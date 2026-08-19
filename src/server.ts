@@ -1067,9 +1067,10 @@ async function startServer() {
       // Get finder phone reputation
       const reputation = await db.getPhoneReputation(finderPhone);
 
-      // Determine flagged status - default to true if other, key details are missing (only for sensitive docs), or client specifies, or reputation auto-flags
+      // Determine flagged status - default to true if other, key details are missing (only for sensitive docs), category requires elevated review (cash/children's-property), or client specifies, or reputation auto-flags
       const isFlagged = isOther || 
                         reputation.autoFlag || 
+                        (cat ? cat.elevated_review : false) ||
                         (req.body.flaggedForReview !== undefined ? !!req.body.flaggedForReview : (isSensitive ? (!extractedNumber || !extractedName) : false));
 
       // RECOVERY FEE ENGINE: an admin who has explicitly hand-set a flat fee
@@ -1294,9 +1295,12 @@ async function startServer() {
         idProofUrl = await uploadBase64Image(idProofBase64, 'id-proofs');
       }
 
-      // Check if there is already an active (non-disputed, non-rejected) claim on this item_id to trigger an auto-dispute
-      // Dispute is only for sensitive documents, and only if claimant is a DIFFERENT phone number
-      if (item.is_sensitive_document !== false) {
+      // Check if there is already an active (non-disputed, non-rejected) claim on this item_id to trigger an auto-dispute.
+      // Runs for every item type — not just sensitive documents. A second
+      // claimant on a laptop or phone is exactly as much a collision risk as
+      // a second claimant on a national ID; the item shouldn't be handed to
+      // "whoever clicked claim first" in either case.
+      {
         const cleanOwnerPhone = ownerPhone.replace(/\s+/g, '');
         const sameOwnerClaim = (await db.getClaims()).find(c => 
           c.item_id === itemId && 
@@ -1353,7 +1357,7 @@ async function startServer() {
           });
 
           return res.status(409).json({
-            error: 'Hati hii tayari inadaiwa na mtu mwingine. Mzozo (Dispute) umefunguliwa na utachunguzwa na wasimamizi wetu.',
+            error: 'Bidhaa hii tayari inadaiwa na mtu mwingine. Mzozo (Dispute) umefunguliwa na utachunguzwa na wasimamizi wetu.',
             claim: newClaim,
             isDisputed: true
           });
@@ -1402,19 +1406,37 @@ async function startServer() {
 
       const claimCode = await generateUniqueClaimId();
 
-      // Create Claim in pending_verification until Tier 2 OTP is satisfied
-      const claim = await db.createClaim({
-        id: claimCode,
-        item_id: itemId,
-        owner_phone: ownerPhone,
-        owner_email: ownerEmail || null,
-        security_answers: securityAnswers,
-        verification_tier: isTier3 ? 3 : 2,
-        status: 'pending_verification',
-        owner_id_proof_url: idProofUrl,
-        payment_reference: null,
-        owner_identifying_details: ownerIdentifyingDetails || null,
-      });
+      // Create Claim in pending_verification until Tier 2 OTP is satisfied.
+      // The application-level duplicate check above narrows the race window
+      // but can't close it entirely (two requests can both pass that check
+      // before either commits) — uq_claims_one_active_per_item is the real
+      // backstop. If we lose that race here, someone else's claim on this
+      // item committed in the gap between our check and our insert; that's
+      // not a server error, it's a legitimate "someone else got there
+      // first" outcome, so we surface it as one.
+      let claim;
+      try {
+        claim = await db.createClaim({
+          id: claimCode,
+          item_id: itemId,
+          owner_phone: ownerPhone,
+          owner_email: ownerEmail || null,
+          security_answers: securityAnswers,
+          verification_tier: isTier3 ? 3 : 2,
+          status: 'pending_verification',
+          owner_id_proof_url: idProofUrl,
+          payment_reference: null,
+          owner_identifying_details: ownerIdentifyingDetails || null,
+        });
+      } catch (raceErr: any) {
+        const isUniqueViolation = raceErr?.code === '23505' || String(raceErr?.cause?.code) === '23505' || /uq_claims_one_active_per_item/.test(String(raceErr?.message || raceErr?.cause?.message || ''));
+        if (isUniqueViolation) {
+          return res.status(409).json({
+            error: 'Mtu mwingine ameshadai bidhaa hii sekunde chache zilizopita. Tafadhali onyesha usaidizi ikiwa unaamini hii ni makosa. / Someone else just claimed this item moments ago. Please contact support if you believe this is a mistake.',
+          });
+        }
+        throw raceErr;
+      }
 
       // Log terms acceptance in audit log server-side
       await db.logAudit(
@@ -2022,26 +2044,31 @@ async function startServer() {
         if (fullItem) {
           const category = fullItem.category_id ? await db.getCategory(fullItem.category_id) : undefined;
           const agent = fullItem.assigned_agent_id ? await db.getAgent(fullItem.assigned_agent_id) : undefined;
-          
-          // Trigger the social media broadcast asynchronously to prevent blocking the agent's API response
-          SocialService.broadcastVerifiedItem(
-            fullItem,
-            agent ? {
-              id: agent.id,
-              business_name: agent.business_name,
-              location_address: agent.location_address,
-              contact_phone: agent.contact_phone
-            } : undefined,
-            category ? {
-              id: category.id,
-              name_en: category.name_en,
-              name_sw: category.name_sw,
-              total_fee: category.total_fee,
-              is_sensitive_document: category.is_sensitive_document
-            } : undefined
-          ).catch(socialErr => {
-            console.error('[SOCIAL MEDIA AUTO-POST] Async broadcast error:', socialErr);
-          });
+
+          const socialPaused = await isSocialPublishingPaused();
+          if (socialPaused) {
+            console.log(`[SOCIAL MEDIA AUTO-POST] Skipped for item ${dropoffCode} — social publishing is paused by admin.`);
+          } else {
+            // Trigger the social media broadcast asynchronously to prevent blocking the agent's API response
+            SocialService.broadcastVerifiedItem(
+              fullItem,
+              agent ? {
+                id: agent.id,
+                business_name: agent.business_name,
+                location_address: agent.location_address,
+                contact_phone: agent.contact_phone
+              } : undefined,
+              category ? {
+                id: category.id,
+                name_en: category.name_en,
+                name_sw: category.name_sw,
+                total_fee: category.total_fee,
+                is_sensitive_document: category.is_sensitive_document
+              } : undefined
+            ).catch(socialErr => {
+              console.error('[SOCIAL MEDIA AUTO-POST] Async broadcast error:', socialErr);
+            });
+          }
         }
       } catch (e) {
         console.error('[SOCIAL MEDIA AUTO-POST] Failed to prepare social broadcast details:', e);
@@ -2219,17 +2246,25 @@ async function startServer() {
       // Fired asynchronously so a social platform outage never blocks the actual
       // handover response to the agent — mirrors the pattern used for the
       // original found-item broadcast in /api/agents/confirm-dropoff.
-      SocialService.broadcastItemReunited(
-        item,
-        category ? {
-          id: category.id,
-          name_en: category.name_en,
-          name_sw: category.name_sw,
-          total_fee: category.total_fee,
-          is_sensitive_document: category.is_sensitive_document
-        } : undefined
-      ).catch(socialErr => {
-        console.error('[SOCIAL MEDIA AUTO-POST] Async reunited-notice broadcast error:', socialErr);
+      isSocialPublishingPaused().then(paused => {
+        if (paused) {
+          console.log(`[SOCIAL MEDIA AUTO-POST] Reunited-notice skipped for claim ${claimId} — social publishing is paused by admin.`);
+          return;
+        }
+        SocialService.broadcastItemReunited(
+          item,
+          category ? {
+            id: category.id,
+            name_en: category.name_en,
+            name_sw: category.name_sw,
+            total_fee: category.total_fee,
+            is_sensitive_document: category.is_sensitive_document
+          } : undefined
+        ).catch(socialErr => {
+          console.error('[SOCIAL MEDIA AUTO-POST] Async reunited-notice broadcast error:', socialErr);
+        });
+      }).catch(pauseCheckErr => {
+        console.error('[SOCIAL MEDIA AUTO-POST] Failed to check publishing-pause setting, skipping reunited-notice as a precaution:', pauseCheckErr);
       });
 
       const itemName = category ? category.name_en : 'Found Document / Item';
@@ -2389,6 +2424,7 @@ async function startServer() {
         pendingSettlements,
         auditLogs: await db.getAuditLogs(),
         currentAdminTotpEnabled: !!currentAdmin?.totp_enabled,
+        socialPublishingPaused: await isSocialPublishingPaused(),
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -2660,6 +2696,26 @@ async function startServer() {
   // with the acting admin's identity (see attemptSettlementRelease/
   // executeClaimSettlement), matching the doc's requirement that every
   // admin override be individually accountable.
+  // Social media emergency stop (doc §86/87 "fail-safe: if uncertain, do not
+  // publish"). Pausing takes effect immediately for every future post — it
+  // does not retract anything already published.
+  app.post('/api/admin/settings/social-publishing-pause', authenticateJWT, async (req, res) => {
+    try {
+      if (req.user?.role !== 'admin') {
+        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+      }
+      const { paused } = req.body;
+      if (typeof paused !== 'boolean') {
+        return res.status(400).json({ error: '"paused" lazima iwe true au false.' });
+      }
+      const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
+      await db.setSetting('social_publishing_paused', paused ? 'true' : 'false', adminIdentifier);
+      res.json({ success: true, message: paused ? 'Social media publishing paused platform-wide.' : 'Social media publishing resumed.' });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.post('/api/admin/claims/:id/release-settlement', authenticateJWT, async (req, res) => {
     const claimId = req.params.id;
     try {
@@ -2836,7 +2892,11 @@ async function startServer() {
         return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
       }
 
-      const { id, name_en, name_sw, total_fee, finder_share, agent_share, platform_share, is_sensitive_document } = req.body;
+      const {
+        id, name_en, name_sw, total_fee, finder_share, agent_share, platform_share, is_sensitive_document,
+        base_fee, complexity_fee, delay_fee, ceiling_percent, finder_pct, agent_pct, platform_pct, finder_reward_cap,
+        elevated_review,
+      } = req.body;
 
       if (!id || typeof id !== 'string' || !/^[a-z0-9-]+$/.test(id)) {
         return res.status(400).json({ error: 'ID lazima iwe herufi ndogo na kistari (lowercase-kebab-case) pekee, na isikuwe tupu.' });
@@ -2878,6 +2938,15 @@ async function startServer() {
         agent_share: numAgent,
         platform_share: numPlatform,
         is_sensitive_document: is_sensitive_document !== false,
+        base_fee: base_fee !== undefined ? Number(base_fee) : undefined,
+        complexity_fee: complexity_fee !== undefined ? Number(complexity_fee) : undefined,
+        delay_fee: delay_fee !== undefined ? Number(delay_fee) : undefined,
+        ceiling_percent: ceiling_percent !== undefined ? Number(ceiling_percent) : undefined,
+        finder_pct: finder_pct !== undefined ? Number(finder_pct) : undefined,
+        agent_pct: agent_pct !== undefined ? Number(agent_pct) : undefined,
+        platform_pct: platform_pct !== undefined ? Number(platform_pct) : undefined,
+        finder_reward_cap: finder_reward_cap === null || finder_reward_cap === undefined || finder_reward_cap === '' ? null : Number(finder_reward_cap),
+        elevated_review: !!elevated_review,
       });
 
       const adminUser = req.user?.username || req.user?.userId || 'admin';
@@ -2905,7 +2974,11 @@ async function startServer() {
         return res.status(404).json({ error: 'Kategoria haikupatikana.' });
       }
 
-      const { name_en, name_sw, total_fee, finder_share, agent_share, platform_share, is_sensitive_document } = req.body;
+      const {
+        name_en, name_sw, total_fee, finder_share, agent_share, platform_share, is_sensitive_document,
+        base_fee, complexity_fee, delay_fee, ceiling_percent, finder_pct, agent_pct, platform_pct, finder_reward_cap,
+        elevated_review, is_admin_modified,
+      } = req.body;
 
       if (!name_en || typeof name_en !== 'string' || name_en.trim() === '' || !name_sw || typeof name_sw !== 'string' || name_sw.trim() === '') {
         return res.status(400).json({ error: 'Majina ya kategoria (English & Swahili) lazima yajazwe.' });
@@ -2936,7 +3009,26 @@ async function startServer() {
         agent_share: numAgent,
         platform_share: numPlatform,
         is_sensitive_document: is_sensitive_document !== false,
-        is_admin_modified: true,
+        // BUG FIX: this used to be hardcoded `true` on every save, which
+        // meant editing ANY field via the admin form — including the
+        // Recovery Fee Engine's own base/complexity/delay/ceiling inputs —
+        // silently pinned the category to its old flat total_fee forever,
+        // making the engine fields dead the instant an admin touched them.
+        // is_admin_modified must now be an explicit choice: "yes, ignore
+        // the engine and use total_fee/finder_share/etc. verbatim" (true)
+        // vs "no, keep computing the fee from base/complexity/delay/
+        // ceiling" (false). If the request doesn't say, preserve whatever
+        // was already set rather than silently flipping it.
+        is_admin_modified: typeof is_admin_modified === 'boolean' ? is_admin_modified : existing.is_admin_modified,
+        base_fee: base_fee !== undefined ? Number(base_fee) : undefined,
+        complexity_fee: complexity_fee !== undefined ? Number(complexity_fee) : undefined,
+        delay_fee: delay_fee !== undefined ? Number(delay_fee) : undefined,
+        ceiling_percent: ceiling_percent !== undefined ? Number(ceiling_percent) : undefined,
+        finder_pct: finder_pct !== undefined ? Number(finder_pct) : undefined,
+        agent_pct: agent_pct !== undefined ? Number(agent_pct) : undefined,
+        platform_pct: platform_pct !== undefined ? Number(platform_pct) : undefined,
+        finder_reward_cap: finder_reward_cap === undefined ? undefined : (finder_reward_cap === null || finder_reward_cap === '' ? null : Number(finder_reward_cap)),
+        elevated_review: elevated_review !== undefined ? !!elevated_review : undefined,
       });
 
       const adminUser = req.user?.username || req.user?.userId || 'admin';
@@ -3190,6 +3282,20 @@ async function releaseDueSettlements() {
     }
   } catch (err) {
     console.error('Error in releaseDueSettlements sweep:', err);
+  }
+}
+
+// Social-media emergency stop: fails SAFE. If the setting can't be read at
+// all (DB hiccup, etc.), we treat that the same as "paused" — never publish
+// when uncertain, per the doc's fail-safe principle. Only an explicit,
+// successfully-read 'false' allows publishing to proceed.
+async function isSocialPublishingPaused(): Promise<boolean> {
+  try {
+    const value = await db.getSetting('social_publishing_paused');
+    return value === 'true';
+  } catch (err) {
+    console.error('[SOCIAL PUBLISHING PAUSE CHECK] Failed to read setting — failing safe (treating as paused):', err);
+    return true;
   }
 }
 

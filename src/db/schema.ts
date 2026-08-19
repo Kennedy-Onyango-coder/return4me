@@ -1,4 +1,5 @@
-import { pgTable, varchar, text, numeric, integer, timestamp, jsonb, boolean, index } from "drizzle-orm/pg-core";
+import { pgTable, varchar, text, numeric, integer, timestamp, jsonb, boolean, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 // 1. CATEGORIES TABLE
 export const categories = pgTable("categories", {
@@ -28,6 +29,14 @@ export const categories = pgTable("categories", {
   agent_pct: numeric("agent_pct", { precision: 5, scale: 2 }).default("35.00").notNull(),
   platform_pct: numeric("platform_pct", { precision: 5, scale: 2 }).default("40.00").notNull(),
   finder_reward_cap: numeric("finder_reward_cap", { precision: 10, scale: 2 }),
+  // When true, every item reported in this category is forced through the
+  // existing admin manual-review gate (flaggedForReview) before it becomes
+  // publicly searchable — regardless of OCR confidence or reputation score.
+  // Used for categories carrying either extra financial risk (cash — a
+  // publicly-known amount is itself a fraud target) or extra child-safety
+  // sensitivity (school IDs, children's documents), matching the doc's
+  // "if uncertain, escalate to human review" fail-safe principle.
+  elevated_review: boolean("elevated_review").default(false).notNull(),
 });
 
 // 2. AGENTS TABLE
@@ -128,6 +137,18 @@ export const claims = pgTable("claims", {
 }, (table) => {
   return {
     idx_claims_item: index("idx_claims_item").on(table.item_id),
+    // Belt-and-braces against the check-then-insert race in the claim
+    // submission route: two nearly-simultaneous requests could both read
+    // "no active claim exists yet" before either commits. The application
+    // check (src/server.ts /api/claims/submit) is the primary UX path — this
+    // partial unique index is the actual guarantee. It allows at most one
+    // "active" (not disputed/rejected/refunded/expired) claim per item at
+    // the database level; a racing second insert fails the constraint and
+    // is caught server-side and converted into the same disputed-claim
+    // response the application-level check already produces.
+    uq_claims_one_active_per_item: uniqueIndex("uq_claims_one_active_per_item")
+      .on(table.item_id)
+      .where(sql`${table.status} NOT IN ('disputed', 'rejected', 'refunded', 'payment_window_expired')`),
   };
 });
 
@@ -253,4 +274,18 @@ export const claim_pickup_codes = pgTable("claim_pickup_codes", {
   code_hash: varchar("code_hash", { length: 64 }).notNull(),
   verified_at: timestamp("verified_at", { withTimezone: true }),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+
+// Small generic key/value store for platform-wide toggles that need to
+// persist across server restarts and be flippable at runtime by an admin —
+// currently just the social-media publishing emergency stop
+// (SOCIAL_PUBLISHING_PAUSED). Deliberately a plain key/value table rather
+// than a dedicated boolean column somewhere, since this is exactly the kind
+// of rarely-added, admin-toggleable flag that doesn't warrant its own
+// migration every time a new one is needed.
+export const platform_settings = pgTable("platform_settings", {
+  key: varchar("key", { length: 100 }).primaryKey(),
+  value: text("value").notNull(),
+  updated_by: varchar("updated_by", { length: 100 }),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });

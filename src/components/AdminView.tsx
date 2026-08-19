@@ -92,6 +92,8 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
   const [catFormAgentPct, setCatFormAgentPct] = useState(35);
   const [catFormPlatformPct, setCatFormPlatformPct] = useState(40);
   const [catFormFinderRewardCap, setCatFormFinderRewardCap] = useState<string>('');
+  const [catFormElevatedReview, setCatFormElevatedReview] = useState(false);
+  const [catFormIsAdminModified, setCatFormIsAdminModified] = useState(false);
 
   const resetCategoryForm = (mode: 'create' | 'edit', cat?: any) => {
     setShowCategoryForm(mode);
@@ -112,6 +114,8 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
       setCatFormAgentPct(35);
       setCatFormPlatformPct(40);
       setCatFormFinderRewardCap('');
+      setCatFormElevatedReview(false);
+      setCatFormIsAdminModified(false);
       setSelectedCategory(null);
     } else if (mode === 'edit' && cat) {
       setCatFormId(cat.id);
@@ -130,6 +134,8 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
       setCatFormAgentPct(cat.agent_pct !== undefined && cat.agent_pct !== null ? Number(cat.agent_pct) : 35);
       setCatFormPlatformPct(cat.platform_pct !== undefined && cat.platform_pct !== null ? Number(cat.platform_pct) : 40);
       setCatFormFinderRewardCap(cat.finder_reward_cap !== undefined && cat.finder_reward_cap !== null ? String(cat.finder_reward_cap) : '');
+      setCatFormElevatedReview(cat.elevated_review || false);
+      setCatFormIsAdminModified(cat.is_admin_modified || false);
       setSelectedCategory(cat);
     }
   };
@@ -329,6 +335,8 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
         agent_pct: catFormAgentPct,
         platform_pct: catFormPlatformPct,
         finder_reward_cap: catFormFinderRewardCap.trim() === '' ? null : parseFloat(catFormFinderRewardCap),
+        elevated_review: catFormElevatedReview,
+        is_admin_modified: catFormIsAdminModified,
       };
 
       const res = await fetch(url, {
@@ -923,6 +931,33 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
     }
   };
 
+  const handleToggleSocialPause = async (paused: boolean) => {
+    setActionSuccess('');
+    setActionWarning('');
+    setDataError('');
+    setItemActionProcessing('social-pause');
+    try {
+      const response = await fetch('/api/admin/settings/social-publishing-pause', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ paused }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to update social publishing setting');
+      }
+      setActionSuccess(data.message || 'Setting updated.');
+      fetchDashboardData();
+    } catch (e: any) {
+      setDataError(e.message);
+    } finally {
+      setItemActionProcessing(null);
+    }
+  };
+
   const handleClearReputation = (phone: string) => {
     setActionSuccess('');
     setActionWarning('');
@@ -1113,6 +1148,32 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               <span>{actionSuccess}</span>
             </div>
           )}
+
+          {/* Social media publishing emergency stop — global, server-enforced,
+              deliberately visible on every tab rather than tucked into
+              settings. See isSocialPublishingPaused() in server.ts: every
+              broadcast call site checks this before posting, and a failed
+              check fails safe (treated as paused). */}
+          <div className={`px-4 py-3 rounded-2xl text-xs font-bold flex flex-wrap items-center justify-between gap-2 border ${
+            dashboardData.socialPublishingPaused ? 'bg-red-50 border-red-200 text-red-800' : 'bg-white border-stone-100 text-stone-500'
+          }`}>
+            <span className="flex items-center space-x-2">
+              <ShieldAlert size={16} />
+              <span>
+                Social Media Publishing: {dashboardData.socialPublishingPaused ? 'PAUSED — no new posts will go out' : 'Active'}
+              </span>
+            </span>
+            <button
+              type="button"
+              disabled={itemActionProcessing === 'social-pause'}
+              onClick={() => handleToggleSocialPause(!dashboardData.socialPublishingPaused)}
+              className={`text-[10px] font-black px-3.5 py-1.5 rounded-lg uppercase tracking-wider transition cursor-pointer disabled:opacity-50 ${
+                dashboardData.socialPublishingPaused ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-red-600 hover:bg-red-700 text-white'
+              }`}
+            >
+              {itemActionProcessing === 'social-pause' ? '...' : dashboardData.socialPublishingPaused ? 'Resume Publishing' : 'Pause All Publishing'}
+            </button>
+          </div>
 
           {actionWarning && (
             <div className="bg-amber-50 border border-amber-300 text-amber-900 px-4 py-3 rounded-2xl text-xs font-bold flex items-center space-x-2">
@@ -2543,6 +2604,44 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                         </div>
                       </div>
 
+                      {/* Elevated Review (cash, children's-property style categories) */}
+                      <div className="space-y-1 flex flex-col justify-end pb-2">
+                        <div className="flex items-center space-x-2">
+                          <input
+                            type="checkbox"
+                            id="catFormElevatedReview"
+                            checked={catFormElevatedReview}
+                            onChange={(e) => setCatFormElevatedReview(e.target.checked)}
+                            className="rounded text-red-600 focus:ring-red-500 h-4 w-4"
+                          />
+                          <label htmlFor="catFormElevatedReview" className="text-xs font-bold text-stone-700">
+                            Elevated Review — force admin approval before this category's items go public
+                          </label>
+                        </div>
+                      </div>
+
+                      {/* Flat fee override toggle — decides whether total_fee/finder_share/
+                          agent_share/platform_share below win outright (ignoring the Recovery
+                          Fee Engine section further down), or whether the engine computes the
+                          fee fresh from base/complexity/delay/ceiling every time. Previously
+                          this was silently forced on by every save from this form, which meant
+                          editing the engine fields below had no effect the moment you saved —
+                          it's now an explicit choice. */}
+                      <div className="col-span-3 space-y-1">
+                        <div className="flex items-center space-x-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                          <input
+                            type="checkbox"
+                            id="catFormIsAdminModified"
+                            checked={catFormIsAdminModified}
+                            onChange={(e) => setCatFormIsAdminModified(e.target.checked)}
+                            className="rounded text-amber-600 focus:ring-amber-500 h-4 w-4"
+                          />
+                          <label htmlFor="catFormIsAdminModified" className="text-xs font-bold text-amber-800">
+                            Use flat fee override — pin Total/Finder/Agent/Platform fee below exactly, and ignore the Recovery Fee Engine config further down entirely
+                          </label>
+                        </div>
+                      </div>
+
                       {/* Name EN */}
                       <div className="space-y-1">
                         <label htmlFor="cat-form-name-en" className="block text-xs font-bold text-stone-700 uppercase tracking-wider">
@@ -2677,10 +2776,15 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                         platform shares above are just a preview of what the engine
                         would compute with no declared value — the real fee for an
                         item is computed fresh at report time from these inputs. */}
-                    <div className="border border-stone-200 rounded-xl p-4 space-y-3 bg-stone-50">
+                    <div className={`border rounded-xl p-4 space-y-3 ${catFormIsAdminModified ? 'border-stone-200 bg-stone-100 opacity-60' : 'border-stone-200 bg-stone-50'}`}>
                       <p className="text-[11px] font-extrabold text-stone-700 uppercase tracking-wider">
                         Recovery Fee Engine Config
                       </p>
+                      {catFormIsAdminModified && (
+                        <p className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                          Inactive — "Use flat fee override" is checked above, so this category ignores everything below and uses the flat Total/Finder/Agent/Platform fee instead.
+                        </p>
+                      )}
                       <p className="text-[10px] text-stone-500 leading-tight">
                         rawFee = Base + Complexity + Delay. If a finder gives a declared value, the fee is capped at Ceiling % of that value (never raised above rawFee). Split % applies to the resulting fee, not the item's value.
                       </p>

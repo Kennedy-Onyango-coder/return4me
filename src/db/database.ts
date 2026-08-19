@@ -14,6 +14,7 @@ import {
   otp_codes as otpCodesTable,
   claim_otps as claimOtpsTable,
   claim_pickup_codes as claimPickupCodesTable,
+  platform_settings as platformSettingsTable,
 } from "./schema.ts";
 import { eq, and, or } from "drizzle-orm";
 import { getSignedPhotoUrl } from "../services/storage.ts";
@@ -44,6 +45,9 @@ export interface Category {
   agent_pct: number;
   platform_pct: number;
   finder_reward_cap: number | null;
+  // Forces every item in this category through admin manual review before
+  // it becomes publicly searchable — see feeEngine/schema.ts comments.
+  elevated_review: boolean;
 }
 
 export interface Agent {
@@ -226,6 +230,7 @@ function parseCategory(row: any): Category {
     agent_pct: row.agent_pct !== undefined && row.agent_pct !== null ? parseFloat(row.agent_pct) : 35,
     platform_pct: row.platform_pct !== undefined && row.platform_pct !== null ? parseFloat(row.platform_pct) : 40,
     finder_reward_cap: row.finder_reward_cap !== undefined && row.finder_reward_cap !== null ? parseFloat(row.finder_reward_cap) : null,
+    elevated_review: !!row.elevated_review,
   };
 }
 
@@ -431,6 +436,26 @@ class DatabaseEngine {
         agent_share: 80,
         platform_share: 70,
         is_sensitive_document: true,
+        // Student IDs are disproportionately likely to belong to a minor —
+        // route every one through admin review before it's publicly
+        // searchable, on top of the standard sensitive-document masking.
+        elevated_review: true,
+      },
+      {
+        id: "cash-money",
+        name_en: "Cash / Money Found",
+        name_sw: "Pesa Taslimu Iliyopatikana",
+        total_fee: 300,
+        finder_share: 120,
+        agent_share: 96,
+        platform_share: 84,
+        // Sensitive so the photo is never shown publicly, and requires
+        // admin review before listing — a publicly-known amount is itself
+        // an obvious fraud target ("KSh 47,000 found"), so the actual sum
+        // is only ever recorded privately (via the finder's optional
+        // declared-value field) and verified by the agent, never published.
+        is_sensitive_document: true,
+        elevated_review: true,
       },
       {
         id: "driving-licence",
@@ -919,6 +944,7 @@ class DatabaseEngine {
             agent_pct: String(engineFields.agent_pct),
             platform_pct: String(engineFields.platform_pct),
             finder_reward_cap: engineFields.finder_reward_cap !== null ? String(engineFields.finder_reward_cap) : null,
+            elevated_review: !!(cat as any).elevated_review,
           })
           .onConflictDoUpdate({
             target: categoriesTable.id,
@@ -938,6 +964,7 @@ class DatabaseEngine {
               agent_pct: String(engineFields.agent_pct),
               platform_pct: String(engineFields.platform_pct),
               finder_reward_cap: engineFields.finder_reward_cap !== null ? String(engineFields.finder_reward_cap) : null,
+              elevated_review: !!(cat as any).elevated_review,
             },
           });
       } catch (err) {
@@ -1806,6 +1833,38 @@ class DatabaseEngine {
     }
   }
 
+  // --- PLATFORM SETTINGS (generic admin-toggleable key/value store) ---
+
+  public async getSetting(key: string): Promise<string | null> {
+    try {
+      const rows = await drizzleDb.select().from(platformSettingsTable).where(eq(platformSettingsTable.key, key)).limit(1);
+      return rows.length > 0 ? rows[0].value : null;
+    } catch (error) {
+      console.error("Database read failed:", error);
+      // Fail safe: if we can't even read the setting, callers that gate a
+      // risky action (like the social-publishing pause) should treat this
+      // the same as "paused" rather than assuming "not paused" and
+      // proceeding — see isSocialPublishingPaused() in server.ts.
+      throw new Error("Failed to read platform setting.", { cause: error });
+    }
+  }
+
+  public async setSetting(key: string, value: string, adminUser: string): Promise<void> {
+    try {
+      await drizzleDb
+        .insert(platformSettingsTable)
+        .values({ key, value, updated_by: adminUser, updated_at: new Date() })
+        .onConflictDoUpdate({
+          target: platformSettingsTable.key,
+          set: { value, updated_by: adminUser, updated_at: new Date() },
+        });
+      await this.logAudit(adminUser, "SETTING_CHANGED", `Setting '${key}' set to '${value}'`);
+    } catch (error) {
+      console.error("Database write failed:", error);
+      throw new Error("Failed to write platform setting.", { cause: error });
+    }
+  }
+
   // --- CORE BUSINESS ESCROW LOGIC ---
 
   /**
@@ -2177,6 +2236,7 @@ class DatabaseEngine {
     agent_pct?: number;
     platform_pct?: number;
     finder_reward_cap?: number | null;
+    elevated_review?: boolean;
   }): Promise<Category> {
     try {
       const rows = await drizzleDb.insert(categoriesTable).values({
@@ -2196,6 +2256,7 @@ class DatabaseEngine {
         agent_pct: String(cat.agent_pct ?? 35),
         platform_pct: String(cat.platform_pct ?? 40),
         finder_reward_cap: cat.finder_reward_cap !== undefined && cat.finder_reward_cap !== null ? String(cat.finder_reward_cap) : null,
+        elevated_review: cat.elevated_review ?? false,
       }).returning();
       return parseCategory(rows[0]);
     } catch (error) {
@@ -2223,6 +2284,7 @@ class DatabaseEngine {
       agent_pct?: number;
       platform_pct?: number;
       finder_reward_cap?: number | null;
+      elevated_review?: boolean;
     }
   ): Promise<Category> {
     try {
@@ -2244,6 +2306,7 @@ class DatabaseEngine {
       if (cat.agent_pct !== undefined) setData.agent_pct = String(cat.agent_pct);
       if (cat.platform_pct !== undefined) setData.platform_pct = String(cat.platform_pct);
       if (cat.finder_reward_cap !== undefined) setData.finder_reward_cap = cat.finder_reward_cap !== null ? String(cat.finder_reward_cap) : null;
+      if (cat.elevated_review !== undefined) setData.elevated_review = cat.elevated_review;
 
       const rows = await drizzleDb.update(categoriesTable).set(setData).where(eq(categoriesTable.id, id)).returning();
       return parseCategory(rows[0]);

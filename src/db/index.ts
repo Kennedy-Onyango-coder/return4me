@@ -393,7 +393,15 @@ class ResilientPool {
           }
         });
       } catch (err: any) {
-        console.error("[ResilientPool] Failed to instantiate pg Pool. Falling back to Mock Mode.", err);
+        console.error("[ResilientPool] Failed to instantiate pg Pool.", err);
+        if (process.env.NODE_ENV === 'production') {
+          // Same fail-closed guarantee as createPool() above — a malformed
+          // DATABASE_URL that passes the placeholder check but still fails
+          // to construct a real Pool must crash startup in production, not
+          // silently degrade to the in-memory mock.
+          throw new Error('FATAL: Failed to instantiate the production PostgreSQL connection pool. Refusing to fall back to the in-memory mock database in production.', { cause: err });
+        }
+        console.error("[ResilientPool] Falling back to Mock Mode (non-production only).");
         this.useMock = true;
       }
     }
@@ -482,6 +490,24 @@ export const createPool = (): any => {
                         dbUrl.includes("user:password@host") || 
                         dbUrl.includes("dummy_user") ||
                         dbUrl.includes("postgresql://host");
+
+  // PRODUCTION MUST NEVER SILENTLY RUN ON THE IN-MEMORY MOCK DATABASE.
+  // The mock pool exists purely so local development and tests can run
+  // without a real Postgres instance configured. A production deployment
+  // with a missing or placeholder DATABASE_URL is a misconfiguration, not
+  // a degraded-but-acceptable state — every found-item report, claim, and
+  // payment record would silently go into memory and vanish on the next
+  // restart while every response looked completely normal. Fail the
+  // process startup loudly instead, so this gets caught in deployment, not
+  // discovered later as "why did all our data disappear."
+  if (isPlaceholder && process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'FATAL: DATABASE_URL is missing or is still a placeholder value in a production environment. ' +
+      'Refusing to start with the in-memory mock database in production — configure a real ' +
+      'PostgreSQL DATABASE_URL before deploying.'
+    );
+  }
+
   return new ResilientPool(dbUrl, isPlaceholder);
 };
 

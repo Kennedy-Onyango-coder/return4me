@@ -28,6 +28,9 @@ CREATE TABLE categories (
     agent_pct NUMERIC(5, 2) NOT NULL DEFAULT 35.00 CHECK (agent_pct >= 0),
     platform_pct NUMERIC(5, 2) NOT NULL DEFAULT 40.00 CHECK (platform_pct >= 0),
     finder_reward_cap NUMERIC(10, 2) CHECK (finder_reward_cap IS NULL OR finder_reward_cap >= 0),
+    -- Forces the admin manual-review gate for every item in this category —
+    -- see the matching comment in src/db/schema.ts.
+    elevated_review BOOLEAN NOT NULL DEFAULT FALSE,
     CONSTRAINT chk_fee_shares_sum CHECK (total_fee = finder_share + agent_share + platform_share)
 );
 
@@ -124,6 +127,11 @@ CREATE TABLE claims (
 );
 
 CREATE INDEX idx_claims_item ON claims(item_id);
+-- At most one "active" claim per item at the DB level — see the matching
+-- comment in src/db/schema.ts for why this exists alongside the
+-- application-level duplicate-claim check.
+CREATE UNIQUE INDEX uq_claims_one_active_per_item ON claims(item_id)
+    WHERE status NOT IN ('disputed', 'rejected', 'refunded', 'payment_window_expired');
 
 -- 5. DISPUTES
 CREATE TABLE disputes (
@@ -185,4 +193,13 @@ CREATE TABLE claim_payment_strikes (
     strike_count INT NOT NULL DEFAULT 0,
     last_strike_at TIMESTAMP WITH TIME ZONE,
     is_cleared_by_admin BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+-- 11. PLATFORM SETTINGS (generic admin-toggleable key/value store, e.g. the
+-- social-media publishing emergency stop). See schema.ts comment.
+CREATE TABLE platform_settings (
+    key VARCHAR(100) PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_by VARCHAR(100),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
