@@ -1,0 +1,121 @@
+import { describe, it, expect } from 'vitest';
+import { toE164Kenyan, hashCode, timingSafeEqualHex, generateToken, verifyToken } from '../auth';
+
+// These four functions were chosen deliberately: they're pure (no DB, no
+// network), but they sit directly behind three of the security fixes made
+// during this audit — toE164Kenyan is what the /api/claims/:id/pay
+// ownership check and the dispute-refund destination both rely on;
+// hashCode/timingSafeEqualHex protect OTPs and pickup codes from timing
+// attacks and plaintext storage; generateToken/verifyToken are the entire
+// session-auth mechanism. A regression in any of these is a security
+// regression, not just a bug, so they get direct coverage even though the
+// rest of server.ts isn't unit-testable without a live Postgres instance.
+
+describe('toE164Kenyan', () => {
+  it('converts a 07... local number to +254 format', () => {
+    expect(toE164Kenyan('0712345678')).toBe('+254712345678');
+  });
+
+  it('converts a 01... local number to +254 format', () => {
+    expect(toE164Kenyan('0112345678')).toBe('+254112345678');
+  });
+
+  it('adds a + to a bare 254... number', () => {
+    expect(toE164Kenyan('254712345678')).toBe('+254712345678');
+  });
+
+  it('leaves an already-E.164 number unchanged', () => {
+    expect(toE164Kenyan('+254712345678')).toBe('+254712345678');
+  });
+
+  it('strips internal whitespace before normalizing', () => {
+    expect(toE164Kenyan('0712 345 678')).toBe('+254712345678');
+  });
+
+  // This is the exact property the /api/claims/:id/pay ownership check
+  // (added during the security pass) depends on: two different textual
+  // representations of the SAME real phone number must normalize to the
+  // same string, or the phone-match comparison silently breaks and either
+  // rejects legitimate owners or lets the STK-push-redirect abuse back in.
+  it('normalizes different formats of the same number to the same value', () => {
+    const local = toE164Kenyan('0712345678');
+    const withCountryCode = toE164Kenyan('254712345678');
+    const e164 = toE164Kenyan('+254712345678');
+    expect(local).toBe(withCountryCode);
+    expect(local).toBe(e164);
+  });
+
+  it('does not silently mangle an unrecognized format', () => {
+    // Falls through to the final `return clean` branch — asserting this
+    // explicitly so a future change to the fallback behavior is a visible
+    // test failure, not a silent behavior change.
+    expect(toE164Kenyan('12345')).toBe('12345');
+  });
+});
+
+describe('hashCode', () => {
+  it('is deterministic for the same input', () => {
+    expect(hashCode('1234')).toBe(hashCode('1234'));
+  });
+
+  it('produces different hashes for different inputs', () => {
+    expect(hashCode('1234')).not.toBe(hashCode('5678'));
+  });
+
+  it('never returns the plaintext code itself', () => {
+    const hashed = hashCode('1234');
+    expect(hashed).not.toBe('1234');
+    expect(hashed).not.toContain('1234');
+  });
+
+  it('produces a 64-character hex string (HMAC-SHA256)', () => {
+    expect(hashCode('1234')).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+describe('timingSafeEqualHex', () => {
+  it('returns true for two equal hex strings', () => {
+    const h = hashCode('1234');
+    expect(timingSafeEqualHex(h, h)).toBe(true);
+  });
+
+  it('returns false for two different hex strings of the same length', () => {
+    expect(timingSafeEqualHex(hashCode('1234'), hashCode('5678'))).toBe(false);
+  });
+
+  it('returns false (not throws) for mismatched lengths', () => {
+    // crypto.timingSafeEqual throws on unequal-length buffers — the
+    // wrapper must catch that shape mismatch and return false rather than
+    // let a raw exception bubble up through an OTP-verification code path.
+    expect(() => timingSafeEqualHex('ab', 'abcd')).not.toThrow();
+    expect(timingSafeEqualHex('ab', 'abcd')).toBe(false);
+  });
+});
+
+describe('generateToken / verifyToken', () => {
+  const payload = {
+    userId: 'test-user-1',
+    phone: '+254712345678',
+    role: 'owner' as const,
+  };
+
+  it('round-trips a signed token back to the original payload', () => {
+    const token = generateToken(payload);
+    const decoded = verifyToken(token);
+    expect(decoded).not.toBeNull();
+    expect(decoded?.userId).toBe(payload.userId);
+    expect(decoded?.phone).toBe(payload.phone);
+    expect(decoded?.role).toBe(payload.role);
+  });
+
+  it('rejects a tampered token', () => {
+    const token = generateToken(payload);
+    const tampered = token.slice(0, -2) + (token.slice(-2) === 'aa' ? 'bb' : 'aa');
+    expect(verifyToken(tampered)).toBeNull();
+  });
+
+  it('rejects garbage input instead of throwing', () => {
+    expect(() => verifyToken('not-a-real-token')).not.toThrow();
+    expect(verifyToken('not-a-real-token')).toBeNull();
+  });
+});

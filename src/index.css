@@ -1,0 +1,52 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  
+  /* Brand CSS Variables requested */
+  --r4m-green: #003820;
+  --r4m-orange: #EC7E0D;
+  --r4m-green-light: #196323;
+  --r4m-cream: #FDF8EE;
+
+  /* Tailwind Color Mappings for automatic update of previous colors */
+  --color-primary-green: #003820;
+  --color-primary-hover: #002414;
+  --color-accent-orange: #EC7E0D;
+  --color-accent-hover: #D26C08;
+  --color-brand-beige: #FDF8EE;
+  --color-brand-light-gray: #F4EFE6;
+  --color-brand-border: #E8E1D3;
+  --color-brand-dark-text: #003820; /* Dark green primary text */
+  --color-brand-muted-text: #605B50;
+
+  /* Tailwind classes for direct r4m names */
+  --color-r4m-green: #003820;
+  --color-r4m-orange: #EC7E0D;
+  --color-r4m-green-light: #196323;
+  --color-r4m-cream: #FDF8EE;
+}
+
+body {
+  background-color: var(--color-brand-beige);
+  font-family: var(--font-sans);
+  color: var(--color-brand-dark-text);
+}
+
+/* Custom fade transitions and animations */
+.fade-in {
+  animation: fadeIn 0.4s ease-out forwards;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
