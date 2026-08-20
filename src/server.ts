@@ -382,8 +382,27 @@ async function seedAdminUser() {
 }
 
 async function startServer() {
-  // Run schema synchronization checks to prevent DB drift crashes
-  await ensureSchemaUpToDate(pool).catch(err => console.error('Failed to sync database schema on startup:', err));
+  // Run schema synchronization checks to prevent DB drift crashes.
+  // ensureSchemaUpToDate() itself throws in production if any migration
+  // statement genuinely failed (see its implementation) — that must be
+  // fatal here too, not swallowed into a log line. Continuing to serve
+  // traffic against a database that doesn't match what the application
+  // code assumes is worse than refusing to start.
+  try {
+    await ensureSchemaUpToDate(pool);
+  } catch (err) {
+    console.error('================================================================');
+    console.error('         RETURN4ME SCHEMA MIGRATION FATAL ERROR                 ');
+    console.error('================================================================');
+    console.error('Failed to sync database schema on startup:', err);
+    if (process.env.NODE_ENV === 'production') {
+      console.error('Refusing to start in production with an unverified database schema.');
+      console.error('================================================================');
+      process.exit(1);
+    }
+    console.error('Continuing in non-production environment despite the migration error.');
+    console.error('================================================================');
+  }
 
   // Sync categories and updated fee schedule on start
   await db.syncDefaultCategories().catch(err => console.error('Failed to sync categories on startup:', err));
@@ -1067,10 +1086,11 @@ async function startServer() {
       // Get finder phone reputation
       const reputation = await db.getPhoneReputation(finderPhone);
 
-      // Determine flagged status - default to true if other, key details are missing (only for sensitive docs), category requires elevated review (cash/children's-property), or client specifies, or reputation auto-flags
+      // Determine flagged status - default to true if other, key details are missing (only for sensitive docs), category requires elevated review (cash/children's-property), agent assignment could not be made with any real confidence, or client specifies, or reputation auto-flags
       const isFlagged = isOther || 
                         reputation.autoFlag || 
                         (cat ? cat.elevated_review : false) ||
+                        matchingResult.needsManualAgentReassignment ||
                         (req.body.flaggedForReview !== undefined ? !!req.body.flaggedForReview : (isSensitive ? (!extractedNumber || !extractedName) : false));
 
       // RECOVERY FEE ENGINE: an admin who has explicitly hand-set a flat fee
@@ -1169,8 +1189,15 @@ async function startServer() {
 
     try {
       const allItems = await db.getItems();
-      // Exclude items that are flagged for review
-      let items = allItems.filter(item => (item.status === 'at_agent' || item.status === 'awaiting_dropoff') && !item.flaggedForReview);
+      // Public search must only ever show items that are CURRENTLY
+      // claimable — routed through the same canCreateClaim() rule used at
+      // claim-submission time, so this list can never drift from what the
+      // claim endpoint will actually accept. Previously this allowed
+      // 'awaiting_dropoff' items through: a Finder's report on its own,
+      // before any Agent has physically verified the item exists. That is
+      // not a verified found item and must never be publicly claimable.
+      const claimabilityChecks = await Promise.all(allItems.map(async item => ({ item, result: await canCreateClaim(item) })));
+      let items = claimabilityChecks.filter(c => c.result.allowed).map(c => c.item);
 
       // Filter by category
       if (categoryId) {
@@ -1278,12 +1305,14 @@ async function startServer() {
         return res.status(404).json({ error: 'Bidhaa inayotafutwa haikupatikana.' });
       }
 
-      // Stolen-property state machine: block the claim flow entirely while
-      // an item is under admin review or legal hold. Deliberately generic —
-      // never names an accusation or a person — and points to support
-      // rather than letting the platform adjudicate anything itself.
-      if (item.status === 'suspected_stolen' || item.status === 'legal_hold') {
-        return res.status(423).json({ error: 'Bidhaa hii inahitaji uthibitisho wa ziada kabla ya kudai. Tafadhali wasiliana na usaidizi. / This item requires additional verification before it can be claimed. Please contact support.' });
+      // Central claimability rule — see canCreateClaim(). Independently
+      // re-verified here rather than trusting that the item was claimable
+      // when it appeared in a search result; the two checks must never be
+      // allowed to drift apart, which is exactly why they share one
+      // function instead of being reimplemented per-endpoint.
+      const claimability = await canCreateClaim(item);
+      if (!claimability.allowed) {
+        return res.status(423).json({ error: claimabilityErrorMessage(claimability.reason) });
       }
 
       // If ID proof is provided, validate its signature and upload to S3 storage
@@ -1583,12 +1612,15 @@ async function startServer() {
         return res.status(404).json({ error: 'Bidhaa inayodaiwa haikupatikana.' });
       }
 
-      // Defense in depth: an item can be flagged stolen/legal-hold after a
-      // claim on it was already created (e.g. mid-verification). Never let
-      // money move on a held item, even if the claim slipped past the
+      // Central claimability rule, re-checked here as defense in depth: an
+      // item's state can change between claim creation and payment (e.g.
+      // flagged stolen/legal-hold, or a dispute opened by a competing
+      // claimant) — never let money move on an item that's no longer
+      // currently claimable, even if this specific claim slipped past the
       // earlier check at submission time.
-      if (item.status === 'suspected_stolen' || item.status === 'legal_hold') {
-        return res.status(423).json({ error: 'Bidhaa hii iko chini ya uangalizi na haiwezi kulipiwa kwa sasa. Tafadhali wasiliana na usaidizi. / This item is under review and cannot be paid for right now. Please contact support.' });
+      const claimability = await canCreateClaim(item);
+      if (!claimability.allowed) {
+        return res.status(423).json({ error: claimabilityErrorMessage(claimability.reason) });
       }
 
       const category = await db.getCategory(item.category_id);
@@ -2181,10 +2213,16 @@ async function startServer() {
       }
 
       // Fail-safe: even with money already in escrow, never let the physical
-      // item leave custody once it's been flagged stolen/legal-hold. If
-      // uncertain, do not release the item — escalate to admin instead.
-      if (item.status === 'suspected_stolen' || item.status === 'legal_hold') {
-        return res.status(423).json({ error: 'Bidhaa hii iko chini ya uangalizi. Usitoe bidhaa hii — wasiliana na msimamizi. / This item is under review. Do not hand it over — contact an administrator.' });
+      // item leave custody once it's been flagged stolen/legal-hold, or if
+      // a competing claimant has opened an unresolved ownership dispute in
+      // the meantime. If uncertain, do not release the item — escalate to
+      // admin instead. (item.status is expected to still be 'at_agent' here
+      // since physical custody hasn't transferred yet — canCreateClaim's
+      // 'at_agent' requirement is not the binding condition in this case,
+      // the dispute/hold checks are.)
+      const claimability = await canCreateClaim(item);
+      if (!claimability.allowed && (claimability.reason === 'suspected_stolen' || claimability.reason === 'legal_hold' || claimability.reason === 'unresolved_dispute')) {
+        return res.status(423).json({ error: claimabilityErrorMessage(claimability.reason) });
       }
 
       // SECURITY: require the owner's secret pickup code (sent privately via
@@ -3289,6 +3327,75 @@ async function releaseDueSettlements() {
 // all (DB hiccup, etc.), we treat that the same as "paused" — never publish
 // when uncertain, per the doc's fail-safe principle. Only an explicit,
 // successfully-read 'false' allows publishing to proceed.
+/**
+ * CENTRAL CLAIMABILITY RULE — the single source of truth for "can this item
+ * currently be claimed." Used by both the public search endpoint (to decide
+ * what's even shown) and claim submission (to independently re-verify —
+ * never trust that something visible in a search result is still
+ * claimable by the time the request arrives). Do not duplicate this logic
+ * inline anywhere else; if a new claimability condition is needed, add it
+ * here once.
+ */
+async function canCreateClaim(item: FoundItem): Promise<{ allowed: boolean; reason: string }> {
+  if (!item) return { allowed: false, reason: 'not_found' };
+
+  // A Finder's report is NOT a verified found item — only an Agent's
+  // physical inspection makes it one. 'at_agent' is the only status that
+  // represents a physically verified, currently-in-custody item; every
+  // other status (awaiting_dropoff, claimed, expired, rejected,
+  // suspected_stolen, legal_hold) means "not currently claimable" for a
+  // different reason, but the practical rule is the same: only 'at_agent'
+  // is eligible.
+  if (item.status !== 'at_agent') {
+    if (item.status === 'suspected_stolen' || item.status === 'legal_hold') {
+      return { allowed: false, reason: item.status };
+    }
+    if (item.status === 'claimed') {
+      return { allowed: false, reason: 'already_recovered' };
+    }
+    if (item.status === 'expired' || item.status === 'rejected') {
+      return { allowed: false, reason: 'no_longer_available' };
+    }
+    // awaiting_dropoff, or any other pre-verification status.
+    return { allowed: false, reason: 'not_physically_verified' };
+  }
+
+  if (item.flaggedForReview) {
+    return { allowed: false, reason: 'flagged_for_review' };
+  }
+
+  // Section 5 / third-claimant rule: at most one UNRESOLVED ownership
+  // dispute per item, and while one is open, no new claims of any kind —
+  // not just a duplicate from a claimant who's already involved. Without
+  // this, a third claimant could slip in after the first two already
+  // entered 'disputed' status, since neither of those two claims counts as
+  // "active" anymore under the earlier duplicate-detection check alone.
+  const disputes = await db.getDisputesByItem(item.id);
+  const hasUnresolvedDispute = disputes.some(d => !d.resolved_at);
+  if (hasUnresolvedDispute) {
+    return { allowed: false, reason: 'unresolved_dispute' };
+  }
+
+  return { allowed: true, reason: 'ok' };
+}
+
+// Shared bilingual error messages for canCreateClaim() reasons — used
+// wherever a claimability check is enforced, so wording doesn't drift
+// between call sites.
+function claimabilityErrorMessage(reason: string): string {
+  const messages: Record<string, string> = {
+    not_physically_verified: 'Bidhaa hii bado haijathibitishwa kimwili na Agent. Tafadhali subiri uthibitisho kabla ya kudai. / This item has not yet been physically verified by an Agent. Please wait for verification before claiming.',
+    suspected_stolen: 'Bidhaa hii inahitaji uthibitisho wa ziada kabla ya kudai. Tafadhali wasiliana na usaidizi. / This item requires additional verification before it can be claimed. Please contact support.',
+    legal_hold: 'Bidhaa hii inahitaji uthibitisho wa ziada kabla ya kudai. Tafadhali wasiliana na usaidizi. / This item requires additional verification before it can be claimed. Please contact support.',
+    flagged_for_review: 'Bidhaa hii bado iko chini ya ukaguzi. Tafadhali jaribu tena baadaye. / This item is still under review. Please try again later.',
+    already_recovered: 'Bidhaa hii tayari imedaiwa na kurejeshwa. / This item has already been claimed and recovered.',
+    no_longer_available: 'Bidhaa hii haipatikani tena. / This item is no longer available.',
+    unresolved_dispute: 'Bidhaa hii ina mzozo wa umiliki ambao bado haujatatuliwa. Hakuna hatua zaidi zinazokubaliwa hadi utatuzi ukamilike. / This item has an unresolved ownership dispute. No further action is accepted until it is resolved.',
+    not_found: 'Bidhaa inayotafutwa haikupatikana.',
+  };
+  return messages[reason] || 'Bidhaa hii haiwezi kudaiwa kwa sasa.';
+}
+
 async function isSocialPublishingPaused(): Promise<boolean> {
   try {
     const value = await db.getSetting('social_publishing_paused');

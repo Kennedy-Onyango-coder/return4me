@@ -16,7 +16,7 @@ import {
   claim_pickup_codes as claimPickupCodesTable,
   platform_settings as platformSettingsTable,
 } from "./schema.ts";
-import { eq, and, or } from "drizzle-orm";
+import { eq, and, or, isNull } from "drizzle-orm";
 import { getSignedPhotoUrl } from "../services/storage.ts";
 
 // --- DATA TYPES & SCHEMAS ---
@@ -128,7 +128,7 @@ export interface Claim {
   // still freeze the claim before money actually moves. 'releasing' is now
   // used only for the brief window while the settlement sweep (or an admin
   // override) is actively sending that disbursement.
-  status: "pending_verification" | "pending_payment" | "payment_pending" | "escrow_held" | "pending_settlement" | "releasing" | "released" | "disputed" | "rejected" | "awaiting_agent_confirmation" | "payment_window_expired" | "refunding" | "refunded";
+  status: "pending_verification" | "pending_payment" | "escrow_held" | "pending_settlement" | "releasing" | "released" | "disputed" | "rejected" | "awaiting_agent_confirmation" | "payment_window_expired" | "refunding" | "refunded";
   owner_id_proof_url: string | null;
   payment_reference: string | null; // Daraja M-Pesa receipt code
   owner_identifying_details: string | null;
@@ -1105,6 +1105,21 @@ class DatabaseEngine {
     }
   }
 
+  // Used by the central claimability rule (canCreateClaim in server.ts) to
+  // check for an unresolved ownership dispute before allowing any new claim
+  // — deliberately a targeted query rather than filtering getDisputes(),
+  // since this runs on every claim-submission attempt.
+  public async getDisputesByItem(itemId: string): Promise<Dispute[]> {
+    try {
+      const rows = await drizzleDb.select().from(disputesTable).where(eq(disputesTable.item_id, itemId));
+      const disputes = rows.map(parseDispute);
+      return Promise.all(disputes.map(signDispute));
+    } catch (error) {
+      console.error("Database query failed:", error);
+      throw new Error("Failed to query disputes for item.", { cause: error });
+    }
+  }
+
   public async getLedger(): Promise<LedgerEntry[]> {
     try {
       const rows = await drizzleDb.select().from(ledgerTable);
@@ -1634,7 +1649,22 @@ class DatabaseEngine {
           throw new Error("This dispute has already been resolved.");
         }
 
-        await tx
+        // Validate winningClaimId genuinely belongs to this dispute. Without
+        // this, passing an arbitrary/unrelated claim ID would still update
+        // that claim's status, then the losingClaimId computation below
+        // (which just checks "is this claimant_1?") would default to
+        // treating the dispute's actual claimant_1 as the loser — silently
+        // refunding/rejecting the wrong person's legitimate claim.
+        if (winningClaimId !== dispute.claimant_1_claim_id && winningClaimId !== dispute.claimant_2_claim_id) {
+          throw new Error("winningClaimId does not belong to this dispute.");
+        }
+
+        // Atomic CAS on resolved_at IS NULL — the earlier read-then-check
+        // above is a genuine race with two admins resolving the same
+        // dispute concurrently (both could read resolved_at=null before
+        // either commits). This UPDATE...WHERE is the real guarantee: only
+        // one concurrent resolution can ever match this condition.
+        const resolvedRows = await tx
           .update(disputesTable)
           .set({
             resolved_by: adminUser,
@@ -1642,10 +1672,34 @@ class DatabaseEngine {
             resolved_at: new Date(),
             admin_notes: adminNotes,
           })
-          .where(eq(disputesTable.id, disputeId));
+          .where(and(eq(disputesTable.id, disputeId), isNull(disputesTable.resolved_at)))
+          .returning();
+        if (resolvedRows.length === 0) {
+          throw new Error("This dispute was just resolved by another admin — refresh and try again.");
+        }
 
-        // Release to winner, set loser back to pending verification
-        await tx.update(claimsTable).set({ status: "escrow_held" }).where(eq(claimsTable.id, winningClaimId));
+        // BUGFIX: this used to unconditionally set the winning claim to
+        // 'escrow_held' — which is only true if that claim actually has
+        // money in escrow. Disputes are now auto-created at claim
+        // SUBMISSION time (see the multi-claimant check in server.ts
+        // /api/claims/submit), before either claimant has necessarily paid
+        // anything, so the common case here is an admin picking a winner
+        // between two claims that are both still unpaid. Blindly marking
+        // the winner 'escrow_held' would have skipped OTP verification and
+        // payment entirely, and later code (settlement, handover) treats
+        // 'escrow_held' as a hard guarantee that a real M-Pesa payment is
+        // already sitting in escrow — a guarantee that would be false here.
+        // Use the same payment_reference signal already used correctly for
+        // the losing claim below: only promote to escrow_held if the
+        // winner genuinely already paid; otherwise send it back through
+        // normal verification like any other claim.
+        const winningClaimRows = await tx.select().from(claimsTable).where(eq(claimsTable.id, winningClaimId));
+        const winningClaim = winningClaimRows[0];
+        const winnerAlreadyPaid = !!(winningClaim && winningClaim.payment_reference);
+        await tx
+          .update(claimsTable)
+          .set({ status: winnerAlreadyPaid ? "escrow_held" : "pending_verification", updated_at: new Date() })
+          .where(eq(claimsTable.id, winningClaimId));
 
         const losingClaimId =
           dispute.claimant_1_claim_id === winningClaimId

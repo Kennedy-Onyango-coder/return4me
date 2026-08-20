@@ -607,6 +607,36 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     `ALTER TABLE claims ADD COLUMN IF NOT EXISTS owner_email VARCHAR(255)`,
     `ALTER TABLE claims ADD COLUMN IF NOT EXISTS agent_confirmed_at TIMESTAMPTZ`,
     `ALTER TABLE claims ADD COLUMN IF NOT EXISTS handover_photo_url VARCHAR(500)`,
+    // Recovery Fee Engine config (categories) — see src/services/feeEngine.ts.
+    // These were added to schema.ts/sql/schema.sql but were missing from
+    // this incremental migration path, meaning any database that was
+    // bootstrapped BEFORE the fee engine existed would never have received
+    // them — the engine would silently read undefined/NaN for every
+    // category on such a database. Fixed here.
+    `ALTER TABLE categories ADD COLUMN IF NOT EXISTS base_fee NUMERIC(10,2) NOT NULL DEFAULT 0.00`,
+    `ALTER TABLE categories ADD COLUMN IF NOT EXISTS complexity_fee NUMERIC(10,2) NOT NULL DEFAULT 0.00`,
+    `ALTER TABLE categories ADD COLUMN IF NOT EXISTS delay_fee NUMERIC(10,2) NOT NULL DEFAULT 0.00`,
+    `ALTER TABLE categories ADD COLUMN IF NOT EXISTS ceiling_percent NUMERIC(5,2) NOT NULL DEFAULT 12.00`,
+    `ALTER TABLE categories ADD COLUMN IF NOT EXISTS finder_pct NUMERIC(5,2) NOT NULL DEFAULT 25.00`,
+    `ALTER TABLE categories ADD COLUMN IF NOT EXISTS agent_pct NUMERIC(5,2) NOT NULL DEFAULT 35.00`,
+    `ALTER TABLE categories ADD COLUMN IF NOT EXISTS platform_pct NUMERIC(5,2) NOT NULL DEFAULT 40.00`,
+    `ALTER TABLE categories ADD COLUMN IF NOT EXISTS finder_reward_cap NUMERIC(10,2)`,
+    `ALTER TABLE categories ADD COLUMN IF NOT EXISTS elevated_review BOOLEAN NOT NULL DEFAULT false`,
+    // Recovery Fee Engine inputs on items (declared value + whether the
+    // ceiling actually bound) — same gap as above.
+    `ALTER TABLE items ADD COLUMN IF NOT EXISTS declared_value NUMERIC(12,2)`,
+    `ALTER TABLE items ADD COLUMN IF NOT EXISTS fee_ceiling_applied BOOLEAN NOT NULL DEFAULT false`,
+    // Settlement dispute-window timestamp on claims — same gap.
+    `ALTER TABLE claims ADD COLUMN IF NOT EXISTS settle_at TIMESTAMPTZ`,
+    // Platform-wide admin toggles (currently just the social publishing
+    // emergency stop) — same gap, this table didn't exist in the
+    // incremental path at all.
+    `CREATE TABLE IF NOT EXISTS platform_settings (
+      key VARCHAR(100) PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_by VARCHAR(100),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    )`,
     // Admin 2FA (TOTP) — additive columns only, both default to "not
     // enrolled" so no existing admin account is affected until they
     // opt in via the new enrollment flow.
@@ -677,16 +707,57 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     // into escrow needs a real M-Pesa refund via IntaSend (see resolveDispute /
     // finalizeClaimRefund / revertClaimRefundLock in database.ts) — without these two
     // statuses that locked, auditable refund flow can't be represented in the DB at all.
+    // 'pending_settlement' added: this was the actual P0 bug — schema.ts and
+    // sql/schema.sql both correctly include it (the settlement dispute-window
+    // state between handover confirmation and real payout — see
+    // enterPendingSettlement in database.ts), but this incremental migration
+    // statement recreated the constraint WITHOUT it, meaning any database that
+    // had already been bootstrapped before the settlement rework would reject
+    // every transition into pending_settlement with a CHECK violation the
+    // moment an agent confirmed a handover. Fixed.
     // Safe to run on every boot.
     `ALTER TABLE claims DROP CONSTRAINT IF EXISTS claims_status_check`,
-    `ALTER TABLE claims ADD CONSTRAINT claims_status_check CHECK (status IN ('pending_verification', 'awaiting_agent_confirmation', 'pending_payment', 'payment_window_expired', 'escrow_held', 'releasing', 'released', 'disputed', 'rejected', 'refunding', 'refunded'))`
+    `ALTER TABLE claims ADD CONSTRAINT claims_status_check CHECK (status IN ('pending_verification', 'awaiting_agent_confirmation', 'pending_payment', 'payment_window_expired', 'escrow_held', 'pending_settlement', 'releasing', 'released', 'disputed', 'rejected', 'refunding', 'refunded'))`,
+    // Same class of bug as claims_status_check above, for items: the
+    // suspected_stolen/legal_hold statuses were added to schema.ts and
+    // sql/schema.sql but this incremental path never updated the
+    // already-bootstrapped-database constraint to match, so an existing
+    // production database would reject the entire stolen-property state
+    // machine. Postgres auto-names an unnamed inline CHECK on a column
+    // "<table>_<column>_check", so this matches the constraint sql/schema.sql
+    // implicitly created.
+    `ALTER TABLE items DROP CONSTRAINT IF EXISTS items_status_check`,
+    `ALTER TABLE items ADD CONSTRAINT items_status_check CHECK (status IN ('awaiting_dropoff', 'at_agent', 'claimed', 'expired', 'rejected', 'suspected_stolen', 'legal_hold'))`,
+    // Belt-and-braces against the claim-creation race (see the matching
+    // comment in schema.ts) — at most one non-terminal claim per item at
+    // the database level. Also missing from this incremental path entirely.
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_claims_one_active_per_item ON claims(item_id) WHERE status NOT IN ('disputed', 'rejected', 'refunded', 'payment_window_expired')`,
   ];
+  let migrationFailureCount = 0;
   for (const sql of statements) {
     try {
       await pool.query(sql);
     } catch (err) {
       console.error(`[SCHEMA SYNC] Failed to run: ${sql}`, err);
+      migrationFailureCount++;
     }
   }
   console.log(`[SCHEMA SYNC] Database schema check complete — ${statements.length} statements verified.`);
+
+  if (migrationFailureCount > 0) {
+    // Every statement above is written to be safely re-runnable (IF NOT
+    // EXISTS / IF EXISTS / DROP-then-ADD), so a failure here means a real,
+    // unexpected schema problem — e.g. existing rows that violate a new
+    // CHECK constraint. Attempting every statement first (rather than
+    // stopping at the first failure) maximizes how much of the schema
+    // actually gets synced even in a partial-failure scenario, but the
+    // process must not silently continue into serving production traffic
+    // on top of a database that didn't end up matching what the
+    // application code assumes.
+    const message = `[SCHEMA SYNC] ${migrationFailureCount} of ${statements.length} migration statement(s) failed. See errors above.`;
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error(message + ' Refusing to start in production with an unverified schema.');
+    }
+    console.warn(message + ' Continuing in non-production environment.');
+  }
 }

@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import crypto from 'crypto';
+import { db } from '../db/database';
 
 dotenv.config();
 
@@ -18,6 +19,43 @@ function sanitizeTelegramEnvValue(raw: string | undefined): string {
   // Normalize any smart/en/em dash to a plain ASCII hyphen-minus.
   v = v.replace(/[\u2010\u2011\u2012\u2013\u2014\u2212]/g, '-');
   return v.trim();
+}
+
+/**
+ * Sanitizes untrusted, Finder-controlled free text (item.description,
+ * item.location_description) before it reaches ANY public social post.
+ * A Finder filling out the found-item report is an anonymous member of the
+ * public — this text must be treated the same as any other untrusted user
+ * input, not as safe content just because it came through our own form.
+ *
+ * Strips:
+ * - full URLs (http/https/www.) — prevents a Finder embedding a phishing
+ *   link disguised as part of a legitimate Return4me post
+ * - phone numbers (Kenyan mobile formats) and email addresses — prevents
+ *   PII leakage and off-platform contact-fishing through a "found item"
+ *   post
+ * - excessive whitespace a Finder could use to visually break the post's
+ *   formatting
+ *
+ * When htmlEscape is true (Telegram, which posts with parse_mode: 'HTML'),
+ * also escapes &, <, > so the text can never be interpreted as markup —
+ * without this, a description like `<a href="evil.com">real return4me
+ * link</a>` would render as an actual clickable link inside our own post.
+ */
+export function sanitizeSocialText(raw: string | null | undefined, opts: { htmlEscape?: boolean } = {}): string {
+  let text = (raw || '').toString();
+
+  text = text.replace(/https?:\/\/\S+/gi, '[link removed]');
+  text = text.replace(/\bwww\.\S+/gi, '[link removed]');
+  text = text.replace(/(?:\+254|254|0)[71]\d{8}\b/g, '[phone removed]');
+  text = text.replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, '[email removed]');
+  text = text.replace(/\s{3,}/g, '  ').trim();
+
+  if (opts.htmlEscape) {
+    text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  return text || 'Not provided.';
 }
 
 interface TwitterOAuthCreds {
@@ -130,6 +168,26 @@ export function maskDocumentNumber(num: string): string {
 
 export const SocialService = {
   /**
+   * Emergency-stop check enforced INSIDE the service itself, not just at
+   * the calling route. Defense in depth: route.ts already checks this
+   * before calling broadcastVerifiedItem/broadcastItemReunited, but that
+   * means the guarantee lives only as long as every current and future
+   * call site remembers to check first. Enforcing it here too means the
+   * pause holds even if a future code path calls SocialService directly.
+   * Fails safe: if the setting can't be read at all, treat that the same
+   * as "paused" — never publish when uncertain.
+   */
+  async _isPublishingPaused(): Promise<boolean> {
+    try {
+      const value = await db.getSetting('social_publishing_paused');
+      return value === 'true';
+    } catch (err) {
+      console.error('[SOCIAL SERVICE] Failed to read publishing-pause setting — failing safe (treating as paused):', err);
+      return true;
+    }
+  },
+
+  /**
    * Post a verified recovery update to Telegram Channel
    */
   async postToTelegram(item: SocialItem, agent?: SocialAgent, category?: SocialCategory): Promise<boolean> {
@@ -142,10 +200,8 @@ export const SocialService = {
 
     let text = '';
     if (isSensitive) {
-      const maskedName = item.ocr_extracted_name ? maskName(item.ocr_extracted_name) : 'Hifadhi ya Binafsi';
-      const maskedNum = item.ocr_extracted_number ? maskDocumentNumber(item.ocr_extracted_number) : 'Hifadhi ya Binafsi';
-
-      text = `<b>NOTICE OF FOUND DOCUMENT</b>\n\n` +
+      const maskedName = sanitizeSocialText(item.ocr_extracted_name ? maskName(item.ocr_extracted_name) : 'Hifadhi ya Binafsi', { htmlEscape: true });
+      const maskedNum = sanitizeSocialText(item.ocr_extracted_number ? maskDocumentNumber(item.ocr_extracted_number) : 'Hifadhi ya Binafsi', { htmlEscape: true });
              `A lost identity document has been deposited and verified at an authorized Return4me agent hub.\n\n` +
              `<b>Document Type:</b> ${categoryName}\n` +
              `<b>Name on Document:</b> <code>${maskedName}</code>\n` +
@@ -155,12 +211,13 @@ export const SocialService = {
              `To claim this document, visit the secure portal link below. Identity verification and standard processing fee of KES ${fee} applies.\n\n` +
              `<b>Claim Link:</b> <a href="https://return4me.co.ke/?claim=${item.id}">https://return4me.co.ke/?claim=${item.id}</a>`;
     } else {
-      const itemDesc = item.description || 'No additional details provided.';
+      const itemDesc = sanitizeSocialText(item.description, { htmlEscape: true }) || 'No additional details provided.';
+      const safeLocation = sanitizeSocialText(item.location_description, { htmlEscape: true });
 
       text = `<b>NOTICE OF FOUND ITEM</b>\n\n` +
              `A lost item has been deposited and verified at an authorized Return4me agent hub.\n\n` +
              `<b>Category:</b> ${categoryName}\n` +
-             `<b>Location Found:</b> ${item.location_description}\n` +
+             `<b>Location Found:</b> ${safeLocation}\n` +
              `<b>Collection Point:</b> ${agent ? agent.business_name : 'Return4me Hub'}, ${agent ? agent.location_address : 'Kenya'}\n` +
              `<b>Description:</b> <i>${itemDesc}</i>\n\n` +
              `<b>Status:</b> Physically verified by authorized agent.\n\n` +
@@ -267,8 +324,8 @@ export const SocialService = {
 
     let text = '';
     if (isSensitive) {
-      const maskedName = item.ocr_extracted_name ? maskName(item.ocr_extracted_name) : 'Hifadhi ya Binafsi';
-      const maskedNum = item.ocr_extracted_number ? maskDocumentNumber(item.ocr_extracted_number) : 'Hifadhi ya Binafsi';
+      const maskedName = sanitizeSocialText(item.ocr_extracted_name ? maskName(item.ocr_extracted_name) : 'Hifadhi ya Binafsi');
+      const maskedNum = sanitizeSocialText(item.ocr_extracted_number ? maskDocumentNumber(item.ocr_extracted_number) : 'Hifadhi ya Binafsi');
 
       text = `NOTICE OF FOUND DOCUMENT\n\n` +
              `A lost identity document has been deposited and verified at an authorized Return4me agent hub.\n\n` +
@@ -280,12 +337,13 @@ export const SocialService = {
              `To claim this document, visit the secure portal link below. Identity verification and standard processing fee of KES ${fee} applies.\n\n` +
              `Claim Link: https://return4me.co.ke/?claim=${item.id}`;
     } else {
-      const itemDesc = item.description || 'No additional details provided.';
+      const itemDesc = sanitizeSocialText(item.description) || 'No additional details provided.';
+      const safeLocation = sanitizeSocialText(item.location_description);
 
       text = `NOTICE OF FOUND ITEM\n\n` +
              `A lost item has been deposited and verified at an authorized Return4me agent hub.\n\n` +
              `Category: ${categoryName}\n` +
-             `Location Found: ${item.location_description}\n` +
+             `Location Found: ${safeLocation}\n` +
              `Collection Point: ${agent ? agent.business_name : 'Return4me Hub'}, ${agent ? agent.location_address : 'Kenya'}\n` +
              `Description: ${itemDesc}\n\n` +
              `Status: Physically verified by authorized agent.\n\n` +
@@ -391,11 +449,12 @@ export const SocialService = {
     // detail lives on the claim page behind the link, not in the tweet itself.
     let text = '';
     if (isSensitive) {
-      const maskedName = item.ocr_extracted_name ? maskName(item.ocr_extracted_name) : 'Private';
+      const maskedName = sanitizeSocialText(item.ocr_extracted_name ? maskName(item.ocr_extracted_name) : 'Private');
       text = `FOUND: ${categoryName} (name: ${maskedName}) verified at a Return4me agent hub` +
              `${agent ? ' in ' + agent.location_address : ''}. Claim it (ID verification + fee applies):\n${claimLink}`;
     } else {
-      text = `FOUND: ${categoryName} near ${item.location_description}, verified at a Return4me agent hub` +
+      const safeLocation = sanitizeSocialText(item.location_description);
+      text = `FOUND: ${categoryName} near ${safeLocation}, verified at a Return4me agent hub` +
              `${agent ? ' (' + agent.business_name + ')' : ''}. Claim it here:\n${claimLink}`;
     }
     if (text.length > 280) {
@@ -492,6 +551,10 @@ export const SocialService = {
    * Broadcast verified recovery message to all configured social platforms
    */
   async broadcastVerifiedItem(item: SocialItem, agent?: SocialAgent, category?: SocialCategory): Promise<void> {
+    if (await this._isPublishingPaused()) {
+      console.log(`[SOCIAL SERVICE] Publishing is paused — skipping broadcast for item ID: ${item.id}.`);
+      return;
+    }
     console.log(`[SOCIAL SERVICE] Initiating social media broadcast for item ID: ${item.id}`);
     
     // Run posts in parallel for maximum performance
@@ -512,9 +575,14 @@ export const SocialService = {
    * the person who claimed it, not the item itself.
    */
   async broadcastItemReunited(item: SocialItem, category?: SocialCategory): Promise<void> {
+    if (await this._isPublishingPaused()) {
+      console.log(`[SOCIAL SERVICE] Publishing is paused — skipping reunited-notice for item ID: ${item.id}.`);
+      return;
+    }
     const categoryName = category ? `${category.name_en} / ${category.name_sw}` : 'Item';
+    const safeLocation = sanitizeSocialText(item.location_description);
     const text = `UPDATE: NOTICE CLOSED\n\n` +
-      `The ${categoryName} previously reported found near ${item.location_description} has been verified and returned to its rightful owner.\n\n` +
+      `The ${categoryName} previously reported found near ${safeLocation} has been verified and returned to its rightful owner.\n\n` +
       `This listing is now closed and no longer available for claim.`;
 
     const botToken = sanitizeTelegramEnvValue(process.env.TELEGRAM_BOT_TOKEN);
