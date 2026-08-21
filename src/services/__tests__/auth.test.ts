@@ -118,4 +118,32 @@ describe('generateToken / verifyToken', () => {
     expect(() => verifyToken('not-a-real-token')).not.toThrow();
     expect(verifyToken('not-a-real-token')).toBeNull();
   });
+
+  // Every admin-only route in server.ts guards itself with
+  // `req.user?.role !== 'admin'` — that guard is only meaningful if the
+  // intermediate 'admin_pending_2fa' role (issued after password
+  // verification but before the TOTP code is checked) round-trips through
+  // signing and verification EXACTLY, and is never silently upgraded to
+  // 'admin'. This is the property the entire admin-2FA security model
+  // rests on: a leaked/replayed pending-2FA token must never pass as a
+  // full admin session.
+  it('preserves the admin_pending_2fa role exactly — never upgrades it to admin', () => {
+    const pendingToken = generateToken({
+      userId: 'admin-1',
+      phone: '+254700000000',
+      role: 'admin_pending_2fa' as any,
+      username: 'testadmin',
+    }, '5m');
+    const decoded = verifyToken(pendingToken);
+    expect(decoded?.role).toBe('admin_pending_2fa');
+    expect(decoded?.role).not.toBe('admin');
+  });
+
+  it('honors a custom short expiry (used for the 5-minute pending-2FA window and 4-hour admin sessions)', () => {
+    const token = generateToken(payload, '1ms');
+    // Give the 1ms expiry time to actually elapse before verifying.
+    const start = Date.now();
+    while (Date.now() - start < 5) { /* busy-wait a few ms */ }
+    expect(verifyToken(token)).toBeNull();
+  });
 });

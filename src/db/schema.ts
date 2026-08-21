@@ -191,6 +191,17 @@ export const ledger = pgTable("ledger", {
   amount: numeric("amount", { precision: 10, scale: 2 }).notNull(),
   phone_or_till: varchar("phone_or_till", { length: 30 }).notNull(),
   status: varchar("status", { length: 20 }).default("pending").notNull(),
+  // Per-transaction provider reconciliation. A batch payout API call
+  // (IntaSend send-money) can partially succeed — one recipient's transfer
+  // going through while another fails — so each ledger row needs its own
+  // provider identity and status, not just the internal 'status' above
+  // driven by the batch HTTP response. provider_batch_id groups rows sent
+  // in the same API call; provider_transaction_id is that specific
+  // recipient's own transaction reference, used to reconcile a later
+  // webhook/status callback back to the correct ledger row.
+  provider_batch_id: varchar("provider_batch_id", { length: 100 }),
+  provider_transaction_id: varchar("provider_transaction_id", { length: 100 }),
+  failure_reason: text("failure_reason"),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 

@@ -767,12 +767,20 @@ async function startServer() {
 
       await db.updateAdminLastLogin(admin.id);
 
+      // Admin sessions are deliberately shorter-lived (4h) than the default
+      // 24h used for ordinary user tokens — an admin session can flag items
+      // stolen, override settlement timing, and change category fee
+      // configuration, and this codebase has no server-side token
+      // revocation (logout is client-side only, consistent with every
+      // other role here). A shorter expiry is the proportionate way to
+      // bound a leaked token's usable window without introducing a new
+      // session/blacklist table.
       const token = generateToken({
         userId: admin.id,
         phone: '+254700000000',
         role: 'admin',
         username: admin.username,
-      });
+      }, '4h');
 
       return res.json({
         success: true,
@@ -839,7 +847,7 @@ async function startServer() {
         phone: '+254700000000',
         role: 'admin',
         username: admin.username,
-      });
+      }, '4h');
 
       return res.json({
         success: true,
@@ -3273,24 +3281,65 @@ async function executeClaimSettlement(claimId: string): Promise<{ success: boole
     }
   }
 
-  const payouts = [
-    { destination: item.finder_phone, payoutMethodType: 'Personal M-Pesa', amount: finderShare, recipientType: 'finder' as const },
-    { destination: agent.mpesa_till_or_paybill, payoutMethodType: agent.payout_method_type || 'Till Number', amount: agentShare, recipientType: 'agent' as const },
-  ];
+  // Only pay recipients whose ledger row is still 'pending'. This is what
+  // makes a retry safe: if the finder's payout already succeeded on a
+  // previous attempt but the agent's failed, this run sends money to the
+  // agent ONLY — never re-sending to the finder, which would be a
+  // duplicate payment.
+  const claimLedgerRows = await db.getLedgerEntriesForClaim(claimId);
+  const finderRow = claimLedgerRows.find(r => r.type === 'finder_payout');
+  const agentRow = claimLedgerRows.find(r => r.type === 'agent_payout');
 
-  const payoutResult = await PaymentService.triggerIntasendPayout(claimId, payouts);
-  if (!payoutResult.success) {
+  const outstanding: Array<{ destination: string; amount: number; payoutMethodType?: string; recipientType: 'finder' | 'agent' }> = [];
+  if (finderRow && finderRow.status === 'pending') {
+    outstanding.push({ destination: item.finder_phone, payoutMethodType: 'Personal M-Pesa', amount: finderShare, recipientType: 'finder' });
+  }
+  if (agentRow && agentRow.status === 'pending') {
+    outstanding.push({ destination: agent.mpesa_till_or_paybill, payoutMethodType: agent.payout_method_type || 'Till Number', amount: agentShare, recipientType: 'agent' });
+  }
+
+  if (outstanding.length > 0) {
+    const payoutResult = await PaymentService.triggerIntasendPayout(claimId, outstanding);
+
+    for (const result of payoutResult.results) {
+      const row = result.recipientType === 'finder' ? finderRow : agentRow;
+      if (!row) continue; // shouldn't happen — outstanding was built from these same rows
+      await db.recordPayoutAttempt(row.id, {
+        status: result.status,
+        providerBatchId: payoutResult.batchId,
+        providerTransactionId: result.providerTransactionId,
+        failureReason: result.status === 'failed' ? 'IntaSend reported this transaction as failed.' : result.status === 'unknown' ? 'Network/timeout error contacting IntaSend — outcome unconfirmed.' : null,
+      });
+      if (result.status === 'failed' || result.status === 'unknown') {
+        await db.logAudit('SYSTEM', 'PAYOUT_NOT_CONFIRMED', `Claim ${claimId}: ${result.recipientType} payout status '${result.status}'. Ledger row ${row.id} left pending for retry/reconciliation.`);
+      }
+    }
+  }
+
+  // Re-check actual state after recording results — never assume the
+  // outcome, re-fetch it.
+  const refreshedLedgerRows = await db.getLedgerEntriesForClaim(claimId);
+  const stillOutstanding = refreshedLedgerRows.find(
+    r => (r.type === 'finder_payout' || r.type === 'agent_payout') && r.status !== 'completed'
+  );
+
+  if (stillOutstanding) {
     await db.revertSettlementRelease(claimId);
-    return { success: false, message: 'Payout disbursement failed; claim reverted to pending_settlement for retry.' };
+    return {
+      success: false,
+      message: `Settlement partially processed — ${stillOutstanding.type} is '${stillOutstanding.status}'. Claim reverted to pending_settlement; the next sweep will retry only the outstanding payout(s).`,
+    };
   }
 
   const finalized = await db.finalizeSettlement(claimId);
   if (!finalized.success) {
-    // Deliberately NOT reverting here — the real M-Pesa payout already went
-    // out. Leaving the claim in 'releasing' keeps it locked and flags it for
-    // manual admin reconciliation rather than risking a duplicate payout.
-    await db.logAudit('SYSTEM', 'SETTLEMENT_FINALIZE_DB_FAILURE_AFTER_PAYOUT', `Claim ${claimId}: IntaSend payout succeeded but finalizeSettlement failed: ${finalized.message}. Left in 'releasing' — requires manual admin review.`);
-    return { success: false, message: 'Payout sent but recording the settlement failed. Flagged for manual admin review.' };
+    // Deliberately NOT reverting here — the real M-Pesa payouts already went
+    // out (every finder_payout/agent_payout row is confirmed 'completed' at
+    // this point). Leaving the claim in 'releasing' keeps it locked and
+    // flags it for manual admin reconciliation rather than risking a
+    // duplicate payout via an automatic retry.
+    await db.logAudit('SYSTEM', 'SETTLEMENT_FINALIZE_DB_FAILURE_AFTER_PAYOUT', `Claim ${claimId}: all payouts confirmed but finalizeSettlement failed: ${finalized.message}. Left in 'releasing' — requires manual admin review.`);
+    return { success: false, message: 'Payouts confirmed but recording the final settlement failed. Flagged for manual admin review.' };
   }
   return finalized;
 }

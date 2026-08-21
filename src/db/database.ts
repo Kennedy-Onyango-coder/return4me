@@ -172,6 +172,9 @@ export interface LedgerEntry {
   amount: number;
   phone_or_till: string;
   status: "pending" | "completed" | "failed";
+  provider_batch_id?: string | null;
+  provider_transaction_id?: string | null;
+  failure_reason?: string | null;
   created_at: string;
 }
 
@@ -352,6 +355,9 @@ function parseLedgerEntry(row: any): LedgerEntry {
     amount: parseFloat(row.amount),
     phone_or_till: row.phone_or_till || "",
     status: row.status as any,
+    provider_batch_id: row.provider_batch_id || null,
+    provider_transaction_id: row.provider_transaction_id || null,
+    failure_reason: row.failure_reason || null,
     created_at: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
   };
 }
@@ -1127,6 +1133,49 @@ class DatabaseEngine {
     } catch (error) {
       console.error("Database query failed:", error);
       throw new Error("Failed to query ledger.", { cause: error });
+    }
+  }
+
+  // Used by executeClaimSettlement to find which finder/agent payout rows
+  // for this claim are still outstanding — the actual mechanism that makes
+  // a settlement retry safe. Only rows still 'pending' get included in the
+  // next payout attempt; a row already 'completed' is never re-sent to,
+  // even if its sibling row for the same claim failed and needs a retry.
+  public async getLedgerEntriesForClaim(claimId: string): Promise<LedgerEntry[]> {
+    try {
+      const rows = await drizzleDb.select().from(ledgerTable).where(eq(ledgerTable.claim_id, claimId));
+      return rows.map(parseLedgerEntry);
+    } catch (error) {
+      console.error("Database query failed:", error);
+      throw new Error("Failed to query ledger entries for claim.", { cause: error });
+    }
+  }
+
+  // Records the outcome of one payout attempt against a specific ledger
+  // row. 'success' marks it 'completed' (money genuinely confirmed sent —
+  // never set this from a bare HTTP 200, only from an actual provider
+  // confirmation); 'failed' marks it 'failed' with a reason for admin
+  // visibility; 'pending'/'unknown' leave the row 'pending' so the next
+  // settlement sweep attempt picks it up again, but now carrying the
+  // provider's batch/transaction id for reconciliation.
+  public async recordPayoutAttempt(
+    ledgerEntryId: string,
+    result: { status: 'success' | 'pending' | 'failed' | 'unknown'; providerBatchId: string | null; providerTransactionId: string | null; failureReason?: string | null }
+  ): Promise<void> {
+    try {
+      const newStatus = result.status === 'success' ? 'completed' : result.status === 'failed' ? 'failed' : 'pending';
+      await drizzleDb
+        .update(ledgerTable)
+        .set({
+          status: newStatus,
+          provider_batch_id: result.providerBatchId,
+          provider_transaction_id: result.providerTransactionId,
+          failure_reason: result.failureReason ?? null,
+        })
+        .where(eq(ledgerTable.id, ledgerEntryId));
+    } catch (error) {
+      console.error("Database update failed:", error);
+      throw new Error("Failed to record payout attempt.", { cause: error });
     }
   }
 
@@ -2154,11 +2203,30 @@ class DatabaseEngine {
           return { success: false, message: `Cannot finalize settlement. Claim is in status: ${claim.status}` };
         }
 
+        // Defensive guard, not just caller discipline: refuse to finalize
+        // if any finder_payout/agent_payout row for this claim isn't
+        // already genuinely 'completed' — i.e. confirmed by an actual
+        // provider result via recordPayoutAttempt, not assumed. Without
+        // this check, the bulk "mark everything pending as completed"
+        // update below would silently launder a still-outstanding or
+        // failed payout into looking settled.
+        const claimLedgerRows = await tx.select().from(ledgerTable).where(eq(ledgerTable.claim_id, claimId));
+        const outstandingPayout = claimLedgerRows.find(
+          r => (r.type === 'finder_payout' || r.type === 'agent_payout') && r.status !== 'completed'
+        );
+        if (outstandingPayout) {
+          return { success: false, message: `Cannot finalize settlement — ${outstandingPayout.type} is still '${outstandingPayout.status}', not confirmed completed.` };
+        }
+
         await tx
           .update(claimsTable)
           .set({ status: "released", updated_at: new Date() })
           .where(eq(claimsTable.id, claimId));
 
+        // Only the platform_fee row (which never goes through an external
+        // payout provider — it's the platform's own retained share) should
+        // still be 'pending' at this point; finder_payout/agent_payout
+        // rows were already individually confirmed 'completed' above.
         await tx
           .update(ledgerTable)
           .set({ status: "completed" })

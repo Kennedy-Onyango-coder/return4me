@@ -157,6 +157,10 @@ CREATE TABLE ledger (
     amount NUMERIC(10, 2) NOT NULL CHECK (amount >= 0),
     phone_or_till VARCHAR(30) NOT NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'completed', 'failed')),
+    -- Per-transaction provider reconciliation — see matching comment in schema.ts.
+    provider_batch_id VARCHAR(100),
+    provider_transaction_id VARCHAR(100),
+    failure_reason TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 

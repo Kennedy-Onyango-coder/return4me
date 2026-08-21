@@ -153,16 +153,46 @@ export const PaymentService = {
   /**
    * Triggers split disbursements to Finders and Agents using IntaSend Payouts/Disbursements API
    */
+  /**
+   * Sends a batch M-Pesa payout via IntaSend's send-money API and returns a
+   * PER-RECIPIENT result, not one aggregate success/failure for the whole
+   * batch. This matters because IntaSend's send-money endpoint accepts
+   * multiple transactions in a single call, and a batch can partially
+   * succeed — e.g. the finder's number is valid and processes, while the
+   * agent's till number is wrong and fails. Collapsing that into one
+   * boolean would either falsely mark BOTH as failed (retrying the
+   * finder's payout a second time — a duplicate payment) or falsely mark
+   * BOTH as succeeded (silently never paying the agent).
+   *
+   * Equally important: HTTP 200 from IntaSend only means "the batch was
+   * accepted for processing" — M-Pesa B2C disbursement is asynchronous, so
+   * acceptance is not the same as money having actually arrived. Every
+   * result from the real (non-simulated) path is therefore reported as
+   * 'pending', never 'success', regardless of the HTTP status — this
+   * function cannot honestly claim a transfer completed without an actual
+   * confirmation, which IntaSend does not return synchronously here. The
+   * caller (executeClaimSettlement in server.ts) is responsible for
+   * treating 'pending' as "accepted, awaiting reconciliation" rather than
+   * "done", and only the simulation path (no real credentials configured)
+   * reports 'success' immediately, since there's no real money movement to
+   * wait on.
+   */
   async triggerIntasendPayout(
     claimId: string,
     payouts: Array<{ destination: string; amount: number; payoutMethodType?: string; recipientType: 'finder' | 'agent' }>
-  ): Promise<{ success: boolean; transactionId: string }> {
+  ): Promise<{ batchId: string | null; results: Array<{ recipientType: 'finder' | 'agent'; destination: string; providerTransactionId: string | null; status: 'success' | 'pending' | 'failed' | 'unknown' }> }> {
     const secretKey = process.env.INTASEND_SECRET_KEY;
     if (isPlaceholderKey(secretKey)) {
       console.warn('[INTASEND DISBURSEMENT] Key missing/dummy. Emulating disbursement split.');
+      const batchId = 'SIM-BATCH-' + Math.random().toString(36).substring(2, 10).toUpperCase();
       return {
-        success: true,
-        transactionId: 'SIM-' + Math.random().toString(36).substring(2, 10).toUpperCase(),
+        batchId,
+        results: payouts.map(p => ({
+          recipientType: p.recipientType,
+          destination: p.destination,
+          providerTransactionId: 'SIM-' + Math.random().toString(36).substring(2, 10).toUpperCase(),
+          status: 'success' as const,
+        })),
       };
     }
 
@@ -203,25 +233,55 @@ export const PaymentService = {
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.warn(`[INTASEND DISBURSEMENT] Sandbox API error (${response.status}): ${errorText.substring(0, 100)}.`);
+        console.warn(`[INTASEND DISBURSEMENT] API error (${response.status}): ${errorText.substring(0, 200)}.`);
         return {
-          success: false,
-          transactionId: '',
+          batchId: null,
+          results: payouts.map(p => ({ recipientType: p.recipientType, destination: p.destination, providerTransactionId: null, status: 'failed' as const })),
         };
       }
 
       const data = await response.json() as any;
       console.log('[INTASEND DISBURSEMENT] Response received:', JSON.stringify(data, null, 2));
 
-      return {
-        success: true,
-        transactionId: data.tracking_id || 'ISD-' + Math.random().toString(36).substring(2, 10).toUpperCase(),
-      };
+      const batchId: string | null = data?.tracking_id || data?.batch_reference || null;
+
+      // Defensively attempt to match individual transaction identifiers
+      // back to each recipient by account number, if IntaSend's response
+      // includes a per-transaction array (field name varies by API
+      // version — checking the common candidates rather than assuming
+      // one specific shape, since this cannot be verified without live
+      // credentials in this environment). If no per-transaction detail is
+      // present at all, every recipient still gets a real batchId to
+      // reconcile against later, just no individual transaction id yet.
+      const rawTxns: any[] = data?.transactions || data?.invoices || data?.disbursements || [];
+      const results = payouts.map(p => {
+        const match = rawTxns.find((t: any) => {
+          const acct = (t?.account || t?.phone_number || t?.destination || '').toString().replace(/\s+/g, '');
+          return acct && acct.endsWith(p.destination.replace(/\s+/g, '').slice(-9));
+        });
+        return {
+          recipientType: p.recipientType,
+          destination: p.destination,
+          providerTransactionId: match?.transaction_id || match?.id || match?.invoice || null,
+          // Deliberately 'pending', not 'success' — see function docstring.
+          // IntaSend accepting the batch is not the same as the M-Pesa B2C
+          // transfer having actually completed.
+          status: 'pending' as const,
+        };
+      });
+
+      return { batchId, results };
     } catch (error: any) {
       console.warn('[INTASEND DISBURSEMENT] Disbursement split exception:', error.message);
+      // 'unknown', not 'failed' — a network/timeout error here means we
+      // genuinely don't know whether IntaSend received and is processing
+      // the request. Treating this as definitively failed risks a
+      // duplicate disbursement if a retry fires while the original request
+      // actually went through; leaving it 'unknown' routes it to manual
+      // admin reconciliation instead of an automatic retry.
       return {
-        success: false,
-        transactionId: '',
+        batchId: null,
+        results: payouts.map(p => ({ recipientType: p.recipientType, destination: p.destination, providerTransactionId: null, status: 'unknown' as const })),
       };
     }
   },
