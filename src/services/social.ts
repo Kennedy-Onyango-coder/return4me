@@ -166,6 +166,21 @@ export function maskDocumentNumber(num: string): string {
   return clean.slice(0, 2) + '****' + clean.slice(-2);
 }
 
+/**
+ * HTML-escapes a value for Telegram's HTML parse mode ONLY — no URL/phone/
+ * email scrubbing (unlike sanitizeSocialText). Use this for admin-
+ * controlled values (category names, Agent business name/address) that
+ * aren't Finder-supplied free text but should still never be able to
+ * break Telegram's HTML parsing or inject markup — e.g. if a category
+ * name is ever edited to include a stray `<` character. For genuinely
+ * untrusted Finder-controlled text (description, location), use
+ * sanitizeSocialText(..., { htmlEscape: true }) instead, which also
+ * strips embedded links/phone numbers/emails.
+ */
+export function escapeTelegramHtml(raw: string | null | undefined): string {
+  return (raw || '').toString().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 export const SocialService = {
   /**
    * Emergency-stop check enforced INSIDE the service itself, not just at
@@ -200,15 +215,16 @@ export const SocialService = {
 
     let text = '';
     if (isSensitive) {
-      const maskedName = sanitizeSocialText(item.ocr_extracted_name ? maskName(item.ocr_extracted_name) : 'Hifadhi ya Binafsi', { htmlEscape: true });
-      const maskedNum = sanitizeSocialText(item.ocr_extracted_number ? maskDocumentNumber(item.ocr_extracted_number) : 'Hifadhi ya Binafsi', { htmlEscape: true });
-             `A lost identity document has been deposited and verified at an authorized Return4me agent hub.\n\n` +
-             `<b>Document Type:</b> ${categoryName}\n` +
-             `<b>Name on Document:</b> <code>${maskedName}</code>\n` +
-             `<b>Document Number:</b> <code>${maskedNum}</code>\n\n` +
-             `<b>Collection Point:</b> ${agent ? agent.business_name : 'Return4me Hub'}, ${agent ? agent.location_address : 'Kenya'}\n` +
-             `<b>Status:</b> Physically verified by authorized agent.\n\n` +
-             `To claim this document, visit the secure portal link below. Identity verification and standard processing fee of KES ${fee} applies.\n\n` +
+      // Most conservative public template for sensitive documents: no
+      // masked name, no masked number, no collection point, no fee — even
+      // partially-masked identity information is more than a public post
+      // needs to say. Real ownership matching happens entirely through
+      // the private claim workflow (security questions, OTP, and — for
+      // Tier 3 — ID proof), never through anything shown here.
+      text = `<b>FOUND: ${escapeTelegramHtml(categoryName).toUpperCase()}</b>\n\n` +
+             `A verified ${escapeTelegramHtml(categoryName)} has been recovered and is being securely held by a Return4me Agent.\n\n` +
+             `Think it may be yours?\n\n` +
+             `Verify ownership securely on Return4me. Use the private claim workflow for real identity matching.\n\n` +
              `<b>Claim Link:</b> <a href="https://return4me.co.ke/?claim=${item.id}">https://return4me.co.ke/?claim=${item.id}</a>`;
     } else {
       const itemDesc = sanitizeSocialText(item.description, { htmlEscape: true }) || 'No additional details provided.';
@@ -216,9 +232,9 @@ export const SocialService = {
 
       text = `<b>NOTICE OF FOUND ITEM</b>\n\n` +
              `A lost item has been deposited and verified at an authorized Return4me agent hub.\n\n` +
-             `<b>Category:</b> ${categoryName}\n` +
+             `<b>Category:</b> ${escapeTelegramHtml(categoryName)}\n` +
              `<b>Location Found:</b> ${safeLocation}\n` +
-             `<b>Collection Point:</b> ${agent ? agent.business_name : 'Return4me Hub'}, ${agent ? agent.location_address : 'Kenya'}\n` +
+             `<b>Collection Point:</b> ${agent ? escapeTelegramHtml(agent.business_name) : 'Return4me Hub'}, ${agent ? escapeTelegramHtml(agent.location_address) : 'Kenya'}\n` +
              `<b>Description:</b> <i>${itemDesc}</i>\n\n` +
              `<b>Status:</b> Physically verified by authorized agent.\n\n` +
              `To claim this item, please visit the portal link below.\n\n` +
@@ -324,17 +340,10 @@ export const SocialService = {
 
     let text = '';
     if (isSensitive) {
-      const maskedName = sanitizeSocialText(item.ocr_extracted_name ? maskName(item.ocr_extracted_name) : 'Hifadhi ya Binafsi');
-      const maskedNum = sanitizeSocialText(item.ocr_extracted_number ? maskDocumentNumber(item.ocr_extracted_number) : 'Hifadhi ya Binafsi');
-
-      text = `NOTICE OF FOUND DOCUMENT\n\n` +
-             `A lost identity document has been deposited and verified at an authorized Return4me agent hub.\n\n` +
-             `Document Type: ${categoryName}\n` +
-             `Name on Document: ${maskedName}\n` +
-             `Document Number: ${maskedNum}\n\n` +
-             `Collection Point: ${agent ? agent.business_name : 'Return4me Hub'}, ${agent ? agent.location_address : 'Kenya'}\n` +
-             `Status: Physically verified by authorized agent.\n\n` +
-             `To claim this document, visit the secure portal link below. Identity verification and standard processing fee of KES ${fee} applies.\n\n` +
+      text = `FOUND: ${categoryName.toUpperCase()}\n\n` +
+             `A verified ${categoryName} has been recovered and is being securely held by a Return4me Agent.\n\n` +
+             `Think it may be yours?\n\n` +
+             `Verify ownership securely on Return4me. Use the private claim workflow for real identity matching.\n\n` +
              `Claim Link: https://return4me.co.ke/?claim=${item.id}`;
     } else {
       const itemDesc = sanitizeSocialText(item.description) || 'No additional details provided.';
@@ -449,9 +458,7 @@ export const SocialService = {
     // detail lives on the claim page behind the link, not in the tweet itself.
     let text = '';
     if (isSensitive) {
-      const maskedName = sanitizeSocialText(item.ocr_extracted_name ? maskName(item.ocr_extracted_name) : 'Private');
-      text = `FOUND: ${categoryName} (name: ${maskedName}) verified at a Return4me agent hub` +
-             `${agent ? ' in ' + agent.location_address : ''}. Claim it (ID verification + fee applies):\n${claimLink}`;
+      text = `FOUND: ${categoryName}. Verified by a Return4me Agent. Think it's yours? Verify securely:\n${claimLink}`;
     } else {
       const safeLocation = sanitizeSocialText(item.location_description);
       text = `FOUND: ${categoryName} near ${safeLocation}, verified at a Return4me agent hub` +
@@ -550,21 +557,52 @@ export const SocialService = {
   /**
    * Broadcast verified recovery message to all configured social platforms
    */
+  /**
+   * Wraps a single platform post attempt with the durable idempotency
+   * claim described on social_publications (schema.ts). Returns true only
+   * if this call actually attempted the post AND it succeeded; returns
+   * false both when the post genuinely failed and when it was skipped
+   * because a slot was already claimed (already published, already
+   * failed, or a concurrent attempt is in flight) — the caller doesn't
+   * need to distinguish those cases for logging purposes, since either
+   * way no further action is needed here.
+   */
+  async _runIdempotentPost(itemId: string, platform: string, publicationType: string, post: () => Promise<boolean>): Promise<boolean> {
+    const claimed = await db.claimSocialPublicationSlot(itemId, platform, publicationType);
+    if (!claimed) {
+      console.log(`[SOCIAL SERVICE] Skipping ${platform} ${publicationType} for item ${itemId} — already claimed/published (idempotency guard).`);
+      return false;
+    }
+    try {
+      const success = await post();
+      await db.recordSocialPublicationResult(itemId, platform, publicationType, { status: success ? 'published' : 'failed' });
+      return success;
+    } catch (err: any) {
+      await db.recordSocialPublicationResult(itemId, platform, publicationType, { status: 'failed', lastError: String(err?.message || err) });
+      return false;
+    }
+  },
+
   async broadcastVerifiedItem(item: SocialItem, agent?: SocialAgent, category?: SocialCategory): Promise<void> {
     if (await this._isPublishingPaused()) {
       console.log(`[SOCIAL SERVICE] Publishing is paused — skipping broadcast for item ID: ${item.id}.`);
       return;
     }
     console.log(`[SOCIAL SERVICE] Initiating social media broadcast for item ID: ${item.id}`);
-    
-    // Run posts in parallel for maximum performance
+
+    // Each platform post is individually claimed via the idempotency table
+    // before being attempted — a retry, a duplicate call (e.g. two
+    // near-simultaneous confirm-dropoff requests), or a server restart
+    // mid-broadcast can never produce a duplicate post for the same
+    // (item, platform, publication_type), because the DB-level unique
+    // constraint on social_publications only lets the first claim win.
     const [tgResult, fbResult, twResult] = await Promise.all([
-      this.postToTelegram(item, agent, category),
-      this.postToFacebook(item, agent, category),
-      this.postToTwitter(item, agent, category)
+      this._runIdempotentPost(item.id, 'telegram', 'found_notice', () => this.postToTelegram(item, agent, category)),
+      this._runIdempotentPost(item.id, 'facebook', 'found_notice', () => this.postToFacebook(item, agent, category)),
+      this._runIdempotentPost(item.id, 'twitter', 'found_notice', () => this.postToTwitter(item, agent, category)),
     ]);
 
-    console.log(`[SOCIAL SERVICE] Broadcast completed. Telegram: ${tgResult ? 'Success' : 'Failed'}, Facebook: ${fbResult ? 'Success' : 'Failed'}, Twitter/X: ${twResult ? 'Success' : 'Failed'}`);
+    console.log(`[SOCIAL SERVICE] Broadcast completed. Telegram: ${tgResult ? 'Success' : 'Failed/Skipped'}, Facebook: ${fbResult ? 'Success' : 'Failed/Skipped'}, Twitter/X: ${twResult ? 'Success' : 'Failed/Skipped'}`);
   },
 
   /**
@@ -594,7 +632,7 @@ export const SocialService = {
     const twAccessToken = process.env.TWITTER_ACCESS_TOKEN?.trim();
     const twAccessTokenSecret = process.env.TWITTER_ACCESS_TOKEN_SECRET?.trim();
 
-    const tgPromise = (async () => {
+    const tgPromise = this._runIdempotentPost(item.id, 'telegram', 'reunited_notice', async () => {
       if (!botToken || !channelId) {
         console.log(`\n=================== [SANDBOX TELEGRAM OUTBOX - REUNITED] ===================`);
         console.log(text);
@@ -616,9 +654,9 @@ export const SocialService = {
         console.error('[SOCIAL SERVICE] Failed to post reunited notice to Telegram:', e);
         return false;
       }
-    })();
+    });
 
-    const fbPromise = (async () => {
+    const fbPromise = this._runIdempotentPost(item.id, 'facebook', 'reunited_notice', async () => {
       if (!pageId || !pageAccessToken) {
         console.log(`\n=================== [SANDBOX FACEBOOK OUTBOX - REUNITED] ===================`);
         console.log(text);
@@ -640,9 +678,9 @@ export const SocialService = {
         console.error('[SOCIAL SERVICE] Failed to post reunited notice to Facebook:', e);
         return false;
       }
-    })();
+    });
 
-    const twPromise = (async () => {
+    const twPromise = this._runIdempotentPost(item.id, 'twitter', 'reunited_notice', async () => {
       if (!twApiKey || !twApiSecret || !twAccessToken || !twAccessTokenSecret) {
         console.log(`\n=================== [SANDBOX TWITTER/X OUTBOX - REUNITED] ===================`);
         console.log(text);
@@ -671,9 +709,9 @@ export const SocialService = {
         console.error('[SOCIAL SERVICE] Failed to post reunited notice to Twitter/X:', e);
         return false;
       }
-    })();
+    });
 
     const [tgResult, fbResult, twResult] = await Promise.all([tgPromise, fbPromise, twPromise]);
-    console.log(`[SOCIAL SERVICE] Reunited notice completed for item ${item.id}. Telegram: ${tgResult ? 'Success' : 'Failed'}, Facebook: ${fbResult ? 'Success' : 'Failed'}, Twitter/X: ${twResult ? 'Success' : 'Failed'}`);
+    console.log(`[SOCIAL SERVICE] Reunited notice completed for item ${item.id}. Telegram: ${tgResult ? 'Success' : 'Failed/Skipped'}, Facebook: ${fbResult ? 'Success' : 'Failed/Skipped'}, Twitter/X: ${twResult ? 'Success' : 'Failed/Skipped'}`);
   }
 };

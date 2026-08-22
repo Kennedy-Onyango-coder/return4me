@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeSocialText } from '../social';
+import { sanitizeSocialText, escapeTelegramHtml } from '../social';
 
 // A Finder submitting a found-item report is an anonymous member of the
 // public. Their free-text description and location fields flow directly
@@ -60,5 +60,49 @@ describe('sanitizeSocialText', () => {
   it('leaves ordinary, legitimate location/description text untouched', () => {
     const result = sanitizeSocialText('Black backpack found near Westgate Mall, Nairobi');
     expect(result).toBe('Black backpack found near Westgate Mall, Nairobi');
+  });
+});
+
+describe('escapeTelegramHtml', () => {
+  // Every value interpolated into a Telegram post (which uses HTML parse
+  // mode) must go through this — including admin-controlled values like
+  // category names and Agent business name/address, not just Finder free
+  // text — so a stray `<` anywhere can never be interpreted as markup.
+
+  it('neutralizes a fake <b> tag', () => {
+    const result = escapeTelegramHtml('<b>fake</b>');
+    expect(result).not.toContain('<b>');
+    expect(result).toBe('&lt;b&gt;fake&lt;/b&gt;');
+  });
+
+  it('neutralizes a fake phishing <a href> link so it never becomes clickable', () => {
+    const result = escapeTelegramHtml('<a href="https://evil.example">Click</a>');
+    expect(result).not.toContain('<a href');
+    expect(result).not.toMatch(/<a[^&]/); // no real unescaped <a tag survives
+  });
+
+  it('neutralizes an <img> tag', () => {
+    const result = escapeTelegramHtml('<img src=x onerror=alert(1)>');
+    expect(result).not.toContain('<img');
+    expect(result).toContain('&lt;img');
+  });
+
+  it('neutralizes a <script> tag', () => {
+    const result = escapeTelegramHtml('<script>alert(1)</script>');
+    expect(result).not.toContain('<script>');
+    expect(result).toBe('&lt;script&gt;alert(1)&lt;/script&gt;');
+  });
+
+  it('escapes bare ampersands too, so escaped entities never double-decode oddly', () => {
+    expect(escapeTelegramHtml('Tom & Jerry')).toBe('Tom &amp; Jerry');
+  });
+
+  it('falls back to an empty string for null/undefined rather than throwing', () => {
+    expect(escapeTelegramHtml(null)).toBe('');
+    expect(escapeTelegramHtml(undefined)).toBe('');
+  });
+
+  it('leaves ordinary text with no special characters completely unchanged', () => {
+    expect(escapeTelegramHtml('National ID')).toBe('National ID');
   });
 });

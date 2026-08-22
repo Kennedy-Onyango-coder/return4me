@@ -8,7 +8,7 @@ import rateLimit from 'express-rate-limit';
 import { createServer as createViteServer } from 'vite';
 import { db, FoundItem, Claim, Agent } from './db/database';
 import { pool, ensureSchemaUpToDate, isDatabaseConnectionError } from './db/index';
-import { AuthService, authenticateJWT, generateToken, verifyToken, toE164Kenyan, hashCode, timingSafeEqualHex } from './services/auth';
+import { AuthService, authenticateJWT, generateToken, verifyToken, toE164Kenyan, hashCode, timingSafeEqualHex, sendCodeViaSms } from './services/auth';
 import { AgentMatchingService, geocodeAddress } from './services/agent';
 import { EmailService } from './services/email';
 import { PaymentService, isPlaceholderKey } from './services/payments';
@@ -1378,20 +1378,34 @@ async function startServer() {
             owner_identifying_details: ownerIdentifyingDetails || null,
           });
 
-          // Generate a dispute and freeze item in 'at_agent' state
+          // Generate a dispute. createDispute() only marks both claims
+          // 'disputed' — it deliberately does not touch item.status, since
+          // a dispute is about ownership, not physical custody (see the
+          // comment in database.ts).
           const disputeCode = 'DSP-' + Math.floor(1000 + Math.random() * 9000).toString();
-          await db.createDispute({
-            id: disputeCode,
-            item_id: itemId,
-            claimant_1_claim_id: existingClaim.id,
-            claimant_2_claim_id: newClaim.id,
-            claimant_1_id_proof_url: existingClaim.owner_id_proof_url || 'no-proof-yet',
-            claimant_2_id_proof_url: newClaim.owner_id_proof_url || 'no-proof-yet',
-            resolved_by: null,
-            resolved_claim_id: null,
-            resolved_at: null,
-            admin_notes: null,
-          });
+          try {
+            await db.createDispute({
+              id: disputeCode,
+              item_id: itemId,
+              claimant_1_claim_id: existingClaim.id,
+              claimant_2_claim_id: newClaim.id,
+              claimant_1_id_proof_url: existingClaim.owner_id_proof_url || 'no-proof-yet',
+              claimant_2_id_proof_url: newClaim.owner_id_proof_url || 'no-proof-yet',
+              resolved_by: null,
+              resolved_claim_id: null,
+              resolved_at: null,
+              admin_notes: null,
+            });
+          } catch (disputeErr: any) {
+            // uq_disputes_one_unresolved_per_item — an unresolved dispute
+            // was already created for this item in the gap between our
+            // read above and this insert (e.g. a third near-simultaneous
+            // claimant). That's fine: the item is already correctly
+            // frozen by the dispute that won the race, so this claim
+            // still needs to be surfaced to admin the same way.
+            const isUniqueViolation = disputeErr?.code === '23505' || String(disputeErr?.cause?.code) === '23505' || /uq_disputes_one_unresolved_per_item/.test(String(disputeErr?.message || disputeErr?.cause?.message || ''));
+            if (!isUniqueViolation) throw disputeErr;
+          }
 
           return res.status(409).json({
             error: 'Bidhaa hii tayari inadaiwa na mtu mwingine. Mzozo (Dispute) umefunguliwa na utachunguzwa na wasimamizi wetu.',
@@ -1516,11 +1530,27 @@ async function startServer() {
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // valid for 5 mins
       await db.setClaimOtp(claimId, hashCode(code), expiresAt);
 
-      console.log(`\n========================================\n[CLAIM OTP GATEWAY] fresh claim-specific OTP ${code} generated for claim ${claimId} (${claim.owner_phone})\n========================================\n`);
+      // BUGFIX: this used to only console.log the raw OTP code and the
+      // owner's full phone number — unconditionally, even in production —
+      // and never actually sent an SMS at all. A real owner in production
+      // would never have received this code on their phone. Now routed
+      // through the same gateway phone-verification OTP uses; the raw
+      // code is only ever printed to the console in dev/sandbox
+      // simulation mode (no real Africa's Talking credentials configured),
+      // clearly labeled as such — see sendCodeViaSms in services/auth.ts.
+      const smsResult = await sendCodeViaSms(
+        claim.owner_phone,
+        code,
+        'CLAIM OTP',
+        `Msimbo mpya wa thibitisho la claim umetumwa kwa nambari ya simu ya ${claim.owner_phone}.`
+      );
+      if (!smsResult.success) {
+        return res.status(500).json({ error: smsResult.message });
+      }
 
       res.json({
         success: true,
-        message: `Msimbo mpya wa thibitisho la claim umetumwa kwa nambari ya simu ya ${claim.owner_phone}.`,
+        message: smsResult.message,
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });

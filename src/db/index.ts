@@ -243,8 +243,53 @@ function executeMockQuery(sql: any, params: any[] = []): { rows: any[] } {
           }
         }
       });
-      
+
       if (!mockDatabaseState[tableName]) mockDatabaseState[tableName] = [];
+
+      // ON CONFLICT (...) DO NOTHING / DO UPDATE — drizzle's
+      // onConflictDoNothing()/onConflictDoUpdate() generate real
+      // "ON CONFLICT (col1, col2) DO ..." SQL. Without handling this, the
+      // mock silently behaved as a plain unconditional insert, meaning
+      // every unique-constraint-based idempotency/race protection added
+      // to this codebase (e.g. uq_claims_one_active_per_item,
+      // uq_social_pub_item_platform_type) was untestable — not because the
+      // real Postgres behavior was wrong, only because this test double
+      // couldn't verify it. This checks the actual target columns'
+      // values against existing rows, same as a real unique constraint
+      // would, for DO NOTHING; DO UPDATE additionally applies the SET
+      // clause to the conflicting row.
+      const conflictMatch = normalized.match(/ON CONFLICT\s*\(([^)]+)\)\s*DO\s+(NOTHING|UPDATE)/i);
+      if (conflictMatch) {
+        const conflictCols = conflictMatch[1].split(',').map(c => c.trim().toLowerCase());
+        const existing = mockDatabaseState[tableName].find(row =>
+          conflictCols.every(col => String(row[col]) === String(newRow[col]))
+        );
+        if (existing) {
+          if (conflictMatch[2].toUpperCase() === 'UPDATE') {
+            const setMatch = normalized.match(/DO UPDATE SET\s+(.+?)(?:\s+RETURNING|$)/i);
+            if (setMatch) {
+              const setParts = setMatch[1].split(',');
+              setParts.forEach(part => {
+                const eqMatch = part.match(/(\w+)\s*=\s*(.+)/);
+                if (eqMatch) {
+                  const col = eqMatch[1].trim();
+                  const valStr = eqMatch[2].trim();
+                  const paramMatch = valStr.match(/\$(\d+)/);
+                  if (paramMatch) {
+                    const paramIdx = parseInt(paramMatch[1]) - 1;
+                    existing[col] = queryParams[paramIdx];
+                  }
+                }
+              });
+            }
+            return { rows: convertToDrizzleRows(queryText, [existing]) };
+          }
+          // DO NOTHING: a real Postgres INSERT ... ON CONFLICT DO NOTHING
+          // RETURNING returns zero rows when the conflict fires.
+          return { rows: [] };
+        }
+      }
+
       mockDatabaseState[tableName].push(newRow);
       return { rows: convertToDrizzleRows(queryText, [newRow]) };
     }
@@ -637,11 +682,6 @@ export async function ensureSchemaUpToDate(pool: Pool) {
       updated_by VARCHAR(100),
       updated_at TIMESTAMPTZ DEFAULT now()
     )`,
-    // Admin 2FA (TOTP) — additive columns only, both default to "not
-    // enrolled" so no existing admin account is affected until they
-    // opt in via the new enrollment flow.
-    `ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS totp_secret VARCHAR(255)`,
-    `ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN NOT NULL DEFAULT false`,
     // Dispute evidence — lets either claimant attach their own photo/text
     // evidence to a dispute for the admin to review during resolution,
     // instead of the admin working from claim data + notes alone.
@@ -659,6 +699,13 @@ export async function ensureSchemaUpToDate(pool: Pool) {
       is_cleared BOOLEAN NOT NULL DEFAULT false,
       updated_at TIMESTAMPTZ DEFAULT now()
     )`,
+    // BUGFIX (migration order): this CREATE TABLE must run BEFORE any
+    // ALTER TABLE admin_users statement. It previously ran AFTER the TOTP
+    // column additions below, meaning a database that didn't already have
+    // admin_users (a genuinely fresh database not bootstrapped via
+    // sql/schema.sql, or an old database that predates this table) would
+    // fail both ALTER statements with "relation admin_users does not
+    // exist" before ever reaching the statement that actually creates it.
     `CREATE TABLE IF NOT EXISTS admin_users (
       id VARCHAR(40) PRIMARY KEY,
       username VARCHAR(50) NOT NULL UNIQUE,
@@ -668,6 +715,12 @@ export async function ensureSchemaUpToDate(pool: Pool) {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       last_login_at TIMESTAMPTZ
     )`,
+    // Admin 2FA (TOTP) — additive columns only, both default to "not
+    // enrolled" so no existing admin account is affected until they
+    // opt in via the new enrollment flow. Now correctly ordered after
+    // the admin_users table is guaranteed to exist.
+    `ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS totp_secret VARCHAR(255)`,
+    `ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN NOT NULL DEFAULT false`,
     `CREATE TABLE IF NOT EXISTS claim_payment_strikes (
       phone_number VARCHAR(15) PRIMARY KEY,
       strike_count INTEGER NOT NULL DEFAULT 0,
@@ -738,6 +791,25 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     `ALTER TABLE ledger ADD COLUMN IF NOT EXISTS provider_batch_id VARCHAR(100)`,
     `ALTER TABLE ledger ADD COLUMN IF NOT EXISTS provider_transaction_id VARCHAR(100)`,
     `ALTER TABLE ledger ADD COLUMN IF NOT EXISTS failure_reason TEXT`,
+    // At most one unresolved dispute per item — see matching comment in schema.ts.
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_disputes_one_unresolved_per_item ON disputes(item_id) WHERE resolved_at IS NULL`,
+    // Durable, idempotent social publication tracking — see matching
+    // comment in schema.ts. Added alongside the schema/SQL changes in the
+    // same pass, not as a follow-up fix.
+    `CREATE TABLE IF NOT EXISTS social_publications (
+      id VARCHAR(50) PRIMARY KEY,
+      item_id VARCHAR(50) NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+      platform VARCHAR(20) NOT NULL,
+      publication_type VARCHAR(30) NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'pending',
+      provider_post_id VARCHAR(200),
+      last_error TEXT,
+      attempt_count INTEGER NOT NULL DEFAULT 1,
+      next_attempt_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      completed_at TIMESTAMPTZ
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_social_pub_item_platform_type ON social_publications(item_id, platform, publication_type)`,
   ];
   let migrationFailureCount = 0;
   for (const sql of statements) {

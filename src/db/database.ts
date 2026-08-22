@@ -15,6 +15,7 @@ import {
   claim_otps as claimOtpsTable,
   claim_pickup_codes as claimPickupCodesTable,
   platform_settings as platformSettingsTable,
+  social_publications as socialPublicationsTable,
 } from "./schema.ts";
 import { eq, and, or, isNull } from "drizzle-orm";
 import { getSignedPhotoUrl } from "../services/storage.ts";
@@ -1604,8 +1605,20 @@ class DatabaseEngine {
           })
           .returning();
 
-        // Flag item and both claims as disputed
-        await tx.update(itemsTable).set({ status: "at_agent" }).where(eq(itemsTable.id, dispute.item_id));
+        // NOTE: this deliberately does NOT touch items.status. A dispute is
+        // about OWNERSHIP, not physical custody, and items.status already
+        // correctly represents custody (at_agent / claimed / etc.) on its
+        // own — canCreateClaim() in server.ts freezes new claims and public
+        // visibility for a disputed item by checking getDisputesByItem()
+        // directly, not by inspecting item.status. This used to also set
+        // status to 'at_agent' unconditionally, which — had this function
+        // ever been called on an item that had already been physically
+        // handed over (status='claimed') — would have falsely reverted the
+        // record to "physically at the agent hub" and corrupted custody
+        // history. Every current call site only reaches createDispute()
+        // after canCreateClaim() has already confirmed the item is
+        // 'at_agent', so removing this was a pure correctness fix, not a
+        // behavior change for any code path that exists today.
         await tx.update(claimsTable).set({ status: "disputed" }).where(eq(claimsTable.id, dispute.claimant_1_claim_id));
         await tx.update(claimsTable).set({ status: "disputed" }).where(eq(claimsTable.id, dispute.claimant_2_claim_id));
 
@@ -1965,6 +1978,74 @@ class DatabaseEngine {
     } catch (error) {
       console.error("Database write failed:", error);
       throw new Error("Failed to write platform setting.", { cause: error });
+    }
+  }
+
+  // --- SOCIAL PUBLICATION IDEMPOTENCY ---
+  // See the schema.ts comment on social_publications for the full
+  // reasoning. The pattern: claim the slot BEFORE calling the provider
+  // API, record the real result AFTER. If the claim fails (a row already
+  // exists for this item+platform+type), the caller must not attempt the
+  // post at all — someone already has, or is already attempting to.
+
+  /**
+   * Attempts to atomically claim the right to publish (item, platform,
+   * publicationType). Returns true if this call won the claim (safe to
+   * proceed and call the actual provider API) — false if a row already
+   * exists (already published, already failed, or a concurrent request
+   * already claimed it), meaning the caller must skip posting entirely.
+   */
+  public async claimSocialPublicationSlot(itemId: string, platform: string, publicationType: string): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .insert(socialPublicationsTable)
+        .values({
+          id: "SPUB-" + Math.random().toString(36).substr(2, 9).toUpperCase(),
+          item_id: itemId,
+          platform,
+          publication_type: publicationType,
+          status: "pending",
+          attempt_count: 1,
+        })
+        .onConflictDoNothing({ target: [socialPublicationsTable.item_id, socialPublicationsTable.platform, socialPublicationsTable.publication_type] })
+        .returning();
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Failed to claim social publication slot:", error);
+      // Fail safe: if we can't even determine whether a slot is claimed,
+      // don't post — a missed post is recoverable (an admin can trigger a
+      // fresh attempt later), a duplicate post is not.
+      return false;
+    }
+  }
+
+  /**
+   * Records the actual outcome of a publication attempt against the slot
+   * claimed above. Called exactly once per claimSocialPublicationSlot()
+   * that returned true.
+   */
+  public async recordSocialPublicationResult(
+    itemId: string,
+    platform: string,
+    publicationType: string,
+    result: { status: 'published' | 'failed'; providerPostId?: string | null; lastError?: string | null }
+  ): Promise<void> {
+    try {
+      await drizzleDb
+        .update(socialPublicationsTable)
+        .set({
+          status: result.status,
+          provider_post_id: result.providerPostId ?? null,
+          last_error: result.lastError ?? null,
+          completed_at: result.status === 'published' ? new Date() : null,
+        })
+        .where(and(
+          eq(socialPublicationsTable.item_id, itemId),
+          eq(socialPublicationsTable.platform, platform),
+          eq(socialPublicationsTable.publication_type, publicationType)
+        ));
+    } catch (error) {
+      console.error("Failed to record social publication result:", error);
     }
   }
 

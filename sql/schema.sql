@@ -147,6 +147,9 @@ CREATE TABLE disputes (
     admin_notes TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+-- At most one unresolved dispute per item — see matching comment in schema.ts.
+CREATE UNIQUE INDEX uq_disputes_one_unresolved_per_item ON disputes(item_id)
+    WHERE resolved_at IS NULL;
 
 -- 6. IMMUTABLE FINANCIAL TRANSACTIONS LEDGER
 CREATE TABLE ledger (
@@ -206,4 +209,20 @@ CREATE TABLE platform_settings (
     value TEXT NOT NULL,
     updated_by VARCHAR(100),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 12. SOCIAL PUBLICATION TRACKING (idempotent — see schema.ts comment)
+CREATE TABLE social_publications (
+    id VARCHAR(50) PRIMARY KEY,
+    item_id VARCHAR(50) NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    platform VARCHAR(20) NOT NULL,
+    publication_type VARCHAR(30) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'published', 'failed')),
+    provider_post_id VARCHAR(200),
+    last_error TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 1,
+    next_attempt_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP WITH TIME ZONE,
+    CONSTRAINT uq_social_pub_item_platform_type UNIQUE (item_id, platform, publication_type)
 );

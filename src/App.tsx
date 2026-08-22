@@ -1,4 +1,4 @@
-import React, { useState, useEffect, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import Navbar from './components/Navbar';
 import ErrorBoundary from './components/ErrorBoundary';
 import { translations } from './types';
@@ -139,7 +139,11 @@ export default function App() {
     setView('home');
   };
 
-  // Fetch Categories, Stats & Recent Items on App Mount
+  // Categories and the agent-count stat rarely change within a single
+  // visit, so these stay mount-only. Recent items are different — a Finder
+  // report + Agent verification can happen at any point during someone's
+  // visit, and the homepage previously had no way to ever learn about it
+  // (see fetchRecentItems below, and the effects that call it).
   useEffect(() => {
     const fetchCategories = async (attempt = 1) => {
       try {
@@ -172,27 +176,79 @@ export default function App() {
         console.error('Failed to load stats:', err);
       }
     };
-    const fetchRecentItems = async () => {
-      try {
-        setRecentItemsLoading(true);
-        setRecentItemsError(false);
-        const res = await fetch('/api/items/search');
-        if (!res.ok) throw new Error('Failed to fetch recent items');
-        const data = await res.json();
-        // Sort by created_at descending (most recent first)
-        const sorted = data.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-        setRecentItems(sorted.slice(0, 4));
-      } catch (err) {
-        console.error('Failed to load recent items:', err);
-        setRecentItemsError(true);
-      } finally {
-        setRecentItemsLoading(false);
-      }
-    };
     fetchCategories();
     fetchStats();
-    fetchRecentItems();
   }, []);
+
+  // RECENT ITEMS — fetchRecentItems is deliberately a single stable
+  // function (via useCallback with an empty dependency array) rather than
+  // being redefined inline inside a mount-only effect, because it now
+  // needs to be called from three different places: once at mount, once
+  // every time the user navigates back to the home view, and once every
+  // 45 seconds while the home view is on screen. A previous visitor could
+  // otherwise report an item, have it verified by an Agent, return to the
+  // homepage, and still see the stale empty/old list from before — the
+  // exact bug this fixes.
+  //
+  // isFetchingRecentItemsRef prevents overlapping requests (e.g. the
+  // manual Refresh button clicked while a poll is already in flight), and
+  // the AbortController ensures a request that's still in flight when the
+  // component unmounts (or a newer request supersedes it) never calls
+  // setState on an unmounted/stale render — no memory leak, no "Can't
+  // perform a React state update on an unmounted component" warning, and
+  // no risk of a slow, superseded response overwriting a newer one.
+  const isFetchingRecentItemsRef = useRef(false);
+  const recentItemsAbortRef = useRef<AbortController | null>(null);
+
+  const fetchRecentItems = useCallback(async () => {
+    if (isFetchingRecentItemsRef.current) return;
+    isFetchingRecentItemsRef.current = true;
+
+    recentItemsAbortRef.current?.abort();
+    const controller = new AbortController();
+    recentItemsAbortRef.current = controller;
+
+    try {
+      setRecentItemsLoading(true);
+      setRecentItemsError(false);
+      const res = await fetch('/api/items/search', { signal: controller.signal });
+      if (!res.ok) throw new Error('Failed to fetch recent items');
+      const data = await res.json();
+      if (controller.signal.aborted) return;
+      // Sort by created_at descending (most recent first)
+      const sorted = data.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      setRecentItems(sorted.slice(0, 4));
+    } catch (err: any) {
+      if (err?.name === 'AbortError') return; // superseded by a newer request or unmount — not a real failure
+      console.error('Failed to load recent items:', err);
+      setRecentItemsError(true);
+    } finally {
+      if (!controller.signal.aborted) {
+        setRecentItemsLoading(false);
+      }
+      isFetchingRecentItemsRef.current = false;
+    }
+  }, []);
+
+  // Initial load.
+  useEffect(() => {
+    fetchRecentItems();
+    return () => {
+      recentItemsAbortRef.current?.abort();
+    };
+  }, [fetchRecentItems]);
+
+  // Refetch every time the user navigates back to the home view — covers
+  // returning from Finder (after reporting), Owner, Agent, or Admin. Also
+  // polls every 45s while home stays on screen, so an item verified by an
+  // Agent while someone is just sitting on the homepage still shows up
+  // without them needing to navigate away and back.
+  useEffect(() => {
+    if (currentView !== 'home') return;
+    fetchRecentItems();
+    const intervalId = setInterval(fetchRecentItems, 45000);
+    return () => clearInterval(intervalId);
+  }, [currentView, fetchRecentItems]);
 
   const getAgentStatText = () => {
     if (activeAgentsCount === null || activeAgentsCount === 0) {
@@ -327,14 +383,25 @@ export default function App() {
                 <div className="w-full max-w-5xl flex flex-col">
                   <div className="flex items-center justify-between mb-6">
                     <h3 className="text-xs font-bold uppercase tracking-widest text-brand-muted-text">
-                      {lang === 'en' ? 'Recently Found Near Nairobi' : 'Imepatikana Karibu Nairobi Hivi Karibuni'}
+                      {lang === 'en' ? 'Recently Found' : 'Imepatikana Hivi Karibuni'}
                     </h3>
-                    <button 
-                      onClick={() => setView('owner')} 
-                      className="text-xs font-bold text-primary-green hover:underline cursor-pointer"
-                    >
-                      {lang === 'en' ? 'View All Items →' : 'Tazama Zote →'}
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => fetchRecentItems()}
+                        disabled={recentItemsLoading}
+                        className="text-xs font-bold text-brand-muted-text hover:text-primary-green disabled:opacity-50 cursor-pointer flex items-center gap-1"
+                        aria-label={lang === 'en' ? 'Refresh recently found items' : 'Onyesha upya vitu vilivyopatikana hivi karibuni'}
+                      >
+                        <Loader2 size={12} className={recentItemsLoading ? 'animate-spin' : ''} />
+                        {lang === 'en' ? 'Refresh' : 'Onyesha Upya'}
+                      </button>
+                      <button 
+                        onClick={() => setView('owner')} 
+                        className="text-xs font-bold text-primary-green hover:underline cursor-pointer"
+                      >
+                        {lang === 'en' ? 'View All Items →' : 'Tazama Zote →'}
+                      </button>
+                    </div>
                   </div>
                   
                   {recentItemsLoading ? (
@@ -377,7 +444,12 @@ export default function App() {
                     /* Dynamic Real Cards Mapping */
                     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                       {recentItems.map((item: any) => (
-                        <div key={item.id} className="p-4 bg-brand-beige border border-brand-border rounded-xl flex gap-4 items-center hover:shadow-sm transition-all duration-200">
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => setView('owner')}
+                          className="p-4 bg-brand-beige border border-brand-border rounded-xl flex gap-4 items-center hover:shadow-sm hover:border-primary-green/40 transition-all duration-200 text-left cursor-pointer w-full"
+                        >
                           <div className="w-12 h-12 bg-white rounded-lg flex items-center justify-center text-primary-green border border-brand-border shadow-sm shrink-0">
                             {getCategoryIcon(item.category_id)}
                           </div>
@@ -389,7 +461,7 @@ export default function App() {
                               {(item.document_name_fuzzy || item.description || (lang === 'en' ? 'Verified Item' : 'Bidhaa Iliyothibitishwa'))} | {item.location_description}
                             </p>
                           </div>
-                        </div>
+                        </button>
                       ))}
                     </div>
                   )}

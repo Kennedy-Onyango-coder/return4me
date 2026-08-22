@@ -165,6 +165,18 @@ export const disputes = pgTable("disputes", {
   resolved_at: timestamp("resolved_at", { withTimezone: true }),
   admin_notes: text("admin_notes"),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+}, (table) => {
+  return {
+    // Application-level checks (canCreateClaim's getDisputesByItem query)
+    // narrow the window but can't close it entirely — two nearly-
+    // simultaneous claim submissions could both pass that check before
+    // either commits. This partial unique index is the actual guarantee:
+    // at most one row per item_id where resolved_at IS NULL, enforced by
+    // Postgres itself.
+    uq_disputes_one_unresolved_per_item: uniqueIndex("uq_disputes_one_unresolved_per_item")
+      .on(table.item_id)
+      .where(sql`${table.resolved_at} IS NULL`),
+  };
 });
 
 // 5b. DISPUTE EVIDENCE TABLE
@@ -299,4 +311,33 @@ export const platform_settings = pgTable("platform_settings", {
   value: text("value").notNull(),
   updated_by: varchar("updated_by", { length: 100 }),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+// Durable, idempotent tracking for social media publication. The actual
+// guarantee this provides: at most ONE row ever exists per (item_id,
+// platform, publication_type) — enforced by the unique index below, not
+// just an application-level check — so a retry, a duplicate request, or a
+// server restart mid-broadcast can never produce a duplicate post. The
+// first caller to successfully insert a row "claims" the right to attempt
+// that specific post; every other caller (including a genuine concurrent
+// race) gets a constraint violation and skips, because the claim already
+// exists. See claimSocialPublicationSlot / recordSocialPublicationResult
+// in database.ts.
+export const social_publications = pgTable("social_publications", {
+  id: varchar("id", { length: 50 }).primaryKey(),
+  item_id: varchar("item_id", { length: 50 }).notNull().references(() => items.id, { onDelete: "cascade" }),
+  platform: varchar("platform", { length: 20 }).notNull(),
+  publication_type: varchar("publication_type", { length: 30 }).notNull(),
+  status: varchar("status", { length: 20 }).default("pending").notNull(),
+  provider_post_id: varchar("provider_post_id", { length: 200 }),
+  last_error: text("last_error"),
+  attempt_count: integer("attempt_count").default(1).notNull(),
+  next_attempt_at: timestamp("next_attempt_at", { withTimezone: true }),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  completed_at: timestamp("completed_at", { withTimezone: true }),
+}, (table) => {
+  return {
+    uq_social_pub_item_platform_type: uniqueIndex("uq_social_pub_item_platform_type")
+      .on(table.item_id, table.platform, table.publication_type),
+  };
 });

@@ -158,6 +158,45 @@ export function verifyToken(token: string): SessionPayload | null {
 
 // --- AUTH SERVICES ---
 
+/**
+ * Sends a numeric code to a Kenyan phone number via SMS — shared by both
+ * phone-verification OTP (requestOTP below) and claim-specific OTP
+ * (POST /api/claims/:id/request-otp in server.ts). Deliberately takes an
+ * already-generated code rather than generating one itself, since the two
+ * callers store it against different tables (phone number vs claim ID)
+ * with different expiry/attempt semantics — this function only owns
+ * actual delivery, not code generation or persistence.
+ *
+ * In sandbox/dev fallback mode (no real Africa's Talking credentials
+ * configured), the code is printed to the console with an unmistakable
+ * "SIMULATION" label — this is the ONLY path that ever logs a real OTP
+ * code, and it never runs when real credentials are configured. The real-
+ * delivery path deliberately never logs the code itself.
+ */
+export async function sendCodeViaSms(cleanPhone: string, code: string, label: string, message: string): Promise<{ success: boolean; message: string }> {
+  if (isAtDummy || !atSMSClient) {
+    console.log(`\n========================================\n[SMS ${label} GATEWAY - SIMULATION, DEV/SANDBOX ONLY] Sending code ${code} to ${cleanPhone}\n========================================\n`);
+    return { success: true, message };
+  }
+
+  console.log(`[SMS ${label} GATEWAY] Sending live SMS via Africa's Talking to ${cleanPhone}`);
+  const options: any = {
+    to: [toE164Kenyan(cleanPhone)],
+    message: `Msimbo wako wa Return4me ni ${code}. Tafadhali usimshirikishe mtu yeyote. Muda wake unaisha baada ya dakika 5.`,
+  };
+  if (atSenderId && !atSenderId.includes('REPLACE_WITH') && atSenderId.trim() !== '') {
+    options.from = atSenderId;
+  }
+  try {
+    const response = await atSMSClient.send(options);
+    console.log(`[SMS ${label} GATEWAY] Africa's Talking response:`, JSON.stringify(response));
+    return { success: true, message };
+  } catch (error: any) {
+    console.error(`[SMS ${label} GATEWAY ERROR] Africa's Talking send failed:`, error);
+    return { success: false, message: `Imeshindwa kutuma ujumbe wa SMS: ${error.message || error}. Tafadhali jaribu tena.` };
+  }
+}
+
 export const AuthService = {
   // Generate and "send" an OTP code to a Kenyan phone number
   async requestOTP(phone: string): Promise<{ success: boolean; message: string }> {
@@ -176,41 +215,7 @@ export const AuthService = {
     // server restart/redeploy and multiple server instances can share state.
     await db.setOtp(cleanPhone, hashCode(code), expiresAt);
 
-    if (isAtDummy || !atSMSClient) {
-      // In sandbox/dev fallback mode, we print the OTP to the console.
-      console.log(`\n========================================\n[SMS OTP GATEWAY - SIMULATION] Sending OTP ${code} to ${cleanPhone}\n========================================\n`);
-      return {
-        success: true,
-        message: `Msimbo wa OTP umetumwa kwa nambari yako ya simu ya ${cleanPhone}.`,
-      };
-    } else {
-      // Production path with real keys - do NOT print the OTP itself to console
-      console.log(`[SMS OTP GATEWAY] Sending live SMS via Africa's Talking to ${cleanPhone}`);
-
-      const options: any = {
-        to: [toE164Kenyan(cleanPhone)],
-        message: `Msimbo wako wa Return4me OTP ni ${code}. Tafadhali usimshirikishe mtu yeyote. Muda wake unaisha baada ya dakika 5.`,
-      };
-
-      if (atSenderId && !atSenderId.includes('REPLACE_WITH') && atSenderId.trim() !== '') {
-        options.from = atSenderId;
-      }
-
-      try {
-        const response = await atSMSClient.send(options);
-        console.log('[SMS OTP GATEWAY] Africa\'s Talking response:', JSON.stringify(response));
-        return {
-          success: true,
-          message: `Msimbo wa OTP umetumwa kwa nambari yako ya simu ya ${cleanPhone}.`,
-        };
-      } catch (error: any) {
-        console.error('[SMS OTP GATEWAY ERROR] Africa\'s Talking send failed:', error);
-        return {
-          success: false,
-          message: `Imeshindwa kutuma ujumbe wa SMS: ${error.message || error}. Tafadhali jaribu tena.`,
-        };
-      }
-    }
+    return sendCodeViaSms(cleanPhone, code, 'OTP', `Msimbo wa OTP umetumwa kwa nambari yako ya simu ya ${cleanPhone}.`);
   },
 
   // Verify OTP code with automatic brute-force invalidation after 5 attempts.

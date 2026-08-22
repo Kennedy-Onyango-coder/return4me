@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { toE164Kenyan, hashCode, timingSafeEqualHex, generateToken, verifyToken } from '../auth';
+import { describe, it, expect, vi } from 'vitest';
+import { toE164Kenyan, hashCode, timingSafeEqualHex, generateToken, verifyToken, sendCodeViaSms } from '../auth';
 
 // These four functions were chosen deliberately: they're pure (no DB, no
 // network), but they sit directly behind three of the security fixes made
@@ -145,5 +145,37 @@ describe('generateToken / verifyToken', () => {
     const start = Date.now();
     while (Date.now() - start < 5) { /* busy-wait a few ms */ }
     expect(verifyToken(token)).toBeNull();
+  });
+});
+
+// This sandbox has no real Africa's Talking credentials configured (see
+// "[AFRICASTALKING] Placeholder or missing keys detected" in the test
+// output), so sendCodeViaSms always takes its simulation branch here —
+// there's no way to exercise the real-delivery branch without live
+// credentials. What IS fully testable and worth pinning down: the
+// simulation branch reports success (so callers like the claim-OTP route
+// don't fail just because dev/sandbox has no SMS provider configured),
+// and — the actual point of sendCodeViaSms existing — every caller gets
+// real delivery through the same single code path instead of each one
+// separately (and, as happened with the claim-OTP route before this
+// fix) potentially forgetting to actually send anything at all.
+describe('sendCodeViaSms', () => {
+  it('reports success in simulation mode (no real SMS credentials configured)', async () => {
+    const result = await sendCodeViaSms('0712345678', '1234', 'TEST', 'A test message');
+    expect(result.success).toBe(true);
+    expect(result.message).toBe('A test message');
+  });
+
+  it('logs the simulated send with an unmistakable SIMULATION label, not silently', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await sendCodeViaSms('0712345678', '1234', 'TEST', 'A test message');
+      const loggedSomethingLabeled = logSpy.mock.calls.some(call =>
+        typeof call[0] === 'string' && call[0].includes('SIMULATION')
+      );
+      expect(loggedSomethingLabeled).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 });
