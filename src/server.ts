@@ -8,7 +8,7 @@ import rateLimit from 'express-rate-limit';
 import { createServer as createViteServer } from 'vite';
 import { db, FoundItem, Claim, Agent } from './db/database';
 import { pool, ensureSchemaUpToDate, isDatabaseConnectionError } from './db/index';
-import { AuthService, authenticateJWT, generateToken, verifyToken, toE164Kenyan, hashCode, timingSafeEqualHex, sendCodeViaSms } from './services/auth';
+import { AuthService, authenticateJWT, generateToken, verifyToken, toE164Kenyan, hashCode, timingSafeEqualHex, sendCodeViaSms, maskPhoneForLog } from './services/auth';
 import { AgentMatchingService, geocodeAddress } from './services/agent';
 import { EmailService } from './services/email';
 import { PaymentService, isPlaceholderKey } from './services/payments';
@@ -3266,7 +3266,7 @@ async function expireStaleClaims() {
       if (claim.status === 'pending_payment' && claim.agent_confirmed_at) {
         const confirmedTime = new Date(claim.agent_confirmed_at).getTime();
         if (now - confirmedTime > 15 * 60 * 1000) {
-          console.log(`[SWEEP] Claim ${claim.id} payment window expired. Transitioning status and recording strike for ${claim.owner_phone}`);
+          console.log(`[SWEEP] Claim ${claim.id} payment window expired. Transitioning status and recording strike for ${maskPhoneForLog(claim.owner_phone)}`);
           try {
             await db.updateClaimStatus(claim.id, 'payment_window_expired');
             await db.recordPaymentStrike(claim.owner_phone);

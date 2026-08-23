@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { toE164Kenyan, hashCode, timingSafeEqualHex, generateToken, verifyToken, sendCodeViaSms } from '../auth';
+import { toE164Kenyan, hashCode, timingSafeEqualHex, generateToken, verifyToken, sendCodeViaSms, maskPhoneForLog } from '../auth';
 
 // These four functions were chosen deliberately: they're pure (no DB, no
 // network), but they sit directly behind three of the security fixes made
@@ -177,5 +177,31 @@ describe('sendCodeViaSms', () => {
     } finally {
       logSpy.mockRestore();
     }
+  });
+});
+
+describe('maskPhoneForLog', () => {
+  it('masks the middle digits, keeping enough to correlate a specific request without printing the full number', () => {
+    expect(maskPhoneForLog('+254712345678')).toBe('+254712***678');
+  });
+
+  it('masks a 07... format number', () => {
+    expect(maskPhoneForLog('0712345678')).toBe('0712***678');
+  });
+
+  it('never reveals the full original number as a substring longer than the kept prefix/suffix', () => {
+    const masked = maskPhoneForLog('+254712345678');
+    expect(masked).not.toContain('345678'); // the masked middle+tail digits
+    expect(masked).not.toBe('+254712345678');
+  });
+
+  it('handles null/undefined/empty without throwing', () => {
+    expect(maskPhoneForLog(null)).toBe('(no phone)');
+    expect(maskPhoneForLog(undefined)).toBe('(no phone)');
+    expect(maskPhoneForLog('')).toBe('(no phone)');
+  });
+
+  it('falls back to full masking for numbers too short to safely partially reveal', () => {
+    expect(maskPhoneForLog('12345')).toBe('***');
   });
 });

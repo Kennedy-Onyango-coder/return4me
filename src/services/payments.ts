@@ -1,5 +1,16 @@
 import { db } from '../db/database';
 
+// Local copy of the phone-masking helper (also in services/auth.ts as
+// maskPhoneForLog, and database.ts) — duplicated rather than imported to
+// avoid a circular import (auth.ts imports isPlaceholderKey from this
+// file, so this file importing back from auth.ts would be circular).
+function maskPhoneForLog(phone: string | null | undefined): string {
+  if (!phone) return '(none)';
+  const clean = phone.toString().replace(/\s+/g, '');
+  if (clean.length < 7) return '***';
+  return clean.slice(0, -6) + '***' + clean.slice(-3);
+}
+
 // Configuration variables for IntaSend
 const INTASEND_BASE_URL = process.env.NODE_ENV === 'production'
   ? 'https://payment.intasend.com/api/v1'
@@ -219,7 +230,10 @@ export const PaymentService = {
       transactions,
     };
 
-    console.log('[INTASEND DISBURSEMENT] Initiating payouts split:', JSON.stringify(payload, null, 2));
+    console.log('[INTASEND DISBURSEMENT] Initiating payouts split:', JSON.stringify({
+      ...payload,
+      transactions: payload.transactions.map(t => ({ ...t, account: maskPhoneForLog(t.account) })),
+    }, null, 2));
 
     try {
       const response = await fetchWithTimeout(`${INTASEND_BASE_URL}/send-money/`, {
@@ -241,7 +255,13 @@ export const PaymentService = {
       }
 
       const data = await response.json() as any;
-      console.log('[INTASEND DISBURSEMENT] Response received:', JSON.stringify(data, null, 2));
+      // Deliberately not logging the full raw response body — its exact
+      // shape (and whether individual transaction objects echo phone
+      // numbers back) isn't something this codebase can fully verify
+      // without live IntaSend credentials. Log only what's actually used
+      // plus the response's top-level shape, not verbatim PII-bearing
+      // content from a third party.
+      console.log('[INTASEND DISBURSEMENT] Response received. Top-level keys:', Object.keys(data || {}), 'tracking_id:', data?.tracking_id || data?.batch_reference || '(none)');
 
       const batchId: string | null = data?.tracking_id || data?.batch_reference || null;
 

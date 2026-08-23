@@ -43,6 +43,19 @@ export function toE164Kenyan(phone: string): string {
   return clean;
 }
 
+/**
+ * Masks a phone number for logging — keeps enough to trace/correlate a
+ * specific request in operational logs without printing the full number.
+ * "+254712345678" -> "+254712***678". Never use the raw phone number in a
+ * console.log/console.error call; use this instead.
+ */
+export function maskPhoneForLog(phone: string | null | undefined): string {
+  if (!phone) return '(no phone)';
+  const clean = phone.toString().replace(/\s+/g, '');
+  if (clean.length < 7) return '***'; // too short to safely partially reveal
+  return clean.slice(0, -6) + '***' + clean.slice(-3);
+}
+
 import { isPlaceholderKey } from './payments';
 
 const atApiKey = sanitizeEnvValue(process.env.AFRICASTALKING_API_KEY);
@@ -175,11 +188,11 @@ export function verifyToken(token: string): SessionPayload | null {
  */
 export async function sendCodeViaSms(cleanPhone: string, code: string, label: string, message: string): Promise<{ success: boolean; message: string }> {
   if (isAtDummy || !atSMSClient) {
-    console.log(`\n========================================\n[SMS ${label} GATEWAY - SIMULATION, DEV/SANDBOX ONLY] Sending code ${code} to ${cleanPhone}\n========================================\n`);
+    console.log(`\n========================================\n[SMS ${label} GATEWAY - SIMULATION, DEV/SANDBOX ONLY] Sending code ${code} to ${maskPhoneForLog(cleanPhone)}\n========================================\n`);
     return { success: true, message };
   }
 
-  console.log(`[SMS ${label} GATEWAY] Sending live SMS via Africa's Talking to ${cleanPhone}`);
+  console.log(`[SMS ${label} GATEWAY] Sending live SMS via Africa's Talking to ${maskPhoneForLog(cleanPhone)}`);
   const options: any = {
     to: [toE164Kenyan(cleanPhone)],
     message: `Msimbo wako wa Return4me ni ${code}. Tafadhali usimshirikishe mtu yeyote. Muda wake unaisha baada ya dakika 5.`,
@@ -265,7 +278,7 @@ export const AuthService = {
   async sendSms(phone: string, message: string): Promise<boolean> {
     const cleanPhone = phone.replace(/\s+/g, '');
     if (isAtDummy || !atSMSClient) {
-      console.log(`\n========================================\n[SMS GATEWAY - SIMULATION] Sending to ${cleanPhone}: ${message}\n========================================\n`);
+      console.log(`\n========================================\n[SMS GATEWAY - SIMULATION] Sending to ${maskPhoneForLog(cleanPhone)}: ${message}\n========================================\n`);
       return true;
     }
     try {

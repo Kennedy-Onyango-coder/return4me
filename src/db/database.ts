@@ -20,6 +20,17 @@ import {
 import { eq, and, or, isNull } from "drizzle-orm";
 import { getSignedPhotoUrl } from "../services/storage.ts";
 
+// Local copy of the phone-masking helper (also defined in services/auth.ts
+// as maskPhoneForLog) — duplicated rather than imported to avoid a
+// circular import, since auth.ts itself imports `db` from this file. Keep
+// both in sync if the masking format ever changes.
+function maskPhoneForLog(phone: string | null | undefined): string {
+  if (!phone) return '(no phone)';
+  const clean = phone.toString().replace(/\s+/g, '');
+  if (clean.length < 7) return '***';
+  return clean.slice(0, -6) + '***' + clean.slice(-3);
+}
+
 // --- DATA TYPES & SCHEMAS ---
 
 export interface Category {
@@ -2954,7 +2965,7 @@ class DatabaseEngine {
         .delete(claimPaymentStrikesTable)
         .where(eq(claimPaymentStrikesTable.phone_number, phone));
 
-      console.log(`[DPA ERASURE] Personal data associated with phone ${phone} successfully purged.`);
+      console.log(`[DPA ERASURE] Personal data associated with phone ${maskPhoneForLog(phone)} successfully purged.`);
     } catch (error) {
       console.error("[DPA ERASURE ERROR] Failed to purge user data:", error);
       throw new Error("Failed to execute data erasure request on database.");

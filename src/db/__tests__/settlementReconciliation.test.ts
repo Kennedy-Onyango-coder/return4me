@@ -123,3 +123,136 @@ describe('settlement partial-payout reconciliation', () => {
     expect(updatedAgentRow?.provider_transaction_id).toBeNull();
   });
 });
+
+// The 8 payout-reconciliation scenarios named in the hardening brief,
+// mapped onto what actually exists in this codebase's architecture:
+// settlement uses a polling sweep (releaseDueSettlements in server.ts)
+// that calls PaymentService.triggerIntasendPayout and records each
+// recipient's individual result via recordPayoutAttempt — there is no
+// inbound payout-status webhook (only the OWNER'S payment collection has
+// a webhook, /api/webhooks/intasend, tested separately below for its own
+// duplicate-callback idempotency). So "duplicate provider status
+// callback" for a PAYOUT specifically doesn't apply to this codebase as
+// architected — the six scenarios that do apply are covered here, each
+// exercised at the same level the real settlement sweep uses: simulate
+// PaymentService's per-recipient result shape, record it via
+// recordPayoutAttempt, and assert the resulting ledger/claim state.
+describe('payout reconciliation — 6 provider-response scenarios (mocked, matching this codebase\'s actual settlement architecture)', () => {
+  it('scenario: both finder and agent payouts succeed → claim can be finalized', async () => {
+    const { claimId, finderRow, agentRow } = await makeTestClaim('S1');
+    await db.recordPayoutAttempt(finderRow.id, { status: 'success', providerBatchId: 'B-S1', providerTransactionId: 'T-FINDER-S1' });
+    await db.recordPayoutAttempt(agentRow.id, { status: 'success', providerBatchId: 'B-S1', providerTransactionId: 'T-AGENT-S1' });
+    const result = await db.finalizeSettlement(claimId);
+    expect(result.success).toBe(true);
+  });
+
+  it('scenario: finder succeeds, agent still pending (provider hasn\'t confirmed yet) → claim NOT finalized', async () => {
+    const { claimId, finderRow } = await makeTestClaim('S2');
+    await db.recordPayoutAttempt(finderRow.id, { status: 'success', providerBatchId: 'B-S2', providerTransactionId: 'T-FINDER-S2' });
+    // agentRow deliberately left untouched — simulates the provider not
+    // having confirmed that leg yet.
+    const result = await db.finalizeSettlement(claimId);
+    expect(result.success).toBe(false);
+    expect(result.message).toMatch(/agent_payout/);
+  });
+
+  it('scenario: finder succeeds, agent fails outright → claim NOT finalized, failure recorded with a reason', async () => {
+    const { claimId, finderRow, agentRow } = await makeTestClaim('S3');
+    await db.recordPayoutAttempt(finderRow.id, { status: 'success', providerBatchId: 'B-S3', providerTransactionId: 'T-FINDER-S3' });
+    await db.recordPayoutAttempt(agentRow.id, { status: 'failed', providerBatchId: 'B-S3', providerTransactionId: null, failureReason: 'Invalid till number.' });
+
+    const result = await db.finalizeSettlement(claimId);
+    expect(result.success).toBe(false);
+
+    const entries = await db.getLedgerEntriesForClaim(claimId);
+    const agent = entries.find(e => e.id === agentRow.id);
+    expect(agent?.status).toBe('failed');
+    expect(agent?.failure_reason).toBe('Invalid till number.');
+    // The finder's already-successful payout must be completely
+    // unaffected by the agent's failure — this is the actual guarantee
+    // that prevents a retry from re-paying the finder a second time.
+    const finder = entries.find(e => e.id === finderRow.id);
+    expect(finder?.status).toBe('completed');
+  });
+
+  it('scenario: finder pending, agent succeeds (order reversed) → claim NOT finalized', async () => {
+    const { claimId, agentRow } = await makeTestClaim('S4');
+    await db.recordPayoutAttempt(agentRow.id, { status: 'success', providerBatchId: 'B-S4', providerTransactionId: 'T-AGENT-S4' });
+    const result = await db.finalizeSettlement(claimId);
+    expect(result.success).toBe(false);
+    expect(result.message).toMatch(/finder_payout/);
+  });
+
+  it('scenario: both finder and agent payouts fail → claim NOT finalized, both failures recorded independently', async () => {
+    const { claimId, finderRow, agentRow } = await makeTestClaim('S5');
+    await db.recordPayoutAttempt(finderRow.id, { status: 'failed', providerBatchId: 'B-S5', providerTransactionId: null, failureReason: 'Invalid phone number.' });
+    await db.recordPayoutAttempt(agentRow.id, { status: 'failed', providerBatchId: 'B-S5', providerTransactionId: null, failureReason: 'Invalid till number.' });
+
+    const result = await db.finalizeSettlement(claimId);
+    expect(result.success).toBe(false);
+
+    const entries = await db.getLedgerEntriesForClaim(claimId);
+    expect(entries.find(e => e.id === finderRow.id)?.status).toBe('failed');
+    expect(entries.find(e => e.id === agentRow.id)?.status).toBe('failed');
+  });
+
+  it('scenario: network timeout after the provider may have already accepted the request → recorded as "unknown", never guessed as success or failure, claim NOT finalized', async () => {
+    const { claimId, finderRow, agentRow } = await makeTestClaim('S6');
+    // 'unknown' is the actual status triggerIntasendPayout returns on a
+    // network/timeout exception — see its docstring in payments.ts. The
+    // point: never silently upgrade this to 'completed' (would risk
+    // paying twice if the original request actually went through) or to
+    // 'failed' (would risk a needless duplicate payout on retry if it
+    // didn't).
+    await db.recordPayoutAttempt(finderRow.id, { status: 'unknown', providerBatchId: null, providerTransactionId: null, failureReason: 'Network/timeout error contacting IntaSend — outcome unconfirmed.' });
+    await db.recordPayoutAttempt(agentRow.id, { status: 'success', providerBatchId: 'B-S6', providerTransactionId: 'T-AGENT-S6' });
+
+    const entries = await db.getLedgerEntriesForClaim(claimId);
+    const finder = entries.find(e => e.id === finderRow.id);
+    // recordPayoutAttempt maps both 'pending' and 'unknown' provider
+    // statuses to the ledger's 'pending' status — there is no separate
+    // "unknown" ledger status; the failure_reason field is what
+    // distinguishes "still processing" from "we genuinely don't know",
+    // for an admin to actually read.
+    expect(finder?.status).toBe('pending');
+    expect(finder?.failure_reason).toMatch(/outcome unconfirmed/);
+
+    const result = await db.finalizeSettlement(claimId);
+    expect(result.success).toBe(false);
+  });
+});
+
+// "Duplicate provider status callback" DOES apply to this codebase for
+// the OWNER'S payment collection — /api/webhooks/intasend can genuinely
+// receive the same confirmation twice (network retry, provider redelivery).
+// attemptClaimEscrowHold is the actual guard: an atomic UPDATE...WHERE
+// status = 'pending_payment', so only the first of two duplicate calls can
+// ever win.
+describe('duplicate payment webhook / provider callback idempotency', () => {
+  it('a second attemptClaimEscrowHold for the same claim (simulating a duplicate webhook delivery) does not re-transition an already-escrowed claim', async () => {
+    const claimId = `TEST-CLAIM-WEBHOOK-DUP`;
+    await db.createClaim({
+      id: claimId,
+      item_id: `TEST-ITEM-WEBHOOK-DUP`,
+      owner_phone: '+254700000099',
+      security_answers: { lastDigits: '0000', color: 'black', lostDetails: 'test fixture' },
+      verification_tier: 1,
+      status: 'pending_payment',
+      owner_id_proof_url: null,
+      payment_reference: null,
+      owner_identifying_details: null,
+    });
+
+    const first = await db.attemptClaimEscrowHold(claimId, 'MPESA-REF-001');
+    const second = await db.attemptClaimEscrowHold(claimId, 'MPESA-REF-001-DUPLICATE');
+
+    expect(first).toBe(true);
+    expect(second).toBe(false);
+
+    // The payment_reference from the FIRST call must be preserved — the
+    // duplicate delivery must never overwrite it.
+    const claim = await db.getClaim(claimId);
+    expect(claim?.payment_reference).toBe('MPESA-REF-001');
+    expect(claim?.status).toBe('escrow_held');
+  });
+});
