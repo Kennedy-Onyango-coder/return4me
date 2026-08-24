@@ -99,7 +99,11 @@ export interface FoundItem {
   latitude: number | null;
   longitude: number | null;
   finder_phone: string; // Securely stored, never shown
-  assigned_agent_id: string;
+  // Nullable: an item can be awaiting MANUAL agent assignment (see
+  // needs_manual_agent_reassignment) when confident automatic matching
+  // wasn't possible. Never populate this with an arbitrary/fallback
+  // agent just to keep it non-null — see AgentMatchingService.
+  assigned_agent_id: string | null;
   // suspected_stolen: owner-facing claim flow is blocked pending admin/legal
   // review; the platform does not adjudicate the accusation itself.
   // legal_hold: item is frozen entirely (no claim, no payment, no handover)
@@ -289,7 +293,7 @@ function parseFoundItem(row: any): FoundItem {
     latitude: row.latitude ? parseFloat(row.latitude) : null,
     longitude: row.longitude ? parseFloat(row.longitude) : null,
     finder_phone: row.finder_phone || "",
-    assigned_agent_id: row.assigned_agent_id || "",
+    assigned_agent_id: row.assigned_agent_id ?? null,
     status: row.status as any,
     flaggedForReview: row.flaggedForReview ?? false,
     isDescriptionOnly: row.isDescriptionOnly ?? false,

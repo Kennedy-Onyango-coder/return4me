@@ -1143,7 +1143,14 @@ async function startServer() {
         latitude: numericLat,
         longitude: numericLon,
         finder_phone: finderPhone,
-        assigned_agent_id: assignedAgent.id,
+        // No arbitrary/fallback agent is ever assigned — assignNearestAgent
+        // returns agent: null whenever it can't confidently match one, and
+        // that null is preserved here rather than being papered over. The
+        // item enters the admin manual-assignment queue instead (see
+        // needs_manual_agent_reassignment below and the
+        // POST /api/admin/items/:id/review endpoint, which an admin uses to
+        // actually assign an agent once one is confidently selected).
+        assigned_agent_id: assignedAgent ? assignedAgent.id : null,
         status: 'awaiting_dropoff',
         flaggedForReview: isFlagged,
         isDescriptionOnly: isOther || !isSensitive,
@@ -1162,7 +1169,7 @@ async function startServer() {
         fee_ceiling_applied: feeCeilingApplied,
       });
 
-      if (matchingResult.method === 'manual_fallback') {
+      if (matchingResult.method === 'manual_required') {
         EmailService.sendAdminNewReassignmentRequestEmail(
           newItem.id,
           locationDescription,
@@ -1182,9 +1189,15 @@ async function startServer() {
         success: true,
         item: {
           id: newItem.id,
+          // assignedAgent is null when the item is awaiting manual admin
+          // assignment — the frontend must handle this case with honest
+          // messaging ("we're finding the right agent for you") rather
+          // than assuming an agent object is always present.
           assignedAgent,
         },
-        message: 'Ripoti yako imepokelewa kikamilifu! Msimbo wako wa kuwasilisha bidhaa kwa Agent umezalishwa.',
+        message: assignedAgent
+          ? 'Ripoti yako imepokelewa kikamilifu! Msimbo wako wa kuwasilisha bidhaa kwa Agent umezalishwa.'
+          : 'Ripoti yako imepokelewa! Tunatafuta Agent anayefaa karibu nawe na tutakujulisha hivi karibuni. / Your report has been received! We\'re finding the right Agent near you and will notify you shortly.',
       });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -2719,12 +2732,25 @@ async function startServer() {
       isDescriptionOnly,
       description,
       assignedAgentId,
+      reason,
     } = req.body;
 
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
       }
+
+      // A manual agent (re)assignment must be accountable: who did it,
+      // which agent it was moved from/to, and why. Require a reason
+      // whenever an agent is actually being assigned here — matches the
+      // same accountability standard already applied to stolen-property
+      // flags and legal holds elsewhere in the admin API.
+      if (assignedAgentId && (!reason || typeof reason !== 'string' || !reason.trim())) {
+        return res.status(400).json({ error: 'Toa sababu ya kupanga Agent huyu. / A reason is required to assign an Agent.' });
+      }
+
+      const existingItem = assignedAgentId ? await db.getItem(itemId) : null;
+      const oldAgentId = existingItem?.assigned_agent_id ?? null;
 
       // Calculate hashes and fuzzy names
       let documentNumberHash = null;
@@ -2758,6 +2784,15 @@ async function startServer() {
       }
 
       await db.adminUpdateItem(itemId, updates);
+
+      if (assignedAgentId) {
+        const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
+        await db.logAudit(
+          adminIdentifier,
+          'MANUAL_AGENT_ASSIGNMENT',
+          `Item ${itemId}: agent changed from ${oldAgentId || '(none)'} to ${assignedAgentId} by ${adminIdentifier}. Reason: ${reason.trim()}`
+        );
+      }
 
       res.json({ success: true, message: 'Item manual review completed and saved.' });
     } catch (e: any) {

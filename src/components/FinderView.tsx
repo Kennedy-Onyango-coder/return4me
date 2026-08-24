@@ -296,15 +296,33 @@ export default function FinderView({ lang, categories, categoriesLoading = false
             <p className="text-stone-500 text-sm">{t.dropoffInstructions}</p>
           </div>
 
-          {/* Assigned Agent Details */}
-          <div className="bg-brand-beige p-5 rounded-2xl text-left border border-stone-200 space-y-3">
-            <h3 className="text-xs font-extrabold text-stone-400 uppercase tracking-widest">{t.agentDetails}</h3>
-            <div>
-              <h4 className="text-lg font-bold text-primary-green">{dropoffResult.assignedAgent.business_name}</h4>
-              <p className="text-stone-600 text-sm font-medium">{dropoffResult.assignedAgent.location_address}</p>
-              <p className="text-stone-500 text-xs mt-1">Phone: {dropoffResult.assignedAgent.contact_phone}</p>
+          {/* Assigned Agent Details — or, if manual assignment is still
+              pending, an honest "we're finding the right agent" message.
+              assignedAgent is null whenever automatic matching couldn't
+              confidently pick one — see AgentMatchingService.
+              assignNearestAgent — so this must never assume it's always
+              present. */}
+          {dropoffResult.assignedAgent ? (
+            <div className="bg-brand-beige p-5 rounded-2xl text-left border border-stone-200 space-y-3">
+              <h3 className="text-xs font-extrabold text-stone-400 uppercase tracking-widest">{t.agentDetails}</h3>
+              <div>
+                <h4 className="text-lg font-bold text-primary-green">{dropoffResult.assignedAgent.business_name}</h4>
+                <p className="text-stone-600 text-sm font-medium">{dropoffResult.assignedAgent.location_address}</p>
+                <p className="text-stone-500 text-xs mt-1">Phone: {dropoffResult.assignedAgent.contact_phone}</p>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="bg-amber-50 p-5 rounded-2xl text-left border border-amber-200 space-y-2">
+              <h3 className="text-xs font-extrabold text-amber-700 uppercase tracking-widest">
+                {lang === 'en' ? 'Finding Your Agent' : 'Tunatafuta Agent Wako'}
+              </h3>
+              <p className="text-amber-900 text-sm font-medium">
+                {lang === 'en'
+                  ? "We couldn't confidently match a nearby Return4me agent automatically. Our team is finding the right one for your location and will notify you with drop-off details shortly."
+                  : 'Hatukuweza kuchagua Agent wa karibu kiotomatiki kwa uhakika. Timu yetu inatafuta anayefaa eneo lako na utajulishwa maelezo ya kuwasilisha hivi karibuni.'}
+              </p>
+            </div>
+          )}
 
           {/* Drop-off Code */}
           <div className="bg-primary-green text-white p-6 rounded-2xl space-y-2">
@@ -312,7 +330,11 @@ export default function FinderView({ lang, categories, categoriesLoading = false
             <div className="text-3xl font-mono font-extrabold tracking-wider text-accent-orange">
               {dropoffResult.id}
             </div>
-            <p className="text-[11px] text-stone-300">{t.directionNote}</p>
+            <p className="text-[11px] text-stone-300">
+              {dropoffResult.assignedAgent
+                ? t.directionNote
+                : (lang === 'en' ? 'Keep this code — you\'ll need it once an agent is assigned.' : 'Hifadhi msimbo huu — utahitajika mara Agent atakapopangwa.')}
+            </p>
           </div>
 
           {/* Save-this-code warning */}

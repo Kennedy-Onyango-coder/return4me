@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { isPlaceholderKey } from '../payments';
+import { PaymentService } from '../payments';
 
 // isPlaceholderKey is the single gate that decides whether a payment
 // call actually hits IntaSend with real money, or safely no-ops into
@@ -46,5 +47,74 @@ describe('isPlaceholderKey', () => {
     // substring (not the whole trimmed value) should NOT be flagged —
     // only an exact 'xxx' (after trim/lowercase) is a placeholder.
     expect(isPlaceholderKey('boxxxer_secret_9f8e7d6c5b4a3210')).toBe(false);
+  });
+});
+
+// P0 REGRESSION TEST — the actual bug: payment/payout simulation had NO
+// production gate at all. A misconfigured production deployment (missing
+// or still-placeholder IntaSend keys — the exact same category of mistake
+// the database fail-closed guard in db/index.ts already protects
+// against) would silently fabricate a COMPLETED payment_received ledger
+// entry, or a 'success' payout result, for money that never actually
+// moved. In production that means anyone could "pay" for any claim for
+// free, or a finder/agent payout could be marked paid with nothing sent.
+//
+// Unlike triggerIntasendPayout/createPool (which read env vars at module
+// import time, requiring vi.resetModules() + dynamic import to test),
+// triggerMpesaStkPush reads process.env at CALL time — so these tests can
+// set NODE_ENV/keys directly before each call without any module-reload
+// gymnastics.
+describe('payment simulation production fail-closed guarantee', () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  it('throws instead of simulating an STK push when NODE_ENV=production and keys are missing', async () => {
+    process.env.NODE_ENV = 'production';
+    delete process.env.INTASEND_PUBLISHABLE_KEY;
+    delete process.env.INTASEND_SECRET_KEY;
+
+    await expect(PaymentService.triggerMpesaStkPush('+254712345678', 500, 'TEST-CLAIM-SIM-1')).rejects.toThrow(/production/i);
+  });
+
+  it('throws instead of simulating an STK push when NODE_ENV=production and keys are still placeholders', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.INTASEND_PUBLISHABLE_KEY = 'REPLACE_WITH_YOUR_KEY';
+    process.env.INTASEND_SECRET_KEY = 'REPLACE_WITH_YOUR_KEY';
+
+    await expect(PaymentService.triggerMpesaStkPush('+254712345678', 500, 'TEST-CLAIM-SIM-2')).rejects.toThrow(/production/i);
+  });
+
+  it('does NOT throw in development even with missing keys (simulation is a dev-only convenience)', async () => {
+    process.env.NODE_ENV = 'development';
+    delete process.env.INTASEND_PUBLISHABLE_KEY;
+    delete process.env.INTASEND_SECRET_KEY;
+
+    const result = await PaymentService.triggerMpesaStkPush('+254712345678', 500, 'TEST-CLAIM-SIM-3');
+    expect(result.success).toBe(true);
+    // Simulation must always be unmistakably labeled as such.
+    expect(result.message).toMatch(/SIMULATION/);
+  });
+
+  it('throws instead of simulating a payout when NODE_ENV=production and the secret key is missing', async () => {
+    process.env.NODE_ENV = 'production';
+    delete process.env.INTASEND_SECRET_KEY;
+
+    await expect(PaymentService.triggerIntasendPayout('TEST-CLAIM-SIM-4', [
+      { destination: '+254712345678', amount: 100, recipientType: 'finder' },
+    ])).rejects.toThrow(/production/i);
+  });
+
+  it('does NOT throw a payout simulation in development even with a missing secret key', async () => {
+    process.env.NODE_ENV = 'development';
+    delete process.env.INTASEND_SECRET_KEY;
+
+    const result = await PaymentService.triggerIntasendPayout('TEST-CLAIM-SIM-5', [
+      { destination: '+254712345678', amount: 100, recipientType: 'finder' },
+    ]);
+    expect(result.results.every(r => r.status === 'success')).toBe(true);
+    expect(result.batchId).toMatch(/^SIM-/);
   });
 });

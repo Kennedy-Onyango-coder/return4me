@@ -47,23 +47,40 @@ export async function geocodeAddress(address: string): Promise<{ latitude: numbe
 
 export const AgentMatchingService = {
   /**
-   * Find nearest active agent based on strict fallback algorithm
+   * Find nearest active agent based on strict fallback algorithm.
+   *
+   * IMPORTANT: this NEVER pretends an arbitrary agent is the nearest one.
+   * If GPS matching fails, address geocoding fails, no active agents
+   * exist, or the active agents that do exist have no coordinates on
+   * file, this returns agent: null with needsManualAgentReassignment:
+   * true — the caller (POST /api/items/report in server.ts) must create
+   * the item with assigned_agent_id: null and route it into the admin
+   * manual-assignment queue, not silently attach a real (possibly
+   * far-away, possibly wrong) agent and let the Finder be sent there
+   * under the false impression it was confidently matched.
    */
   async assignNearestAgent(
     lat: number | null,
     lon: number | null,
     locationDescription: string
   ): Promise<{
-    agent: Agent;
-    method: 'gps_haversine' | 'geocoded_text' | 'manual_fallback';
+    agent: Agent | null;
+    method: 'gps_haversine' | 'geocoded_text' | 'manual_required';
     distanceKm: number | null;
     needsManualAgentReassignment: boolean;
   }> {
     const agents = await db.getAgents();
     const activeAgents = agents.filter(a => a.status === 'active');
 
+    // Scenario D (no active agents at all): this used to throw, which
+    // failed the Finder's entire report submission with a hard error.
+    // Reporting a found item should never fail outright just because
+    // agent capacity is temporarily at zero — queue it for manual
+    // assignment instead, same as any other "couldn't confidently match"
+    // outcome.
     if (activeAgents.length === 0) {
-      throw new Error('No active Return4me agents available in the system currently.');
+      console.log('[AGENT ASSIGNMENT] No active agents available — routing to manual assignment queue.');
+      return { agent: null, method: 'manual_required', distanceKm: null, needsManualAgentReassignment: true };
     }
 
     // Fallback 1: GPS Haversine assignment (no cutoff)
@@ -121,14 +138,15 @@ export const AgentMatchingService = {
       }
     }
 
-    // Fallback 3: Oldest active agent in list as catch-all (never fail dropoff flow)
-    const fallbackAgent = activeAgents[0];
-    console.log(`[AGENT ASSIGNMENT] Assigned ${fallbackAgent.business_name} via Default Fallback.`);
-    return {
-      agent: fallbackAgent,
-      method: 'manual_fallback',
-      distanceKm: null,
-      needsManualAgentReassignment: true,
-    };
+    // Fallback 3 (was the actual bug): GPS matching failed, geocoding
+    // failed or wasn't possible, OR active agents exist but scenario E
+    // applies — none of them have coordinates on file, so a distance
+    // comparison genuinely can't be made even though agents technically
+    // exist. In every one of these cases, NEVER fall back to
+    // activeAgents[0] or any other arbitrary pick. Return null and let
+    // an admin — who can see the actual reported location and the real
+    // list of agents — make the call.
+    console.log('[AGENT ASSIGNMENT] Could not confidently match any agent (no GPS match, no geocoding match, or no agents with usable coordinates) — routing to manual assignment queue.');
+    return { agent: null, method: 'manual_required', distanceKm: null, needsManualAgentReassignment: true };
   },
 };

@@ -89,14 +89,25 @@ export const PaymentService = {
       };
     };
 
-    if (!publishableKey || !secretKey) {
-      console.warn('[INTASEND GATEWAY] Configuration missing. Falling back to simulated payout split.');
-      return generateMockStkPushSuccess(phone, amount, claimId);
-    }
-
-    const isDummyKey = isPlaceholderKey(publishableKey) || isPlaceholderKey(secretKey);
-    if (isDummyKey) {
-      console.warn('[INTASEND GATEWAY] Dummy placeholder keys detected. Emulating M-Pesa STK push simulation.');
+    if (!publishableKey || !secretKey || isPlaceholderKey(publishableKey) || isPlaceholderKey(secretKey)) {
+      // PRODUCTION MUST NEVER SIMULATE A PAYMENT. A misconfigured
+      // production deployment (missing or still-placeholder IntaSend
+      // keys) previously fell straight through to
+      // generateMockStkPushSuccess, which doesn't just simulate an STK
+      // push request — it directly writes a COMPLETED payment_received
+      // ledger entry for money that never moved. In production that
+      // means anyone could "pay" for any claim and proceed straight to
+      // collecting the item, for free, with zero real M-Pesa transaction
+      // behind it. Same fail-closed principle as the database connection
+      // guard in db/index.ts: refuse to start faking money movement
+      // rather than silently doing it.
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error(
+          'FATAL: IntaSend payment credentials are missing or still a placeholder value in a production environment. ' +
+          'Refusing to simulate a payment in production — configure real INTASEND_PUBLISHABLE_KEY/INTASEND_SECRET_KEY before accepting payments.'
+        );
+      }
+      console.warn('[INTASEND GATEWAY] Configuration missing or placeholder (non-production only). Falling back to simulated payout split.');
       return generateMockStkPushSuccess(phone, amount, claimId);
     }
 
@@ -107,7 +118,13 @@ export const PaymentService = {
       api_ref: claimId,
     };
 
-    console.log('[INTASEND GATEWAY] Initiating STK Push Collection. Payload:', JSON.stringify(payload, null, 2));
+    // Never log the public_key (a credential, even if labeled
+    // "publishable") or the full phone number — see maskPhoneForLog.
+    console.log('[INTASEND GATEWAY] Initiating STK Push Collection.', {
+      phone_number: maskPhoneForLog(formattedPhone),
+      amount,
+      api_ref: claimId,
+    });
 
     try {
       const response = await fetchWithTimeout(`${INTASEND_BASE_URL}/payment/mpesa-stk-push/`, {
@@ -131,7 +148,10 @@ export const PaymentService = {
       }
 
       const data = await response.json() as any;
-      console.log('[INTASEND GATEWAY] Response received:', JSON.stringify(data, null, 2));
+      // Not logging the raw response body verbatim — its exact shape (and
+      // whether it echoes the phone number back) isn't fully known
+      // without live credentials; log only what's actually used.
+      console.log('[INTASEND GATEWAY] Response received. Top-level keys:', Object.keys(data || {}), 'invoice_id:', data?.invoice?.invoice_id || '(none)');
 
       const invoiceId = data.invoice?.invoice_id || 'INV-' + Math.random().toString(36).substring(2, 10).toUpperCase();
 
@@ -194,7 +214,20 @@ export const PaymentService = {
   ): Promise<{ batchId: string | null; results: Array<{ recipientType: 'finder' | 'agent'; destination: string; providerTransactionId: string | null; status: 'success' | 'pending' | 'failed' | 'unknown' }> }> {
     const secretKey = process.env.INTASEND_SECRET_KEY;
     if (isPlaceholderKey(secretKey)) {
-      console.warn('[INTASEND DISBURSEMENT] Key missing/dummy. Emulating disbursement split.');
+      // Same fail-closed guarantee as triggerMpesaStkPush above — never
+      // fabricate a 'success' payout result in production. Unlike the STK
+      // push path, this doesn't write directly to the ledger itself (the
+      // caller does, via recordPayoutAttempt), but reporting 'success'
+      // here is exactly as dangerous: it would cause the caller to mark a
+      // finder/agent payout as genuinely completed when no real M-Pesa
+      // transfer occurred.
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error(
+          'FATAL: IntaSend secret key is missing or still a placeholder value in a production environment. ' +
+          'Refusing to simulate a payout in production — configure a real INTASEND_SECRET_KEY before processing settlements.'
+        );
+      }
+      console.warn('[INTASEND DISBURSEMENT] Key missing/dummy (non-production only). Emulating disbursement split.');
       const batchId = 'SIM-BATCH-' + Math.random().toString(36).substring(2, 10).toUpperCase();
       return {
         batchId,
