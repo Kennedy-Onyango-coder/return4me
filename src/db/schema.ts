@@ -37,6 +37,14 @@ export const categories = pgTable("categories", {
   // sensitivity (school IDs, children's documents), matching the doc's
   // "if uncertain, escalate to human review" fail-safe principle.
   elevated_review: boolean("elevated_review").default(false).notNull(),
+  // Public-recognition masking policy for this category's document-number
+  // clue in social posts — see src/services/publicRecognition.ts. Admin-
+  // configurable per category rather than hardcoded, since new document
+  // types get added over time and different ones warrant different
+  // levels of exposure (e.g. a card's last-4 vs a passport's first
+  // character only). 'none' means never show a document-number clue at
+  // all for this category, regardless of what was extracted.
+  public_clue_style: varchar("public_clue_style", { length: 30 }).default("generic").notNull(),
 });
 
 // 2. AGENTS TABLE
@@ -99,6 +107,28 @@ export const items = pgTable("items", {
   // verified valuation, and never shown to the owner as a claim of fact.
   declared_value: numeric("declared_value", { precision: 12, scale: 2 }),
   fee_ceiling_applied: boolean("fee_ceiling_applied").default(false).notNull(),
+  // --- AGENT VERIFICATION (kept fully separate from the Finder's original
+  // submission above — ocr_extracted_name/ocr_extracted_number/description/
+  // location_description are NEVER overwritten by an Agent correction, so
+  // the original Finder data always remains intact for audit purposes).
+  // Every individual field-level change is additionally recorded in
+  // item_verification_changes with a reason. These verified_* fields hold
+  // the CURRENT agent-confirmed value (defaulting to the Finder's original
+  // value when the Agent confirms as-reported rather than correcting it),
+  // and are the only source PublicRecognitionService may read from — never
+  // the raw Finder fields directly. See database.ts recordItemVerification.
+  verified_category_id: varchar("verified_category_id", { length: 50 }).references(() => categories.id),
+  verified_name: varchar("verified_name", { length: 150 }),
+  verified_document_number: varchar("verified_document_number", { length: 100 }),
+  verified_description: text("verified_description"),
+  verified_found_area: varchar("verified_found_area", { length: 200 }),
+  // pending: Agent hasn't reviewed yet. confirmed_as_reported: Agent
+  // reviewed and the Finder's data was accurate as-is. corrected: Agent
+  // changed one or more fields (see item_verification_changes for which).
+  // Physical verification and approval are separate, later steps — see
+  // physically_verified_at / status='at_agent' below.
+  verification_status: varchar("verification_status", { length: 30 }).default("pending").notNull(),
+  physically_verified_at: timestamp("physically_verified_at", { withTimezone: true }),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
 }, (table) => {
   return {
@@ -339,5 +369,28 @@ export const social_publications = pgTable("social_publications", {
   return {
     uq_social_pub_item_platform_type: uniqueIndex("uq_social_pub_item_platform_type")
       .on(table.item_id, table.platform, table.publication_type),
+  };
+});
+
+// Field-level audit trail for every Agent correction to a Finder's
+// original submission. One row per changed field, not per verification
+// event — so "what did the Agent change, on which field, and why" is
+// individually reconstructable later, not just "something changed."
+// Confirming as-reported with no changes creates zero rows here (nothing
+// to audit) but still sets items.verification_status =
+// 'confirmed_as_reported'.
+export const item_verification_changes = pgTable("item_verification_changes", {
+  id: varchar("id", { length: 50 }).primaryKey(),
+  item_id: varchar("item_id", { length: 50 }).notNull().references(() => items.id, { onDelete: "cascade" }),
+  agent_id: varchar("agent_id", { length: 50 }).notNull().references(() => agents.id),
+  field_name: varchar("field_name", { length: 50 }).notNull(),
+  original_value: text("original_value"),
+  verified_value: text("verified_value"),
+  reason: varchar("reason", { length: 100 }).notNull(),
+  reason_detail: text("reason_detail"),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+}, (table) => {
+  return {
+    idx_item_verification_changes_item: index("idx_item_verification_changes_item").on(table.item_id),
   };
 });

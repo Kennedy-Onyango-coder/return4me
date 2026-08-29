@@ -16,6 +16,7 @@ import {
   claim_pickup_codes as claimPickupCodesTable,
   platform_settings as platformSettingsTable,
   social_publications as socialPublicationsTable,
+  item_verification_changes as itemVerificationChangesTable,
 } from "./schema.ts";
 import { eq, and, or, isNull } from "drizzle-orm";
 import { getSignedPhotoUrl } from "../services/storage.ts";
@@ -60,6 +61,7 @@ export interface Category {
   // Forces every item in this category through admin manual review before
   // it becomes publicly searchable — see feeEngine/schema.ts comments.
   elevated_review: boolean;
+  public_clue_style: string;
 }
 
 export interface Agent {
@@ -125,6 +127,34 @@ export interface FoundItem {
   locked_platform_share?: number | null;
   declared_value?: number | null;
   fee_ceiling_applied?: boolean;
+  // Agent-verified fields — see the schema.ts comment on these columns.
+  // Never populated by the Finder; only ever written by
+  // db.recordItemVerification(). Falls back to the original Finder field
+  // (ocr_extracted_name, ocr_extracted_number, description,
+  // location_description) when the Agent hasn't corrected that
+  // particular field — see resolveVerifiedItemFields in
+  // publicRecognition.ts, which is the ONLY place that should read these
+  // with fallback logic; everywhere else, null here genuinely means "not
+  // yet verified."
+  verified_category_id?: string | null;
+  verified_name?: string | null;
+  verified_document_number?: string | null;
+  verified_description?: string | null;
+  verified_found_area?: string | null;
+  verification_status?: "pending" | "confirmed_as_reported" | "corrected" | "rejected";
+  physically_verified_at?: string | null;
+}
+
+export interface ItemVerificationChange {
+  id: string;
+  item_id: string;
+  agent_id: string;
+  field_name: string;
+  original_value: string | null;
+  verified_value: string | null;
+  reason: string;
+  reason_detail: string | null;
+  created_at: string;
 }
 
 export interface Claim {
@@ -250,6 +280,7 @@ function parseCategory(row: any): Category {
     platform_pct: row.platform_pct !== undefined && row.platform_pct !== null ? parseFloat(row.platform_pct) : 40,
     finder_reward_cap: row.finder_reward_cap !== undefined && row.finder_reward_cap !== null ? parseFloat(row.finder_reward_cap) : null,
     elevated_review: !!row.elevated_review,
+    public_clue_style: row.public_clue_style || "generic",
   };
 }
 
@@ -311,6 +342,27 @@ function parseFoundItem(row: any): FoundItem {
     locked_platform_share: row.locked_platform_share ? parseFloat(row.locked_platform_share) : null,
     declared_value: row.declared_value ? parseFloat(row.declared_value) : null,
     fee_ceiling_applied: row.fee_ceiling_applied ?? false,
+    verified_category_id: row.verified_category_id ?? null,
+    verified_name: row.verified_name ?? null,
+    verified_document_number: row.verified_document_number ?? null,
+    verified_description: row.verified_description ?? null,
+    verified_found_area: row.verified_found_area ?? null,
+    verification_status: row.verification_status ?? "pending",
+    physically_verified_at: row.physically_verified_at ? new Date(row.physically_verified_at).toISOString() : null,
+  };
+}
+
+function parseItemVerificationChange(row: any): ItemVerificationChange {
+  return {
+    id: row.id,
+    item_id: row.item_id,
+    agent_id: row.agent_id,
+    field_name: row.field_name,
+    original_value: row.original_value ?? null,
+    verified_value: row.verified_value ?? null,
+    reason: row.reason,
+    reason_detail: row.reason_detail ?? null,
+    created_at: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
   };
 }
 
@@ -935,6 +987,20 @@ class DatabaseEngine {
       };
     }
 
+    // Derives a sensible default public-recognition masking style per
+    // category — see the schema.ts comment on public_clue_style. Admins
+    // can override this per category afterward; this only sets an
+    // opinionated starting point so sensitive categories don't launch
+    // with an inappropriate generic mask.
+    function derivePublicClueStyle(categoryId: string): string {
+      if (categoryId === 'national-id') return 'national_id';
+      if (categoryId === 'passport') return 'passport';
+      if (categoryId === 'driving-licence') return 'driving_licence';
+      if (categoryId === 'atm-credit-card') return 'card';
+      if (categoryId === 'cash-money') return 'none'; // no document number applies to cash at all
+      return 'generic';
+    }
+
     const errors: any[] = [];
     for (const cat of list) {
       try {
@@ -946,6 +1012,7 @@ class DatabaseEngine {
         }
 
         const engineFields = deriveFeeEngineFields(cat.total_fee, cat.is_sensitive_document);
+        const publicClueStyle = derivePublicClueStyle(cat.id);
 
         await drizzleDb.insert(categoriesTable)
           .values({
@@ -967,6 +1034,7 @@ class DatabaseEngine {
             platform_pct: String(engineFields.platform_pct),
             finder_reward_cap: engineFields.finder_reward_cap !== null ? String(engineFields.finder_reward_cap) : null,
             elevated_review: !!(cat as any).elevated_review,
+            public_clue_style: publicClueStyle,
           })
           .onConflictDoUpdate({
             target: categoriesTable.id,
@@ -987,6 +1055,7 @@ class DatabaseEngine {
               platform_pct: String(engineFields.platform_pct),
               finder_reward_cap: engineFields.finder_reward_cap !== null ? String(engineFields.finder_reward_cap) : null,
               elevated_review: !!(cat as any).elevated_review,
+              public_clue_style: publicClueStyle,
             },
           });
       } catch (err) {
@@ -1964,6 +2033,133 @@ class DatabaseEngine {
     }
   }
 
+  // --- AGENT VERIFICATION / CORRECTION WORKFLOW ---
+
+  /**
+   * Records an Agent's verification/correction pass over a Finder's
+   * original item submission. This is the ONLY way verified_* fields on
+   * an item are ever written the API surface here (a fixed set of
+   * physically-observable fields) structurally prevents an Agent from
+   * touching anything financial or identity-related (Finder phone,
+   * payout percentages, owner identity, dispute/legal-hold decisions):
+   * those fields simply do not exist as parameters this function accepts.
+   *
+   * verifiedFields must include a value for every correctable field
+   * (even ones the Agent is not changing) verified_* columns become the
+   * single source of truth once verification completes, so every one of
+   * them must end up populated, not just the ones that actually differ
+   * from the Finder's original. A field-level audit row is only created
+   * for fields that genuinely changed value.
+   *
+   * Sensitive items (is_sensitive_document) require physicallyVerified to
+   * be true before ANY correction to name or document_number is
+   * accepted an Agent must never "correct" identity information from
+   * memory or a Finder's say-so without having physically looked at the
+   * item. This is enforced here, not just suggested in the UI.
+   */
+  public async recordItemVerification(
+    itemId: string,
+    agentId: string,
+    verifiedFields: {
+      category_id: string;
+      name: string | null;
+      document_number: string | null;
+      description: string | null;
+      found_area: string;
+    },
+    reason: string,
+    reasonDetail: string | null,
+    physicallyVerified: boolean
+  ): Promise<{ success: boolean; message: string }> {
+    try {
+      return await drizzleDb.transaction(async (tx) => {
+        const itemRows = await tx.select().from(itemsTable).where(eq(itemsTable.id, itemId));
+        if (itemRows.length === 0) return { success: false, message: "Item not found." };
+        const item = itemRows[0];
+
+        const originalValues: Record<string, string | null> = {
+          category_id: item.category_id,
+          name: item.ocr_extracted_name,
+          document_number: item.ocr_extracted_number,
+          description: item.description,
+          found_area: item.location_description,
+        };
+
+        const newValues: Record<string, string | null> = {
+          category_id: verifiedFields.category_id,
+          name: verifiedFields.name,
+          document_number: verifiedFields.document_number,
+          description: verifiedFields.description,
+          found_area: verifiedFields.found_area,
+        };
+
+        const changedFields = Object.keys(newValues).filter(
+          f => (originalValues[f] ?? null) !== (newValues[f] ?? null)
+        );
+
+        if (item.is_sensitive_document && !physicallyVerified) {
+          const touchesIdentity = changedFields.includes('name') || changedFields.includes('document_number');
+          if (touchesIdentity) {
+            return {
+              success: false,
+              message: "Marekebisho ya jina/nambari ya hati nyeti yanahitaji uthibitisho wa kimwili wa Agent kabla ya kukubaliwa. / Corrections to a sensitive document's name/number require the Agent's physical verification before they can be accepted.",
+            };
+          }
+        }
+
+        if (changedFields.length > 0 && (!reason || !reason.trim())) {
+          return { success: false, message: 'Toa sababu ya marekebisho. / A reason is required for any correction.' };
+        }
+
+        for (const field of changedFields) {
+          await tx.insert(itemVerificationChangesTable).values({
+            id: "IVC-" + Math.random().toString(36).substr(2, 9).toUpperCase(),
+            item_id: itemId,
+            agent_id: agentId,
+            field_name: field,
+            original_value: originalValues[field],
+            verified_value: newValues[field],
+            reason,
+            reason_detail: reasonDetail,
+          });
+        }
+
+        await tx.update(itemsTable).set({
+          verified_category_id: newValues.category_id,
+          verified_name: newValues.name,
+          verified_document_number: newValues.document_number,
+          verified_description: newValues.description,
+          verified_found_area: newValues.found_area,
+          verification_status: changedFields.length > 0 ? 'corrected' : 'confirmed_as_reported',
+          physically_verified_at: physicallyVerified ? new Date() : item.physically_verified_at,
+          category_id: newValues.category_id,
+        }).where(eq(itemsTable.id, itemId));
+
+        await tx.insert(auditLogTable).values({
+          id: "AUD-" + Math.random().toString(36).substr(2, 9).toUpperCase(),
+          admin_user: agentId,
+          action: "ITEM_VERIFICATION_RECORDED",
+          details: `Item ${itemId}: ${changedFields.length > 0 ? `corrected fields [${changedFields.join(', ')}]` : 'confirmed as reported'} by agent ${agentId}. Physically verified: ${physicallyVerified}. Reason: ${reason || '(none no changes)'}`,
+        });
+
+        return { success: true, message: changedFields.length > 0 ? 'Corrections saved.' : 'Confirmed as reported.' };
+      });
+    } catch (error) {
+      console.error("Database write failed:", error);
+      return { success: false, message: `Failed to record item verification: ${error instanceof Error ? error.message : String(error)}` };
+    }
+  }
+
+  public async getItemVerificationChanges(itemId: string): Promise<ItemVerificationChange[]> {
+    try {
+      const rows = await drizzleDb.select().from(itemVerificationChangesTable).where(eq(itemVerificationChangesTable.item_id, itemId));
+      return rows.map(parseItemVerificationChange);
+    } catch (error) {
+      console.error("Database query failed:", error);
+      throw new Error("Failed to query item verification changes.", { cause: error });
+    }
+  }
+
   // --- PLATFORM SETTINGS (generic admin-toggleable key/value store) ---
 
   public async getSetting(key: string): Promise<string | null> {
@@ -2455,6 +2651,7 @@ class DatabaseEngine {
     platform_pct?: number;
     finder_reward_cap?: number | null;
     elevated_review?: boolean;
+    public_clue_style?: string;
   }): Promise<Category> {
     try {
       const rows = await drizzleDb.insert(categoriesTable).values({
@@ -2475,6 +2672,7 @@ class DatabaseEngine {
         platform_pct: String(cat.platform_pct ?? 40),
         finder_reward_cap: cat.finder_reward_cap !== undefined && cat.finder_reward_cap !== null ? String(cat.finder_reward_cap) : null,
         elevated_review: cat.elevated_review ?? false,
+        public_clue_style: cat.public_clue_style ?? 'generic',
       }).returning();
       return parseCategory(rows[0]);
     } catch (error) {
@@ -2503,6 +2701,7 @@ class DatabaseEngine {
       platform_pct?: number;
       finder_reward_cap?: number | null;
       elevated_review?: boolean;
+      public_clue_style?: string;
     }
   ): Promise<Category> {
     try {
@@ -2525,6 +2724,7 @@ class DatabaseEngine {
       if (cat.platform_pct !== undefined) setData.platform_pct = String(cat.platform_pct);
       if (cat.finder_reward_cap !== undefined) setData.finder_reward_cap = cat.finder_reward_cap !== null ? String(cat.finder_reward_cap) : null;
       if (cat.elevated_review !== undefined) setData.elevated_review = cat.elevated_review;
+      if (cat.public_clue_style !== undefined) setData.public_clue_style = cat.public_clue_style;
 
       const rows = await drizzleDb.update(categoriesTable).set(setData).where(eq(categoriesTable.id, id)).returning();
       return parseCategory(rows[0]);

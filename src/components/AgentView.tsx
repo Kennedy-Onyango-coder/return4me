@@ -43,6 +43,127 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
   const [handoverCodeInput, setHandoverCodeInput] = useState('');
   const [actionSuccessMsg, setActionSuccessMsg] = useState('');
 
+  // Item verification/correction panel — the Agent reviews the Finder's
+  // original submission before physically approving it. Confirming as
+  // reported or saving a correction both go through the same
+  // /api/agents/verify-item call; approving only proceeds to
+  // /api/agents/confirm-dropoff once verification (and, for a sensitive
+  // item's identity fields, physical verification) is complete — enforced
+  // server-side, not just by this UI's button order.
+  const [verifyingItemId, setVerifyingItemId] = useState<string | null>(null);
+  const [verifyCategoryId, setVerifyCategoryId] = useState('');
+  const [verifyName, setVerifyName] = useState('');
+  const [verifyDocNumber, setVerifyDocNumber] = useState('');
+  const [verifyDescription, setVerifyDescription] = useState('');
+  const [verifyFoundArea, setVerifyFoundArea] = useState('');
+  const [verifyPhysicallyChecked, setVerifyPhysicallyChecked] = useState(false);
+  const [verifyReason, setVerifyReason] = useState('Finder entered wrong information');
+  const [verifyReasonDetail, setVerifyReasonDetail] = useState('');
+  const [verifyError, setVerifyError] = useState('');
+  const [categories, setCategories] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch('/api/categories').then(r => r.json()).then(setCategories).catch(() => {});
+  }, []);
+
+  const openVerificationPanel = (item: any) => {
+    setVerifyingItemId(item.id);
+    setVerifyCategoryId(item.category_id || '');
+    setVerifyName(item.ocr_extracted_name || '');
+    setVerifyDocNumber(item.ocr_extracted_number || '');
+    setVerifyDescription(item.description || '');
+    setVerifyFoundArea(item.location_description || '');
+    setVerifyPhysicallyChecked(false);
+    setVerifyReason('Finder entered wrong information');
+    setVerifyReasonDetail('');
+    setVerifyError('');
+    setActionSuccessMsg('');
+  };
+
+  const hasCorrections = (item: any) => {
+    if (!item) return false;
+    return (
+      verifyCategoryId !== (item.category_id || '') ||
+      verifyName !== (item.ocr_extracted_name || '') ||
+      verifyDocNumber !== (item.ocr_extracted_number || '') ||
+      verifyDescription !== (item.description || '') ||
+      verifyFoundArea !== (item.location_description || '')
+    );
+  };
+
+  // Submits verification/correction, then — only if the Agent has
+  // checked "physically verified" — immediately proceeds to
+  // confirm-dropoff in the same action. This combines the design brief's
+  // separate "verify" and "approve & accept" steps into one button when
+  // the Agent has already looked at the item; if they haven't checked
+  // the physical-verification box, this only saves the correction and
+  // leaves the item in the queue for them to come back and approve once
+  // they've actually inspected it.
+  const handleSubmitVerification = async (item: any, outcome: 'confirmed' | 'corrected') => {
+    setVerifyError('');
+    setActionSuccessMsg('');
+    setActionProcessing(true);
+
+    const changed = hasCorrections(item);
+    if (outcome === 'corrected' && !changed) {
+      setVerifyError(lang === 'en' ? 'No fields were actually changed — use "Confirm As Reported" instead, or edit a field first.' : 'Hakuna sehemu iliyobadilishwa — tumia "Thibitisha Kama Ilivyoripotiwa", au badilisha sehemu kwanza.');
+      setActionProcessing(false);
+      return;
+    }
+
+    try {
+      const verifyResponse = await fetch('/api/agents/verify-item', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          dropoffCode: item.id,
+          categoryId: verifyCategoryId,
+          name: item.is_sensitive_document ? (verifyName || null) : null,
+          documentNumber: item.is_sensitive_document ? (verifyDocNumber || null) : null,
+          description: verifyDescription || null,
+          foundArea: verifyFoundArea,
+          reason: changed ? verifyReason : '',
+          reasonDetail: changed ? (verifyReasonDetail || null) : null,
+          physicallyVerified: verifyPhysicallyChecked,
+        }),
+      });
+      const verifyData = await verifyResponse.json();
+      if (!verifyResponse.ok) {
+        throw new Error(verifyData.error || 'Verification failed');
+      }
+
+      if (!verifyPhysicallyChecked) {
+        // Correction/confirmation saved, but the Agent hasn't physically
+        // inspected the item yet — leave it in the queue rather than
+        // approving it now.
+        setActionSuccessMsg(lang === 'en' ? 'Saved. Physically inspect the item, then check the box and confirm to approve it.' : 'Imehifadhiwa. Kagua bidhaa kimwili, kisha weka alama kwenye kisanduku na uthibitishe ili kuikubali.');
+        setVerifyingItemId(null);
+        fetchQueues();
+        setActionProcessing(false);
+        return;
+      }
+
+      // Physically verified — proceed straight to approval.
+      const approveResponse = await fetch('/api/agents/confirm-dropoff', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ dropoffCode: item.id }),
+      });
+      const approveData = await approveResponse.json();
+      if (!approveResponse.ok) {
+        throw new Error(approveData.error || 'Approval failed');
+      }
+
+      setActionSuccessMsg(approveData.message);
+      setVerifyingItemId(null);
+      fetchQueues();
+    } catch (e: any) {
+      setVerifyError(e.message);
+    } finally {
+      setActionProcessing(false);
+    }
+  };
+
   // Rejection States
   const [rejectingItemId, setRejectingItemId] = useState<string | null>(null);
   const [rejectionReason, setRejectionReason] = useState<string>("Not a real item");
@@ -179,36 +300,19 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
     }
   };
 
-  // Confirm Physical Drop-off from Finder
-  const handleConfirmDropoff = async (e: React.FormEvent) => {
+  // Look up a pending item by drop-off code and open its verification
+  // panel, rather than confirming immediately — confirm-dropoff now
+  // requires verification to have happened first (server-enforced).
+  const handleLookupDropoff = (e: React.FormEvent) => {
     e.preventDefault();
-    setActionSuccessMsg('');
     setAuthError('');
-    setActionProcessing(true);
-
-    try {
-      const response = await fetch('/api/agents/confirm-dropoff', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ dropoffCode: dropoffCodeInput }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Confirm drop-off failed');
-      }
-
-      setActionSuccessMsg(data.message);
-      setDropoffCodeInput('');
-      fetchQueues(); // Reload queues
-    } catch (e: any) {
-      setAuthError(e.message);
-    } finally {
-      setActionProcessing(false);
+    const item = expectedDropoffs.find(i => i.id.trim().toUpperCase() === dropoffCodeInput.trim().toUpperCase());
+    if (!item) {
+      setAuthError(lang === 'en' ? 'No pending item found with that drop-off code.' : 'Hakuna bidhaa inayosubiri yenye msimbo huo.');
+      return;
     }
+    openVerificationPanel(item);
+    setDropoffCodeInput('');
   };
 
   const handleRejectDropoff = async (dropoffCode: string) => {
@@ -744,7 +848,7 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
                 <ShieldCheck size={20} className="text-accent-orange" />
                 <h3 className="font-extrabold text-sm uppercase tracking-wide">{t.confirmDropBtn}</h3>
               </div>
-              <form onSubmit={handleConfirmDropoff} className="flex gap-2">
+              <form onSubmit={handleLookupDropoff} className="flex gap-2">
                 <input
                   type="text"
                   value={dropoffCodeInput}
@@ -797,15 +901,13 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
                             <span className="text-xs font-mono font-bold text-accent-orange">{item.id}</span>
                             <p className="text-stone-500 text-[10px] leading-tight">Reported on: {new Date(item.created_at).toLocaleDateString()}</p>
                           </div>
-                          {rejectingItemId !== item.id && (
+                          {rejectingItemId !== item.id && verifyingItemId !== item.id && (
                             <div className="flex space-x-1.5">
                               <button
-                                onClick={() => {
-                                  setDropoffCodeInput(item.id);
-                                }}
+                                onClick={() => openVerificationPanel(item)}
                                 className="bg-primary-green text-white text-xs font-bold px-3 py-1.5 rounded-xl hover:bg-primary-hover transition"
                               >
-                                Confirm
+                                {lang === 'en' ? 'Review' : 'Kagua'}
                               </button>
                               <button
                                 onClick={() => {
@@ -820,6 +922,152 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
                             </div>
                           )}
                         </div>
+
+                        {/* ITEM VERIFICATION — Original vs Verified. This is the
+                            required review step before the item can be
+                            physically approved; confirm-dropoff refuses to run
+                            until it's completed (server-enforced). */}
+                        {verifyingItemId === item.id && (
+                          <div className="bg-brand-beige/60 p-4 rounded-xl border border-stone-200 space-y-3">
+                            <h4 className="text-xs font-extrabold text-primary-green uppercase tracking-wide">
+                              {lang === 'en' ? 'Item Verification' : 'Uthibitisho wa Bidhaa'}
+                            </h4>
+
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold text-stone-500 uppercase block">Category</label>
+                              <select
+                                value={verifyCategoryId}
+                                onChange={(e) => setVerifyCategoryId(e.target.value)}
+                                className="w-full border border-stone-200 rounded-lg p-2 text-xs bg-white"
+                              >
+                                {categories.map((c: any) => (
+                                  <option key={c.id} value={c.id}>{lang === 'en' ? c.name_en : c.name_sw}</option>
+                                ))}
+                              </select>
+                              {verifyCategoryId !== (item.category_id || '') && (
+                                <p className="text-[10px] text-stone-400">Finder: {item.category_id}</p>
+                              )}
+                            </div>
+
+                            {item.is_sensitive_document && (
+                              <>
+                                <div className="space-y-1">
+                                  <label className="text-[10px] font-bold text-stone-500 uppercase block">Name on document</label>
+                                  <input
+                                    type="text"
+                                    value={verifyName}
+                                    onChange={(e) => setVerifyName(e.target.value)}
+                                    className="w-full border border-stone-200 rounded-lg p-2 text-xs"
+                                  />
+                                  {verifyName !== (item.ocr_extracted_name || '') && (
+                                    <p className="text-[10px] text-stone-400">Finder: {item.ocr_extracted_name || '(none)'}</p>
+                                  )}
+                                </div>
+                                <div className="space-y-1">
+                                  <label className="text-[10px] font-bold text-stone-500 uppercase block">Document number</label>
+                                  <input
+                                    type="text"
+                                    value={verifyDocNumber}
+                                    onChange={(e) => setVerifyDocNumber(e.target.value)}
+                                    className="w-full border border-stone-200 rounded-lg p-2 text-xs font-mono"
+                                  />
+                                  {verifyDocNumber !== (item.ocr_extracted_number || '') && (
+                                    <p className="text-[10px] text-stone-400">Finder: {item.ocr_extracted_number || '(none)'}</p>
+                                  )}
+                                </div>
+                              </>
+                            )}
+
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold text-stone-500 uppercase block">Description</label>
+                              <input
+                                type="text"
+                                value={verifyDescription}
+                                onChange={(e) => setVerifyDescription(e.target.value)}
+                                className="w-full border border-stone-200 rounded-lg p-2 text-xs"
+                              />
+                              {verifyDescription !== (item.description || '') && (
+                                <p className="text-[10px] text-stone-400">Finder: {item.description || '(none)'}</p>
+                              )}
+                            </div>
+
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold text-stone-500 uppercase block">Found area</label>
+                              <input
+                                type="text"
+                                value={verifyFoundArea}
+                                onChange={(e) => setVerifyFoundArea(e.target.value)}
+                                className="w-full border border-stone-200 rounded-lg p-2 text-xs"
+                              />
+                              {verifyFoundArea !== (item.location_description || '') && (
+                                <p className="text-[10px] text-stone-400">Finder: {item.location_description}</p>
+                              )}
+                            </div>
+
+                            {hasCorrections(item) && (
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-bold text-stone-500 uppercase block">Reason for correction</label>
+                                <select
+                                  value={verifyReason}
+                                  onChange={(e) => setVerifyReason(e.target.value)}
+                                  className="w-full border border-stone-200 rounded-lg p-2 text-xs bg-white"
+                                >
+                                  <option value="Finder entered wrong information">Finder entered wrong information</option>
+                                  <option value="Finder information incomplete">Finder information incomplete</option>
+                                  <option value="Physical item differs from report">Physical item differs from report</option>
+                                  <option value="Wrong category">Wrong category</option>
+                                  <option value="Wrong description">Wrong description</option>
+                                  <option value="Wrong location">Wrong location</option>
+                                  <option value="Other">Other</option>
+                                </select>
+                                <input
+                                  type="text"
+                                  value={verifyReasonDetail}
+                                  onChange={(e) => setVerifyReasonDetail(e.target.value)}
+                                  placeholder="Optional explanation..."
+                                  className="w-full border border-stone-200 rounded-lg p-2 text-xs"
+                                />
+                              </div>
+                            )}
+
+                            <label className="flex items-center space-x-2 text-xs text-stone-700 font-semibold">
+                              <input
+                                type="checkbox"
+                                checked={verifyPhysicallyChecked}
+                                onChange={(e) => setVerifyPhysicallyChecked(e.target.checked)}
+                              />
+                              <span>{lang === 'en' ? 'I have physically inspected this item' : 'Nimekagua bidhaa hii kimwili'}</span>
+                            </label>
+                            {item.is_sensitive_document && (verifyName !== (item.ocr_extracted_name || '') || verifyDocNumber !== (item.ocr_extracted_number || '')) && !verifyPhysicallyChecked && (
+                              <p className="text-[10px] text-red-600 font-semibold">
+                                {lang === 'en' ? 'Correcting name/ID number on a sensitive document requires physical inspection — check the box above.' : 'Kurekebisha jina/nambari ya hati nyeti kunahitaji ukaguzi wa kimwili — weka alama kwenye kisanduku hapo juu.'}
+                              </p>
+                            )}
+
+                            {verifyError && (
+                              <p className="text-xs text-red-600 font-semibold">{verifyError}</p>
+                            )}
+
+                            <div className="flex flex-wrap gap-2 justify-end pt-1">
+                              <button
+                                onClick={() => setVerifyingItemId(null)}
+                                className="text-stone-500 hover:text-stone-700 text-xs px-3 py-1.5 rounded-lg"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                disabled={actionProcessing}
+                                onClick={() => handleSubmitVerification(item, hasCorrections(item) ? 'corrected' : 'confirmed')}
+                                className="bg-primary-green hover:bg-primary-hover text-white text-xs font-bold px-4 py-1.5 rounded-xl transition disabled:opacity-50 flex items-center gap-1.5"
+                              >
+                                {actionProcessing ? <Loader2 className="animate-spin" size={12} /> : null}
+                                {hasCorrections(item)
+                                  ? (verifyPhysicallyChecked ? 'Save Corrections & Approve' : 'Save Corrections & Continue')
+                                  : (verifyPhysicallyChecked ? 'Confirm As Reported & Approve' : 'Confirm As Reported')}
+                              </button>
+                            </div>
+                          </div>
+                        )}
 
                         {rejectingItemId === item.id && (
                           <div className="bg-red-50/50 p-3 rounded-xl border border-red-100/50 space-y-3">

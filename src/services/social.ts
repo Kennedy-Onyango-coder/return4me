@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import crypto from 'crypto';
 import { db } from '../db/database';
+import { buildSafePublicClues } from './publicRecognition';
 
 dotenv.config();
 
@@ -125,6 +126,10 @@ export interface SocialItem {
   is_sensitive_document: boolean;
   locked_total_fee?: string | number | null;
   photo_url?: string | null;
+  verified_name?: string | null;
+  verified_document_number?: string | null;
+  verified_found_area?: string | null;
+  verification_status?: string;
 }
 
 export interface SocialAgent {
@@ -140,6 +145,7 @@ export interface SocialCategory {
   name_sw: string;
   total_fee: string | number;
   is_sensitive_document: boolean;
+  public_clue_style?: string;
 }
 
 /**
@@ -215,16 +221,23 @@ export const SocialService = {
 
     let text = '';
     if (isSensitive) {
-      // Most conservative public template for sensitive documents: no
-      // masked name, no masked number, no collection point, no fee — even
-      // partially-masked identity information is more than a public post
-      // needs to say. Real ownership matching happens entirely through
-      // the private claim workflow (security questions, OTP, and — for
-      // Tier 3 — ID proof), never through anything shown here.
+      // Recognition clues, not authentication: enough that a genuine
+      // owner thinks "this could be mine", never enough to prove it.
+      // Built exclusively through PublicRecognitionService from
+      // Agent-VERIFIED fields — never straight from Finder-submitted
+      // data. See buildSafePublicClues and the guard in
+      // broadcastVerifiedItem above.
+      const clues = buildSafePublicClues(item, category || { public_clue_style: 'generic' });
+      const nameLine = clues.nameClue ? `<b>Name clue:</b> <code>${escapeTelegramHtml(clues.nameClue)}</code>\n` : '';
+      const numberLine = clues.documentNumberClue ? `<b>ID clue:</b> <code>${escapeTelegramHtml(clues.documentNumberClue)}</code>\n` : '';
+
       text = `<b>FOUND: ${escapeTelegramHtml(categoryName).toUpperCase()}</b>\n\n` +
-             `A verified ${escapeTelegramHtml(categoryName)} has been recovered and is being securely held by a Return4me Agent.\n\n` +
-             `Think it may be yours?\n\n` +
-             `Verify ownership securely on Return4me. Use the private claim workflow for real identity matching.\n\n` +
+             nameLine +
+             numberLine +
+             `<b>Found around:</b> ${escapeTelegramHtml(clues.location)}\n\n` +
+             `A verified item is safely held by a Return4me Agent.\n\n` +
+             `Think this may be yours?\n\n` +
+             `Verify ownership securely through Return4me. Use the private claim workflow for real identity matching — this post is never sufficient to claim the item on its own.\n\n` +
              `<b>Claim Link:</b> <a href="https://return4me.co.ke/?claim=${item.id}">https://return4me.co.ke/?claim=${item.id}</a>`;
     } else {
       const itemDesc = sanitizeSocialText(item.description, { htmlEscape: true }) || 'No additional details provided.';
@@ -340,10 +353,17 @@ export const SocialService = {
 
     let text = '';
     if (isSensitive) {
+      const clues = buildSafePublicClues(item, category || { public_clue_style: 'generic' });
+      const nameLine = clues.nameClue ? `Name clue: ${sanitizeSocialText(clues.nameClue)}\n` : '';
+      const numberLine = clues.documentNumberClue ? `ID clue: ${sanitizeSocialText(clues.documentNumberClue)}\n` : '';
+
       text = `FOUND: ${categoryName.toUpperCase()}\n\n` +
-             `A verified ${categoryName} has been recovered and is being securely held by a Return4me Agent.\n\n` +
-             `Think it may be yours?\n\n` +
-             `Verify ownership securely on Return4me. Use the private claim workflow for real identity matching.\n\n` +
+             nameLine +
+             numberLine +
+             `Found around: ${sanitizeSocialText(clues.location)}\n\n` +
+             `A verified item is safely held by a Return4me Agent.\n\n` +
+             `Think this may be yours?\n\n` +
+             `Verify ownership securely through Return4me. Use the private claim workflow for real identity matching — this post is never sufficient to claim the item on its own.\n\n` +
              `Claim Link: https://return4me.co.ke/?claim=${item.id}`;
     } else {
       const itemDesc = sanitizeSocialText(item.description) || 'No additional details provided.';
@@ -458,7 +478,9 @@ export const SocialService = {
     // detail lives on the claim page behind the link, not in the tweet itself.
     let text = '';
     if (isSensitive) {
-      text = `FOUND: ${categoryName}. Verified by a Return4me Agent. Think it's yours? Verify securely:\n${claimLink}`;
+      const clues = buildSafePublicClues(item, category || { public_clue_style: 'generic' });
+      const nameLine = clues.nameClue ? ` (${sanitizeSocialText(clues.nameClue)})` : '';
+      text = `FOUND: ${categoryName}${nameLine} near ${sanitizeSocialText(clues.location)}. Verified by a Return4me Agent. Think it's yours? Verify securely:\n${claimLink}`;
     } else {
       const safeLocation = sanitizeSocialText(item.location_description);
       text = `FOUND: ${categoryName} near ${safeLocation}, verified at a Return4me agent hub` +
@@ -588,6 +610,20 @@ export const SocialService = {
       console.log(`[SOCIAL SERVICE] Publishing is paused — skipping broadcast for item ID: ${item.id}.`);
       return;
     }
+
+    // CRITICAL RULE: public sensitive-document clues must be built from
+    // Agent-VERIFIED data, never straight from an unverified Finder
+    // submission. confirm-dropoff (server.ts) already requires
+    // verification_status !== 'pending' before an item can even reach
+    // 'at_agent' (the status that triggers this broadcast) — this is a
+    // second, defensive check at the point publication actually happens,
+    // so a future code path that calls broadcastVerifiedItem some other
+    // way can't accidentally publish an unverified sensitive item.
+    if (item.is_sensitive_document && (!item.verification_status || item.verification_status === 'pending')) {
+      console.error(`[SOCIAL SERVICE] Refusing to broadcast sensitive item ${item.id} — verification_status is '${item.verification_status || 'pending'}', not yet Agent-verified. This should be unreachable given confirm-dropoff's own guard; treating as a bug and failing safe.`);
+      return;
+    }
+
     console.log(`[SOCIAL SERVICE] Initiating social media broadcast for item ID: ${item.id}`);
 
     // Each platform post is individually claimed via the idempotency table

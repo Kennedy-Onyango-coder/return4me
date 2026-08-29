@@ -31,6 +31,9 @@ CREATE TABLE categories (
     -- Forces the admin manual-review gate for every item in this category —
     -- see the matching comment in src/db/schema.ts.
     elevated_review BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Public-recognition document-number masking policy — see matching
+    -- comment in src/db/schema.ts.
+    public_clue_style VARCHAR(30) NOT NULL DEFAULT 'generic',
     CONSTRAINT chk_fee_shares_sum CHECK (total_fee = finder_share + agent_share + platform_share)
 );
 
@@ -94,8 +97,32 @@ CREATE TABLE items (
     -- Optional, unverified finder-supplied replacement-value estimate — used
     -- only as an input to the Recovery Fee Engine's ceiling calculation.
     declared_value NUMERIC(12, 2) CHECK (declared_value IS NULL OR declared_value >= 0),
-    fee_ceiling_applied BOOLEAN NOT NULL DEFAULT FALSE
+    fee_ceiling_applied BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Agent-verified fields — see matching comment in schema.ts. The
+    -- original Finder submission (ocr_extracted_name, ocr_extracted_number,
+    -- description, location_description above) is never overwritten.
+    verified_category_id VARCHAR(50) REFERENCES categories(id),
+    verified_name VARCHAR(150),
+    verified_document_number VARCHAR(100),
+    verified_description TEXT,
+    verified_found_area VARCHAR(200),
+    verification_status VARCHAR(30) NOT NULL DEFAULT 'pending' CHECK (verification_status IN ('pending', 'confirmed_as_reported', 'corrected', 'rejected')),
+    physically_verified_at TIMESTAMP WITH TIME ZONE
 );
+
+-- Field-level Agent-correction audit trail — see matching comment in schema.ts.
+CREATE TABLE item_verification_changes (
+    id VARCHAR(50) PRIMARY KEY,
+    item_id VARCHAR(50) NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    agent_id VARCHAR(50) NOT NULL REFERENCES agents(id),
+    field_name VARCHAR(50) NOT NULL,
+    original_value TEXT,
+    verified_value TEXT,
+    reason VARCHAR(100) NOT NULL,
+    reason_detail TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_item_verification_changes_item ON item_verification_changes(item_id);
 
 -- Create indexes for performance
 CREATE INDEX idx_items_doc_hash ON items(document_number_hash);

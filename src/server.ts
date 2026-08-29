@@ -2096,6 +2096,64 @@ async function startServer() {
   });
 
   // 9. AGENT CONFIRMATIONS
+  /**
+   * Agent correction/verification step — must happen BEFORE
+   * confirm-dropoff (physical approve & accept). Lets the Agent, who is
+   * physically looking at the item, correct or complete what the Finder
+   * submitted. Original Finder data is never touched; see
+   * recordItemVerification in database.ts for the full data-integrity
+   * and sensitive-document rules this enforces.
+   */
+  app.post('/api/agents/verify-item', authenticateJWT, async (req, res) => {
+    const { dropoffCode, categoryId, name, documentNumber, description, foundArea, reason, reasonDetail, physicallyVerified } = req.body;
+
+    try {
+      if (req.user?.role !== 'agent' || !req.user.agentId) {
+        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
+      }
+
+      const item = await db.getItem(dropoffCode);
+      if (!item) {
+        return res.status(404).json({ error: 'Msimbo wa kuwasilisha (Drop-off code) si sahihi.' });
+      }
+
+      if (item.assigned_agent_id !== req.user.agentId) {
+        return res.status(403).json({ error: 'Bidhaa hii haijapangiwa physical hub yako.' });
+      }
+
+      if (item.status !== 'awaiting_dropoff') {
+        return res.status(400).json({ error: `Bidhaa hii tayari imeshughulikiwa. Hali ya sasa: ${item.status}` });
+      }
+
+      if (!categoryId || !foundArea) {
+        return res.status(400).json({ error: 'Kategoria na eneo lililopatikana ni lazima.' });
+      }
+
+      const result = await db.recordItemVerification(
+        dropoffCode,
+        req.user.agentId,
+        {
+          category_id: categoryId,
+          name: name ?? null,
+          document_number: documentNumber ?? null,
+          description: description ?? null,
+          found_area: foundArea,
+        },
+        reason || '',
+        reasonDetail || null,
+        !!physicallyVerified
+      );
+
+      if (!result.success) {
+        return res.status(400).json({ error: result.message });
+      }
+
+      res.json({ success: true, message: result.message });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.post('/api/agents/confirm-dropoff', authenticateJWT, async (req, res) => {
     const { dropoffCode } = req.body;
 
@@ -2111,6 +2169,17 @@ async function startServer() {
 
       if (item.assigned_agent_id !== req.user.agentId) {
         return res.status(403).json({ error: 'Bidhaa hii haijapangiwa physical hub yako.' });
+      }
+
+      // The Agent must complete verification (confirm-as-reported or
+      // correct-and-save) before physically approving the item — this is
+      // enforced here, server-side, not just by the frontend button
+      // sequence, so it can't be bypassed by calling the API directly.
+      if (item.verification_status === 'pending') {
+        return res.status(400).json({ error: 'Tafadhali kamilisha uthibitisho wa bidhaa kabla ya kuikubali. / Please complete item verification before approving it.' });
+      }
+      if (!item.physically_verified_at) {
+        return res.status(400).json({ error: 'Tafadhali thibitisha kimwili bidhaa hii kabla ya kuikubali. / Please physically verify this item before approving it.' });
       }
 
       // SOCIAL MEDIA AUTO-POSTING INTEGRATION POINT:

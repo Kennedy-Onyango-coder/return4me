@@ -810,6 +810,36 @@ export async function ensureSchemaUpToDate(pool: Pool) {
       completed_at TIMESTAMPTZ
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS uq_social_pub_item_platform_type ON social_publications(item_id, platform, publication_type)`,
+    // Agent-verification fields on items, plus the field-level correction
+    // audit trail table — see matching comments in schema.ts.
+    `ALTER TABLE items ADD COLUMN IF NOT EXISTS verified_category_id VARCHAR(50) REFERENCES categories(id)`,
+    `ALTER TABLE items ADD COLUMN IF NOT EXISTS verified_name VARCHAR(150)`,
+    `ALTER TABLE items ADD COLUMN IF NOT EXISTS verified_document_number VARCHAR(100)`,
+    `ALTER TABLE items ADD COLUMN IF NOT EXISTS verified_description TEXT`,
+    `ALTER TABLE items ADD COLUMN IF NOT EXISTS verified_found_area VARCHAR(200)`,
+    `ALTER TABLE items ADD COLUMN IF NOT EXISTS verification_status VARCHAR(30) NOT NULL DEFAULT 'pending'`,
+    `ALTER TABLE items ADD COLUMN IF NOT EXISTS physically_verified_at TIMESTAMPTZ`,
+    // Same class of bug fixed twice already this project (admin_users
+    // TOTP columns, ledger provider columns): CREATE TABLE for a brand
+    // new table must come before any statement that references it. This
+    // table doesn't exist in an already-bootstrapped older database, so
+    // it's created here, in the incremental path, not just in
+    // sql/schema.sql's fresh-bootstrap path.
+    `CREATE TABLE IF NOT EXISTS item_verification_changes (
+      id VARCHAR(50) PRIMARY KEY,
+      item_id VARCHAR(50) NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+      agent_id VARCHAR(50) NOT NULL REFERENCES agents(id),
+      field_name VARCHAR(50) NOT NULL,
+      original_value TEXT,
+      verified_value TEXT,
+      reason VARCHAR(100) NOT NULL,
+      reason_detail TEXT,
+      created_at TIMESTAMPTZ DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_item_verification_changes_item ON item_verification_changes(item_id)`,
+    `ALTER TABLE items DROP CONSTRAINT IF EXISTS items_verification_status_check`,
+    `ALTER TABLE items ADD CONSTRAINT items_verification_status_check CHECK (verification_status IN ('pending', 'confirmed_as_reported', 'corrected', 'rejected'))`,
+    `ALTER TABLE categories ADD COLUMN IF NOT EXISTS public_clue_style VARCHAR(30) NOT NULL DEFAULT 'generic'`,
   ];
   let migrationFailureCount = 0;
   for (const sql of statements) {
