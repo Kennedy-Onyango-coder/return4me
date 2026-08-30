@@ -1,0 +1,104 @@
+name: CI
+
+# There was no CI/CD configuration anywhere in this repository before this
+# file — no .github/workflows, no other CI config of any kind. That means
+# nothing was actually enforcing "lint clean, tests pass, build succeeds"
+# before code reached main; it depended entirely on whoever pushed having
+# run those commands locally first. This workflow is the quality gate:
+# a required check on every push and pull request that fails loudly (and,
+# once configured as a required status check in the repo's branch
+# protection rules, blocks merging) if typecheck, the test suite, or the
+# production build breaks.
+#
+# What this workflow deliberately does NOT do: deploy anything. This repo
+# has no render.yaml/vercel.json/Dockerfile/fly.toml — nothing indicating
+# how or where it's actually deployed (the .env.example comments suggest
+# Google Cloud Run via AI Studio's own pipeline). Wiring an actual deploy
+# step here would mean guessing at infrastructure and secrets that don't
+# exist in this repo, which is worse than not having it. This workflow is
+# the safe, universally-applicable part: catch regressions before they
+# reach main, regardless of whatever deploys main afterward.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same branch/PR so pushing a fix doesn't
+# leave a stale, already-outdated run occupying a runner.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-gate:
+    name: Lint, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies (exact lockfile versions)
+        run: npm ci --no-audit --no-fund
+
+      # "lint" in package.json is `tsc --noEmit` — this repo's actual
+      # typecheck/lint gate, not a separate linter. Kept as its own step
+      # (rather than folded into build) so a typecheck failure is reported
+      # distinctly from a bundling failure.
+      - name: Typecheck (npm run lint)
+        run: npm run lint
+
+      # The full vitest suite: unit, service, and the static source-audit
+      # regression tests (e.g. admin route authorization, claim-ID rate
+      # limiting, payment authorization gating, webhook signature timing-
+      # safety, phone-number log masking) that this repo relies on in place
+      # of a real browser E2E harness, which isn't set up here.
+      - name: Run tests
+        run: npm test
+
+      # Exercises the exact same build this app ships with: the Vite
+      # frontend bundle plus the esbuild-bundled Express server. A build
+      # break here is a build break in production, full stop.
+      - name: Build (frontend + server bundle)
+        run: npm run build
+
+      # Fails the job (not just a warning) if any production secret looks
+      # like it was accidentally committed — the same class of thing
+      # Phase 18 asks for ("no production secrets in Git"). This is a
+      # narrow, low-false-positive check on this specific repo's actual
+      # secret-shaped env vars, not a generic secret scanner, and only
+      # looks at tracked files (git ls-files), never node_modules or the
+      # build output.
+      - name: Guard against committed secrets
+        run: |
+          set -euo pipefail
+          # .env.example is expected to contain REPLACE_WITH_*/dummy
+          # placeholder values by design — that's not a leaked secret, it's
+          # the documented template. Every other tracked file is checked.
+          FILES=$(git ls-files | grep -v '^\.env\.example$' || true)
+          if [ -z "$FILES" ]; then
+            echo "No tracked files to scan."
+            exit 0
+          fi
+          # Matches this repo's real secret env-var names assigned to a
+          # non-empty, non-placeholder-looking, non-env-reference value —
+          # i.e. not REPLACE_WITH_*, not MY_*, not a `process.env....` read
+          # (every one of these vars is legitimately read via
+          # `process.env.X` throughout src/, which must not itself trip
+          # this check), and not empty/quotes-only.
+          PATTERN='(JWT_SECRET|ADMIN_PASSCODE|DOC_HASH_SALT|INTASEND_SECRET_KEY|INTASEND_WEBHOOK_SECRET|STORAGE_SECRET|SQL_ADMIN_PASSWORD|RESEND_API_KEY|TELEGRAM_BOT_TOKEN|TWITTER_API_SECRET|TWITTER_ACCESS_TOKEN_SECRET|FACEBOOK_PAGE_ACCESS_TOKEN|AFRICASTALKING_API_KEY)\s*[:=]\s*["'"'"']?(?!REPLACE_WITH_|MY_|process\.env\.|["'"'"']?\s*$)[A-Za-z0-9+/_.=-]{8,}'
+          MATCHES=$(echo "$FILES" | xargs -I{} grep -lPn "$PATTERN" {} 2>/dev/null || true)
+          if [ -n "$MATCHES" ]; then
+            echo "::error::Possible committed secret found in: $MATCHES"
+            echo "$FILES" | xargs -I{} grep -Pn "$PATTERN" {} 2>/dev/null || true
+            exit 1
+          fi
+          echo "No committed secrets matching known env-var patterns found."
