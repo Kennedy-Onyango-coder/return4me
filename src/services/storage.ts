@@ -104,10 +104,28 @@ export async function uploadBase64Image(base64Data: string, prefix: string): Pro
   const filename = `${Date.now()}-${crypto.randomUUID()}.${extension}`;
   const key = `${prefix}/${filename}`;
 
-  // Fallback to data URI if storage is not configured (e.g. in development/preview environments)
+  // Fallback to data URI if storage is not configured (e.g. in development/preview environments).
+  // SECURITY/PRODUCTION-SAFETY: every other misconfigured-external-dependency
+  // path in this codebase (database.ts's mock-DB fallback, payments.ts's
+  // simulated STK-push/payout, auth.ts's OTP bypass) throws fatally when
+  // NODE_ENV==='production' rather than silently degrading — this fallback
+  // was the one exception. Left as-is, a production deploy with missing/
+  // misconfigured STORAGE_* env vars would silently embed the raw base64
+  // photo (including sensitive-document photos) directly as a data: URI in
+  // the items table instead of a bucket key, bloating every row, defeating
+  // the presigned-URL access model the rest of the app assumes, and — since
+  // that data URI would then flow through the same public-serving paths as
+  // a real storage key — potentially exposing full unmasked document photos
+  // wherever photo_url is read back. Matches the established fail-closed
+  // pattern: still a dev/preview convenience, never a silent production one.
   if (!endpoint || !bucket || !accessKeyId || !secretAccessKey) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error(
+        'FATAL: STORAGE_ENDPOINT/STORAGE_BUCKET/STORAGE_KEY/STORAGE_SECRET are missing in production. Refusing to fall back to embedding raw file data in the database.'
+      );
+    }
     console.warn(
-      `[STORAGE SERVICE] S3 storage configuration is missing. Falling back to data URI for file: ${key}`
+      `[STORAGE SERVICE] S3 storage configuration is missing (non-production only). Falling back to data URI for file: ${key}`
     );
     return `data:${verifiedMime};base64,${cleanBase64}`;
   }

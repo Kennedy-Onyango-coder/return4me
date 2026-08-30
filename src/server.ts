@@ -354,6 +354,26 @@ const otpVerifyLimiter = rateLimit({
   message: { error: 'Umekwishajaribu msimbo wa OTP mara nyingi mno. Tafadhali subiri kidogo. / Too many OTP verification attempts. Please wait.' }
 });
 
+// Claim IDs are 6-digit numeric codes (CLM-100000..CLM-999999 — see
+// generateUniqueClaimId below), a space of under 900,000 values. `/pay`,
+// `/lookup`, and `/status` all accept a bare claim ID from an unauthenticated
+// caller (owners have no login), and generalLimiter's 1000 req/15min per IP
+// is nowhere near tight enough to stop that space being brute-forced —
+// worst case for `/pay` specifically, a guessed ID sitting in
+// 'pending_payment' with no `phone` supplied lets an attacker trigger a real
+// M-Pesa STK push to an uninvolved third party's phone with no proof of
+// ownership at all (see the SECURITY comment on that route). Keyed by IP so
+// it doesn't block the legitimate owner retrying their own claim, and kept
+// tight since a real owner only ever needs a handful of calls per claim.
+const claimGuessLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: false,
+  message: { error: 'Umejaribu maombi mengi mno ya claim hii hivi karibuni. Tafadhali subiri dakika chache. / Too many claim requests from this connection recently. Please wait a few minutes.' }
+});
+
 async function seedAdminUser() {
   try {
     const isEmpty = await db.isAdminTableEmpty();
@@ -1621,7 +1641,7 @@ async function startServer() {
   });
 
   // 7. INTASEND M-PESA STK PUSH & WEBHOOKS
-  app.post('/api/claims/:id/pay', async (req, res) => {
+  app.post('/api/claims/:id/pay', claimGuessLimiter, async (req, res) => {
     const claimId = req.params.id;
     const { phone } = req.body;
 
@@ -1729,7 +1749,7 @@ async function startServer() {
   });
 
   // 7a. Look up existing claim by Claim ID and Owner Phone
-  app.post('/api/claims/lookup', async (req, res) => {
+  app.post('/api/claims/lookup', claimGuessLimiter, async (req, res) => {
     const { claimId, phone } = req.body;
     if (!claimId || !phone) {
       return res.status(400).json({ error: 'Msimbo wa claim (Claim ID) na nambari ya simu zinahitajika.' });
