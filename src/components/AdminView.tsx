@@ -25,6 +25,13 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
   const [actionSuccess, setActionSuccess] = useState('');
   const [actionWarning, setActionWarning] = useState('');
 
+  // Emergency pause controls: reports/claims/payments/payouts/handovers,
+  // alongside the pre-existing social-publishing pause above. Fetched
+  // separately from dashboardData since it's its own small, fast,
+  // admin-only endpoint (GET /api/admin/settings/pause-status) rather than
+  // folded into the heavier dashboard payload.
+  const [pauseStatuses, setPauseStatuses] = useState<Record<string, boolean> | null>(null);
+
   // Admin 2FA enrollment (Security section, stats tab)
   const [twoFaSetupData, setTwoFaSetupData] = useState<{ secret: string; otpauthUrl: string } | null>(null);
   const [twoFaConfirmCode, setTwoFaConfirmCode] = useState('');
@@ -247,6 +254,51 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
     }
   };
 
+  const fetchPauseStatuses = async () => {
+    if (!token) return;
+    try {
+      const response = await fetch('/api/admin/settings/pause-status', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (response.ok && data.statuses) {
+        setPauseStatuses(data.statuses);
+      }
+    } catch {
+      // Non-critical — the dedicated pause toggle buttons below re-fetch
+      // this after every successful toggle, and the social-publishing
+      // toggle (which already has its own state in dashboardData) is
+      // unaffected by this call failing.
+    }
+  };
+
+  const handleTogglePause = async (scope: string, paused: boolean) => {
+    setActionSuccess('');
+    setActionWarning('');
+    setDataError('');
+    setItemActionProcessing('pause:' + scope);
+    try {
+      const response = await fetch('/api/admin/settings/pause', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ scope, paused }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || `Failed to update ${scope} pause setting`);
+      }
+      setActionSuccess(data.message || 'Setting updated.');
+      fetchPauseStatuses();
+    } catch (e: any) {
+      setDataError(e.message);
+    } finally {
+      setItemActionProcessing(null);
+    }
+  };
+
   const fetchAdminCategories = async () => {
     if (!token) return;
     setAdminCategoriesLoading(true);
@@ -411,6 +463,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
     if (token) {
       fetchDashboardData();
       fetchAdminCategories();
+      fetchPauseStatuses();
     }
   }, [token]);
 
@@ -1174,6 +1227,49 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               {itemActionProcessing === 'social-pause' ? '...' : dashboardData.socialPublishingPaused ? 'Resume Publishing' : 'Pause All Publishing'}
             </button>
           </div>
+
+          {/* The other five emergency pause scopes — reports, claims,
+              payments, payouts, handovers. Same server-enforced, fail-safe
+              pattern as the social-publishing stop above (see
+              PAUSABLE_SCOPES / isPlatformOperationPaused in server.ts), just
+              rendered as a compact grid since there are five of them. */}
+          {pauseStatuses && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+              {([
+                ['reports', 'New Reports'],
+                ['claims', 'New Claims'],
+                ['payments', 'Payments'],
+                ['payouts', 'Payouts'],
+                ['handovers', 'Handovers'],
+              ] as const).map(([scope, label]) => {
+                const isPaused = !!pauseStatuses[scope];
+                const isBusy = itemActionProcessing === 'pause:' + scope;
+                return (
+                  <div
+                    key={scope}
+                    className={`px-3.5 py-2.5 rounded-2xl text-[11px] font-bold flex items-center justify-between gap-2 border ${
+                      isPaused ? 'bg-red-50 border-red-200 text-red-800' : 'bg-white border-stone-100 text-stone-500'
+                    }`}
+                  >
+                    <span className="flex items-center space-x-1.5">
+                      <ShieldAlert size={14} />
+                      <span>{label}: {isPaused ? 'PAUSED' : 'Active'}</span>
+                    </span>
+                    <button
+                      type="button"
+                      disabled={isBusy}
+                      onClick={() => handleTogglePause(scope, !isPaused)}
+                      className={`text-[9px] font-black px-2.5 py-1 rounded-lg uppercase tracking-wider transition cursor-pointer disabled:opacity-50 shrink-0 ${
+                        isPaused ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-red-600 hover:bg-red-700 text-white'
+                      }`}
+                    >
+                      {isBusy ? '...' : isPaused ? 'Resume' : 'Pause'}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           {actionWarning && (
             <div className="bg-amber-50 border border-amber-300 text-amber-900 px-4 py-3 rounded-2xl text-xs font-bold flex items-center space-x-2">

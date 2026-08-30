@@ -1061,6 +1061,10 @@ async function startServer() {
       declaredValue,
     } = req.body;
 
+    if (await isPlatformOperationPaused(pauseSettingKey('reports'))) {
+      return res.status(503).json({ error: PAUSED_MESSAGES.reports });
+    }
+
     if (!categoryId || !photoBase64 || !locationDescription || !finderPhone) {
       return res.status(400).json({ error: 'Tafadhali jaza sehemu zote zinazohitajika.' });
     }
@@ -1324,6 +1328,10 @@ async function startServer() {
   // 6. OWNER CLAIMS: TIERED IDENTITY VERIFICATION
   app.post('/api/claims/submit', async (req, res) => {
     const { itemId, ownerPhone, securityAnswers, verificationTier, idProofBase64, termsAccepted, ownerIdentifyingDetails, ownerEmail } = req.body;
+
+    if (await isPlatformOperationPaused(pauseSettingKey('claims'))) {
+      return res.status(503).json({ error: PAUSED_MESSAGES.claims });
+    }
 
     if (!itemId || !ownerPhone || !securityAnswers) {
       return res.status(400).json({ error: 'Tafadhali jaza maelezo yote ya usajili wa claim.' });
@@ -1692,6 +1700,10 @@ async function startServer() {
   app.post('/api/claims/:id/pay', claimGuessLimiter, async (req, res) => {
     const claimId = req.params.id;
     const { phone, paymentAuthToken } = req.body;
+
+    if (await isPlatformOperationPaused(pauseSettingKey('payments'))) {
+      return res.status(503).json({ error: PAUSED_MESSAGES.payments });
+    }
 
     try {
       const claim = await db.getClaim(claimId);
@@ -2414,6 +2426,10 @@ async function startServer() {
   app.post('/api/agents/confirm-handover', authenticateJWT, async (req, res) => {
     const { claimId, userRating, pickupCode } = req.body;
 
+    if (await isPlatformOperationPaused(pauseSettingKey('handovers'))) {
+      return res.status(503).json({ error: PAUSED_MESSAGES.handovers });
+    }
+
     try {
       if (req.user?.role !== 'agent' || !req.user.agentId) {
         return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
@@ -3007,6 +3023,50 @@ async function startServer() {
     }
   });
 
+  // EMERGENCY CONTROLS: generalizes the pattern above to the other five
+  // scopes an admin needs to be able to freeze independently — see the
+  // PAUSABLE_SCOPES comment. Kept as a separate route (rather than folding
+  // 'social_publishing' in here and deleting the dedicated route above) so
+  // nothing about the existing, already-wired-up social-pause admin UI
+  // needs to change; both ultimately write the same underlying setting via
+  // the same audited setSetting() call.
+  app.post('/api/admin/settings/pause', authenticateJWT, async (req, res) => {
+    try {
+      if (req.user?.role !== 'admin') {
+        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+      }
+      const { scope, paused } = req.body;
+      if (typeof paused !== 'boolean') {
+        return res.status(400).json({ error: '"paused" lazima iwe true au false.' });
+      }
+      if (typeof scope !== 'string' || !(PAUSABLE_SCOPES as readonly string[]).includes(scope)) {
+        return res.status(400).json({ error: `"scope" must be one of: ${PAUSABLE_SCOPES.join(', ')}.` });
+      }
+      const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
+      await db.setSetting(pauseSettingKey(scope as PausableScope), paused ? 'true' : 'false', adminIdentifier);
+      res.json({ success: true, scope, paused, message: `${scope} is now ${paused ? 'PAUSED' : 'resumed'} platform-wide.` });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Lets any client (admin dashboard, or defensively the public frontend)
+  // read current pause state for all six scopes in one call, rather than
+  // guessing from a 403 on some unrelated action.
+  app.get('/api/admin/settings/pause-status', authenticateJWT, async (req, res) => {
+    try {
+      if (req.user?.role !== 'admin') {
+        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+      }
+      const statuses = await Promise.all(
+        PAUSABLE_SCOPES.map(async scope => [scope, await isPlatformOperationPaused(pauseSettingKey(scope))] as const)
+      );
+      res.json({ success: true, statuses: Object.fromEntries(statuses) });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.post('/api/admin/claims/:id/release-settlement', authenticateJWT, async (req, res) => {
     const claimId = req.params.id;
     try {
@@ -3506,6 +3566,19 @@ async function expireStaleClaims() {
  * settlement is actually executed.
  */
 async function executeClaimSettlement(claimId: string): Promise<{ success: boolean; message: string }> {
+  if (await isPlatformOperationPaused(pauseSettingKey('payouts'))) {
+    // The claim has already won the attemptSettlementRelease() lock
+    // (status='releasing') by the time this function is called — reverting
+    // it back to 'pending_settlement' here (the same mechanism already used
+    // below for "still outstanding, retry later") is what keeps this safe
+    // to call from both the automatic sweep and the admin manual-release
+    // endpoint: neither path moves any real money while paused, and the
+    // claim isn't left stuck in 'releasing' with nothing to unstick it.
+    await db.revertSettlementRelease(claimId);
+    await db.logAudit('SYSTEM', 'SETTLEMENT_SKIPPED_PAYOUTS_PAUSED', `Claim ${claimId}: settlement release skipped — payouts are paused platform-wide. Reverted to pending_settlement for retry once resumed.`);
+    return { success: false, message: 'Payouts are currently paused platform-wide by an administrator. This claim remains in pending_settlement and will be retried automatically once resumed.' };
+  }
+
   const claim = await db.getClaim(claimId);
   if (!claim) return { success: false, message: 'Claim not found.' };
   const item = await db.getItem(claim.item_id);
@@ -3691,14 +3764,50 @@ function claimabilityErrorMessage(reason: string): string {
 }
 
 async function isSocialPublishingPaused(): Promise<boolean> {
+  return isPlatformOperationPaused('social_publishing_paused');
+}
+
+// EMERGENCY CONTROLS: before this, 'social_publishing_paused' was the only
+// platform-wide pause switch that existed. There was no way for an admin to
+// stop new reports, new claims, payment initiation, payout disbursement, or
+// handovers without touching code/infrastructure — a real gap for the one
+// class of situation (suspected fraud ring, a payment-provider incident, a
+// bug actively causing harm) where an admin needs to freeze a specific slice
+// of the platform in seconds, not by disabling the whole app. Six
+// independent scopes, each its own platform_settings row (via the same
+// setSetting()/getSetting() pair — audited, admin-only, fail-safe already
+// used for social publishing), so pausing one never accidentally pauses an
+// unrelated flow, and each is a single boolean an admin can flip back.
+const PAUSABLE_SCOPES = ['reports', 'claims', 'payments', 'payouts', 'handovers', 'social_publishing'] as const;
+type PausableScope = typeof PAUSABLE_SCOPES[number];
+
+function pauseSettingKey(scope: PausableScope): string {
+  return `${scope}_paused`;
+}
+
+async function isPlatformOperationPaused(settingKey: string): Promise<boolean> {
   try {
-    const value = await db.getSetting('social_publishing_paused');
+    const value = await db.getSetting(settingKey);
     return value === 'true';
   } catch (err) {
-    console.error('[SOCIAL PUBLISHING PAUSE CHECK] Failed to read setting — failing safe (treating as paused):', err);
+    // Same fail-safe rule as the original social-publishing check this
+    // generalizes from: if we can't even determine whether an operation is
+    // paused, treat it as paused rather than silently letting a
+    // report/claim/payment/payout/handover through unchecked.
+    console.error(`[EMERGENCY PAUSE CHECK] Failed to read setting '${settingKey}' — failing safe (treating as paused):`, err);
     return true;
   }
 }
+
+const PAUSED_MESSAGES: Record<PausableScope, string> = {
+  reports: 'Uwasilishaji wa ripoti mpya umesimamishwa kwa muda na msimamizi. / New item reports are temporarily paused by an administrator. Please try again shortly.',
+  claims: 'Uwasilishaji wa madai mapya umesimamishwa kwa muda na msimamizi. / New claims are temporarily paused by an administrator. Please try again shortly.',
+  payments: 'Malipo yamesimamishwa kwa muda na msimamizi. / Payments are temporarily paused by an administrator. Please try again shortly.',
+  payouts: 'Malipo ya wakala/mtafutaji yamesimamishwa kwa muda na msimamizi. / Agent/Finder payouts are temporarily paused by an administrator.',
+  handovers: 'Ukabidhi wa bidhaa umesimamishwa kwa muda na msimamizi. / Item handovers are temporarily paused by an administrator. Please try again shortly.',
+  social_publishing: 'Uchapishaji wa mitandao ya kijamii umesimamishwa kwa muda na msimamizi. / Social publishing is temporarily paused by an administrator.',
+};
+
 
 function hashDocument(value: string): string {
   const normalizedValue = value.trim().toUpperCase();
