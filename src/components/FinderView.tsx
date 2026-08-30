@@ -409,10 +409,11 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                     onClick={startCamera}
                     className="bg-white text-primary-green p-3 rounded-full hover:bg-stone-100 shadow-md transition"
                     title="Retake camera snap"
+                    aria-label="Retake camera snap"
                   >
                     <Camera size={20} />
                   </button>
-                  <label className="bg-white text-primary-green p-3 rounded-full hover:bg-stone-100 shadow-md transition cursor-pointer">
+                  <label className="bg-white text-primary-green p-3 rounded-full hover:bg-stone-100 shadow-md transition cursor-pointer" aria-label="Upload a photo file instead">
                     <Upload size={20} />
                     <input type="file" accept="image/*" onChange={handleFileUpload} className="hidden" />
                   </label>

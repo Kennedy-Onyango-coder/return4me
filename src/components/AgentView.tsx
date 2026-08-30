@@ -1354,6 +1354,7 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
                       onClick={startHandoverCamera}
                       className="bg-white text-primary-green p-2.5 rounded-full hover:bg-stone-100 shadow-md transition"
                       title={lang === 'en' ? 'Retake with camera' : 'Piga tena kwa kamera'}
+                      aria-label={lang === 'en' ? 'Retake with camera' : 'Piga tena kwa kamera'}
                     >
                       <Camera size={16} />
                     </button>
@@ -1362,6 +1363,7 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
                       onClick={() => handoverPhotoInputRef.current?.click()}
                       className="bg-white text-primary-green p-2.5 rounded-full hover:bg-stone-100 shadow-md transition"
                       title={lang === 'en' ? 'Upload a different photo' : 'Pakia picha nyingine'}
+                      aria-label={lang === 'en' ? 'Upload a different photo' : 'Pakia picha nyingine'}
                     >
                       <Upload size={16} />
                     </button>

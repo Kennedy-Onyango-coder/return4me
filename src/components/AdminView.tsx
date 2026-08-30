@@ -1190,6 +1190,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               onClick={fetchDashboardData}
               className="bg-stone-100 hover:bg-stone-200 p-2.5 rounded-xl border border-stone-200 text-stone-700 transition"
               title="Refresh Audit Data"
+              aria-label="Refresh Audit Data"
             >
               <RefreshCw size={16} />
             </button>
