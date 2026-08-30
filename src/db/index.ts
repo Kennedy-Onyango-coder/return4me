@@ -840,6 +840,16 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     `ALTER TABLE items DROP CONSTRAINT IF EXISTS items_verification_status_check`,
     `ALTER TABLE items ADD CONSTRAINT items_verification_status_check CHECK (verification_status IN ('pending', 'confirmed_as_reported', 'corrected', 'rejected'))`,
     `ALTER TABLE categories ADD COLUMN IF NOT EXISTS public_clue_style VARCHAR(30) NOT NULL DEFAULT 'generic'`,
+    // Short-lived, single-use claim-payment authorization — see matching
+    // comment on claim_payment_auth in schema.ts. Same class of gap as the
+    // other tables above: must exist in this incremental path, not just
+    // sql/schema.sql, for an already-running database to pick it up.
+    `CREATE TABLE IF NOT EXISTS claim_payment_auth (
+      claim_id VARCHAR(50) PRIMARY KEY REFERENCES claims(id) ON DELETE CASCADE,
+      token_hash VARCHAR(64) NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT now()
+    )`,
   ];
   let migrationFailureCount = 0;
   for (const sql of statements) {

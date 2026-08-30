@@ -14,6 +14,7 @@ import {
   otp_codes as otpCodesTable,
   claim_otps as claimOtpsTable,
   claim_pickup_codes as claimPickupCodesTable,
+  claim_payment_auth as claimPaymentAuthTable,
   platform_settings as platformSettingsTable,
   social_publications as socialPublicationsTable,
   item_verification_changes as itemVerificationChangesTable,
@@ -2961,6 +2962,52 @@ class DatabaseEngine {
       await drizzleDb.delete(claimOtpsTable).where(eq(claimOtpsTable.claim_id, claimId));
     } catch (error) {
       console.error("Failed to delete claim OTP:", error);
+    }
+  }
+
+  // --- CLAIM PAYMENT AUTHORIZATION (short-lived token gating /pay) ---
+  // See the matching comment on claim_payment_auth in schema.ts. Minted by
+  // POST /api/agents/claims/:id/confirm-viewing the moment an agent
+  // physically confirms the owner in person; required by POST
+  // /api/claims/:id/pay before a real M-Pesa STK push can be triggered.
+
+  public async setClaimPaymentAuthToken(claimId: string, tokenHash: string, expiresAt: Date): Promise<void> {
+    try {
+      const existing = await drizzleDb
+        .select()
+        .from(claimPaymentAuthTable)
+        .where(eq(claimPaymentAuthTable.claim_id, claimId));
+
+      if (existing.length > 0) {
+        await drizzleDb
+          .update(claimPaymentAuthTable)
+          .set({ token_hash: tokenHash, expires_at: expiresAt, created_at: new Date() })
+          .where(eq(claimPaymentAuthTable.claim_id, claimId));
+      } else {
+        await drizzleDb
+          .insert(claimPaymentAuthTable)
+          .values({ claim_id: claimId, token_hash: tokenHash, expires_at: expiresAt });
+      }
+    } catch (error) {
+      console.error("Failed to set claim payment authorization token:", error);
+      throw new Error("Failed to persist claim payment authorization token.");
+    }
+  }
+
+  public async getClaimPaymentAuthToken(claimId: string): Promise<{ token_hash: string; expires_at: Date } | undefined> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(claimPaymentAuthTable)
+        .where(eq(claimPaymentAuthTable.claim_id, claimId));
+      if (rows.length === 0) return undefined;
+      return {
+        token_hash: rows[0].token_hash,
+        expires_at: new Date(rows[0].expires_at as any),
+      };
+    } catch (error) {
+      console.error("Failed to get claim payment authorization token:", error);
+      return undefined;
     }
   }
 

@@ -1640,10 +1640,58 @@ async function startServer() {
     }
   });
 
+  // 6c. Short-lived, single-purpose payment authorization. Owners have no
+  // persistent login in this app, so this is the closest equivalent to a
+  // "claim session": prove you know the claim's registered phone number
+  // (the same bar /lookup already uses) and receive a random, opaque,
+  // 20-minute token that /pay will require. Unlike a bare phone-number
+  // check, this token expires, is minted fresh per request (nothing
+  // long-lived to leak), and is never persisted in plaintext — only its
+  // hash is stored, exactly like OTP codes and pickup codes elsewhere in
+  // this file. Rate-limited the same as the other claim-ID-guessable
+  // routes since it still only takes a claim ID + a guessable-in-principle
+  // phone number to attempt.
+  app.post('/api/claims/:id/payment-auth', claimGuessLimiter, async (req, res) => {
+    const claimId = req.params.id;
+    const { phone } = req.body;
+    if (!phone) {
+      return res.status(400).json({ error: 'Nambari ya simu inahitajika. / Phone number is required.' });
+    }
+
+    try {
+      const claim = await db.getClaim(claimId);
+      if (!claim) {
+        return res.status(404).json({ error: 'Claim haikupatikana.' });
+      }
+
+      if (claim.status !== 'pending_payment') {
+        return res.status(400).json({
+          error: 'Lazima kwanza uthibitishwe na wakala kabla ya kuomba idhini ya malipo. / You must be confirmed by the agent in person before requesting payment authorization.'
+        });
+      }
+
+      const normalizedInput = toE164Kenyan(String(phone).replace(/\s+/g, ''));
+      const normalizedOwner = toE164Kenyan(String(claim.owner_phone || '').replace(/\s+/g, ''));
+      if (normalizedInput !== normalizedOwner) {
+        return res.status(403).json({
+          error: 'Nambari ya simu uliyoweka hailingani na iliyotumiwa kutengeneza claim hii. / The phone number provided does not match the one used to create this claim.'
+        });
+      }
+
+      const paymentAuthToken = crypto.randomBytes(32).toString('hex');
+      const paymentAuthExpiresAt = new Date(Date.now() + 20 * 60 * 1000);
+      await db.setClaimPaymentAuthToken(claimId, hashCode(paymentAuthToken), paymentAuthExpiresAt);
+
+      res.json({ success: true, paymentAuthToken, expiresAt: paymentAuthExpiresAt.toISOString() });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // 7. INTASEND M-PESA STK PUSH & WEBHOOKS
   app.post('/api/claims/:id/pay', claimGuessLimiter, async (req, res) => {
     const claimId = req.params.id;
-    const { phone } = req.body;
+    const { phone, paymentAuthToken } = req.body;
 
     try {
       const claim = await db.getClaim(claimId);
@@ -1658,24 +1706,42 @@ async function startServer() {
       }
 
       // SECURITY: this route is deliberately unauthenticated (owners aren't
-      // logged in), but that means the only thing standing between an
-      // attacker and triggering an M-Pesa STK push to an arbitrary Kenyan
-      // number is knowing/guessing a claim ID. `phone` in the body used to
-      // silently override the claim's real owner_phone with no check at
-      // all — so anyone who found or brute-forced a claim ID sitting in
-      // 'pending_payment' could spam an unrelated third party's phone with
-      // STK push prompts. It's still accepted (an owner may be paying from
-      // a different handset than the one they registered), but it must
-      // resolve to the same person: normalized to E.164 and compared
-      // against the claim's own owner_phone before being used.
-      if (phone) {
-        const normalizedInput = toE164Kenyan(String(phone).replace(/\s+/g, ''));
-        const normalizedOwner = toE164Kenyan(String(claim.owner_phone || '').replace(/\s+/g, ''));
-        if (normalizedInput !== normalizedOwner) {
-          return res.status(403).json({
-            error: 'Nambari ya simu uliyoweka hailingani na iliyotumiwa kutengeneza claim hii. / The phone number provided does not match the one used to create this claim.'
-          });
-        }
+      // logged in). It used to accept a bare claim ID as sufficient —
+      // `phone` was only checked if the caller bothered to send it, so
+      // omitting it entirely let anyone who found/guessed a claim ID
+      // trigger an M-Pesa STK push against the claim's real owner_phone
+      // with zero proof of ownership. Now BOTH are required and checked:
+      // `phone` must resolve (E.164-normalized) to the claim's own
+      // owner_phone, exactly as /lookup already requires, AND the caller
+      // must present a valid, unexpired paymentAuthToken minted by
+      // POST /api/claims/:id/payment-auth (which itself required that same
+      // phone match to issue). Knowing the claim ID, or the phone number,
+      // is no longer individually or jointly sufficient without also
+      // holding a token that expires in 20 minutes and was minted for this
+      // specific payment attempt.
+      if (!phone) {
+        return res.status(400).json({
+          error: 'Nambari ya simu inahitajika. / Phone number is required.'
+        });
+      }
+      const normalizedInput = toE164Kenyan(String(phone).replace(/\s+/g, ''));
+      const normalizedOwner = toE164Kenyan(String(claim.owner_phone || '').replace(/\s+/g, ''));
+      if (normalizedInput !== normalizedOwner) {
+        return res.status(403).json({
+          error: 'Nambari ya simu uliyoweka hailingani na iliyotumiwa kutengeneza claim hii. / The phone number provided does not match the one used to create this claim.'
+        });
+      }
+
+      if (!paymentAuthToken) {
+        return res.status(403).json({
+          error: 'Idhini ya malipo imekosekana. Tafadhali omba idhini mpya kabla ya kulipa. / Payment authorization is missing. Please request authorization before paying.'
+        });
+      }
+      const authRecord = await db.getClaimPaymentAuthToken(claimId);
+      if (!authRecord || authRecord.expires_at.getTime() < Date.now() || !timingSafeEqualHex(hashCode(String(paymentAuthToken)), authRecord.token_hash)) {
+        return res.status(403).json({
+          error: 'Idhini ya malipo si sahihi au imeisha muda. Tafadhali omba idhini mpya. / Payment authorization is invalid or has expired. Please request a new authorization.'
+        });
       }
 
       const item = await db.getItem(claim.item_id);
@@ -1981,7 +2047,16 @@ async function startServer() {
       // Method 1: Check signature header
       if (signatureHeader) {
         const computed = crypto.createHmac('sha256', webhookSecret).update(JSON.stringify(payload)).digest('hex');
-        if (computed === signatureHeader) {
+        // BUGFIX: this used to compare with plain `===`, a variable-time
+        // string comparison — inconsistent with the timing-safe comparison
+        // this codebase already uses everywhere else a secret/HMAC value is
+        // checked (OTP codes, pickup codes, the claim payment-auth token).
+        // A `===` comparison on a hex digest leaks (in principle, via
+        // response-timing statistics across many attempts) how many
+        // leading characters an attacker's guess got right, incrementally
+        // narrowing the search space for a value that's supposed to be
+        // computationally infeasible to guess at all.
+        if (timingSafeEqualHex(computed, signatureHeader)) {
           isValid = true;
         }
       }
@@ -1990,7 +2065,7 @@ async function startServer() {
       if (!isValid && payload.signature) {
         const { signature, ...rest } = payload;
         const computed = crypto.createHmac('sha256', webhookSecret).update(JSON.stringify(rest)).digest('hex');
-        if (computed === signature) {
+        if (typeof signature === 'string' && timingSafeEqualHex(computed, signature)) {
           isValid = true;
         }
       }

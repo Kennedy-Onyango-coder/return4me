@@ -329,6 +329,30 @@ export const claim_pickup_codes = pgTable("claim_pickup_codes", {
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
+// A short-lived, single-use authorization token minted the moment an agent
+// physically confirms the owner in person (POST /api/agents/claims/:id/
+// confirm-viewing, the transition into 'pending_payment') and required by
+// POST /api/claims/:id/pay before it will trigger a real M-Pesa STK push.
+// Before this table existed, /pay's only gate was the claim's `status`
+// column plus a claim-ID rate limiter — meaning anyone who obtained/
+// guessed a claim ID sitting in 'pending_payment' could initiate a
+// payment prompt for it with no proof they were the person the agent had
+// just verified in person. Kept in its own table (not a column on
+// `claims`) for the same reason claim_otps/claim_pickup_codes are:
+// `claims` rows flow through several `res.json({ claim })` response
+// paths across the codebase, and a secret hash has no business being on
+// an object that gets serialized that broadly. Only the hash is stored;
+// the raw token is returned once, directly to the agent-confirm response,
+// and is expected to be carried forward by the frontend (the owner is
+// physically at the agent's terminal at this point in the resumable-
+// session flow) into the payment step.
+export const claim_payment_auth = pgTable("claim_payment_auth", {
+  claim_id: varchar("claim_id", { length: 50 }).primaryKey().references(() => claims.id, { onDelete: "cascade" }),
+  token_hash: varchar("token_hash", { length: 64 }).notNull(),
+  expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+
 // Small generic key/value store for platform-wide toggles that need to
 // persist across server restarts and be flippable at runtime by an admin —
 // currently just the social-media publishing emergency stop

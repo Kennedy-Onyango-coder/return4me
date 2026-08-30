@@ -387,10 +387,24 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
     setErrorMsg('');
 
     try {
-      const response = await fetch(`/api/claims/${paidClaim.id}/pay`, {
+      // Short-lived, single-purpose payment authorization: proves we know
+      // the claim's registered phone number (right before paying, not once
+      // at claim submission) and gets a token that /pay now requires. See
+      // the matching comment on /api/claims/:id/payment-auth in server.ts.
+      const authResponse = await fetch(`/api/claims/${paidClaim.id}/payment-auth`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: ownerPhone }),
+      });
+      const authData = await authResponse.json();
+      if (!authResponse.ok) {
+        throw new Error(authData.error || 'Payment authorization failed');
+      }
+
+      const response = await fetch(`/api/claims/${paidClaim.id}/pay`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: ownerPhone, paymentAuthToken: authData.paymentAuthToken }),
       });
 
       const data = await response.json();
