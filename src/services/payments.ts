@@ -371,7 +371,10 @@ export const PaymentService = {
       }],
     };
 
-    console.log('[INTASEND REFUND] Initiating refund disbursement:', JSON.stringify(payload, null, 2));
+    console.log('[INTASEND REFUND] Initiating refund disbursement:', JSON.stringify({
+      ...payload,
+      transactions: payload.transactions.map(t => ({ ...t, account: maskPhoneForLog(t.account) })),
+    }, null, 2));
 
     try {
       const response = await fetchWithTimeout(`${INTASEND_BASE_URL}/send-money/`, {

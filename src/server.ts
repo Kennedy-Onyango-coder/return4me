@@ -2031,7 +2031,23 @@ async function startServer() {
     const signatureHeader = req.headers['x-intasend-signature'] as string || req.headers['signature'] as string;
     const webhookSecret = process.env.INTASEND_WEBHOOK_SECRET;
 
-    console.log('[INTASEND WEBHOOK] Received callback event:', JSON.stringify(payload, null, 2));
+    // SECURITY/LOGGING: this used to log the complete raw payload via
+    // JSON.stringify(payload, null, 2) — IntaSend collection callbacks
+    // typically carry the payer's phone number (and sometimes account/
+    // narrative fields), so that line was writing an unmasked phone number
+    // to production logs every single payment, in direct violation of the
+    // no-full-phone-numbers-in-logs rule this codebase already follows
+    // elsewhere (see maskPhoneForLog, used for the exact same purpose in
+    // auth.ts and the sweep job below). Log only the fields actually
+    // useful for debugging a webhook delivery, with the phone masked.
+    const logSafePayload = {
+      invoice_id: payload?.invoice_id,
+      state: payload?.state,
+      api_ref: payload?.api_ref,
+      value: payload?.value,
+      phone_number: maskPhoneForLog(payload?.phone_number),
+    };
+    console.log('[INTASEND WEBHOOK] Received callback event:', JSON.stringify(logSafePayload, null, 2));
 
     // Missing signature rejection in production
     if (!signatureHeader && !payload.signature) {
