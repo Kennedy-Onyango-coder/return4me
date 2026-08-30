@@ -3441,6 +3441,31 @@ async function startServer() {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     
+    // SECURITY: this used to be a single `express.static(path.join(process
+    // .cwd(), 'src'))` covering the ENTIRE src/ tree — meaning
+    // src/server.ts (the full backend, including exact validation logic,
+    // rate-limit thresholds, magic-byte checks, and every comment
+    // explaining how the security model works), all of src/db/ (the ORM
+    // schema and every query), and all of src/services/ (auth, payments,
+    // storage, social) were served as plain-text over HTTP to anyone who
+    // requested e.g. GET /src/server.ts in production. The stated intent
+    // ("so that sourcemaps can load TSX/TS source files") only actually
+    // needs the FRONTEND files a Vite/browser sourcemap can reference —
+    // src/components, src/App.tsx, src/main.tsx, src/index.css,
+    // src/types.ts. None of the backend-only directories are ever part of
+    // the frontend bundle (confirmed: zero imports from src/components,
+    // src/App.tsx, or src/main.tsx into src/db/ or src/services/), so they
+    // have no legitimate reason to be reachable over HTTP at all. Denylist
+    // checked before the static handler runs, returning a plain 404 (not
+    // 403) so the response doesn't even confirm a backend layer exists.
+    const srcBackendPathPrefixes = ['/src/server.ts', '/src/db/', '/src/services/', '/src/__tests__/'];
+    app.use('/src', (req, res, next) => {
+      if (srcBackendPathPrefixes.some(prefix => req.path === prefix || req.path.startsWith(prefix))) {
+        return res.status(404).send('Not Found');
+      }
+      next();
+    });
+
     // Serve the src directory statically in production so that sourcemaps can load TSX/TS source files
     app.use('/src', express.static(path.join(process.cwd(), 'src'), {
       setHeaders: (res, filePath) => {
