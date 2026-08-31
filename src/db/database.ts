@@ -19,7 +19,7 @@ import {
   social_publications as socialPublicationsTable,
   item_verification_changes as itemVerificationChangesTable,
 } from "./schema.ts";
-import { eq, and, or, isNull } from "drizzle-orm";
+import { eq, and, or, isNull, inArray } from "drizzle-orm";
 import { getSignedPhotoUrl } from "../services/storage.ts";
 
 // Local copy of the phone-masking helper (also defined in services/auth.ts
@@ -1140,6 +1140,47 @@ class DatabaseEngine {
     }
   }
 
+  // PERFORMANCE: getItems() above does an unconditional, unfiltered
+  // `SELECT * FROM items` — every status, every historical row, no LIMIT.
+  // The public search route (GET /api/items/search, the highest-traffic,
+  // anonymously-hit endpoint in this app) used to call getItems() and then
+  // filter down to the tiny fraction of rows that are actually claimable
+  // ('at_agent') in application code, meaning every search request loaded
+  // the ENTIRE items table — including every long-since claimed, expired,
+  // rejected, or still-awaiting-dropoff item ever created — into memory
+  // and ran the (cryptographic) signFoundItem() step on every single one
+  // of them, only to discard almost all of it. This pushes the same
+  // filter into the WHERE clause instead, so the query only ever returns
+  // and signs the rows that can actually be candidates.
+  public async getItemsByStatus(status: FoundItem["status"]): Promise<FoundItem[]> {
+    try {
+      const rows = await drizzleDb.select().from(itemsTable).where(eq(itemsTable.status, status));
+      const items = rows.map(parseFoundItem);
+      return Promise.all(items.map(signFoundItem));
+    } catch (error) {
+      console.error("Database query failed:", error);
+      throw new Error("Failed to query items by status.", { cause: error });
+    }
+  }
+
+  // PERFORMANCE: the agent dashboard's "items assigned to me" view used to
+  // call getItems() (the full unfiltered table) and filter by
+  // assigned_agent_id in application code — despite idx_items_agent
+  // already existing on exactly this column and sitting unused for this
+  // query. Pushes the filter into the WHERE clause so it actually uses
+  // that index instead of scanning every item in the system for every
+  // agent's dashboard load.
+  public async getItemsByAgent(agentId: string): Promise<FoundItem[]> {
+    try {
+      const rows = await drizzleDb.select().from(itemsTable).where(eq(itemsTable.assigned_agent_id, agentId));
+      const items = rows.map(parseFoundItem);
+      return Promise.all(items.map(signFoundItem));
+    } catch (error) {
+      console.error("Database query failed:", error);
+      throw new Error("Failed to query items by agent.", { cause: error });
+    }
+  }
+
   public async getItem(id: string): Promise<FoundItem | undefined> {
     try {
       const rows = await drizzleDb.select().from(itemsTable).where(eq(itemsTable.id, id));
@@ -1209,6 +1250,34 @@ class DatabaseEngine {
     } catch (error) {
       console.error("Database query failed:", error);
       throw new Error("Failed to query disputes for item.", { cause: error });
+    }
+  }
+
+  // PERFORMANCE: batched sibling of getDisputesByItem, for callers (like the
+  // public search route's canCreateClaim() check over every result item)
+  // that would otherwise fire one getDisputesByItem query per item in a
+  // Promise.all — an N+1 query pattern that scales with result-set size on
+  // every single search request. One query for the whole candidate set,
+  // grouped by item_id, instead of N round trips. Returns an empty map for
+  // an empty itemIds array without querying at all.
+  public async getDisputesByItemIds(itemIds: string[]): Promise<Map<string, Dispute[]>> {
+    const byItem = new Map<string, Dispute[]>();
+    if (itemIds.length === 0) return byItem;
+    try {
+      const rows = await drizzleDb.select().from(disputesTable).where(inArray(disputesTable.item_id, itemIds));
+      const disputes = await Promise.all(rows.map(parseDispute).map(signDispute));
+      for (const dispute of disputes) {
+        const existing = byItem.get(dispute.item_id);
+        if (existing) {
+          existing.push(dispute);
+        } else {
+          byItem.set(dispute.item_id, [dispute]);
+        }
+      }
+      return byItem;
+    } catch (error) {
+      console.error("Database query failed:", error);
+      throw new Error("Failed to batch-query disputes for items.", { cause: error });
     }
   }
 

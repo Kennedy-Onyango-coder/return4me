@@ -134,6 +134,11 @@ export const items = pgTable("items", {
   return {
     idx_items_doc_hash: index("idx_items_doc_hash").on(table.document_number_hash),
     idx_items_agent: index("idx_items_agent").on(table.assigned_agent_id),
+    // Added alongside getItemsByStatus() in database.ts — the public
+    // search route now runs `WHERE status = 'at_agent'` on every request,
+    // and without an index this is a full table scan on exactly the
+    // column the highest-traffic query in the app filters on.
+    idx_items_status: index("idx_items_status").on(table.status),
   };
 });
 

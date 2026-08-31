@@ -850,6 +850,13 @@ export async function ensureSchemaUpToDate(pool: Pool) {
       expires_at TIMESTAMPTZ NOT NULL,
       created_at TIMESTAMPTZ DEFAULT now()
     )`,
+    // Matches idx_items_status in schema.ts — the public search route now
+    // runs `WHERE status = 'at_agent'` on every request (see
+    // getItemsByStatus in database.ts), and without an index this is a
+    // full table scan on exactly the column the highest-traffic query in
+    // the app filters on. Must exist here, not just schema.ts, for an
+    // already-running database to pick it up.
+    `CREATE INDEX IF NOT EXISTS idx_items_status ON items(status)`,
   ];
   let migrationFailureCount = 0;
   for (const sql of statements) {

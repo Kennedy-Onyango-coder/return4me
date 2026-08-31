@@ -6,7 +6,7 @@ import express from 'express';
 import crypto from 'crypto';
 import rateLimit from 'express-rate-limit';
 import { createServer as createViteServer } from 'vite';
-import { db, FoundItem, Claim, Agent } from './db/database';
+import { db, FoundItem, Claim, Agent, Dispute } from './db/database';
 import { pool, ensureSchemaUpToDate, isDatabaseConnectionError } from './db/index';
 import { AuthService, authenticateJWT, generateToken, verifyToken, toE164Kenyan, hashCode, timingSafeEqualHex, sendCodeViaSms, maskPhoneForLog } from './services/auth';
 import { AgentMatchingService, geocodeAddress } from './services/agent';
@@ -1233,7 +1233,15 @@ async function startServer() {
     const { q, categoryId, area } = req.query;
 
     try {
-      const allItems = await db.getItems();
+      // PERFORMANCE: canCreateClaim() only ever returns allowed:true for
+      // status==='at_agent' — every other status (awaiting_dropoff,
+      // claimed, expired, rejected, suspected_stolen, legal_hold) always
+      // returns allowed:false. So fetching only 'at_agent' rows at the SQL
+      // level (via getItemsByStatus, replacing an unfiltered
+      // db.getItems() table scan) produces an identical final result set
+      // while skipping every row that could never have passed anyway —
+      // see the comment on getItemsByStatus in database.ts.
+      const allItems = await db.getItemsByStatus('at_agent');
       // Public search must only ever show items that are CURRENTLY
       // claimable — routed through the same canCreateClaim() rule used at
       // claim-submission time, so this list can never drift from what the
@@ -1241,7 +1249,14 @@ async function startServer() {
       // 'awaiting_dropoff' items through: a Finder's report on its own,
       // before any Agent has physically verified the item exists. That is
       // not a verified found item and must never be publicly claimable.
-      const claimabilityChecks = await Promise.all(allItems.map(async item => ({ item, result: await canCreateClaim(item) })));
+      //
+      // PERFORMANCE: canCreateClaim's dispute check used to run as its own
+      // db.getDisputesByItem() query per item inside this Promise.all — an
+      // N+1 pattern where every search request fired one dispute query per
+      // result. Batched into a single db.getDisputesByItemIds() call up
+      // front instead; see that method's comment.
+      const disputesByItem = await db.getDisputesByItemIds(allItems.map(item => item.id));
+      const claimabilityChecks = await Promise.all(allItems.map(async item => ({ item, result: await canCreateClaim(item, disputesByItem.get(item.id) ?? []) })));
       let items = claimabilityChecks.filter(c => c.result.allowed).map(c => c.item);
 
       // Filter by category
@@ -2183,8 +2198,15 @@ async function startServer() {
       }
 
       // Get items assigned to this agent
-      const allItems = await db.getItems();
-      const items = allItems.filter(i => i.assigned_agent_id === agentId);
+      //
+      // PERFORMANCE: this used to fetch the entire items table
+      // (db.getItems(), every status, every historical row) and filter by
+      // assigned_agent_id in application code — despite idx_items_agent
+      // already existing on exactly this column and sitting unused here.
+      // getItemsByAgent() pushes the filter into the WHERE clause so this
+      // actually uses that index instead of scanning every item in the
+      // system on every agent dashboard load.
+      const items = await db.getItemsByAgent(agentId);
       
       const rawClaims = await db.getClaims();
       const allClaims = [];
@@ -3728,7 +3750,7 @@ async function releaseDueSettlements() {
  * inline anywhere else; if a new claimability condition is needed, add it
  * here once.
  */
-async function canCreateClaim(item: FoundItem): Promise<{ allowed: boolean; reason: string }> {
+async function canCreateClaim(item: FoundItem, preFetchedDisputes?: Dispute[]): Promise<{ allowed: boolean; reason: string }> {
   if (!item) return { allowed: false, reason: 'not_found' };
 
   // A Finder's report is NOT a verified found item — only an Agent's
@@ -3762,7 +3784,14 @@ async function canCreateClaim(item: FoundItem): Promise<{ allowed: boolean; reas
   // this, a third claimant could slip in after the first two already
   // entered 'disputed' status, since neither of those two claims counts as
   // "active" anymore under the earlier duplicate-detection check alone.
-  const disputes = await db.getDisputesByItem(item.id);
+  //
+  // PERFORMANCE: a caller iterating many items (the search route) passes
+  // preFetchedDisputes from one batched db.getDisputesByItemIds() call
+  // instead of every item triggering its own db.getDisputesByItem() query
+  // — see the comment on that method. Single-item callers (e.g. /pay,
+  // /claims/submit) omit it and this falls back to the original per-item
+  // query, unchanged.
+  const disputes = preFetchedDisputes ?? await db.getDisputesByItem(item.id);
   const hasUnresolvedDispute = disputes.some(d => !d.resolved_at);
   if (hasUnresolvedDispute) {
     return { allowed: false, reason: 'unresolved_dispute' };
