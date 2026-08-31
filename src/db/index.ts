@@ -857,6 +857,9 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     // the app filters on. Must exist here, not just schema.ts, for an
     // already-running database to pick it up.
     `CREATE INDEX IF NOT EXISTS idx_items_status ON items(status)`,
+    // Dedup guard for POST /api/claims/:id/rate — see the matching comment
+    // on the Claim interface's agent_rated_at field in database.ts.
+    `ALTER TABLE claims ADD COLUMN IF NOT EXISTS agent_rated_at TIMESTAMPTZ`,
   ];
   let migrationFailureCount = 0;
   for (const sql of statements) {

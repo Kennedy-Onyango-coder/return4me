@@ -183,6 +183,12 @@ export interface Claim {
   agent_confirmed_at?: string | null;
   handover_photo_url?: string | null;
   settle_at?: string | null;
+  // Set the first (and only) time POST /api/claims/:id/rate succeeds for
+  // this claim — see the comment on that route. Without this, the same
+  // guessable claim ID could be POSTed to repeatedly to arbitrarily
+  // inflate or tank an agent's rating average, since rateAgent() is a
+  // simple running average with no built-in dedup.
+  agent_rated_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -382,6 +388,7 @@ function parseClaim(row: any): Claim {
     agent_confirmed_at: row.agent_confirmed_at ? new Date(row.agent_confirmed_at).toISOString() : null,
     handover_photo_url: row.handover_photo_url || null,
     settle_at: row.settle_at ? new Date(row.settle_at).toISOString() : null,
+    agent_rated_at: row.agent_rated_at ? new Date(row.agent_rated_at).toISOString() : null,
     created_at: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
     updated_at: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString(),
   };
@@ -1633,6 +1640,29 @@ class DatabaseEngine {
     } catch (error) {
       console.error("Database update failed:", error);
       throw new Error("Failed to update claim status.", { cause: error });
+    }
+  }
+
+  // POST /api/claims/:id/rate is unauthenticated (owners aren't logged in)
+  // and only takes a claim ID from a guessable, low-entropy space — see the
+  // route comment. Without a dedup mechanism, the same claim ID could be
+  // POSTed to repeatedly to skew an agent's rating average arbitrarily.
+  // Atomic conditional UPDATE (WHERE agent_rated_at IS NULL), same pattern
+  // as attemptClaimEscrowHold/attemptSettlementRelease elsewhere in this
+  // file, so two concurrent rating attempts for the same claim can't both
+  // win the race between an application-level read-check and the write.
+  // Returns true only for the caller that actually claimed the rating slot.
+  public async markClaimRatedIfNotAlready(claimId: string): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(claimsTable)
+        .set({ agent_rated_at: new Date() })
+        .where(and(eq(claimsTable.id, claimId), isNull(claimsTable.agent_rated_at)))
+        .returning({ id: claimsTable.id });
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Database update failed:", error);
+      throw new Error("Failed to mark claim as rated.", { cause: error });
     }
   }
 

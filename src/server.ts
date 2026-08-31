@@ -1881,7 +1881,19 @@ async function startServer() {
   });
 
   // 7b. Submit user rating for an agent from the owner portal
-  app.post('/api/claims/:id/rate', async (req, res) => {
+  // SECURITY: this route is deliberately unauthenticated (owners aren't
+  // logged in), but that used to mean a bare, guessable claim ID (see the
+  // claim-ID-guessing comments elsewhere in this file — 6-digit numeric
+  // space, under 900,000 values) was sufficient to call db.rateAgent() an
+  // unlimited number of times for any claim, with no check that the claim
+  // had even reached handover. rateAgent() is a running average with no
+  // built-in dedup, so this let anyone who found/guessed a claim ID
+  // arbitrarily inflate or tank an agent's reputation score by spamming
+  // this endpoint. Now gated three ways: rate-limited like the other
+  // claim-ID-guessable routes, requires the claim to have actually reached
+  // a post-handover status, and atomically allows at most one rating per
+  // claim ever (db.markClaimRatedIfNotAlready).
+  app.post('/api/claims/:id/rate', claimGuessLimiter, async (req, res) => {
     const claimId = req.params.id;
     const { userRating } = req.body;
 
@@ -1891,6 +1903,11 @@ async function startServer() {
         return res.status(404).json({ error: 'Claim haikupatikana.' });
       }
 
+      const handoverHasOccurred = ['pending_settlement', 'releasing', 'released'].includes(claim.status);
+      if (!handoverHasOccurred) {
+        return res.status(400).json({ error: 'Huwezi kutoa ukadiriaji kabla ya bidhaa kukabidhiwa. / You can only rate after the item has actually been handed over.' });
+      }
+
       const item = await db.getItem(claim.item_id);
       if (!item) {
         return res.status(404).json({ error: 'Bidhaa inayodaiwa haikupatikana.' });
@@ -1898,6 +1915,11 @@ async function startServer() {
 
       if (!item.assigned_agent_id) {
         return res.status(400).json({ error: 'Hakuna hub/wakala aliyepangiwa bidhaa hii.' });
+      }
+
+      const wonRatingSlot = await db.markClaimRatedIfNotAlready(claimId);
+      if (!wonRatingSlot) {
+        return res.status(409).json({ error: 'Dai hili tayari limekadiriwa. / This claim has already been rated.' });
       }
 
       if (userRating) {

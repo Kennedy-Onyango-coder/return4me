@@ -167,6 +167,10 @@ export const claims = pgTable("claims", {
   // funds once now() >= settle_at, giving a dispute window during which a
   // second claimant or an admin can freeze the payout before money moves.
   settle_at: timestamp("settle_at", { withTimezone: true }),
+  // Set the first time POST /api/claims/:id/rate succeeds for this claim —
+  // see the comment on the Claim interface field of the same name in
+  // database.ts.
+  agent_rated_at: timestamp("agent_rated_at", { withTimezone: true }),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 }, (table) => {
