@@ -860,6 +860,9 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     // Dedup guard for POST /api/claims/:id/rate — see the matching comment
     // on the Claim interface's agent_rated_at field in database.ts.
     `ALTER TABLE claims ADD COLUMN IF NOT EXISTS agent_rated_at TIMESTAMPTZ`,
+    // Matches idx_items_finder_phone in schema.ts — see the comment on
+    // getItemsByFinderPhone in database.ts.
+    `CREATE INDEX IF NOT EXISTS idx_items_finder_phone ON items(finder_phone)`,
   ];
   let migrationFailureCount = 0;
   for (const sql of statements) {

@@ -1507,11 +1507,28 @@ class DatabaseEngine {
     }
   }
 
+  // PERFORMANCE: getPhoneReputation() used to call the unfiltered
+  // this.getItems() (every item, every status, every historical row —
+  // see the comment on getItemsByStatus above) purely to filter down to
+  // one finder's own items in application code. This is called on every
+  // single item report submission (POST /api/items/report), so it ran a
+  // full-table scan-and-sign on the highest-write-frequency endpoint in
+  // the app. Scoped to a single indexed WHERE clause instead.
+  public async getItemsByFinderPhone(phoneNumber: string): Promise<FoundItem[]> {
+    try {
+      const rows = await drizzleDb.select().from(itemsTable).where(eq(itemsTable.finder_phone, phoneNumber));
+      const items = rows.map(parseFoundItem);
+      return Promise.all(items.map(signFoundItem));
+    } catch (error) {
+      console.error("Database query failed:", error);
+      throw new Error("Failed to query items by finder phone.", { cause: error });
+    }
+  }
+
   // Get lightweight reputation metrics per phone number
   public async getPhoneReputation(phoneNumber: string): Promise<{ total_reports: number; rejected_reports: number; autoFlag: boolean }> {
     try {
-      const allItems = await this.getItems();
-      const phoneItems = allItems.filter(i => i.finder_phone === phoneNumber);
+      const phoneItems = await this.getItemsByFinderPhone(phoneNumber);
       const total_reports = phoneItems.length;
       const rejected_reports = phoneItems.filter(i => i.status === "rejected").length;
 

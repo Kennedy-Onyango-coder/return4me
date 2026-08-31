@@ -139,6 +139,11 @@ export const items = pgTable("items", {
     // and without an index this is a full table scan on exactly the
     // column the highest-traffic query in the app filters on.
     idx_items_status: index("idx_items_status").on(table.status),
+    // Added alongside getItemsByFinderPhone() in database.ts — called on
+    // every item report submission (POST /api/items/report) to compute
+    // phone reputation, and without an index this is a full table scan on
+    // exactly the column that query filters on.
+    idx_items_finder_phone: index("idx_items_finder_phone").on(table.finder_phone),
   };
 });
 
