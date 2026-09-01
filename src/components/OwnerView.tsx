@@ -270,6 +270,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
       const response = await fetch(`/api/claims/${claimId}/request-otp`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: ownerPhone }),
       });
       const data = await response.json();
       if (!response.ok) {

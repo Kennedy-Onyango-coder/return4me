@@ -262,6 +262,19 @@ export const SocialService = {
     const canShowPhoto = !isSensitive && !!item.photo_url;
 
     if (!botToken || botToken.trim() === '' || !channelId || channelId.trim() === '') {
+      // P0: this used to unconditionally `return true` here — meaning a
+      // production deploy with missing/misconfigured Telegram credentials
+      // would report every post as successfully published, and
+      // broadcastVerifiedItem below would write a 'published' row to
+      // social_publications for a post that never actually went out. The
+      // sandbox-outbox behavior (log the content, return success) is a
+      // legitimate dev/preview convenience — same class of exception this
+      // codebase already applies consistently elsewhere (storage,
+      // payments, DB) — but must never silently happen in production.
+      if (process.env.NODE_ENV === 'production') {
+        console.error('[SOCIAL SERVICE] FATAL: TELEGRAM_BOT_TOKEN/TELEGRAM_CHANNEL_ID missing in production. Refusing to report a fake success.');
+        return false;
+      }
       console.log(`\n=================== [SANDBOX TELEGRAM OUTBOX] ===================`);
       console.log(`Channel ID: ${channelId || '[NOT CONFIGURED]'}`);
       console.log(`Photo attached: ${canShowPhoto ? 'YES - ' + item.photo_url : 'no'}`);
@@ -385,6 +398,12 @@ export const SocialService = {
     const canShowPhoto = !isSensitive && !!item.photo_url;
 
     if (!pageId || pageId.trim() === '' || !pageAccessToken || pageAccessToken.trim() === '') {
+      // P0: see the matching comment in postToTelegram above — same fix,
+      // same reasoning.
+      if (process.env.NODE_ENV === 'production') {
+        console.error('[SOCIAL SERVICE] FATAL: FACEBOOK_PAGE_ID/FACEBOOK_PAGE_ACCESS_TOKEN missing in production. Refusing to report a fake success.');
+        return false;
+      }
       console.log(`\n=================== [SANDBOX FACEBOOK OUTBOX] ===================`);
       console.log(`Page ID: ${pageId || '[NOT CONFIGURED]'}`);
       console.log(`Photo attached: ${canShowPhoto ? 'YES - ' + item.photo_url : 'no'}`);
@@ -495,6 +514,12 @@ export const SocialService = {
     const canShowPhoto = !isSensitive && !!item.photo_url;
 
     if (!apiKey || !apiSecret || !accessToken || !accessTokenSecret) {
+      // P0: see the matching comment in postToTelegram above — same fix,
+      // same reasoning.
+      if (process.env.NODE_ENV === 'production') {
+        console.error('[SOCIAL SERVICE] FATAL: TWITTER_API_KEY/TWITTER_API_SECRET/TWITTER_ACCESS_TOKEN/TWITTER_ACCESS_TOKEN_SECRET missing in production. Refusing to report a fake success.');
+        return false;
+      }
       console.log(`\n=================== [SANDBOX TWITTER/X OUTBOX] ===================`);
       console.log(`Photo attached: ${canShowPhoto ? 'YES - ' + item.photo_url : 'no'}`);
       console.log(`--- Post Content ---`);
@@ -670,6 +695,11 @@ export const SocialService = {
 
     const tgPromise = this._runIdempotentPost(item.id, 'telegram', 'reunited_notice', async () => {
       if (!botToken || !channelId) {
+        // P0: see the matching comment in postToTelegram above.
+        if (process.env.NODE_ENV === 'production') {
+          console.error('[SOCIAL SERVICE] FATAL: TELEGRAM_BOT_TOKEN/TELEGRAM_CHANNEL_ID missing in production. Refusing to report a fake success (reunited notice).');
+          return false;
+        }
         console.log(`\n=================== [SANDBOX TELEGRAM OUTBOX - REUNITED] ===================`);
         console.log(text);
         console.log(`==============================================================================\n`);
@@ -694,6 +724,11 @@ export const SocialService = {
 
     const fbPromise = this._runIdempotentPost(item.id, 'facebook', 'reunited_notice', async () => {
       if (!pageId || !pageAccessToken) {
+        // P0: see the matching comment in postToTelegram above.
+        if (process.env.NODE_ENV === 'production') {
+          console.error('[SOCIAL SERVICE] FATAL: FACEBOOK_PAGE_ID/FACEBOOK_PAGE_ACCESS_TOKEN missing in production. Refusing to report a fake success (reunited notice).');
+          return false;
+        }
         console.log(`\n=================== [SANDBOX FACEBOOK OUTBOX - REUNITED] ===================`);
         console.log(text);
         console.log(`==============================================================================\n`);
@@ -718,6 +753,11 @@ export const SocialService = {
 
     const twPromise = this._runIdempotentPost(item.id, 'twitter', 'reunited_notice', async () => {
       if (!twApiKey || !twApiSecret || !twAccessToken || !twAccessTokenSecret) {
+        // P0: see the matching comment in postToTelegram above.
+        if (process.env.NODE_ENV === 'production') {
+          console.error('[SOCIAL SERVICE] FATAL: TWITTER_API_KEY/TWITTER_API_SECRET/TWITTER_ACCESS_TOKEN/TWITTER_ACCESS_TOKEN_SECRET missing in production. Refusing to report a fake success (reunited notice).');
+          return false;
+        }
         console.log(`\n=================== [SANDBOX TWITTER/X OUTBOX - REUNITED] ===================`);
         console.log(text);
         console.log(`===============================================================================\n`);

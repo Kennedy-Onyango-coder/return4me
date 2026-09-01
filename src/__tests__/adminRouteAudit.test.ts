@@ -48,3 +48,30 @@ describe('every /api/admin route enforces an explicit admin role check', () => {
     });
   }
 });
+
+// Coverage gap this closes: the audit above only scans routes whose path
+// starts with /api/admin — but three equally admin-only, equally sensitive
+// routes (2FA setup/confirm/disable for admin accounts) live under
+// /api/auth/admin-2fa/* instead, entirely outside that regex's reach.
+// They are correctly protected today (verified below), but the audit
+// above would not have caught it if they weren't — this closes that blind
+// spot so a future accidental removal of the role check on any of these
+// three specifically is caught, the same way it already would be for a
+// route under /api/admin.
+describe('the three admin-2fa routes under /api/auth (outside /api/admin) also enforce the admin role check', () => {
+  const adminTwoFaRoutes = [
+    "/api/auth/admin-2fa/setup",
+    "/api/auth/admin-2fa/confirm",
+    "/api/auth/admin-2fa/disable",
+  ];
+
+  for (const route of adminTwoFaRoutes) {
+    it(`POST ${route} checks req.user?.role !== 'admin'`, () => {
+      const marker = `app.post('${route}', authenticateJWT,`;
+      const start = serverTs.indexOf(marker);
+      expect(start, `route not found: ${route}`).toBeGreaterThan(-1);
+      const body = serverTs.slice(start, start + 1500);
+      expect(body).toMatch(/role\s*!==\s*['"]admin['"]/);
+    });
+  }
+});

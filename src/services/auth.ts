@@ -142,6 +142,16 @@ export interface SessionPayload {
   role: 'owner' | 'finder' | 'agent' | 'admin' | 'admin_pending_2fa';
   agentId?: string;
   username?: string;
+  // Session-revocation (P0): the admin_users.token_version value that was
+  // current at the moment this token was issued. Every admin route
+  // re-compares this against the account's CURRENT token_version on each
+  // request (see requireCurrentAdminSession in server.ts) — a mismatch
+  // means something security-sensitive happened to the account since this
+  // token was issued (2FA disabled, account suspended, etc.), and the
+  // token is rejected even though it's still validly signed and unexpired.
+  // Only meaningful for role 'admin' / 'admin_pending_2fa'; absent for
+  // other roles.
+  tokenVersion?: number;
 }
 
 // Helper to sign session payloads as a real JWT. expiresIn defaults to the
@@ -297,6 +307,36 @@ export const AuthService = {
 };
 
 // --- AUTHENTICATION MIDDLEWARES ---
+
+// Pure decision predicate behind server.ts's requireActiveAgent middleware
+// — extracted here (rather than left inline in server.ts) specifically so
+// it can be unit-tested directly. server.ts has no exports at all and
+// pulls in a large amount of top-level side-effecting setup (dotenv
+// loading, production fatal-throw guards, rate limiters, etc.), so
+// importing anything from it in a test file is unsafe; auth.ts has none of
+// that and is already safely imported by existing tests. Takes only the
+// two fields the decision actually depends on, not a full Agent record —
+// an undefined/null agent (the "no such Agent" / "unknown agentId" case)
+// is never actionable, and only 'active' status is.
+export function isAgentActionable(agent: { status: string } | undefined | null): boolean {
+  return !!agent && agent.status === 'active';
+}
+
+// Pure decision predicate behind server.ts's requireCurrentAdminSession
+// middleware — same rationale as isAgentActionable above: extracted here
+// so it's unit-testable without importing server.ts. A session is valid
+// only if the account is still active AND the token's embedded version
+// matches the account's current version exactly; a missing tokenVersion on
+// the token (e.g. a stale token minted before this mechanism existed) is
+// deliberately NOT treated as a wildcard match — it fails closed.
+export function isAdminSessionCurrent(
+  admin: { is_active: boolean; token_version: number } | undefined | null,
+  tokenVersion: number | undefined
+): boolean {
+  if (!admin || !admin.is_active) return false;
+  if (typeof tokenVersion !== 'number') return false;
+  return tokenVersion === admin.token_version;
+}
 
 export function authenticateJWT(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;

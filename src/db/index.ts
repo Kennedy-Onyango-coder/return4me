@@ -863,6 +863,10 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     // Matches idx_items_finder_phone in schema.ts — see the comment on
     // getItemsByFinderPhone in database.ts.
     `CREATE INDEX IF NOT EXISTS idx_items_finder_phone ON items(finder_phone)`,
+    // Session-revocation mechanism for admin accounts — see the matching
+    // comment on admin_users.token_version in schema.ts. Must exist here,
+    // not just schema.ts, for an already-running database to pick it up.
+    `ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 1`,
   ];
   let migrationFailureCount = 0;
   for (const sql of statements) {

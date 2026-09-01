@@ -303,6 +303,19 @@ export const admin_users = pgTable("admin_users", {
   // exists today.
   totp_secret: varchar("totp_secret", { length: 255 }),
   totp_enabled: boolean("totp_enabled").default(false).notNull(),
+  // Session-revocation mechanism (P0): a JWT proves it was validly signed
+  // and hasn't expired, but says nothing about whether the account it
+  // names should still be trusted *right now*. Every admin JWT embeds the
+  // token_version that was current at issuance time; every admin route
+  // re-checks it against the account's current value on each request (see
+  // requireCurrentAdminSession in server.ts). Bumping this value (e.g. on
+  // 2FA being disabled, or any other future "something security-sensitive
+  // changed" event) immediately invalidates every previously-issued token
+  // for this account, even ones that haven't expired yet — deliberately a
+  // version counter rather than a boolean, so that later re-enabling
+  // whatever triggered the bump does NOT retroactively revalidate old
+  // tokens; only a fresh login (which reads the current version) does.
+  token_version: integer("token_version").default(1).notNull(),
 });
 
 // 11. OTP CODES TABLE

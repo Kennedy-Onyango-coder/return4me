@@ -249,6 +249,7 @@ export interface AdminUser {
   last_login_at: string | null;
   totp_secret: string | null;
   totp_enabled: boolean;
+  token_version: number;
 }
 
 // --- PARSERS FOR TYPE-SAFETY ---
@@ -264,6 +265,7 @@ function parseAdminUser(row: any): AdminUser {
     last_login_at: row.last_login_at ? new Date(row.last_login_at).toISOString() : null,
     totp_secret: row.totp_secret ?? null,
     totp_enabled: !!row.totp_enabled,
+    token_version: row.token_version ?? 1,
   };
 }
 
@@ -3206,6 +3208,33 @@ class DatabaseEngine {
     } catch (error) {
       console.error("Failed to get admin by username:", error);
       return null;
+    }
+  }
+
+  // Session-revocation: bumps token_version, immediately invalidating every
+  // previously-issued JWT for this admin account regardless of remaining
+  // expiry — see the comment on admin_users.token_version in schema.ts.
+  // Call this on any security-sensitive change to the account (2FA
+  // disabled, password changed, account suspended, etc.). Read-then-write
+  // rather than a raw SQL increment expression, matching the pattern used
+  // elsewhere in this file (e.g. rateAgent) — this codebase's in-memory
+  // test-mock query engine doesn't reliably support every drizzle sql`...`
+  // arithmetic expression, so plain values keep this portable and testable.
+  public async bumpAdminTokenVersion(username: string): Promise<void> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(adminUsersTable)
+        .where(eq(adminUsersTable.username, username));
+      if (rows.length === 0) return;
+      const currentVersion = rows[0].token_version ?? 1;
+      await drizzleDb
+        .update(adminUsersTable)
+        .set({ token_version: currentVersion + 1 })
+        .where(eq(adminUsersTable.username, username));
+    } catch (error) {
+      console.error("Failed to bump admin token version:", error);
+      throw new Error("Failed to revoke existing admin sessions.", { cause: error });
     }
   }
 

@@ -3,12 +3,13 @@ import path from 'path';
 import fs from 'fs';
 import https from 'https';
 import express from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import rateLimit from 'express-rate-limit';
 import { createServer as createViteServer } from 'vite';
 import { db, FoundItem, Claim, Agent, Dispute } from './db/database';
 import { pool, ensureSchemaUpToDate, isDatabaseConnectionError } from './db/index';
-import { AuthService, authenticateJWT, generateToken, verifyToken, toE164Kenyan, hashCode, timingSafeEqualHex, sendCodeViaSms, maskPhoneForLog } from './services/auth';
+import { AuthService, authenticateJWT, generateToken, verifyToken, toE164Kenyan, hashCode, timingSafeEqualHex, sendCodeViaSms, maskPhoneForLog, isAgentActionable, isAdminSessionCurrent } from './services/auth';
 import { AgentMatchingService, geocodeAddress } from './services/agent';
 import { EmailService } from './services/email';
 import { PaymentService, isPlaceholderKey } from './services/payments';
@@ -316,6 +317,28 @@ const otpPhoneLimiter = rateLimit({
   message: { error: 'Nambari hii imefikia kikomo cha maombi ya OTP. Tafadhali subiri dakika 5.' }
 });
 
+// P0: POST /api/claims/:id/request-otp used to require only a claim ID —
+// no phone parameter at all — and was gated solely by otpIpLimiter (5/5min
+// per IP) and otpGlobalLimiter (a system-wide bucket). Neither is keyed to
+// the specific claim being targeted, so an attacker who found or guessed a
+// claim ID (the same 900k-combination numeric space documented elsewhere
+// in this file) could repeatedly trigger real OTP SMS messages to that
+// claim's real registered owner_phone — a harassment/cost-abuse vector
+// against a third party who never initiated anything — bounded only by a
+// generous IP-wide budget that resets every 5 minutes and doesn't stop an
+// attacker who simply rotates IPs. Keyed on the claim ID itself (from the
+// URL param, always present) rather than IP, so the limit follows the
+// target claim regardless of how many different IPs an attacker uses.
+const otpClaimLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 3,
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: false,
+  keyGenerator: (req) => `claim-otp:${req.params.id || 'unknown-claim'}`,
+  message: { error: 'Dai hili limefikia kikomo cha maombi ya OTP hivi karibuni. Tafadhali subiri dakika chache. / This claim has reached its OTP request limit recently. Please wait a few minutes.' }
+});
+
 const reportLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 10,
@@ -373,6 +396,88 @@ const claimGuessLimiter = rateLimit({
   validate: false,
   message: { error: 'Umejaribu maombi mengi mno ya claim hii hivi karibuni. Tafadhali subiri dakika chache. / Too many claim requests from this connection recently. Please wait a few minutes.' }
 });
+
+// ACTIVE AGENT AUTHORIZATION: authenticateJWT only proves a token was
+// validly signed and hasn't expired — it says nothing about whether the
+// Agent it names is still allowed to act *right now*. Before this
+// middleware existed, every Agent operational route (verify-item,
+// confirm-dropoff, reject-dropoff, confirm-viewing, confirm-handover) only
+// ever checked `req.user?.role === 'agent'` — trusting the JWT claim alone
+// — while a single unrelated route (GET /api/agents/queue) separately
+// re-verified `agent.status === 'active'` against the live Agent record.
+// That meant a suspended or still-pending Agent whose JWT happened to still
+// have hours of validity left (this codebase has no per-request session
+// expiry shorter than the token's own lifetime) could keep performing every
+// one of those operations right up until the token's natural expiry,
+// regardless of being suspended in the interim. This middleware is the
+// single choke point: re-loads the Agent from the DB on every request,
+// confirms it still exists, and confirms status === 'active', denying
+// (403) otherwise. Mount it directly after authenticateJWT on every Agent
+// operational route. Attaches the freshly-loaded, known-active Agent record
+// to req.activeAgent so route handlers that need it don't have to
+// re-query.
+function requireActiveAgent(req: Request, res: Response, next: NextFunction) {
+  if (req.user?.role !== 'agent' || !req.user.agentId) {
+    return res.status(403).json({ error: 'Ufikiaji umekataliwa. Sio Return4me Agent aliyeidhinishwa.' });
+  }
+  db.getAgent(req.user.agentId)
+    .then(agent => {
+      if (!isAgentActionable(agent)) {
+        return res.status(403).json({ error: 'Akaunti yako ya Agent bado haijaidhinishwa au imesitishwa.' });
+      }
+      req.activeAgent = agent;
+      next();
+    })
+    .catch(err => {
+      console.error('[requireActiveAgent] Failed to verify Agent status:', err);
+      res.status(500).json({ error: 'Imeshindikana kuthibitisha akaunti yako ya Agent.' });
+    });
+}
+
+// Express type augmentation for req.activeAgent, set by requireActiveAgent
+// above once it has confirmed the Agent named in the JWT is real and
+// currently active — lets route handlers use the already-verified record
+// instead of re-querying it.
+declare global {
+  namespace Express {
+    interface Request {
+      activeAgent?: Agent;
+    }
+  }
+}
+
+// ADMIN SESSION REVOCATION: same class of gap as requireActiveAgent above,
+// for admin sessions. authenticateJWT alone only proves a token was
+// validly signed and hasn't expired — an admin JWT stayed fully usable for
+// its entire remaining lifetime (currently 4h) even after is_active was
+// set to false, because is_active was only ever checked at login and at
+// 2FA verification, never on the ~24 subsequent privileged requests a
+// session actually makes. Re-checks both is_active and token_version
+// against the live admin_users record on every request via
+// isAdminSessionCurrent() (services/auth.ts) — a mismatch on either means
+// something security-sensitive happened to this account since the token
+// was issued, and the token is rejected regardless of remaining expiry.
+// Mount directly after authenticateJWT on every admin route, in addition
+// to (not instead of) each route's own `role !== 'admin'` check.
+function requireCurrentAdminSession(req: Request, res: Response, next: NextFunction) {
+  if (req.user?.role !== 'admin' || !req.user.username) {
+    // Not an admin-role token at all (e.g. admin_pending_2fa, or another
+    // role entirely) — the route's own role check will reject it; nothing
+    // further to verify here.
+    return next();
+  }
+  db.getAdminByUsername(req.user.username)
+    .then(admin => {
+      if (!isAdminSessionCurrent(admin, req.user!.tokenVersion)) {
+        return res.status(401).json({ error: 'Kikao chako cha msimamizi kimebatilishwa. Tafadhali ingia tena. / Your admin session has been revoked. Please log in again.' });
+      }
+      next();
+    })
+    .catch(err => {
+      console.error('[requireCurrentAdminSession] Failed to verify admin session:', err);
+      res.status(500).json({ error: 'Imeshindikana kuthibitisha kikao chako.' });
+    });
+}
 
 async function seedAdminUser() {
   try {
@@ -800,6 +905,7 @@ async function startServer() {
         phone: '+254700000000',
         role: 'admin',
         username: admin.username,
+        tokenVersion: admin.token_version,
       }, '4h');
 
       return res.json({
@@ -867,6 +973,7 @@ async function startServer() {
         phone: '+254700000000',
         role: 'admin',
         username: admin.username,
+        tokenVersion: admin.token_version,
       }, '4h');
 
       return res.json({
@@ -891,7 +998,7 @@ async function startServer() {
   // actually generate a valid code from it via the confirm endpoint below,
   // so a half-finished enrollment (e.g. they closed the tab before
   // scanning the QR code) can never lock them out.
-  app.post('/api/auth/admin-2fa/setup', authenticateJWT, async (req, res) => {
+  app.post('/api/auth/admin-2fa/setup', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
@@ -926,7 +1033,7 @@ async function startServer() {
 
   // Confirms enrollment: the admin must prove the secret from /setup above
   // actually works before 2FA is turned on and required at login.
-  app.post('/api/auth/admin-2fa/confirm', authenticateJWT, async (req, res) => {
+  app.post('/api/auth/admin-2fa/confirm', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
@@ -965,7 +1072,7 @@ async function startServer() {
   // applies to other sensitive account changes, since a stolen/left-open
   // session shouldn't be enough on its own to turn off an account's second
   // factor.
-  app.post('/api/auth/admin-2fa/disable', authenticateJWT, async (req, res) => {
+  app.post('/api/auth/admin-2fa/disable', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
@@ -984,6 +1091,14 @@ async function startServer() {
       }
 
       await db.disableAdminTotp(admin.id);
+      // Disabling 2FA is exactly the kind of security-sensitive account
+      // change requireCurrentAdminSession's tokenVersion check exists for
+      // — bump it so every other currently-active session for this admin
+      // (on other devices/browsers, or a stolen-but-still-valid token) is
+      // immediately invalidated and forced to re-authenticate, rather than
+      // silently continuing to work under the now-weaker 2FA-less posture
+      // until each token's own 4h expiry.
+      await db.bumpAdminTokenVersion(admin.username);
       res.json({ success: true, message: '2FA imezimwa kwa akaunti hii. / 2FA has been disabled on this account.' });
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -1573,12 +1688,31 @@ async function startServer() {
   });
 
   // 6b. Tier 2: CLAIM SPECIFIC OTP DISPATCH & VERIFICATION
-  app.post('/api/claims/:id/request-otp', otpGlobalLimiter, otpIpLimiter, async (req, res) => {
+  app.post('/api/claims/:id/request-otp', otpGlobalLimiter, otpIpLimiter, otpClaimLimiter, async (req, res) => {
     const claimId = req.params.id;
+    const { phone } = req.body;
+
+    if (!phone) {
+      return res.status(400).json({ error: 'Nambari ya simu inahitajika. / Phone number is required.' });
+    }
+
     try {
       const claim = await db.getClaim(claimId);
       if (!claim) {
         return res.status(404).json({ error: 'Claim haikupatikana.' });
+      }
+
+      // P0: claim ID alone (a guessable, ~900k-combination numeric space)
+      // used to be sufficient to trigger an OTP SMS to this claim's real
+      // owner_phone — no proof the caller was that owner at all. Now
+      // requires the same phone-match standard already used by /lookup,
+      // /pay, and /payment-auth elsewhere in this file.
+      const normalizedInput = toE164Kenyan(String(phone).replace(/\s+/g, ''));
+      const normalizedOwner = toE164Kenyan(String(claim.owner_phone || '').replace(/\s+/g, ''));
+      if (normalizedInput !== normalizedOwner) {
+        return res.status(403).json({
+          error: 'Nambari ya simu uliyoweka hailingani na iliyotumiwa kutengeneza claim hii. / The phone number provided does not match the one used to create this claim.'
+        });
       }
 
       // Generate secure 4-digit code using Node crypto
@@ -2207,17 +2341,9 @@ async function startServer() {
   });
 
   // 8. AGENT HUB QUEUES
-  app.get('/api/agents/queue', authenticateJWT, async (req, res) => {
+  app.get('/api/agents/queue', authenticateJWT, requireActiveAgent, async (req, res) => {
     try {
-      if (req.user?.role !== 'agent' || !req.user.agentId) {
-        return res.status(403).json({ error: 'Ufikiaji umekataliwa. Sio Return4me Agent aliyeidhinishwa.' });
-      }
-
-      const agentId = req.user.agentId;
-      const agent = await db.getAgent(agentId);
-      if (!agent || agent.status !== 'active') {
-        return res.status(403).json({ error: 'Akaunti yako ya Agent bado haijaidhinishwa au imesitishwa.' });
-      }
+      const agentId = req.user!.agentId!;
 
       // Get items assigned to this agent
       //
@@ -2240,7 +2366,7 @@ async function startServer() {
       const earnings = await db.getAgentEarnings(agentId);
 
       res.json({
-        agent,
+        agent: req.activeAgent,
         earnings,
         pendingDropoffs: items.filter(i => i.status === 'awaiting_dropoff'),
         holdingItems: items.filter(i => i.status === 'at_agent').map(item => {
@@ -2271,14 +2397,10 @@ async function startServer() {
    * recordItemVerification in database.ts for the full data-integrity
    * and sensitive-document rules this enforces.
    */
-  app.post('/api/agents/verify-item', authenticateJWT, async (req, res) => {
+  app.post('/api/agents/verify-item', authenticateJWT, requireActiveAgent, async (req, res) => {
     const { dropoffCode, categoryId, name, documentNumber, description, foundArea, reason, reasonDetail, physicallyVerified } = req.body;
 
     try {
-      if (req.user?.role !== 'agent' || !req.user.agentId) {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
-      }
-
       const item = await db.getItem(dropoffCode);
       if (!item) {
         return res.status(404).json({ error: 'Msimbo wa kuwasilisha (Drop-off code) si sahihi.' });
@@ -2321,14 +2443,10 @@ async function startServer() {
     }
   });
 
-  app.post('/api/agents/confirm-dropoff', authenticateJWT, async (req, res) => {
+  app.post('/api/agents/confirm-dropoff', authenticateJWT, requireActiveAgent, async (req, res) => {
     const { dropoffCode } = req.body;
 
     try {
-      if (req.user?.role !== 'agent' || !req.user.agentId) {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
-      }
-
       const item = await db.getItem(dropoffCode);
       if (!item) {
         return res.status(404).json({ error: 'Msimbo wa kuwasilisha (Drop-off code) si sahihi.' });
@@ -2399,7 +2517,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/agents/reject-dropoff', authenticateJWT, async (req, res) => {
+  app.post('/api/agents/reject-dropoff', authenticateJWT, requireActiveAgent, async (req, res) => {
     const { dropoffCode, reason } = req.body;
 
     if (!dropoffCode || !reason || !reason.trim() || /^Other:\s*$/i.test(reason.trim())) {
@@ -2407,10 +2525,6 @@ async function startServer() {
     }
 
     try {
-      if (req.user?.role !== 'agent' || !req.user.agentId) {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
-      }
-
       const item = await db.getItem(dropoffCode);
       if (!item) {
         return res.status(404).json({ error: 'Msimbo wa kuwasilisha (Drop-off code) si sahihi.' });
@@ -2427,14 +2541,10 @@ async function startServer() {
     }
   });
 
-  app.post('/api/agents/claims/:claimId/confirm-viewing', authenticateJWT, async (req, res) => {
+  app.post('/api/agents/claims/:claimId/confirm-viewing', authenticateJWT, requireActiveAgent, async (req, res) => {
     const claimId = req.params.claimId;
 
     try {
-      if (req.user?.role !== 'agent' || !req.user.agentId) {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
-      }
-
       const claim = await db.getClaim(claimId);
       if (!claim) {
         return res.status(404).json({ error: 'Claim haikupatikana.' });
@@ -2467,7 +2577,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/agents/confirm-handover', authenticateJWT, async (req, res) => {
+  app.post('/api/agents/confirm-handover', authenticateJWT, requireActiveAgent, async (req, res) => {
     const { claimId, userRating, pickupCode } = req.body;
 
     if (await isPlatformOperationPaused(pauseSettingKey('handovers'))) {
@@ -2475,10 +2585,6 @@ async function startServer() {
     }
 
     try {
-      if (req.user?.role !== 'agent' || !req.user.agentId) {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
-      }
-
       const claim = await db.getClaim(claimId);
       if (!claim) {
         return res.status(404).json({ error: 'Claim haikupatikana.' });
@@ -2649,7 +2755,7 @@ async function startServer() {
   });
 
   // 10. ADMIN DASHBOARD & CONTROLS
-  app.get('/api/admin/dashboard', authenticateJWT, async (req, res) => {
+  app.get('/api/admin/dashboard', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
@@ -2760,7 +2866,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/agents/:id/approve', authenticateJWT, async (req, res) => {
+  app.post('/api/admin/agents/:id/approve', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     const agentId = req.params.id;
     try {
       if (req.user?.role !== 'admin') {
@@ -2778,7 +2884,7 @@ async function startServer() {
   // signup only geocodes a free-text address automatically — when that fails
   // (common with informal Kenyan addresses) or is wrong, this is the only way
   // to fix it so the agent becomes matchable by the nearest-agent algorithm.
-  app.post('/api/admin/agents/:id/location', authenticateJWT, async (req, res) => {
+  app.post('/api/admin/agents/:id/location', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     const agentId = req.params.id;
     const { latitude, longitude } = req.body;
     try {
@@ -2806,7 +2912,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/agents/:id/suspend', authenticateJWT, async (req, res) => {
+  app.post('/api/admin/agents/:id/suspend', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     const agentId = req.params.id;
     try {
       if (req.user?.role !== 'admin') {
@@ -2820,7 +2926,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/agents/:id/warn', authenticateJWT, async (req, res) => {
+  app.post('/api/admin/agents/:id/warn', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     const agentId = req.params.id;
     const { reason } = req.body;
     try {
@@ -2909,7 +3015,7 @@ async function startServer() {
   // Admin-only, on-demand (not bundled into the main dashboard payload,
   // which every admin page-load fetches — evidence can include photos and
   // is only actually needed when an admin opens a specific dispute).
-  app.get('/api/admin/disputes/:disputeId/evidence', authenticateJWT, async (req, res) => {
+  app.get('/api/admin/disputes/:disputeId/evidence', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
@@ -2921,7 +3027,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/disputes/resolve', authenticateJWT, async (req, res) => {
+  app.post('/api/admin/disputes/resolve', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     const { disputeId, winningClaimId, adminNotes } = req.body;
     try {
       if (req.user?.role !== 'admin') {
@@ -2963,7 +3069,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/items/:id/review', authenticateJWT, async (req, res) => {
+  app.post('/api/admin/items/:id/review', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     const itemId = req.params.id;
     const {
       categoryId,
@@ -3050,7 +3156,7 @@ async function startServer() {
   // Social media emergency stop (doc §86/87 "fail-safe: if uncertain, do not
   // publish"). Pausing takes effect immediately for every future post — it
   // does not retract anything already published.
-  app.post('/api/admin/settings/social-publishing-pause', authenticateJWT, async (req, res) => {
+  app.post('/api/admin/settings/social-publishing-pause', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
@@ -3074,7 +3180,7 @@ async function startServer() {
   // nothing about the existing, already-wired-up social-pause admin UI
   // needs to change; both ultimately write the same underlying setting via
   // the same audited setSetting() call.
-  app.post('/api/admin/settings/pause', authenticateJWT, async (req, res) => {
+  app.post('/api/admin/settings/pause', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
@@ -3097,7 +3203,7 @@ async function startServer() {
   // Lets any client (admin dashboard, or defensively the public frontend)
   // read current pause state for all six scopes in one call, rather than
   // guessing from a 403 on some unrelated action.
-  app.get('/api/admin/settings/pause-status', authenticateJWT, async (req, res) => {
+  app.get('/api/admin/settings/pause-status', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
@@ -3111,7 +3217,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/claims/:id/release-settlement', authenticateJWT, async (req, res) => {
+  app.post('/api/admin/claims/:id/release-settlement', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     const claimId = req.params.id;
     try {
       if (req.user?.role !== 'admin') {
@@ -3138,7 +3244,7 @@ async function startServer() {
   // ever change an item's claimability/visibility; no public accusation is
   // ever attached to a person, and the underlying report is always routed
   // to the appropriate authorities outside the platform.
-  app.post('/api/admin/items/:id/flag-stolen', authenticateJWT, async (req, res) => {
+  app.post('/api/admin/items/:id/flag-stolen', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     const itemId = req.params.id;
     const { reason } = req.body;
     try {
@@ -3158,7 +3264,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/items/:id/legal-hold', authenticateJWT, async (req, res) => {
+  app.post('/api/admin/items/:id/legal-hold', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     const itemId = req.params.id;
     const { reason } = req.body;
     try {
@@ -3178,7 +3284,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/items/:id/clear-hold', authenticateJWT, async (req, res) => {
+  app.post('/api/admin/items/:id/clear-hold', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     const itemId = req.params.id;
     const { reason } = req.body;
     try {
@@ -3198,7 +3304,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/items/:id/reject', authenticateJWT, async (req, res) => {
+  app.post('/api/admin/items/:id/reject', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     const itemId = req.params.id;
     const { reason } = req.body;
 
@@ -3219,7 +3325,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/reputations/:phone/clear', authenticateJWT, async (req, res) => {
+  app.post('/api/admin/reputations/:phone/clear', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     const phone = req.params.phone;
 
     try {
@@ -3234,7 +3340,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/payment-strikes', authenticateJWT, async (req, res) => {
+  app.get('/api/admin/payment-strikes', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
@@ -3247,7 +3353,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/payment-strikes/:phone/clear', authenticateJWT, async (req, res) => {
+  app.post('/api/admin/payment-strikes/:phone/clear', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     const phone = req.params.phone;
 
     try {
@@ -3269,7 +3375,7 @@ async function startServer() {
   });
 
   // 10B. ADMIN CATEGORIES MANAGEMENT
-  app.get('/api/admin/categories', authenticateJWT, async (req, res) => {
+  app.get('/api/admin/categories', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
@@ -3281,7 +3387,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/categories', authenticateJWT, async (req, res) => {
+  app.post('/api/admin/categories', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
@@ -3357,7 +3463,7 @@ async function startServer() {
     }
   });
 
-  app.put('/api/admin/categories/:id', authenticateJWT, async (req, res) => {
+  app.put('/api/admin/categories/:id', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     const { id } = req.params;
     try {
       if (req.user?.role !== 'admin') {
@@ -3439,7 +3545,7 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/admin/categories/:id', authenticateJWT, async (req, res) => {
+  app.delete('/api/admin/categories/:id', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     const { id } = req.params;
     try {
       if (req.user?.role !== 'admin') {
