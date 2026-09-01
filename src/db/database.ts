@@ -19,7 +19,7 @@ import {
   social_publications as socialPublicationsTable,
   item_verification_changes as itemVerificationChangesTable,
 } from "./schema.ts";
-import { eq, and, or, isNull, inArray } from "drizzle-orm";
+import { eq, and, or, isNull, inArray, lte } from "drizzle-orm";
 import { getSignedPhotoUrl } from "../services/storage.ts";
 
 // Local copy of the phone-masking helper (also defined in services/auth.ts
@@ -2354,19 +2354,50 @@ class DatabaseEngine {
    * claimed above. Called exactly once per claimSocialPublicationSlot()
    * that returned true.
    */
+  // P0: social-publication retry/reconciliation. Previously only ever
+  // wrote 'published' or 'failed' — no distinction between a definite,
+  // safe-to-retry rejection and a genuine "we don't know what happened"
+  // network failure, and no attempt tracking at all despite attempt_count/
+  // next_attempt_at already existing as columns. See the PublicationOutcome
+  // comment in services/social.ts for the full reasoning behind the four
+  // states. Retry scheduling (next_attempt_at, with exponential backoff)
+  // is set ONLY for 'retryable_failure' — 'unknown' and 'permanent_failure'
+  // are deliberately never auto-scheduled; see socialRetrySweep in
+  // server.ts and the admin manual-retry route for why.
   public async recordSocialPublicationResult(
     itemId: string,
     platform: string,
     publicationType: string,
-    result: { status: 'published' | 'failed'; providerPostId?: string | null; lastError?: string | null }
+    result: { status: 'published' | 'retryable_failure' | 'permanent_failure' | 'unknown'; providerPostId?: string | null; lastError?: string | null }
   ): Promise<void> {
     try {
+      const existingRows = await drizzleDb
+        .select()
+        .from(socialPublicationsTable)
+        .where(and(
+          eq(socialPublicationsTable.item_id, itemId),
+          eq(socialPublicationsTable.platform, platform),
+          eq(socialPublicationsTable.publication_type, publicationType)
+        ));
+      const currentAttempt = existingRows.length > 0 ? (existingRows[0].attempt_count ?? 1) : 1;
+
+      let nextAttemptAt: Date | null = null;
+      if (result.status === 'retryable_failure') {
+        // Exponential backoff, capped at 24h: 5min, 20min, 80min, ... —
+        // gives transient provider issues (rate limits, a 5xx blip) room
+        // to clear without hammering the provider or the DB.
+        const backoffMinutes = Math.min(24 * 60, 5 * Math.pow(4, Math.max(0, currentAttempt - 1)));
+        nextAttemptAt = new Date(Date.now() + backoffMinutes * 60 * 1000);
+      }
+
       await drizzleDb
         .update(socialPublicationsTable)
         .set({
           status: result.status,
           provider_post_id: result.providerPostId ?? null,
           last_error: result.lastError ?? null,
+          attempt_count: currentAttempt + 1,
+          next_attempt_at: nextAttemptAt,
           completed_at: result.status === 'published' ? new Date() : null,
         })
         .where(and(
@@ -2376,6 +2407,78 @@ class DatabaseEngine {
         ));
     } catch (error) {
       console.error("Failed to record social publication result:", error);
+    }
+  }
+
+  // Finds publications eligible for the automatic retry sweep — see
+  // socialRetrySweep in server.ts. Deliberately excludes 'unknown': an
+  // unknown outcome might already have succeeded on the provider's side,
+  // and automatically retrying risks a duplicate post. Only
+  // 'retryable_failure' rows past their scheduled next_attempt_at qualify.
+  // Looks up a social_publications row's id by (item, platform, type) — the
+  // same unique key claimSocialPublicationSlot enforces, but that method
+  // only returns whether the claim succeeded, not the row's id. Used by an
+  // admin UI (or a test) that has an item/platform/type in hand and needs
+  // the row id to pass to resetSocialPublicationForManualRetry / the
+  // manual-retry route.
+  public async getSocialPublicationId(itemId: string, platform: string, publicationType: string): Promise<string | null> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(socialPublicationsTable)
+        .where(and(
+          eq(socialPublicationsTable.item_id, itemId),
+          eq(socialPublicationsTable.platform, platform),
+          eq(socialPublicationsTable.publication_type, publicationType)
+        ));
+      return rows.length > 0 ? rows[0].id : null;
+    } catch (error) {
+      console.error("Failed to look up social publication id:", error);
+      return null;
+    }
+  }
+
+  public async getSocialPublicationsDueForRetry(): Promise<Array<{ id: string; item_id: string; platform: string; publication_type: string; attempt_count: number }>> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(socialPublicationsTable)
+        .where(and(
+          eq(socialPublicationsTable.status, 'retryable_failure'),
+          lte(socialPublicationsTable.next_attempt_at, new Date())
+        ));
+      return rows.map(r => ({
+        id: r.id,
+        item_id: r.item_id,
+        platform: r.platform,
+        publication_type: r.publication_type,
+        attempt_count: r.attempt_count ?? 1,
+      }));
+    } catch (error) {
+      console.error("Failed to query social publications due for retry:", error);
+      return [];
+    }
+  }
+
+  // Admin manual retry (for 'unknown' and 'permanent_failure' rows, which
+  // are never auto-retried) resets the row to a fresh retryable state so
+  // the next sweep — or an immediate direct re-post — will pick it up,
+  // regardless of any prior next_attempt_at.
+  public async resetSocialPublicationForManualRetry(id: string): Promise<{ item_id: string; platform: string; publication_type: string } | null> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(socialPublicationsTable)
+        .where(eq(socialPublicationsTable.id, id));
+      if (rows.length === 0) return null;
+      await drizzleDb
+        .update(socialPublicationsTable)
+        .set({ status: 'retryable_failure', next_attempt_at: new Date() })
+        .where(eq(socialPublicationsTable.id, id));
+      return { item_id: rows[0].item_id, platform: rows[0].platform, publication_type: rows[0].publication_type };
+    } catch (error) {
+      console.error("Failed to reset social publication for manual retry:", error);
+      return null;
     }
   }
 

@@ -187,6 +187,48 @@ export function escapeTelegramHtml(raw: string | null | undefined): string {
   return (raw || '').toString().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// P0: social-publication retry/reconciliation state machine.
+//
+// Before this, every post function collapsed to a plain boolean: an
+// explicit HTTP rejection from the provider (definitely didn't post —
+// safe to retry) and a network-level exception like a timeout, DNS
+// failure, or connection reset (we genuinely do NOT know whether the
+// provider received and processed the request before the connection
+// dropped) both just returned `false`, identically. Retrying a genuine
+// 'unknown' automatically risks a duplicate post if the first attempt
+// actually landed; never retrying it risks silently losing a real post if
+// it didn't. The fix is to tell the two apart and handle them differently:
+//
+// - 'published'          — provider returned 2xx. Done.
+// - 'retryable_failure'   — provider explicitly rejected with a transient-
+//                           looking status (429 rate limit, 5xx server
+//                           error). Safe to retry automatically with
+//                           backoff — the request definitely did NOT
+//                           succeed.
+// - 'permanent_failure'   — provider explicitly rejected with a status
+//                           that won't fix itself on retry (401/403 bad
+//                           or revoked credentials, 400/404 bad request/
+//                           chat/page). Automatic retry would just repeat
+//                           the same failure; needs a human to fix
+//                           configuration, not a retry loop.
+// - 'unknown'             — the request itself failed before we got a
+//                           definitive response (timeout, network error,
+//                           aborted connection). Never auto-retried — see
+//                           the comment on socialRetrySweep in server.ts —
+//                           surfaced for admin manual reconciliation
+//                           instead.
+export type PublicationOutcome = 'published' | 'retryable_failure' | 'permanent_failure' | 'unknown';
+
+// Classifies an explicit (non-network-error) HTTP failure response from a
+// social provider. Only called when we DID get a response — i.e. we know
+// for certain the request reached the provider and was rejected, which is
+// what makes 'retryable_failure'/'permanent_failure' safe to distinguish
+// from 'unknown' here (a definite rejection is never "unknown").
+export function classifyHttpFailure(status: number): 'retryable_failure' | 'permanent_failure' {
+  if (status === 429 || status >= 500) return 'retryable_failure';
+  return 'permanent_failure'; // 400/401/403/404 etc — won't fix itself on retry
+}
+
 export const SocialService = {
   /**
    * Emergency-stop check enforced INSIDE the service itself, not just at
@@ -211,7 +253,7 @@ export const SocialService = {
   /**
    * Post a verified recovery update to Telegram Channel
    */
-  async postToTelegram(item: SocialItem, agent?: SocialAgent, category?: SocialCategory): Promise<boolean> {
+  async postToTelegram(item: SocialItem, agent?: SocialAgent, category?: SocialCategory): Promise<PublicationOutcome> {
     const botToken = sanitizeTelegramEnvValue(process.env.TELEGRAM_BOT_TOKEN);
     const channelId = sanitizeTelegramEnvValue(process.env.TELEGRAM_CHANNEL_ID);
 
@@ -273,7 +315,10 @@ export const SocialService = {
       // payments, DB) — but must never silently happen in production.
       if (process.env.NODE_ENV === 'production') {
         console.error('[SOCIAL SERVICE] FATAL: TELEGRAM_BOT_TOKEN/TELEGRAM_CHANNEL_ID missing in production. Refusing to report a fake success.');
-        return false;
+        // Missing config is never going to fix itself on a retry — it
+        // needs a human to set the env vars — so this is a permanent, not
+        // retryable, failure.
+        return 'permanent_failure';
       }
       console.log(`\n=================== [SANDBOX TELEGRAM OUTBOX] ===================`);
       console.log(`Channel ID: ${channelId || '[NOT CONFIGURED]'}`);
@@ -281,7 +326,7 @@ export const SocialService = {
       console.log(`--- Post Content ---`);
       console.log(text.replace(/<[^>]*>/g, '')); // log stripped html for readability
       console.log(`=================================================================\n`);
-      return true;
+      return 'published';
     }
 
     try {
@@ -318,7 +363,7 @@ export const SocialService = {
             // Fall through to text-only send below rather than losing the post entirely.
           } else {
             console.log(`[SOCIAL SERVICE] Telegram photo broadcast success for item ${item.id}`);
-            return true;
+            return 'published';
           }
         } catch (fetchErr) {
           console.error('[SOCIAL SERVICE] Failed to fetch/upload photo bytes for Telegram, falling back to text-only post:', fetchErr);
@@ -342,21 +387,28 @@ export const SocialService = {
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
         console.error('[SOCIAL SERVICE] Telegram API error:', errorData);
-        return false;
+        return classifyHttpFailure(res.status);
       }
 
       console.log(`[SOCIAL SERVICE] Telegram broadcast success for item ${item.id}`);
-      return true;
+      return 'published';
     } catch (e) {
-      console.error('[SOCIAL SERVICE] Failed to post to Telegram:', e);
-      return false;
+      // A thrown exception here means the request itself never completed
+      // — a network error, timeout, or aborted connection — NOT that
+      // Telegram explicitly rejected it. We cannot tell whether Telegram
+      // received and processed the message before the connection dropped,
+      // so this is 'unknown', not 'retryable_failure': blindly retrying an
+      // unknown risks a duplicate post if the first attempt actually
+      // landed.
+      console.error('[SOCIAL SERVICE] Failed to post to Telegram (network/timeout — outcome unknown):', e);
+      return 'unknown';
     }
   },
 
   /**
    * Post a verified recovery update to Facebook Page Feed
    */
-  async postToFacebook(item: SocialItem, agent?: SocialAgent, category?: SocialCategory): Promise<boolean> {
+  async postToFacebook(item: SocialItem, agent?: SocialAgent, category?: SocialCategory): Promise<PublicationOutcome> {
     const pageId = process.env.FACEBOOK_PAGE_ID;
     const pageAccessToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
 
@@ -402,7 +454,7 @@ export const SocialService = {
       // same reasoning.
       if (process.env.NODE_ENV === 'production') {
         console.error('[SOCIAL SERVICE] FATAL: FACEBOOK_PAGE_ID/FACEBOOK_PAGE_ACCESS_TOKEN missing in production. Refusing to report a fake success.');
-        return false;
+        return 'permanent_failure';
       }
       console.log(`\n=================== [SANDBOX FACEBOOK OUTBOX] ===================`);
       console.log(`Page ID: ${pageId || '[NOT CONFIGURED]'}`);
@@ -410,7 +462,7 @@ export const SocialService = {
       console.log(`--- Post Content ---`);
       console.log(text);
       console.log(`=================================================================\n`);
-      return true;
+      return 'published';
     }
 
     try {
@@ -445,7 +497,7 @@ export const SocialService = {
             // Fall through to text-only feed post below rather than losing the post entirely.
           } else {
             console.log(`[SOCIAL SERVICE] Facebook photo post success for item ${item.id}`);
-            return true;
+            return 'published';
           }
         } catch (fetchErr) {
           console.error('[SOCIAL SERVICE] Failed to fetch/upload photo bytes for Facebook, falling back to text-only post:', fetchErr);
@@ -468,21 +520,24 @@ export const SocialService = {
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
         console.error('[SOCIAL SERVICE] Facebook Graph API error:', errorData);
-        return false;
+        return classifyHttpFailure(res.status);
       }
 
       console.log(`[SOCIAL SERVICE] Facebook feed post success for item ${item.id}`);
-      return true;
+      return 'published';
     } catch (e) {
-      console.error('[SOCIAL SERVICE] Failed to post to Facebook:', e);
-      return false;
+      // See the matching comment in postToTelegram's catch block above —
+      // a thrown exception here means we don't know if Facebook actually
+      // received the post before the connection failed.
+      console.error('[SOCIAL SERVICE] Failed to post to Facebook (network/timeout — outcome unknown):', e);
+      return 'unknown';
     }
   },
 
   /**
    * Post a verified recovery update to Twitter/X
    */
-  async postToTwitter(item: SocialItem, agent?: SocialAgent, category?: SocialCategory): Promise<boolean> {
+  async postToTwitter(item: SocialItem, agent?: SocialAgent, category?: SocialCategory): Promise<PublicationOutcome> {
     const apiKey = process.env.TWITTER_API_KEY?.trim();
     const apiSecret = process.env.TWITTER_API_SECRET?.trim();
     const accessToken = process.env.TWITTER_ACCESS_TOKEN?.trim();
@@ -518,14 +573,14 @@ export const SocialService = {
       // same reasoning.
       if (process.env.NODE_ENV === 'production') {
         console.error('[SOCIAL SERVICE] FATAL: TWITTER_API_KEY/TWITTER_API_SECRET/TWITTER_ACCESS_TOKEN/TWITTER_ACCESS_TOKEN_SECRET missing in production. Refusing to report a fake success.');
-        return false;
+        return 'permanent_failure';
       }
       console.log(`\n=================== [SANDBOX TWITTER/X OUTBOX] ===================`);
       console.log(`Photo attached: ${canShowPhoto ? 'YES - ' + item.photo_url : 'no'}`);
       console.log(`--- Post Content ---`);
       console.log(text);
       console.log(`====================================================================\n`);
-      return true;
+      return 'published';
     }
 
     const oauthCreds = { apiKey, apiSecret, accessToken, accessTokenSecret };
@@ -590,14 +645,15 @@ export const SocialService = {
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
         console.error('[SOCIAL SERVICE] Twitter/X API error:', errorData);
-        return false;
+        return classifyHttpFailure(res.status);
       }
 
       console.log(`[SOCIAL SERVICE] Twitter/X post success for item ${item.id}`);
-      return true;
+      return 'published';
     } catch (e) {
-      console.error('[SOCIAL SERVICE] Failed to post to Twitter/X:', e);
-      return false;
+      // See the matching comment in postToTelegram's catch block above.
+      console.error('[SOCIAL SERVICE] Failed to post to Twitter/X (network/timeout — outcome unknown):', e);
+      return 'unknown';
     }
   },
 
@@ -614,20 +670,71 @@ export const SocialService = {
    * need to distinguish those cases for logging purposes, since either
    * way no further action is needed here.
    */
-  async _runIdempotentPost(itemId: string, platform: string, publicationType: string, post: () => Promise<boolean>): Promise<boolean> {
+  async _runIdempotentPost(itemId: string, platform: string, publicationType: string, post: () => Promise<PublicationOutcome>): Promise<PublicationOutcome> {
     const claimed = await db.claimSocialPublicationSlot(itemId, platform, publicationType);
     if (!claimed) {
       console.log(`[SOCIAL SERVICE] Skipping ${platform} ${publicationType} for item ${itemId} — already claimed/published (idempotency guard).`);
-      return false;
+      return 'permanent_failure';
     }
     try {
-      const success = await post();
-      await db.recordSocialPublicationResult(itemId, platform, publicationType, { status: success ? 'published' : 'failed' });
-      return success;
+      const outcome = await post();
+      await db.recordSocialPublicationResult(itemId, platform, publicationType, { status: outcome });
+      return outcome;
     } catch (err: any) {
-      await db.recordSocialPublicationResult(itemId, platform, publicationType, { status: 'failed', lastError: String(err?.message || err) });
-      return false;
+      // A post() implementation throwing directly (rather than returning
+      // 'unknown'/'retryable_failure'/'permanent_failure' itself) is a bug
+      // in that implementation, not a known network-vs-provider outcome —
+      // but since we genuinely can't classify it here, treat it the same
+      // as a network-level failure: 'unknown', never silently 'published'.
+      await db.recordSocialPublicationResult(itemId, platform, publicationType, { status: 'unknown', lastError: String(err?.message || err) });
+      return 'unknown';
     }
+  },
+
+  // Re-attempts an existing 'found_notice' publication row — used by both
+  // the automatic retry sweep (socialRetrySweep in server.ts, for
+  // 'retryable_failure' rows past their next_attempt_at) and the admin
+  // manual-retry endpoint (for 'unknown'/'permanent_failure' rows an admin
+  // has decided to retry anyway). Deliberately bypasses
+  // claimSocialPublicationSlot/_runIdempotentPost's claim step: that slot
+  // was already claimed the first time this (item, platform, type) was
+  // attempted, and re-claiming an existing row is exactly what the unique
+  // constraint is there to prevent — this calls recordSocialPublicationResult
+  // directly on the existing row instead.
+  //
+  // SCOPE NOTE: only 'found_notice' is supported here. The 'reunited_notice'
+  // post logic (in broadcastItemReunited) is not factored into standalone,
+  // independently-callable functions the way postToTelegram/Facebook/
+  // Twitter are for found_notice — it's inline closures over a
+  // pre-computed `text` string. Retrying a reunited_notice would mean
+  // either duplicating that text-generation logic here or refactoring
+  // broadcastItemReunited to expose it, neither of which this pass
+  // attempts. Calling this for a 'reunited_notice' row returns
+  // 'permanent_failure' with a clear last_error rather than silently doing
+  // nothing or guessing at a re-implementation.
+  async retryFoundNoticePost(itemId: string, platform: string): Promise<PublicationOutcome> {
+    if (platform !== 'telegram' && platform !== 'facebook' && platform !== 'twitter') {
+      return 'permanent_failure';
+    }
+    const item = await db.getItem(itemId);
+    if (!item) {
+      await db.recordSocialPublicationResult(itemId, platform, 'found_notice', { status: 'permanent_failure', lastError: 'Item no longer exists.' });
+      return 'permanent_failure';
+    }
+    const agent = item.assigned_agent_id ? await db.getAgent(item.assigned_agent_id) : undefined;
+    const category = await db.getCategory(item.category_id);
+
+    let outcome: PublicationOutcome;
+    if (platform === 'telegram') {
+      outcome = await this.postToTelegram(item, agent ?? undefined, category ?? undefined);
+    } else if (platform === 'facebook') {
+      outcome = await this.postToFacebook(item, agent ?? undefined, category ?? undefined);
+    } else {
+      outcome = await this.postToTwitter(item, agent ?? undefined, category ?? undefined);
+    }
+
+    await db.recordSocialPublicationResult(itemId, platform, 'found_notice', { status: outcome });
+    return outcome;
   },
 
   async broadcastVerifiedItem(item: SocialItem, agent?: SocialAgent, category?: SocialCategory): Promise<void> {
@@ -698,12 +805,12 @@ export const SocialService = {
         // P0: see the matching comment in postToTelegram above.
         if (process.env.NODE_ENV === 'production') {
           console.error('[SOCIAL SERVICE] FATAL: TELEGRAM_BOT_TOKEN/TELEGRAM_CHANNEL_ID missing in production. Refusing to report a fake success (reunited notice).');
-          return false;
+          return 'permanent_failure';
         }
         console.log(`\n=================== [SANDBOX TELEGRAM OUTBOX - REUNITED] ===================`);
         console.log(text);
         console.log(`==============================================================================\n`);
-        return true;
+        return 'published';
       }
       try {
         const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
@@ -713,12 +820,12 @@ export const SocialService = {
         });
         if (!res.ok) {
           console.error('[SOCIAL SERVICE] Telegram reunited-notice error:', await res.json().catch(() => ({})));
-          return false;
+          return classifyHttpFailure(res.status);
         }
-        return true;
+        return 'published';
       } catch (e) {
-        console.error('[SOCIAL SERVICE] Failed to post reunited notice to Telegram:', e);
-        return false;
+        console.error('[SOCIAL SERVICE] Failed to post reunited notice to Telegram (network/timeout — outcome unknown):', e);
+        return 'unknown';
       }
     });
 
@@ -727,12 +834,12 @@ export const SocialService = {
         // P0: see the matching comment in postToTelegram above.
         if (process.env.NODE_ENV === 'production') {
           console.error('[SOCIAL SERVICE] FATAL: FACEBOOK_PAGE_ID/FACEBOOK_PAGE_ACCESS_TOKEN missing in production. Refusing to report a fake success (reunited notice).');
-          return false;
+          return 'permanent_failure';
         }
         console.log(`\n=================== [SANDBOX FACEBOOK OUTBOX - REUNITED] ===================`);
         console.log(text);
         console.log(`==============================================================================\n`);
-        return true;
+        return 'published';
       }
       try {
         const res = await fetch(`https://graph.facebook.com/v18.0/${pageId}/feed`, {
@@ -742,12 +849,12 @@ export const SocialService = {
         });
         if (!res.ok) {
           console.error('[SOCIAL SERVICE] Facebook reunited-notice error:', await res.json().catch(() => ({})));
-          return false;
+          return classifyHttpFailure(res.status);
         }
-        return true;
+        return 'published';
       } catch (e) {
-        console.error('[SOCIAL SERVICE] Failed to post reunited notice to Facebook:', e);
-        return false;
+        console.error('[SOCIAL SERVICE] Failed to post reunited notice to Facebook (network/timeout — outcome unknown):', e);
+        return 'unknown';
       }
     });
 
@@ -756,12 +863,12 @@ export const SocialService = {
         // P0: see the matching comment in postToTelegram above.
         if (process.env.NODE_ENV === 'production') {
           console.error('[SOCIAL SERVICE] FATAL: TWITTER_API_KEY/TWITTER_API_SECRET/TWITTER_ACCESS_TOKEN/TWITTER_ACCESS_TOKEN_SECRET missing in production. Refusing to report a fake success (reunited notice).');
-          return false;
+          return 'permanent_failure';
         }
         console.log(`\n=================== [SANDBOX TWITTER/X OUTBOX - REUNITED] ===================`);
         console.log(text);
         console.log(`===============================================================================\n`);
-        return true;
+        return 'published';
       }
       try {
         const tweetUrl = 'https://api.twitter.com/2/tweets';
@@ -778,16 +885,16 @@ export const SocialService = {
         });
         if (!res.ok) {
           console.error('[SOCIAL SERVICE] Twitter/X reunited-notice error:', await res.json().catch(() => ({})));
-          return false;
+          return classifyHttpFailure(res.status);
         }
-        return true;
+        return 'published';
       } catch (e) {
-        console.error('[SOCIAL SERVICE] Failed to post reunited notice to Twitter/X:', e);
-        return false;
+        console.error('[SOCIAL SERVICE] Failed to post reunited notice to Twitter/X (network/timeout — outcome unknown):', e);
+        return 'unknown';
       }
     });
 
     const [tgResult, fbResult, twResult] = await Promise.all([tgPromise, fbPromise, twPromise]);
-    console.log(`[SOCIAL SERVICE] Reunited notice completed for item ${item.id}. Telegram: ${tgResult ? 'Success' : 'Failed/Skipped'}, Facebook: ${fbResult ? 'Success' : 'Failed/Skipped'}, Twitter/X: ${twResult ? 'Success' : 'Failed/Skipped'}`);
+    console.log(`[SOCIAL SERVICE] Reunited notice completed for item ${item.id}. Telegram: ${tgResult}, Facebook: ${fbResult}, Twitter/X: ${twResult}`);
   }
 };

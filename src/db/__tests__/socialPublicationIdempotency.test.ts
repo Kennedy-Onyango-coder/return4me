@@ -56,7 +56,7 @@ describe('social publication idempotency', () => {
   it('a second claim still fails even after the first attempt is recorded as failed — no automatic retry that could double-post', async () => {
     const itemId = await makeTestItem();
     await db.claimSocialPublicationSlot(itemId, 'telegram', 'found_notice');
-    await db.recordSocialPublicationResult(itemId, 'telegram', 'found_notice', { status: 'failed', lastError: 'simulated failure' });
+    await db.recordSocialPublicationResult(itemId, 'telegram', 'found_notice', { status: 'retryable_failure', lastError: 'simulated failure' });
 
     const retryClaim = await db.claimSocialPublicationSlot(itemId, 'telegram', 'found_notice');
     expect(retryClaim).toBe(false);

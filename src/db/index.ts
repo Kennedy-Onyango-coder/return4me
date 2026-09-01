@@ -122,7 +122,66 @@ function evaluateWhere(row: any, whereClause: string, params: any[]): boolean {
     
     return String(row[col]) !== String(val);
   }
-  
+
+  // Match ordering comparisons: "col <= $1", "col < $1", "col >= $1", "col > $1"
+  // — added because there was NO handling for these at all: any WHERE
+  // clause using one (e.g. drizzle's lte()/lt()/gte()/gt()) fell through
+  // every branch above and hit the unconditional `return true` at the end
+  // of this function, meaning every row silently matched regardless of
+  // the actual comparison. That's not a production bug (production talks
+  // to a real Postgres, never this mock) but it's a real defect in this
+  // test double that could make any test using a range/ordering
+  // comparison pass or fail for the wrong reason. Order matters: check
+  // <= / >= before < / > so e.g. "<=" isn't matched by the "<" pattern
+  // first and left with a dangling "=".
+  const cmpMatch = cleanExpr.match(/^([\w.]+)\s*(<=|>=|<|>)\s*(.+)$/);
+  if (cmpMatch) {
+    const col = cmpMatch[1].replace(/^\w+\./, '').trim();
+    const op = cmpMatch[2];
+    const valExpr = cmpMatch[3].trim();
+
+    let val: any;
+    const paramMatch = valExpr.match(/^\$(\d+)$/);
+    if (paramMatch) {
+      const idx = parseInt(paramMatch[1]) - 1;
+      val = params[idx];
+    } else if (/^now\(\)$/i.test(valExpr)) {
+      val = new Date();
+    } else {
+      val = valExpr.replace(/^'|'$/g, '').trim();
+    }
+
+    // Compare as dates if either side looks like one, else numerically,
+    // else fall back to string comparison — mirrors how a real Postgres
+    // column's type would drive the comparison, without needing this mock
+    // to actually track column types.
+    const rowVal = row[col];
+    const asDate = (x: any): number | null => {
+      if (x instanceof Date) return x.getTime();
+      if (typeof x === 'string' && !isNaN(Date.parse(x)) && /\d{4}-\d{2}-\d{2}/.test(x)) return Date.parse(x);
+      return null;
+    };
+    const rowDate = asDate(rowVal);
+    const valDate = asDate(val);
+
+    let cmp: number;
+    if (rowVal === null || rowVal === undefined) {
+      // NULL is never <=, <, >=, or > anything in SQL three-valued logic.
+      return false;
+    } else if (rowDate !== null && valDate !== null) {
+      cmp = rowDate - valDate;
+    } else if (!isNaN(Number(rowVal)) && !isNaN(Number(val))) {
+      cmp = Number(rowVal) - Number(val);
+    } else {
+      cmp = String(rowVal) < String(val) ? -1 : String(rowVal) > String(val) ? 1 : 0;
+    }
+
+    if (op === '<=') return cmp <= 0;
+    if (op === '>=') return cmp >= 0;
+    if (op === '<') return cmp < 0;
+    return cmp > 0; // '>'
+  }
+
   return true;
 }
 

@@ -3173,6 +3173,38 @@ async function startServer() {
     }
   });
 
+  // P0: admin manual retry for social publications that the automatic
+  // sweep (socialRetrySweep) deliberately never touches — 'unknown'
+  // outcomes (might already have succeeded; auto-retry risks a duplicate)
+  // and 'permanent_failure' outcomes (won't fix themselves; an admin has
+  // presumably just fixed whatever caused it, e.g. rotated credentials).
+  // Resets the row to 'retryable_failure' with an immediate next_attempt_at,
+  // then retries it directly (found_notice only — see the SCOPE NOTE on
+  // SocialService.retryFoundNoticePost for reunited_notice's limitation).
+  app.post('/api/admin/social/:id/retry', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
+    try {
+      if (req.user?.role !== 'admin') {
+        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+      }
+      const publicationId = req.params.id;
+      const reset = await db.resetSocialPublicationForManualRetry(publicationId);
+      if (!reset) {
+        return res.status(404).json({ error: 'Social publication record haikupatikana.' });
+      }
+      if (reset.publication_type !== 'found_notice') {
+        return res.status(400).json({
+          error: `Manual retry is not yet implemented for publication_type '${reset.publication_type}' (only 'found_notice' is supported). See SocialService.retryFoundNoticePost's SCOPE NOTE.`
+        });
+      }
+      const outcome = await SocialService.retryFoundNoticePost(reset.item_id, reset.platform);
+      const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
+      await db.logAudit(adminIdentifier, 'SOCIAL_PUBLICATION_MANUAL_RETRY', `Manually retried ${reset.platform} ${reset.publication_type} for item ${reset.item_id}. Outcome: ${outcome}.`);
+      res.json({ success: true, outcome });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // EMERGENCY CONTROLS: generalizes the pattern above to the other five
   // scopes an admin needs to be able to freeze independently — see the
   // PAUSABLE_SCOPES comment. Kept as a separate route (rather than folding
@@ -3661,6 +3693,8 @@ async function startServer() {
     setInterval(expireStaleClaims, 60000);
     // Start background sweep for due settlements (dispute window closed) every 5 minutes
     setInterval(releaseDueSettlements, 5 * 60 * 1000);
+    // Start background sweep for retryable social-publication failures every 5 minutes
+    setInterval(socialRetrySweep, 5 * 60 * 1000);
   });
 }
 
@@ -3706,6 +3740,35 @@ async function checkClaimExpiry(claim: any): Promise<any> {
     }
   }
   return claim;
+}
+
+// P0: automatic retry sweep for social publications. Only ever picks up
+// 'retryable_failure' rows past their scheduled next_attempt_at — never
+// 'unknown' (an unknown outcome might already have succeeded on the
+// provider's side; auto-retrying risks a duplicate post — see the
+// PublicationOutcome comment in services/social.ts) and never
+// 'permanent_failure' (won't succeed on retry without a human fixing
+// configuration first). Both of those are left for admin manual retry
+// instead (POST /api/admin/social/:id/retry). Only 'found_notice' rows are
+// retried here — see the SCOPE NOTE on SocialService.retryFoundNoticePost.
+async function socialRetrySweep() {
+  try {
+    const due = await db.getSocialPublicationsDueForRetry();
+    for (const row of due) {
+      if (row.publication_type !== 'found_notice') {
+        console.log(`[SOCIAL RETRY SWEEP] Skipping ${row.platform} ${row.publication_type} for item ${row.item_id} — automatic retry is only implemented for found_notice (see retryFoundNoticePost).`);
+        continue;
+      }
+      console.log(`[SOCIAL RETRY SWEEP] Retrying ${row.platform} found_notice for item ${row.item_id} (attempt ${row.attempt_count + 1}).`);
+      try {
+        await SocialService.retryFoundNoticePost(row.item_id, row.platform);
+      } catch (err) {
+        console.error(`[SOCIAL RETRY SWEEP] Unexpected error retrying ${row.platform} for item ${row.item_id}:`, err);
+      }
+    }
+  } catch (err) {
+    console.error('[SOCIAL RETRY SWEEP] Sweep failed:', err);
+  }
 }
 
 async function expireStaleClaims() {
