@@ -479,6 +479,32 @@ function requireCurrentAdminSession(req: Request, res: Response, next: NextFunct
     });
 }
 
+// P1: error disclosure. Every one of this file's ~50 generic
+// `catch (e: any) { res.status(500).json({ error: e.message }) }` blocks
+// used to hand the caught exception's raw .message straight to the
+// client — meaning a Postgres constraint violation ("duplicate key value
+// violates unique constraint \"items_pkey\""), a filesystem path, a
+// third-party provider's raw API error body, or any other unexpected
+// internal detail could reach an end user verbatim, since these catch
+// blocks are specifically the "something unexpected happened" path (not
+// the ~400-level explicit validation checks throughout this file, which
+// already return safe, intentional bilingual messages BEFORE ever
+// reaching a catch block, and are untouched by this fix). In production,
+// this always logs the full error server-side and returns a generic,
+// safe message instead of the raw one; in development the raw message is
+// still shown, matching this codebase's established pattern of being
+// stricter in production than in dev (see storage.ts, payments.ts,
+// social.ts's own fail-closed-in-production guards for the same shape of
+// tradeoff elsewhere in this file).
+function sendServerError(res: Response, error: any, context: string) {
+  console.error(`[${context}]`, error);
+  if (process.env.NODE_ENV === 'production') {
+    res.status(500).json({ error: 'Hitilafu imetokea upande wa seva. Tafadhali jaribu tena baadaye. / A server error occurred. Please try again later.' });
+  } else {
+    res.status(500).json({ error: error?.message || String(error) });
+  }
+}
+
 async function seedAdminUser() {
   try {
     const isEmpty = await db.isAdminTableEmpty();
@@ -692,7 +718,7 @@ async function startServer() {
           error: "Huduma haipatikani kwa sasa. Tafadhali jaribu tena baadaye. / Service temporarily unavailable. Please try again shortly."
         });
       }
-      res.status(500).json({ error: e.message || String(e) });
+      sendServerError(res, e, 'CATEGORIES_FETCH_ERROR');
     }
   });
 
@@ -701,7 +727,7 @@ async function startServer() {
       const regions = await db.getDistinctRegions();
       res.json(regions);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -711,7 +737,7 @@ async function startServer() {
       const activeAgentsCount = agents.filter(a => a.status === 'active').length;
       res.json({ activeAgentsCount });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -729,7 +755,7 @@ async function startServer() {
       const { otp, ...safeResult } = result as any;
       res.json(safeResult);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -840,7 +866,7 @@ async function startServer() {
         },
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -1027,7 +1053,7 @@ async function startServer() {
         message: 'Skani msimbo wa QR kwa programu yako ya uthibitishaji, kisha thibitisha msimbo ili kuwezesha 2FA. / Scan the QR code with your authenticator app, then confirm a code to enable 2FA.',
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -1063,7 +1089,7 @@ async function startServer() {
       await db.confirmAdminTotpEnrollment(admin.id);
       res.json({ success: true, message: '2FA imewezeshwa kikamilifu kwa akaunti yako. / 2FA has been successfully enabled on your account.' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -1101,7 +1127,7 @@ async function startServer() {
       await db.bumpAdminTokenVersion(admin.username);
       res.json({ success: true, message: '2FA imezimwa kwa akaunti hii. / 2FA has been disabled on this account.' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -1136,7 +1162,7 @@ async function startServer() {
       });
     } catch (e: any) {
       console.error('[DATA DELETION ERROR]', e);
-      res.status(500).json({ error: e.message || String(e) });
+      sendServerError(res, e, 'DATA_DELETION_ERROR');
     }
   });
 
@@ -1154,7 +1180,7 @@ async function startServer() {
       const ocrResult = await OcrService.extractDocumentDetails(photoBase64);
       res.json(ocrResult);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -1339,7 +1365,7 @@ async function startServer() {
           : 'Ripoti yako imepokelewa! Tunatafuta Agent anayefaa karibu nawe na tutakujulisha hivi karibuni. / Your report has been received! We\'re finding the right Agent near you and will notify you shortly.',
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -1451,7 +1477,7 @@ async function startServer() {
 
       res.json(maskedResults);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -1683,7 +1709,7 @@ async function startServer() {
             : 'Ombi lako limepokelewa! Tafadhali thibitisha OTP yako ili uendelee kwenye malipo.'),
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -1743,7 +1769,7 @@ async function startServer() {
         message: smsResult.message,
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -1793,7 +1819,7 @@ async function startServer() {
         message: 'Msimbo umethibitishwa kikamilifu! Tafadhali nenda kwa wakala physically ili athibitishe kuwa bidhaa hii ni yako kabla ya kulipa. / Verification code approved! Please visit the agent physically to verify the item belongs to you before initiating payment.',
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -1841,7 +1867,7 @@ async function startServer() {
 
       res.json({ success: true, paymentAuthToken, expiresAt: paymentAuthExpiresAt.toISOString() });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -1971,7 +1997,7 @@ async function startServer() {
         message: 'Malipo yameanzishwa kikamilifu! Tafadhali weka PIN ya M-Pesa kwenye simu yako ili kukamilisha.',
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -2010,7 +2036,7 @@ async function startServer() {
         agent: toOwnerSafeAgentView(agent),
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -2065,7 +2091,7 @@ async function startServer() {
 
       res.json({ success: true, message: 'Ukadiriaji umewasilishwa kikamilifu! Ahsante.' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -2109,7 +2135,7 @@ async function startServer() {
         agent: toOwnerSafeAgentView(agent),
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -2291,7 +2317,7 @@ async function startServer() {
         await processClaimPaymentConfirmed(claimId, invoice_id);
       } catch (err: any) {
         console.error('[INTASEND WEBHOOK] Error handling claim payment webhook update:', err);
-        return res.status(500).json({ error: err.message });
+        return sendServerError(res, err, 'INTASEND_WEBHOOK_CLAIM_UPDATE_ERROR');
       }
     }
 
@@ -2327,7 +2353,7 @@ async function startServer() {
       res.json({ success: true, claim: updatedClaim, pickupCode });
     } catch (e: any) {
       console.error('[DEV SIMULATE PAYMENT] Failed:', e);
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -2384,7 +2410,7 @@ async function startServer() {
         }),
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -2439,7 +2465,7 @@ async function startServer() {
 
       res.json({ success: true, message: result.message });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -2513,7 +2539,7 @@ async function startServer() {
 
       res.json({ success: true, message: 'Uthibitisho umekamilika! Bidhaa sasa ipo salama kwenye hub yako.' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -2537,7 +2563,7 @@ async function startServer() {
       await db.rejectItem(dropoffCode, reason);
       res.json({ success: true, message: 'Bidhaa imekataliwa na kuondolewa kwenye mfumo.' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -2573,7 +2599,7 @@ async function startServer() {
       const updatedClaim = await db.getClaim(claimId);
       res.json({ success: true, claim: updatedClaim });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -2760,7 +2786,7 @@ async function startServer() {
 
       res.json({ success: true, message: settlement.message, settleAt: settlement.settleAt });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -2872,7 +2898,7 @@ async function startServer() {
         socialPublishingPaused: await isSocialPublishingPaused(),
       });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -2886,7 +2912,7 @@ async function startServer() {
       await db.approveAgent(agentId, adminIdentifier);
       res.json({ success: true, message: 'Return4me Agent amethibitishwa na kuruhusiwa kuanza kazi.' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -2918,7 +2944,7 @@ async function startServer() {
       );
       res.json({ success: true, agent: updated, message: 'Mahali pa Agent pamesasishwa. / Agent location updated.' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -2932,7 +2958,7 @@ async function startServer() {
       await db.suspendAgent(agentId, adminIdentifier);
       res.json({ success: true, message: 'Return4me Agent amesimamishwa kazi kwa muda.' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -2950,7 +2976,7 @@ async function startServer() {
       const updatedAgent = await db.warnAgent(agentId, reason, adminIdentifier);
       res.json({ success: true, message: 'Onyo limetumwa kwa wakala kikamilifu.', agent: updatedAgent });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -3018,7 +3044,7 @@ async function startServer() {
 
       res.json({ success: true, evidence, message: 'Ushahidi wako umewasilishwa kwa mafanikio. Msimamizi atauzingatia wakati wa kutatua mzozo.' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -3033,7 +3059,7 @@ async function startServer() {
       const evidence = await db.getDisputeEvidenceForDispute(req.params.disputeId);
       res.json({ success: true, evidence });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -3075,7 +3101,7 @@ async function startServer() {
 
       res.json({ success: true, message: 'Mzozo umetatuliwa kikamilifu kulingana na ushahidi uliowasilishwa.' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -3152,7 +3178,7 @@ async function startServer() {
 
       res.json({ success: true, message: 'Item manual review completed and saved.' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -3179,7 +3205,7 @@ async function startServer() {
       await db.setSetting('social_publishing_paused', paused ? 'true' : 'false', adminIdentifier);
       res.json({ success: true, message: paused ? 'Social media publishing paused platform-wide.' : 'Social media publishing resumed.' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -3211,7 +3237,7 @@ async function startServer() {
       await db.logAudit(adminIdentifier, 'SOCIAL_PUBLICATION_MANUAL_RETRY', `Manually retried ${reset.platform} ${reset.publication_type} for item ${reset.item_id}. Outcome: ${outcome}.`);
       res.json({ success: true, outcome });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -3238,7 +3264,7 @@ async function startServer() {
       await db.setSetting(pauseSettingKey(scope as PausableScope), paused ? 'true' : 'false', adminIdentifier);
       res.json({ success: true, scope, paused, message: `${scope} is now ${paused ? 'PAUSED' : 'resumed'} platform-wide.` });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -3255,7 +3281,7 @@ async function startServer() {
       );
       res.json({ success: true, statuses: Object.fromEntries(statuses) });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -3277,7 +3303,7 @@ async function startServer() {
       }
       res.json({ success: true, message: result.message });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -3302,7 +3328,7 @@ async function startServer() {
       await db.setItemReviewStatus(itemId, 'suspected_stolen', reason.trim(), adminIdentifier);
       res.json({ success: true, message: 'Item flagged as suspected stolen. The claim flow is now blocked pending review.' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -3322,7 +3348,7 @@ async function startServer() {
       await db.setItemReviewStatus(itemId, 'legal_hold', reason.trim(), adminIdentifier);
       res.json({ success: true, message: 'Item placed under legal hold. No claim, payment, or handover can proceed while this is active.' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -3342,7 +3368,7 @@ async function startServer() {
       await db.setItemReviewStatus(itemId, 'at_agent', reason && reason.trim() ? reason.trim() : 'Hold cleared after review.', adminIdentifier);
       res.json({ success: true, message: 'Hold cleared. Item is claimable again.' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -3363,7 +3389,7 @@ async function startServer() {
       await db.rejectItem(itemId, reason || 'Admin manual review rejection');
       res.json({ success: true, message: 'Item rejected successfully.' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -3378,7 +3404,7 @@ async function startServer() {
       await db.clearPhoneReputation(phone);
       res.json({ success: true, message: `Reputation flag manually cleared for ${phone}.` });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -3391,7 +3417,7 @@ async function startServer() {
       const strikes = await db.getAllPaymentStrikes();
       res.json({ success: true, strikes });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -3412,7 +3438,7 @@ async function startServer() {
       );
       res.json({ success: true, message: `Payment strikes manually cleared for ${phone}.` });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -3425,7 +3451,7 @@ async function startServer() {
       const categories = await db.getCategoriesWithUsage();
       res.json(categories);
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -3501,7 +3527,7 @@ async function startServer() {
 
       res.json({ success: true, category: newCat });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -3583,7 +3609,7 @@ async function startServer() {
 
       res.json({ success: true, category: updatedCat });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 
@@ -3618,7 +3644,7 @@ async function startServer() {
 
       res.json({ success: true, message: 'Kategoria imefutwa kikamilifu.' });
     } catch (e: any) {
-      res.status(500).json({ error: e.message });
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
 

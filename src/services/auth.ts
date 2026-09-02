@@ -216,7 +216,12 @@ export async function sendCodeViaSms(cleanPhone: string, code: string, label: st
     return { success: true, message };
   } catch (error: any) {
     console.error(`[SMS ${label} GATEWAY ERROR] Africa's Talking send failed:`, error);
-    return { success: false, message: `Imeshindwa kutuma ujumbe wa SMS: ${error.message || error}. Tafadhali jaribu tena.` };
+    // P1: this used to embed the raw provider error (error.message) directly
+    // into the message returned to the caller — which multiple routes then
+    // forward straight to res.json({ error: ... }), reaching the end user
+    // verbatim. The full error is already logged above for debugging; the
+    // caller-facing message stays generic.
+    return { success: false, message: 'Imeshindwa kutuma ujumbe wa SMS. Tafadhali jaribu tena. / Failed to send SMS. Please try again.' };
   }
 }
 
