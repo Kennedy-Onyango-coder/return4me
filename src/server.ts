@@ -2623,12 +2623,30 @@ async function startServer() {
       }
 
       // SECURITY: require the owner's secret pickup code (sent privately via
-      // SMS/email when payment was confirmed) before releasing any money.
-      // Without this, an agent could confirm handover — and trigger the payout
-      // — without the item ever actually being given to the verified owner.
+      // SMS/email when payment was confirmed) before releasing any money —
+      // and, per the fix below, before uploading/storing any photo at all.
       if (!pickupCode || typeof pickupCode !== 'string' || pickupCode.trim() === '') {
         return res.status(400).json({ error: 'Muulize mmiliki msimbo wake wa siri wa kuchukua bidhaa kabla ya kuendelea. / Ask the owner for their secret pickup code before proceeding.' });
       }
+
+      // P0: pickup-code hash verification now happens BEFORE the photo
+      // upload/storage step below, not after. Previously the handover
+      // photo was uploaded and persisted to the claim (db.setHandoverPhoto)
+      // first, and only THEN was the pickup code actually checked against
+      // its hash — meaning a wrong pickup code (a typo, a scam attempt, an
+      // agent testing the flow) still left a real uploaded evidence photo
+      // stored against the claim even though the handover never actually
+      // happened. Correct order: authorize the agent and the claim/item,
+      // validate claim state, validate the pickup code, THEN — and only
+      // then — validate and upload the photo.
+      const pickupRecord = await db.getPickupCode(claimId);
+      if (!pickupRecord) {
+        return res.status(400).json({ error: 'Msimbo wa kuchukua haujaanzishwa kwa dai hili. / No pickup code has been issued for this claim yet.' });
+      }
+      if (!timingSafeEqualHex(hashCode(pickupCode.trim()), pickupRecord.code_hash)) {
+        return res.status(400).json({ error: 'Msimbo wa siri wa kuchukua si sahihi. Muulize mmiliki tena. / The secret pickup code is incorrect. Ask the owner again.' });
+      }
+      await db.markPickupCodeVerified(claimId);
 
       // Require a handover evidence photo (the claimant holding the item,
       // ideally alongside their own ID) before any payout can be triggered.
@@ -2636,7 +2654,8 @@ async function startServer() {
       // someone who is not the real owner: a colluding agent now has to
       // actively produce and submit fabricated evidence rather than simply
       // clicking a button with no record at all, and a genuine dispute later
-      // has something concrete to review.
+      // has something concrete to review. Only reached now that the pickup
+      // code has already been confirmed correct — see the comment above.
       const { handoverPhotoBase64 } = req.body;
       if (!handoverPhotoBase64 || typeof handoverPhotoBase64 !== 'string' || handoverPhotoBase64.trim() === '') {
         return res.status(400).json({ error: 'Piga picha ya mdai akiwa na bidhaa kabla ya kutoa. Hii inalinda dhidi ya udanganyifu. / Take a photo of the claimant with the item before handing it over. This protects against fraud.' });
@@ -2649,15 +2668,6 @@ async function startServer() {
         return res.status(500).json({ error: 'Imeshindikana kupakia picha. Tafadhali jaribu tena. / Failed to upload photo. Please try again.' });
       }
       await db.setHandoverPhoto(claimId, handoverPhotoUrl);
-
-      const pickupRecord = await db.getPickupCode(claimId);
-      if (!pickupRecord) {
-        return res.status(400).json({ error: 'Msimbo wa kuchukua haujaanzishwa kwa dai hili. / No pickup code has been issued for this claim yet.' });
-      }
-      if (!timingSafeEqualHex(hashCode(pickupCode.trim()), pickupRecord.code_hash)) {
-        return res.status(400).json({ error: 'Msimbo wa siri wa kuchukua si sahihi. Muulize mmiliki tena. / The secret pickup code is incorrect. Ask the owner again.' });
-      }
-      await db.markPickupCodeVerified(claimId);
 
       // Atomically claim the exclusive right to move this claim into
       // settlement. If two (or more) confirm-handover requests arrive

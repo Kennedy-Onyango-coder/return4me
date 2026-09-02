@@ -2485,8 +2485,19 @@ class DatabaseEngine {
   // --- CORE BUSINESS ESCROW LOGIC ---
 
   /**
-   * Release Escrow: Triggered when both Owner collects the item from the Agent
-   * splits: total_fee -> 40% Finder Share, 32% Agent Share, 28% Platform Share
+   * Release Escrow: Triggered when both Owner collects the item from the Agent.
+   * The finder/agent/platform split is NOT hardcoded here or anywhere in
+   * this function — it comes entirely from the category's own
+   * finder_share/agent_share/platform_share columns (or the claim's
+   * locked_* snapshot of them, taken at claim-creation time so a later
+   * category-pricing change never retroactively alters an in-flight
+   * claim's split). There is no seeded/default category data in this
+   * codebase — categories are created via the admin category management
+   * routes, which enforce (via chk_fee_shares_sum) only that the three
+   * shares sum to total_fee, not any particular percentage split. The
+   * current documented standard is Finder 25% / Agent 35% / Platform 40%,
+   * but that's a business convention admins are expected to follow when
+   * creating categories, not something this function assumes or enforces.
    */
   // Atomically transitions a claim from 'escrow_held' to a transient
   // 'releasing' state, and only proceeds if THIS call is the one that
