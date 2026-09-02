@@ -20,6 +20,13 @@ const minimalItem = {
   location_description: 'Test location',
   description: 'Test description',
   is_sensitive_document: false,
+  // Required so these credential-focused tests don't trip the separate
+  // P0 public-recognition fail-closed check (buildSafePublicClues, added
+  // afterward) — that check is tested independently in
+  // publicRecognition.test.ts and socialPublicRecognitionFailClosed.test.ts.
+  verification_status: 'confirmed_as_reported',
+  verified_found_area: 'Test verified area',
+  verified_description: 'Test verified description',
 };
 
 afterEach(() => {

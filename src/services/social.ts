@@ -129,6 +129,15 @@ export interface SocialItem {
   verified_name?: string | null;
   verified_document_number?: string | null;
   verified_found_area?: string | null;
+  // P0: needed so non-sensitive items' public description never falls
+  // back to the raw, Agent-unverified Finder description either — see
+  // the fail-closed comment on buildSafePublicClues.
+  verified_description?: string | null;
+  // P0: buildSafePublicClues' fail-closed gate treats a missing/undefined
+  // value here the same as any other non-verified status — it throws
+  // rather than proceeding — so this stays optional (matching FoundItem's
+  // own optional field) rather than forcing every caller to pass it
+  // explicitly.
   verification_status?: string;
 }
 
@@ -261,15 +270,25 @@ export const SocialService = {
     const categoryName = category ? `${category.name_en} / ${category.name_sw}` : 'Lost Item';
     const fee = item.locked_total_fee || (category ? category.total_fee : '200');
 
+    // P0 FAIL-CLOSED GUARANTEE: called unconditionally, for BOTH sensitive
+    // and non-sensitive items — this used to only run inside the
+    // isSensitive branch, meaning a non-sensitive item's location AND
+    // description were published straight from raw, Agent-unverified
+    // Finder fields (item.location_description / item.description) with
+    // no verification check and no generalization at all. Throws if the
+    // item hasn't actually been Agent-verified — see buildSafePublicClues.
+    let clues;
+    try {
+      clues = buildSafePublicClues(item, category || { public_clue_style: 'generic' });
+    } catch (e) {
+      console.error('[SOCIAL SERVICE] Refusing to post to Telegram — public recognition fail-closed check failed:', e);
+      return 'permanent_failure';
+    }
+
     let text = '';
     if (isSensitive) {
       // Recognition clues, not authentication: enough that a genuine
       // owner thinks "this could be mine", never enough to prove it.
-      // Built exclusively through PublicRecognitionService from
-      // Agent-VERIFIED fields — never straight from Finder-submitted
-      // data. See buildSafePublicClues and the guard in
-      // broadcastVerifiedItem above.
-      const clues = buildSafePublicClues(item, category || { public_clue_style: 'generic' });
       const nameLine = clues.nameClue ? `<b>Name clue:</b> <code>${escapeTelegramHtml(clues.nameClue)}</code>\n` : '';
       const numberLine = clues.documentNumberClue ? `<b>ID clue:</b> <code>${escapeTelegramHtml(clues.documentNumberClue)}</code>\n` : '';
 
@@ -282,8 +301,8 @@ export const SocialService = {
              `Verify ownership securely through Return4me. Use the private claim workflow for real identity matching — this post is never sufficient to claim the item on its own.\n\n` +
              `<b>Claim Link:</b> <a href="https://return4me.co.ke/?claim=${item.id}">https://return4me.co.ke/?claim=${item.id}</a>`;
     } else {
-      const itemDesc = sanitizeSocialText(item.description, { htmlEscape: true }) || 'No additional details provided.';
-      const safeLocation = sanitizeSocialText(item.location_description, { htmlEscape: true });
+      const itemDesc = sanitizeSocialText(clues.description, { htmlEscape: true }) || 'No additional details provided.';
+      const safeLocation = escapeTelegramHtml(clues.location);
 
       text = `<b>NOTICE OF FOUND ITEM</b>\n\n` +
              `A lost item has been deposited and verified at an authorized Return4me agent hub.\n\n` +
@@ -416,9 +435,19 @@ export const SocialService = {
     const categoryName = category ? `${category.name_en} / ${category.name_sw}` : 'Lost Item';
     const fee = item.locked_total_fee || (category ? category.total_fee : '200');
 
+    // P0 FAIL-CLOSED GUARANTEE: see the matching comment in postToTelegram
+    // above — same fix, same reasoning. Called unconditionally for both
+    // sensitive and non-sensitive items.
+    let clues;
+    try {
+      clues = buildSafePublicClues(item, category || { public_clue_style: 'generic' });
+    } catch (e) {
+      console.error('[SOCIAL SERVICE] Refusing to post to Facebook — public recognition fail-closed check failed:', e);
+      return 'permanent_failure';
+    }
+
     let text = '';
     if (isSensitive) {
-      const clues = buildSafePublicClues(item, category || { public_clue_style: 'generic' });
       const nameLine = clues.nameClue ? `Name clue: ${sanitizeSocialText(clues.nameClue)}\n` : '';
       const numberLine = clues.documentNumberClue ? `ID clue: ${sanitizeSocialText(clues.documentNumberClue)}\n` : '';
 
@@ -431,8 +460,8 @@ export const SocialService = {
              `Verify ownership securely through Return4me. Use the private claim workflow for real identity matching — this post is never sufficient to claim the item on its own.\n\n` +
              `Claim Link: https://return4me.co.ke/?claim=${item.id}`;
     } else {
-      const itemDesc = sanitizeSocialText(item.description) || 'No additional details provided.';
-      const safeLocation = sanitizeSocialText(item.location_description);
+      const itemDesc = sanitizeSocialText(clues.description) || 'No additional details provided.';
+      const safeLocation = sanitizeSocialText(clues.location);
 
       text = `NOTICE OF FOUND ITEM\n\n` +
              `A lost item has been deposited and verified at an authorized Return4me agent hub.\n\n` +
@@ -547,16 +576,26 @@ export const SocialService = {
     const categoryName = category ? category.name_en : 'Lost Item';
     const claimLink = `https://return4me.co.ke/?claim=${item.id}`;
 
+    // P0 FAIL-CLOSED GUARANTEE: see the matching comment in postToTelegram
+    // above — same fix, same reasoning. Called unconditionally for both
+    // sensitive and non-sensitive items.
+    let clues;
+    try {
+      clues = buildSafePublicClues(item, category || { public_clue_style: 'generic' });
+    } catch (e) {
+      console.error('[SOCIAL SERVICE] Refusing to post to Twitter/X — public recognition fail-closed check failed:', e);
+      return 'permanent_failure';
+    }
+
     // X/Twitter has a strict character limit, so this is a deliberately
     // compact variant of the same notice posted to Telegram/Facebook — full
     // detail lives on the claim page behind the link, not in the tweet itself.
     let text = '';
     if (isSensitive) {
-      const clues = buildSafePublicClues(item, category || { public_clue_style: 'generic' });
       const nameLine = clues.nameClue ? ` (${sanitizeSocialText(clues.nameClue)})` : '';
       text = `FOUND: ${categoryName}${nameLine} near ${sanitizeSocialText(clues.location)}. Verified by a Return4me Agent. Think it's yours? Verify securely:\n${claimLink}`;
     } else {
-      const safeLocation = sanitizeSocialText(item.location_description);
+      const safeLocation = sanitizeSocialText(clues.location);
       text = `FOUND: ${categoryName} near ${safeLocation}, verified at a Return4me agent hub` +
              `${agent ? ' (' + agent.business_name + ')' : ''}. Claim it here:\n${claimLink}`;
     }
@@ -743,16 +782,22 @@ export const SocialService = {
       return;
     }
 
-    // CRITICAL RULE: public sensitive-document clues must be built from
+    // CRITICAL RULE: public clues (identity clues for sensitive items;
+    // description/location clues for all items) must be built from
     // Agent-VERIFIED data, never straight from an unverified Finder
     // submission. confirm-dropoff (server.ts) already requires
     // verification_status !== 'pending' before an item can even reach
     // 'at_agent' (the status that triggers this broadcast) — this is a
     // second, defensive check at the point publication actually happens,
     // so a future code path that calls broadcastVerifiedItem some other
-    // way can't accidentally publish an unverified sensitive item.
-    if (item.is_sensitive_document && (!item.verification_status || item.verification_status === 'pending')) {
-      console.error(`[SOCIAL SERVICE] Refusing to broadcast sensitive item ${item.id} — verification_status is '${item.verification_status || 'pending'}', not yet Agent-verified. This should be unreachable given confirm-dropoff's own guard; treating as a bug and failing safe.`);
+    // way can't accidentally publish an unverified item. Applies to ALL
+    // items now, not just sensitive ones — buildSafePublicClues (called
+    // unconditionally inside each postTo* function below) enforces this
+    // as the real, authoritative gate; this is an early exit so an
+    // already-known-doomed broadcast doesn't even attempt three
+    // concurrent provider calls first.
+    if (!item.verification_status || item.verification_status === 'pending' || item.verification_status === 'rejected') {
+      console.error(`[SOCIAL SERVICE] Refusing to broadcast item ${item.id} — verification_status is '${item.verification_status || 'pending'}', not yet Agent-verified. This should be unreachable given confirm-dropoff's own guard; treating as a bug and failing safe.`);
       return;
     }
 

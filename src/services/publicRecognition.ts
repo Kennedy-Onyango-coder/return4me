@@ -25,6 +25,10 @@ export interface SafePublicClues {
   nameClue: string | null;
   documentNumberClue: string | null;
   location: string;
+  // Only meaningful (and only ever populated) for non-sensitive items —
+  // sensitive items never get a description clue at all, same as they
+  // never get raw description text today. See buildSafePublicClues.
+  description: string | null;
 }
 
 /**
@@ -136,46 +140,72 @@ export function safePublicLocation(rawLocation: string | null | undefined): stri
 
 interface VerifiedItemLike {
   is_sensitive_document: boolean;
+  // REQUIRED as a value (throws if not one of the verified statuses) but
+  // OPTIONAL as a TypeScript key — a caller's underlying type (e.g.
+  // FoundItem) may itself declare this field optional, and an
+  // undefined/missing value is treated identically to any other
+  // non-verified status by the runtime check below: it throws. See the
+  // fail-closed guarantee on buildSafePublicClues.
+  verification_status?: string | null;
   verified_name?: string | null;
   verified_document_number?: string | null;
   verified_found_area?: string | null;
-  // Fallbacks used ONLY if verification hasn't happened yet (defensive —
-  // callers should not reach this path for an unverified item at all;
-  // see the module-level warning below).
-  ocr_extracted_name?: string | null;
-  ocr_extracted_number?: string | null;
-  location_description?: string | null;
+  verified_description?: string | null;
 }
 
 interface CategoryLike {
   public_clue_style?: string;
 }
 
+const VERIFIED_STATUSES = new Set(['confirmed_as_reported', 'corrected']);
+
 /**
- * Builds the full set of safe public clues for an item. CRITICAL: this
- * must only ever be called with an item whose verification_status is
- * 'confirmed_as_reported' or 'corrected' (i.e. an Agent has physically
- * verified it) — see the "verified data only" rule in the design brief.
- * As a defensive fallback (never the intended path), if verified_* fields
- * are still null this falls back to the raw Finder fields rather than
- * throwing — but the caller (SocialService) is responsible for not
- * publishing an item that hasn't been verified at all.
+ * Builds the full set of safe public clues for an item.
+ *
+ * P0 FAIL-CLOSED GUARANTEE: throws (never silently substitutes) if
+ * verification_status is not 'confirmed_as_reported' or 'corrected'. This
+ * used to fall back to ocr_extracted_name/ocr_extracted_number/
+ * location_description — raw, Agent-unverified Finder/OCR data — whenever
+ * the verified_* fields were null, on the theory that verification simply
+ * "hadn't happened yet" for this call. That reasoning was backwards: per
+ * the VerifiedItemLike comment above, once verification has genuinely
+ * happened the verified_* fields are always populated (possibly with
+ * nulls that are themselves the correct, final answer) — so a null
+ * verified_* field is never actually evidence that verification is
+ * incomplete, and silently substituting raw data risked publishing
+ * unverified information under the guise of "verified public recognition"
+ * with no signal that anything unusual had happened. Now the ONLY thing
+ * that decides whether this function proceeds at all is
+ * verification_status itself, checked explicitly and rejected loudly.
+ * Applies identically to sensitive and non-sensitive items — see the
+ * location clue below, which used to fall back to raw location_description
+ * for exactly the items (non-sensitive) that skipped the sensitive-only
+ * name/number fallback check entirely.
  */
 export function buildSafePublicClues(item: VerifiedItemLike, category: CategoryLike): SafePublicClues {
-  const location = safePublicLocation(item.verified_found_area ?? item.location_description ?? null);
-
-  if (!item.is_sensitive_document) {
-    // Non-sensitive items don't get identity/document clues at all —
-    // there's no PII-shaped data to mask for a backpack or a phone.
-    return { nameClue: null, documentNumberClue: null, location };
+  if (!VERIFIED_STATUSES.has(item.verification_status ?? '')) {
+    throw new Error(
+      `PublicRecognitionService.buildSafePublicClues called for an item with verification_status='${item.verification_status ?? 'null'}' — only 'confirmed_as_reported' or 'corrected' items may enter public recognition. Refusing rather than falling back to unverified data.`
+    );
   }
 
-  const nameSource = item.verified_name ?? item.ocr_extracted_name ?? null;
-  const numberSource = item.verified_document_number ?? item.ocr_extracted_number ?? null;
+  const location = safePublicLocation(item.verified_found_area ?? null);
+
+  if (!item.is_sensitive_document) {
+    // Non-sensitive items don't get identity/document clues — there's no
+    // PII-shaped data to mask for a backpack or a phone — but DO get a
+    // description clue, sourced only from verified_description (never
+    // raw, Agent-unverified description text).
+    return { nameClue: null, documentNumberClue: null, location, description: item.verified_description ?? null };
+  }
 
   return {
-    nameClue: maskPublicName(nameSource),
-    documentNumberClue: maskPublicDocumentNumber(numberSource, category.public_clue_style ?? 'generic'),
+    nameClue: maskPublicName(item.verified_name ?? null),
+    documentNumberClue: maskPublicDocumentNumber(item.verified_document_number ?? null, category.public_clue_style ?? 'generic'),
     location,
+    // Sensitive items never publish a free-text description clue at all —
+    // matches the existing behavior (sensitive posts only ever showed
+    // name/number/location clues, never raw description text).
+    description: null,
   };
 }

@@ -119,6 +119,7 @@ describe('buildSafePublicClues', () => {
     const clues = buildSafePublicClues(
       {
         is_sensitive_document: true,
+        verification_status: 'confirmed_as_reported',
         verified_name: 'Kennedy Onyango',
         verified_document_number: '12345678',
         verified_found_area: 'Eastleigh, Nairobi',
@@ -130,36 +131,97 @@ describe('buildSafePublicClues', () => {
     expect(clues.location).toBe('Eastleigh, Nairobi');
   });
 
-  it('non-sensitive item: never produces a name or document clue, regardless of what data is present', () => {
+  it('non-sensitive item: never produces a name or document clue, regardless of what data is present; description clue comes only from verified_description', () => {
     const clues = buildSafePublicClues(
       {
         is_sensitive_document: false,
+        verification_status: 'confirmed_as_reported',
         verified_name: 'Should Never Appear',
         verified_document_number: '99999999',
         verified_found_area: 'Westlands, Nairobi',
+        verified_description: 'A black backpack with a red zipper.',
       },
       { public_clue_style: 'generic' }
     );
     expect(clues.nameClue).toBeNull();
     expect(clues.documentNumberClue).toBeNull();
     expect(clues.location).toBe('Westlands, Nairobi');
+    expect(clues.description).toBe('A black backpack with a red zipper.');
   });
 
-  it('falls back to the original Finder fields only defensively if verified_* is still null', () => {
+  // P0 FAIL-CLOSED REGRESSION: this used to fall back to
+  // ocr_extracted_name/ocr_extracted_number/location_description whenever
+  // verified_* fields were null, on the theory that verification "hadn't
+  // happened yet". That was backwards — see the fail-closed comment on
+  // buildSafePublicClues in publicRecognition.ts. Now it throws instead of
+  // ever substituting raw, unverified data, for both sensitive and
+  // non-sensitive items.
+  it('throws (never falls back to raw Finder/OCR data) when verification_status is not confirmed_as_reported/corrected', () => {
+    expect(() =>
+      buildSafePublicClues(
+        {
+          is_sensitive_document: true,
+          verification_status: 'pending',
+          verified_name: null,
+          verified_document_number: null,
+          verified_found_area: null,
+        },
+        { public_clue_style: 'national_id' }
+      )
+    ).toThrow();
+  });
+
+  it('throws for a non-sensitive item too — the fail-closed guarantee applies identically regardless of sensitivity', () => {
+    expect(() =>
+      buildSafePublicClues(
+        {
+          is_sensitive_document: false,
+          verification_status: 'pending',
+          verified_found_area: null,
+          verified_description: null,
+        },
+        { public_clue_style: 'generic' }
+      )
+    ).toThrow();
+  });
+
+  it('throws when verification_status is null or undefined entirely', () => {
+    expect(() =>
+      buildSafePublicClues(
+        { is_sensitive_document: true, verification_status: null },
+        { public_clue_style: 'national_id' }
+      )
+    ).toThrow();
+    expect(() =>
+      buildSafePublicClues(
+        { is_sensitive_document: true, verification_status: undefined },
+        { public_clue_style: 'national_id' }
+      )
+    ).toThrow();
+  });
+
+  it('a "rejected" verification_status is NOT treated as verified — rejected items must also refuse public recognition', () => {
+    expect(() =>
+      buildSafePublicClues(
+        { is_sensitive_document: true, verification_status: 'rejected' },
+        { public_clue_style: 'national_id' }
+      )
+    ).toThrow();
+  });
+
+  it('a genuinely verified item with legitimately null verified_name (nothing was ever there) returns null, not a thrown error — null after verification is a valid answer, not a signal to refuse', () => {
     const clues = buildSafePublicClues(
       {
         is_sensitive_document: true,
+        verification_status: 'confirmed_as_reported',
         verified_name: null,
         verified_document_number: null,
-        verified_found_area: null,
-        ocr_extracted_name: 'Fallback Name',
-        ocr_extracted_number: '87654321',
-        location_description: 'Kibera, Nairobi',
+        verified_found_area: 'Kibera, Nairobi',
       },
       { public_clue_style: 'national_id' }
     );
-    expect(clues.nameClue).toBe('F******* N***');
-    expect(clues.documentNumberClue).toBe('87******');
+    expect(clues.nameClue).toBeNull();
+    expect(clues.documentNumberClue).toBeNull();
     expect(clues.location).toBe('Kibera, Nairobi');
   });
 
@@ -167,6 +229,7 @@ describe('buildSafePublicClues', () => {
     const clues = buildSafePublicClues(
       {
         is_sensitive_document: true,
+        verification_status: 'confirmed_as_reported',
         verified_name: 'Kennedy Onyango',
         verified_document_number: '12345678',
         verified_found_area: 'Eastleigh, Nairobi',
