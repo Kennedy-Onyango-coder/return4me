@@ -19,7 +19,7 @@ import {
   social_publications as socialPublicationsTable,
   item_verification_changes as itemVerificationChangesTable,
 } from "./schema.ts";
-import { eq, and, or, isNull, inArray, lte } from "drizzle-orm";
+import { eq, and, or, isNull, isNotNull, inArray, lte } from "drizzle-orm";
 import { getSignedPhotoUrl } from "../services/storage.ts";
 
 // Local copy of the phone-masking helper (also defined in services/auth.ts
@@ -3305,6 +3305,57 @@ class DatabaseEngine {
     } catch (error) {
       console.error("Failed to set handover photo:", error);
       throw new Error("Failed to save handover evidence photo.");
+    }
+  }
+
+  // P1: data retention — see docs/DATA_RETENTION_POLICY.md. Finds
+  // completed claims whose handover evidence photo has outlived its
+  // documented retention window (default 2 years past release), so it can
+  // be purged by handoverEvidenceRetentionSweep in server.ts. Restricted
+  // to status='released' specifically: a claim under dispute, still
+  // pending settlement, or otherwise not in its final resolved state is
+  // never eligible, regardless of how old updated_at looks — 'released'
+  // is a terminal status this codebase doesn't further mutate except via
+  // the ratings flag (which doesn't touch updated_at), so updated_at is a
+  // reliable proxy for "when this claim was released".
+  public async getClaimsWithExpiredHandoverPhotos(retentionDays: number): Promise<string[]> {
+    try {
+      const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+      const rows = await drizzleDb
+        .select()
+        .from(claimsTable)
+        .where(and(
+          eq(claimsTable.status, 'released'),
+          isNotNull(claimsTable.handover_photo_url),
+          lte(claimsTable.updated_at, cutoff)
+        ));
+      // purgeHandoverPhoto replaces the URL with a marker string rather
+      // than NULL (see its comment), so an already-purged row still
+      // matches isNotNull above and needs excluding here explicitly — or
+      // the sweep would keep "re-purging" (harmlessly, but pointlessly
+      // and noisily — a fresh audit-log entry every sweep interval) the
+      // same already-purged claims indefinitely.
+      return rows.filter(r => r.handover_photo_url !== 'DELETED-PER-RETENTION-POLICY').map(r => r.id);
+    } catch (error) {
+      console.error("Failed to query claims with expired handover photos:", error);
+      return [];
+    }
+  }
+
+  // Purges (does not merely null out silently) an expired handover photo —
+  // replaces the URL with an explicit marker, matching the pattern
+  // purgeUserData already uses for finder photo_url, so it's visible in
+  // any admin view that this field is intentionally empty due to
+  // retention policy rather than a data-integrity bug.
+  public async purgeHandoverPhoto(claimId: string): Promise<void> {
+    try {
+      await drizzleDb
+        .update(claimsTable)
+        .set({ handover_photo_url: 'DELETED-PER-RETENTION-POLICY' })
+        .where(eq(claimsTable.id, claimId));
+    } catch (error) {
+      console.error("Failed to purge handover photo:", error);
+      throw new Error("Failed to purge expired handover evidence photo.");
     }
   }
 

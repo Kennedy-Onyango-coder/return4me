@@ -3731,6 +3731,9 @@ async function startServer() {
     setInterval(releaseDueSettlements, 5 * 60 * 1000);
     // Start background sweep for retryable social-publication failures every 5 minutes
     setInterval(socialRetrySweep, 5 * 60 * 1000);
+    // Start background sweep for expired handover-evidence photos once a day
+    // (multi-year retention window — no need to check more often)
+    setInterval(handoverEvidenceRetentionSweep, 24 * 60 * 60 * 1000);
   });
 }
 
@@ -3787,6 +3790,38 @@ async function checkClaimExpiry(claim: any): Promise<any> {
 // configuration first). Both of those are left for admin manual retry
 // instead (POST /api/admin/social/:id/retry). Only 'found_notice' rows are
 // retried here — see the SCOPE NOTE on SocialService.retryFoundNoticePost.
+// P1: data retention (docs/DATA_RETENTION_POLICY.md). Purges handover
+// evidence photos past their documented retention window (default 2
+// years past a claim's release) — a real, concrete implementation of the
+// "automated deletion/anonymization" the policy calls for, rather than
+// leaving the whole thing as a document nobody enforces. Deliberately
+// narrow in scope: only handover photos, only for status='released'
+// claims (a disputed/held claim is never eligible regardless of age —
+// see the comment on getClaimsWithExpiredHandoverPhotos). The other
+// categories in the policy document remain documented-but-not-yet-
+// automated by design; each needs its own scoped sweep and its own
+// tests, the same way this one was built, rather than one large
+// unreviewed sweep across every category at once.
+const HANDOVER_PHOTO_RETENTION_DAYS = 730; // 2 years — see docs/DATA_RETENTION_POLICY.md
+async function handoverEvidenceRetentionSweep() {
+  try {
+    const expiredClaimIds = await db.getClaimsWithExpiredHandoverPhotos(HANDOVER_PHOTO_RETENTION_DAYS);
+    for (const claimId of expiredClaimIds) {
+      try {
+        await db.purgeHandoverPhoto(claimId);
+        await db.logAudit('SYSTEM', 'HANDOVER_PHOTO_RETENTION_PURGE', `Claim ${claimId}: handover evidence photo purged — past its ${HANDOVER_PHOTO_RETENTION_DAYS}-day retention window per data retention policy.`);
+      } catch (err) {
+        console.error(`[HANDOVER PHOTO RETENTION SWEEP] Failed to purge photo for claim ${claimId}:`, err);
+      }
+    }
+    if (expiredClaimIds.length > 0) {
+      console.log(`[HANDOVER PHOTO RETENTION SWEEP] Purged ${expiredClaimIds.length} expired handover photo(s).`);
+    }
+  } catch (err) {
+    console.error('[HANDOVER PHOTO RETENTION SWEEP] Sweep failed:', err);
+  }
+}
+
 async function socialRetrySweep() {
   try {
     const due = await db.getSocialPublicationsDueForRetry();
