@@ -40,6 +40,33 @@ export function isPlaceholderKey(key: string | undefined | null): boolean {
   );
 }
 
+// P1: webhook amount reconciliation — pure decision logic behind
+// processClaimPaymentConfirmed in server.ts, extracted here specifically
+// so it's unit-testable (server.ts has no exports and a large amount of
+// top-level side-effecting setup unsafe to import in a test file — same
+// reasoning as isAgentActionable/isAdminSessionCurrent in services/auth.ts).
+// 'match': proceed. 'mismatch': refuse, do not hold escrow. 'unknown':
+// the webhook payload didn't include a recognizable amount field at all —
+// proceed with a warning rather than blocking, since a wrong guess about
+// an external API's field name should never be able to silently halt
+// every real payment (see the NOTE ON FIELD NAME comment in server.ts).
+// 0.5 KES epsilon tolerance absorbs decimal-string formatting differences
+// ("500" vs "500.00"), not genuine underpayment.
+export function reconcileWebhookAmount(
+  confirmedAmount: number | string | null | undefined,
+  expectedFee: number | string
+): 'match' | 'mismatch' | 'unknown' {
+  if (confirmedAmount === undefined || confirmedAmount === null || confirmedAmount === '') {
+    return 'unknown';
+  }
+  const confirmedNum = parseFloat(String(confirmedAmount));
+  const expectedNum = parseFloat(String(expectedFee));
+  if (isNaN(confirmedNum) || isNaN(expectedNum)) {
+    return 'unknown';
+  }
+  return Math.abs(confirmedNum - expectedNum) <= 0.5 ? 'match' : 'mismatch';
+}
+
 // fetch() has no built-in timeout — without one, a request to a third-party
 // API that's unreachable (blocked network, DNS failure, provider outage) can
 // hang far longer than any reasonable UX should wait, which looks to a user

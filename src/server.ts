@@ -12,7 +12,7 @@ import { pool, ensureSchemaUpToDate, isDatabaseConnectionError } from './db/inde
 import { AuthService, authenticateJWT, generateToken, verifyToken, toE164Kenyan, hashCode, timingSafeEqualHex, sendCodeViaSms, maskPhoneForLog, isAgentActionable, isAdminSessionCurrent } from './services/auth';
 import { AgentMatchingService, geocodeAddress } from './services/agent';
 import { EmailService } from './services/email';
-import { PaymentService, isPlaceholderKey } from './services/payments';
+import { PaymentService, isPlaceholderKey, reconcileWebhookAmount } from './services/payments';
 import { OcrService } from './services/ocr';
 import { uploadBase64Image } from './services/storage';
 import { SocialService } from './services/social';
@@ -2144,7 +2144,53 @@ async function startServer() {
   // simulator below, so both paths run through the exact same business
   // logic — no duplicated/diverging implementation between "real" and
   // "simulated" payment confirmation.
-  async function processClaimPaymentConfirmed(claimId: string, invoiceId: string): Promise<string | null> {
+  async function processClaimPaymentConfirmed(claimId: string, invoiceId: string, confirmedAmount?: number | string | null): Promise<string | null> {
+    // P1: webhook amount reconciliation. Before this, the webhook handler
+    // never looked at the paid amount at all — only invoice_id, state, and
+    // api_ref were read from the payload. Signature verification means an
+    // attacker can't forge/alter a payload without the shared secret, but
+    // that's a different guarantee than this one: a legitimately-signed
+    // webhook could still report a different amount than what this claim
+    // actually owes (a fee-calculation bug, a race between STK-push
+    // initiation and confirmation, a provider-side anomaly) and nothing
+    // would catch it — the claim would move to escrow_held and eventually
+    // pay out Finder/Agent shares computed from ITS OWN expected fee,
+    // silently diverging from what the owner was actually charged.
+    //
+    // NOTE ON FIELD NAME: this codebase has no prior reference to what
+    // IntaSend actually calls the paid amount in a collection webhook
+    // payload — the call site below best-effort reads payload.value (with
+    // payload.amount as a fallback), based on IntaSend's typical naming,
+    // but this has not been verified against live IntaSend documentation
+    // from this environment (no network access). If the field name is
+    // wrong, confirmedAmount arrives as undefined here, and — deliberately
+    // — that does NOT block the payment (see below): a wrong guess about
+    // an external API's field name should never be able to silently halt
+    // every real payment, only add a soft warning until it's verified.
+    const claim = await db.getClaim(claimId);
+    if (!claim) return null;
+    const item = await db.getItem(claim.item_id);
+    if (!item) return null;
+    const categoriesForReconciliation = await db.getCategories();
+    const catForReconciliation = categoriesForReconciliation.find(c => c.id === item.category_id);
+    let expectedFee = catForReconciliation ? catForReconciliation.total_fee : '0.00';
+    if (item.locked_total_fee !== undefined && item.locked_total_fee !== null) {
+      expectedFee = String(item.locked_total_fee);
+    }
+
+    if (confirmedAmount !== undefined && confirmedAmount !== null && confirmedAmount !== '') {
+      const reconciliation = reconcileWebhookAmount(confirmedAmount, expectedFee);
+      if (reconciliation === 'mismatch') {
+        console.error(
+          `[WEBHOOK AMOUNT RECONCILIATION] REFUSING to confirm payment for claim ${claimId}: webhook reports amount ${confirmedAmount}, claim expects ${expectedFee}. Invoice ${invoiceId}. This claim will remain in its current status pending manual admin investigation — it will NOT be silently held in escrow with a mismatched amount.`
+        );
+        await db.logAudit('SYSTEM', 'WEBHOOK_AMOUNT_MISMATCH_REFUSED', `Claim ${claimId}: webhook amount ${confirmedAmount} did not reconcile with expected fee ${expectedFee} (invoice ${invoiceId}). Payment confirmation refused pending manual review.`);
+        return null;
+      }
+    } else {
+      console.warn(`[WEBHOOK AMOUNT RECONCILIATION] No amount field found in webhook payload for claim ${claimId} (invoice ${invoiceId}) — proceeding without reconciliation. This should be verified against IntaSend's actual webhook payload format; see the comment on processClaimPaymentConfirmed.`);
+    }
+
     // Atomic compare-and-swap: only the delivery that actually wins the
     // 'pending_payment' -> 'escrow_held' transition proceeds past this
     // point. A duplicate/retried webhook for an already-confirmed claim
@@ -2153,11 +2199,6 @@ async function startServer() {
     // second time.
     const won = await db.attemptClaimEscrowHold(claimId, invoiceId);
     if (!won) return null;
-
-    const claim = await db.getClaim(claimId);
-    if (!claim) return null;
-    const item = await db.getItem(claim.item_id);
-    if (!item) return null;
 
     await db.updateItemStatus(item.id, 'at_agent');
 
@@ -2170,15 +2211,11 @@ async function startServer() {
     }
 
     // Pre-fetch metadata for emails
-    const categories = await db.getCategories();
-    const cat = categories.find(c => c.id === item.category_id);
+    const cat = catForReconciliation;
     const itemName = cat ? cat.name_en : 'Found Document / Item';
     const agent = await db.getAgent(item.assigned_agent_id);
 
-    let resolvedFee = cat ? cat.total_fee : '0.00';
-    if (item && item.locked_total_fee !== undefined && item.locked_total_fee !== null) {
-      resolvedFee = String(item.locked_total_fee);
-    }
+    const resolvedFee = expectedFee;
 
     // Generate a genuinely secret, single-use pickup code for this claim.
     // NOTE: this is deliberately NOT the item's drop-off code (item.id) —
@@ -2309,12 +2346,15 @@ async function startServer() {
       return res.status(401).json({ error: 'Webhook secret is missing' });
     }
 
-    const { invoice_id, state, api_ref } = payload;
+    const { invoice_id, state, api_ref, value, amount } = payload;
     const claimId = api_ref;
+    // Best-effort field-name guess — see the NOTE ON FIELD NAME comment on
+    // processClaimPaymentConfirmed.
+    const webhookAmount = value ?? amount;
 
     if (claimId && (state === 'COMPLETE' || state === 'COMPLETED' || state === 'SUCCESS')) {
       try {
-        await processClaimPaymentConfirmed(claimId, invoice_id);
+        await processClaimPaymentConfirmed(claimId, invoice_id, webhookAmount);
       } catch (err: any) {
         console.error('[INTASEND WEBHOOK] Error handling claim payment webhook update:', err);
         return sendServerError(res, err, 'INTASEND_WEBHOOK_CLAIM_UPDATE_ERROR');
