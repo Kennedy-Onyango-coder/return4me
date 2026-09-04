@@ -2038,10 +2038,28 @@ class DatabaseEngine {
   // Finalizes a refund after the real M-Pesa transfer has actually
   // succeeded via IntaSend. Only ever called post-transfer — never marks a
   // ledger entry 'completed' for money that hasn't actually moved.
-  public async finalizeClaimRefund(claimId: string, amount: string, phone: string): Promise<void> {
+  public async finalizeClaimRefund(claimId: string, amount: string, phone: string): Promise<boolean> {
     try {
-      await drizzleDb.transaction(async (tx) => {
-        const claimRows = await tx.select().from(claimsTable).where(eq(claimsTable.id, claimId));
+      return await drizzleDb.transaction(async (tx) => {
+        // Idempotency guard: only a claim currently locked in 'refunding'
+        // (set by resolveDispute) can be finalized. resolveDispute's own
+        // atomic CAS (WHERE resolved_at IS NULL) already means this method
+        // can only be reached once via that call path today — but this
+        // guard exists independently so a FUTURE caller (e.g. an admin
+        // manual "retry stuck refund" action, matching the pattern already
+        // built for social-publication manual retry) can't accidentally
+        // insert a second 'refund' ledger row and a second audit entry for
+        // one real M-Pesa transfer, the same class of gap already fixed for
+        // payouts (attemptClaimEscrowHold / attemptSettlementRelease) and
+        // rating (markClaimRatedIfNotAlready) elsewhere in this file — a
+        // real, non-money-moving side effect (the ledger/audit record) is
+        // still a genuine double-write worth preventing even though the
+        // underlying bank transfer itself isn't re-triggered here.
+        const claimRows = await tx
+          .select()
+          .from(claimsTable)
+          .where(and(eq(claimsTable.id, claimId), eq(claimsTable.status, "refunding")));
+        if (claimRows.length === 0) return false;
         const claim = claimRows[0];
         await tx.update(claimsTable).set({ status: "refunded", updated_at: new Date() }).where(eq(claimsTable.id, claimId));
         if (claim?.item_id) {
@@ -2064,6 +2082,7 @@ class DatabaseEngine {
           action: "REFUND_ESCROW",
           details: `Refunded ${amount} KES to owner ${phone} for claim ${claimId} after real M-Pesa disbursement succeeded.`,
         });
+        return true;
       });
     } catch (error) {
       console.error("Failed to finalize claim refund:", error);
