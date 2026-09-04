@@ -173,3 +173,76 @@ describe('revertClaimRefundLock: refunding -> rejected on a failed real transfer
     expect(claim?.status).toBe('rejected'); // unchanged, not corrupted
   });
 });
+
+// FIX #4 (audit finding A1): an ambiguous IntaSend outcome (network
+// timeout/exception) must NOT be treated as a definite failure. The caller
+// (server.ts /api/admin/disputes/resolve) now leaves the claim locked in
+// 'refunding' and only writes an audit entry — no finalize, no revert, no
+// automatic retry. These tests pin the DB-side reconciliation guarantees
+// that make that behavior financially safe.
+describe('unknown refund outcome: claim remains in refunding for manual reconciliation', () => {
+  it('keeps the claim in refunding with no refund ledger row, and the audit-only path leaves money recoverable', async () => {
+    const { winnerClaimId, loserClaimId, disputeId } = await makeDisputedClaimPair(true);
+    await db.resolveDispute(disputeId, winnerClaimId, 'test-admin', 'notes');
+    expect((await db.getClaim(loserClaimId))?.status).toBe('refunding');
+
+    // This is ALL the unknown-outcome caller does: log an audit entry.
+    await db.logAudit('SYSTEM', 'REFUND_UNKNOWN_OUTCOME', `Claim ${loserClaimId}: refund request to IntaSend ended in an ambiguous outcome (timeout/network error). The claim remains locked in 'refunding'. No automatic retry has been issued.`);
+
+    // No state transition happened, no money was recorded as moved.
+    const claim = await db.getClaim(loserClaimId);
+    expect(claim?.status).toBe('refunding');
+    // payment_reference (the real M-Pesa escrow receipt) is preserved —
+    // this is what makes the stuck escrow traceable for reconciliation.
+    expect(claim?.payment_reference).toBe('TEST-MPESA-REF-123');
+    let ledger = await db.getLedgerEntriesForClaim(loserClaimId);
+    expect(ledger.filter(l => l.type === 'refund').length).toBe(0);
+
+    // The winner's claim is unaffected while the loser sits in refunding.
+    const winner = await db.getClaim(winnerClaimId);
+    expect(winner?.status).not.toBe('refunding');
+    expect(winner?.status).not.toBe('rejected');
+    expect(winner?.status).not.toBe('refunded');
+  });
+
+  it('reconciliation path 1 — provider confirms the refund executed: finalizeClaimRefund still works exactly once from refunding', async () => {
+    const { winnerClaimId, loserClaimId, disputeId } = await makeDisputedClaimPair(true);
+    await db.resolveDispute(disputeId, winnerClaimId, 'test-admin', 'notes');
+    await db.logAudit('SYSTEM', 'REFUND_UNKNOWN_OUTCOME', `Claim ${loserClaimId}: ambiguous outcome, awaiting reconciliation.`);
+
+    const fin = await db.finalizeClaimRefund(loserClaimId, '500.00', '+254700000007');
+    expect(fin).toBe(true);
+
+    const claim = await db.getClaim(loserClaimId);
+    expect(claim?.status).toBe('refunded');
+    const ledger = await db.getLedgerEntriesForClaim(loserClaimId);
+    expect(ledger.filter(l => l.type === 'refund').length).toBe(1);
+  });
+
+  it('reconciliation path 2 — provider confirms the refund was NOT executed: revertClaimRefundLock still works from refunding', async () => {
+    const { winnerClaimId, loserClaimId, disputeId } = await makeDisputedClaimPair(true);
+    await db.resolveDispute(disputeId, winnerClaimId, 'test-admin', 'notes');
+    await db.logAudit('SYSTEM', 'REFUND_UNKNOWN_OUTCOME', `Claim ${loserClaimId}: ambiguous outcome, awaiting reconciliation.`);
+
+    await db.revertClaimRefundLock(loserClaimId, 'IntaSend confirmed the refund never executed');
+    const claim = await db.getClaim(loserClaimId);
+    expect(claim?.status).toBe('rejected');
+    expect(claim?.payment_reference).toBe('TEST-MPESA-REF-123'); // still traceable
+  });
+
+  it('a second refund trigger cannot bypass the state guard — finalize/revert only act on a claim locked in refunding', async () => {
+    const { loserClaimId } = await makeDisputedClaimPair(false); // never locked into refunding
+    // Even if some future caller blindly re-triggers a refund for this
+    // claim, both reconciliation operations refuse: the WHERE
+    // status='refunding' guards match zero rows, so no ledger row and no
+    // status change can occur outside a genuine resolveDispute lock.
+    const fin = await db.finalizeClaimRefund(loserClaimId, '500.00', '+254700000007');
+    expect(fin).toBe(false);
+    await db.revertClaimRefundLock(loserClaimId, 'spurious trigger');
+    const claim = await db.getClaim(loserClaimId);
+    expect(claim?.status).not.toBe('refunded');
+    expect(claim?.status).not.toBe('rejected');
+    const ledger = await db.getLedgerEntriesForClaim(loserClaimId);
+    expect(ledger.filter(l => l.type === 'refund').length).toBe(0);
+  });
+});

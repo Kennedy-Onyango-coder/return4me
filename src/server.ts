@@ -3116,10 +3116,10 @@ async function startServer() {
       // locked into 'refunding' by resolveDispute above. Trigger the real
       // M-Pesa refund now — outside the DB transaction, since it's a
       // network call to IntaSend — and only mark the refund complete once
-      // the transfer actually succeeds. A failure here does NOT roll back
-      // the dispute decision (the winner has already been decided); it
-      // reverts just the loser's claim to 'escrow_held' and flags it in
-      // the audit log for manual admin reconciliation, exactly like a
+      // the transfer actually succeeds. A definite provider rejection does
+      // NOT roll back the dispute decision (the winner has already been
+      // decided); it reverts just the loser's claim to 'rejected' and flags
+      // it in the audit log for manual admin reconciliation, exactly like a
       // failed payout during normal escrow release.
       if (result.refundNeededForClaimId && result.refundAmount && result.refundPhone) {
         const refundResult = await PaymentService.triggerIntasendRefund(
@@ -3127,10 +3127,36 @@ async function startServer() {
           parseFloat(result.refundAmount),
           result.refundNeededForClaimId
         );
-        if (refundResult.success) {
+        if (refundResult.outcome === 'completed') {
           await db.finalizeClaimRefund(result.refundNeededForClaimId, result.refundAmount, result.refundPhone);
+        } else if (refundResult.outcome === 'unknown') {
+          // FIX #4 (audit finding A1): a network timeout/exception means we
+          // do NOT know whether IntaSend executed the refund. Treating that
+          // as a definite failure (the previous behavior) moved the claim to
+          // terminal 'rejected' even though the owner's money may have been
+          // sent — and any retry could double-refund. Instead: leave the
+          // claim locked in 'refunding' (excluded from
+          // uq_claims_one_active_per_item, so the winner remains the sole
+          // active claim), record an audit entry for reconciliation, and
+          // take NO automatic action. finalizeClaimRefund's
+          // WHERE status='refunding' guard means an admin can later safely
+          // finalize (provider confirmed executed) or
+          // revertClaimRefundLock (provider confirmed NOT executed).
+          await db.logAudit(
+            adminIdentifier,
+            'REFUND_UNKNOWN_OUTCOME',
+            `Claim ${result.refundNeededForClaimId}: refund request to IntaSend ended in an ambiguous outcome (timeout/network error). The claim remains locked in 'refunding'. No automatic retry has been issued. Manual provider reconciliation is required: confirm with IntaSend whether the refund executed, then finalizeClaimRefund (executed) or revertClaimRefundLock (not executed).`
+          );
+          return res.status(207).json({
+            success: true,
+            message: 'Mzozo umetatuliwa, lakini hali ya urejeshaji wa fedha wa mdai aliyeshindwa haijathibitishwa (hitilafu ya mtandao). Msimamizi anahitaji kuthibitisha na IntaSend kabla ya hatua nyingine. / Dispute resolved, but the losing claimant\'s refund outcome is unverified (network error). The claim remains in refunding — confirm with IntaSend before any further action.',
+            refundUnknown: true,
+          });
         } else {
-          await db.revertClaimRefundLock(result.refundNeededForClaimId, 'IntaSend refund disbursement failed or timed out');
+          // Definite provider rejection (IntaSend received the request and
+          // refused it) — the refund was NOT executed, so reverting the
+          // claim's refund lock is safe.
+          await db.revertClaimRefundLock(result.refundNeededForClaimId, 'IntaSend refund disbursement rejected by provider');
           return res.status(207).json({
             success: true,
             message: 'Mzozo umetatuliwa, lakini urejeshaji wa fedha wa mdai aliyeshindwa umeshindwa kufaulu. Msimamizi anahitaji kufuatilia kwa mkono. / Dispute resolved, but the losing claimant\'s refund failed to go through. Manual admin follow-up is required.',

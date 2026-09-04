@@ -377,13 +377,14 @@ export const PaymentService = {
     phone: string,
     amount: number,
     claimId: string
-  ): Promise<{ success: boolean; transactionId: string }> {
+  ): Promise<{ success: boolean; transactionId: string; outcome: 'completed' | 'failed' | 'unknown' }> {
     const secretKey = process.env.INTASEND_SECRET_KEY;
     if (isPlaceholderKey(secretKey)) {
       console.warn('[INTASEND REFUND] Key missing/dummy. Emulating refund disbursement.');
       return {
         success: true,
         transactionId: 'SIM-REFUND-' + Math.random().toString(36).substring(2, 10).toUpperCase(),
+        outcome: 'completed',
       };
     }
 
@@ -416,7 +417,10 @@ export const PaymentService = {
       if (!response.ok) {
         const errorText = await response.text();
         console.warn(`[INTASEND REFUND] Sandbox API error (${response.status}): ${errorText.substring(0, 100)}.`);
-        return { success: false, transactionId: '' };
+        // HTTP error response = IntaSend RECEIVED the request and explicitly
+        // rejected it. The refund was definitively NOT executed, so classifying
+        // this as 'failed' is safe (no duplicate-refund risk on retry).
+        return { success: false, transactionId: '', outcome: 'failed' };
       }
 
       const data = await response.json() as any;
@@ -425,10 +429,20 @@ export const PaymentService = {
       return {
         success: true,
         transactionId: data.tracking_id || 'ISD-REFUND-' + Math.random().toString(36).substring(2, 10).toUpperCase(),
+        outcome: 'completed',
       };
     } catch (error: any) {
       console.warn('[INTASEND REFUND] Refund exception:', error.message);
-      return { success: false, transactionId: '' };
+      // 'unknown', not 'failed' — a network/timeout exception here means we
+      // genuinely don't know whether IntaSend received and executed the
+      // refund. Treating this as definitively failed (the pre-FIX#4 behavior)
+      // reverted the claim to terminal 'rejected' while the owner's money may
+      // actually have been sent — a silent reconciliation divergence, and any
+      // retry path could double-refund. Mirroring triggerIntasendPayout's
+      // established principle: an ambiguous provider response must be treated
+      // as UNKNOWN, leaving the claim in 'refunding' for manual admin/provider
+      // reconciliation. No automatic retry is issued from this outcome.
+      return { success: false, transactionId: '', outcome: 'unknown' };
     }
   },
 

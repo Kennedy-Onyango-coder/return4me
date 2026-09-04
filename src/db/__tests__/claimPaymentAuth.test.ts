@@ -46,14 +46,18 @@ describe('claim payment authorization token store', () => {
       is_sensitive_document: false,
       rejection_reason: null,
     } as any);
-    for (const claimId of PAYAUTH_CLAIMS) {
+    for (const [i, claimId] of PAYAUTH_CLAIMS.entries()) {
       await db.createClaim({
         id: claimId,
         item_id: `TEST-ITEM-PAYAUTH-${testRunId}`,
         owner_phone: '+254700000006',
         security_answers: { lastDigits: '0000', color: 'black', lostDetails: 'test fixture' },
         verification_tier: 1,
-        status: 'pending_payment',
+        // uq_claims_one_active_per_item allows only ONE active claim per item
+        // on real Postgres (the mock doesn't enforce it). The token store is
+        // status-agnostic, so only the first claim needs an active status;
+        // the rest use the constraint-excluded 'disputed'.
+        status: i === 0 ? 'pending_payment' : 'disputed',
         owner_id_proof_url: null,
         payment_reference: null,
         owner_identifying_details: null,
