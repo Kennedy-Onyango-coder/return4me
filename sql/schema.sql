@@ -150,7 +150,13 @@ CREATE TABLE claims (
     handover_photo_url TEXT,
     -- Set when the claim enters 'pending_settlement'; the settlement sweep
     -- only disburses once now() >= settle_at.
-    settle_at TIMESTAMP WITH TIME ZONE
+    settle_at TIMESTAMP WITH TIME ZONE,
+    -- Set the first time POST /api/claims/:id/rate succeeds for this claim —
+    -- dedup guard so the same claim can't be rated twice. Mirrors
+    -- src/db/schema.ts (agent_rated_at) and the matching ALTER statement in
+    -- src/db/index.ts; previously missing from this file, which left a fresh
+    -- database bootstrapped from schema.sql unable to run createClaim().
+    agent_rated_at TIMESTAMP WITH TIME ZONE
 );
 
 CREATE INDEX idx_claims_item ON claims(item_id);
@@ -158,7 +164,7 @@ CREATE INDEX idx_claims_item ON claims(item_id);
 -- comment in src/db/schema.ts for why this exists alongside the
 -- application-level duplicate-claim check.
 CREATE UNIQUE INDEX uq_claims_one_active_per_item ON claims(item_id)
-    WHERE status NOT IN ('disputed', 'rejected', 'refunded', 'payment_window_expired');
+    WHERE status NOT IN ('disputed', 'rejected', 'refunding', 'refunded', 'payment_window_expired');
 
 -- 5. DISPUTES
 CREATE TABLE disputes (

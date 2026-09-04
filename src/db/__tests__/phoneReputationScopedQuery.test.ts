@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { db } from '../database';
+import { ensureTestCategory, testRunId } from './ensureTestCategory';
 
 // Regression test for a real performance gap: db.getPhoneReputation() —
 // called on every single item report submission (POST /api/items/report)
@@ -13,11 +14,12 @@ import { db } from '../database';
 
 let counter = 0;
 async function makeTestItem(phone: string, status: 'at_agent' | 'rejected') {
-  const id = `TEST-ITEM-PHONESCOPED-${counter++}`;
+  const id = `TEST-ITEM-PHONESCOPED-${testRunId}-${counter++}`;
+  await ensureTestCategory('national-id');
   await db.createItem({
     id,
     category_id: 'national-id',
-    photo_url: null,
+    photo_url: 'test-photo.jpg',
     ocr_extracted_number: null,
     ocr_extracted_name: null,
     document_number_hash: null,
@@ -39,8 +41,8 @@ async function makeTestItem(phone: string, status: 'at_agent' | 'rejected') {
 
 describe('getItemsByFinderPhone returns exactly the matching-phone subset', () => {
   it('returns only items reported by the given phone number', async () => {
-    const phoneA = '+254700111001';
-    const phoneB = '+254700111002';
+    const phoneA = `+254${testRunId}001`;
+    const phoneB = `+254${testRunId}002`;
     const itemA = await makeTestItem(phoneA, 'at_agent');
     const itemB = await makeTestItem(phoneB, 'at_agent');
 
@@ -53,7 +55,7 @@ describe('getItemsByFinderPhone returns exactly the matching-phone subset', () =
   });
 
   it('matches what getItems() + an application-level phone filter would return (parity)', async () => {
-    const phone = '+254700111003';
+    const phone = `+254${testRunId}003`;
     await makeTestItem(phone, 'at_agent');
 
     const all = await db.getItems();
@@ -68,7 +70,7 @@ describe('getItemsByFinderPhone returns exactly the matching-phone subset', () =
 
 describe('getPhoneReputation still computes correct autoFlag after the scoped-query refactor', () => {
   it('flags a phone with >=3 reports and >30% rejection rate', async () => {
-    const phone = '+254700111004';
+    const phone = `+254${testRunId}004`;
     await makeTestItem(phone, 'rejected');
     await makeTestItem(phone, 'rejected');
     await makeTestItem(phone, 'at_agent');
@@ -81,7 +83,7 @@ describe('getPhoneReputation still computes correct autoFlag after the scoped-qu
   });
 
   it('does not flag a phone below the report-count threshold', async () => {
-    const phone = '+254700111005';
+    const phone = `+254${testRunId}005`;
     await makeTestItem(phone, 'rejected');
     await makeTestItem(phone, 'rejected');
 

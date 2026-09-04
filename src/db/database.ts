@@ -2015,7 +2015,11 @@ class DatabaseEngine {
             refundAmount = String(fee);
             refundPhone = losingClaim.owner_phone;
           } else {
-            await tx.update(claimsTable).set({ status: "pending_verification" }).where(eq(claimsTable.id, losingClaimId));
+            // The loser's claim is DENIED once the dispute is resolved — it
+            // must not go back to 'pending_verification' (a claimable, active
+            // state), or the resolved dispute would leave two active claims
+            // on the same item and violate uq_claims_one_active_per_item.
+            await tx.update(claimsTable).set({ status: "rejected", updated_at: new Date() }).where(eq(claimsTable.id, losingClaimId));
           }
         }
 
@@ -2093,13 +2097,25 @@ class DatabaseEngine {
   // Reverts a claim out of the 'refunding' lock if the real M-Pesa transfer
   // failed, so it doesn't get stranded — flags it for manual admin
   // reconciliation via the ledger/audit log rather than silently retrying.
+  //
+  // The claim is moved to 'rejected', NOT 'escrow_held': the dispute has
+  // already been resolved against this claimant, so their claim is DENIED.
+  // Putting it back in 'escrow_held' (a live, "payment confirmed, proceeding
+  // to handover" state) would (a) violate uq_claims_one_active_per_item by
+  // leaving two active claims on the item while the winner is also active,
+  // and (b) make the denied loser look like a still-competing claimant to the
+  // claim-submit duplicate detection. The fact that the loser's money is
+  // still held in escrow and needs a manual refund is recorded here in the
+  // audit log (REFUND_FAILED_REVERTED) and remains recoverable via the
+  // claim's still-set payment_reference — it is a financial reconciliation
+  // concern, not a claim-status concern.
   public async revertClaimRefundLock(claimId: string, reason: string): Promise<void> {
     try {
       await drizzleDb
         .update(claimsTable)
-        .set({ status: "escrow_held", updated_at: new Date() })
+        .set({ status: "rejected", updated_at: new Date() })
         .where(and(eq(claimsTable.id, claimId), eq(claimsTable.status, "refunding")));
-      await this.logAudit("SYSTEM", "REFUND_FAILED_REVERTED", `Refund attempt for claim ${claimId} failed and was reverted to escrow_held: ${reason}. Requires manual admin review.`);
+      await this.logAudit("SYSTEM", "REFUND_FAILED_REVERTED", `Refund attempt for claim ${claimId} failed and the losing claim was rejected: ${reason}. The claimant's escrow balance still requires manual admin refund.`);
     } catch (error) {
       console.error("Failed to revert claim refund lock:", error);
     }

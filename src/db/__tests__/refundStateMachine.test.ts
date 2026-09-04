@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { db } from '../database';
+import { ensureTestCategory, testRunId } from './ensureTestCategory';
 
 // P1 REGRESSION TEST — payment state machine, refund path. The payout
 // side of this state machine (finder/agent payouts, all 6 provider-
@@ -22,12 +23,13 @@ import { db } from '../database';
 
 let counter = 0;
 async function makeDisputedClaimPair(loserAlreadyPaid: boolean) {
-  const itemId = `TEST-ITEM-REFUND-${counter++}`;
-  const winnerClaimId = `TEST-CLAIM-REFUND-WINNER-${counter++}`;
-  const loserClaimId = `TEST-CLAIM-REFUND-LOSER-${counter++}`;
+  const itemId = `TEST-ITEM-REFUND-${testRunId}-${counter++}`;
+  await ensureTestCategory('phone');
+  const winnerClaimId = `TEST-CLAIM-REFUND-WINNER-${testRunId}-${counter++}`;
+  const loserClaimId = `TEST-CLAIM-REFUND-LOSER-${testRunId}-${counter++}`;
 
   await db.createItem({
-    id: itemId, category_id: 'phone', photo_url: null, ocr_extracted_number: null,
+    id: itemId, category_id: 'phone', photo_url: 'test-photo.jpg', ocr_extracted_number: null,
     ocr_extracted_name: null, document_number_hash: null, document_name_fuzzy: null,
     location_description: 'x', latitude: null, longitude: null, finder_phone: '+254700000005',
     assigned_agent_id: null, status: 'at_agent', flaggedForReview: false, isDescriptionOnly: true,
@@ -43,7 +45,11 @@ async function makeDisputedClaimPair(loserAlreadyPaid: boolean) {
   await db.createClaim({
     id: loserClaimId, item_id: itemId, owner_phone: '+254700000007',
     security_answers: { lastDigits: '1111', color: 'red', lostDetails: 'loser fixture' },
-    verification_tier: 1, status: 'pending_verification', owner_id_proof_url: null,
+    // The claims table enforces at most one "active" claim per item
+    // (uq_claims_one_active_per_item); the winner is already the active
+    // claim, so the second (loser) claim must start in the excluded
+    // 'disputed' status against real Postgres.
+    verification_tier: 1, status: 'disputed', owner_id_proof_url: null,
     payment_reference: null, owner_identifying_details: null,
   });
 
@@ -56,12 +62,12 @@ async function makeDisputedClaimPair(loserAlreadyPaid: boolean) {
   }
 
   const dispute = await db.createDispute({
-    id: `TEST-DISPUTE-REFUND-${counter++}`,
+    id: `TEST-DISPUTE-REFUND-${testRunId}-${counter++}`,
     item_id: itemId,
     claimant_1_claim_id: winnerClaimId,
     claimant_2_claim_id: loserClaimId,
-    claimant_1_id_proof_url: null,
-    claimant_2_id_proof_url: null,
+    claimant_1_id_proof_url: 'test-proof-1',
+    claimant_2_id_proof_url: 'test-proof-2',
     resolved_by: null,
     resolved_claim_id: null,
     resolved_at: null,
@@ -137,15 +143,21 @@ describe('finalizeClaimRefund: refunding -> refunded, exactly once', () => {
   });
 });
 
-describe('revertClaimRefundLock: refunding -> escrow_held on a failed real transfer', () => {
-  it('reverts the claim back to escrow_held so it is not stranded', async () => {
+describe('revertClaimRefundLock: refunding -> rejected on a failed real transfer', () => {
+  it('reverts the claim to rejected (denied) so it is not stranded as an active claim', async () => {
     const { winnerClaimId, loserClaimId, disputeId } = await makeDisputedClaimPair(true);
     await db.resolveDispute(disputeId, winnerClaimId, 'test-admin', 'notes');
 
     await db.revertClaimRefundLock(loserClaimId, 'simulated IntaSend failure');
 
     const claim = await db.getClaim(loserClaimId);
-    expect(claim?.status).toBe('escrow_held');
+    // The loser is denied (dispute already resolved against them), so their
+    // claim must leave the 'refunding' lock into a non-active terminal state
+    // ('rejected') — never 'escrow_held', which would collide with the
+    // winner's active claim against uq_claims_one_active_per_item.
+    expect(claim?.status).toBe('rejected');
+    // The money is still recoverable for manual refund via payment_reference.
+    expect(claim?.payment_reference).toBe('TEST-MPESA-REF-123');
   });
 
   it('is idempotent — a second revert call after the claim already moved on is a safe no-op', async () => {
@@ -153,11 +165,11 @@ describe('revertClaimRefundLock: refunding -> escrow_held on a failed real trans
     await db.resolveDispute(disputeId, winnerClaimId, 'test-admin', 'notes');
 
     await db.revertClaimRefundLock(loserClaimId, 'first failure');
-    // Claim is now 'escrow_held', not 'refunding' — this second call's own
+    // Claim is now 'rejected', not 'refunding' — this second call's own
     // WHERE status='refunding' guard should match zero rows.
     await db.revertClaimRefundLock(loserClaimId, 'a second, spurious revert attempt');
 
     const claim = await db.getClaim(loserClaimId);
-    expect(claim?.status).toBe('escrow_held'); // unchanged, not corrupted
+    expect(claim?.status).toBe('rejected'); // unchanged, not corrupted
   });
 });

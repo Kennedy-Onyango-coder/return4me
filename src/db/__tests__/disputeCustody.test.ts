@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { db } from '../database';
+import { ensureTestCategory, testRunId } from './ensureTestCategory';
 
 // P0 REGRESSION TEST — see the comment in createDispute() (database.ts).
 //
@@ -21,11 +22,12 @@ import { db } from '../database';
 
 let counter = 0;
 async function makeTestItem(status: 'at_agent' | 'claimed') {
-  const id = `TEST-ITEM-CUSTODY-${counter++}`;
+  const id = `TEST-ITEM-CUSTODY-${testRunId}-${counter++}`;
+  await ensureTestCategory('national-id');
   await db.createItem({
     id,
     category_id: 'national-id',
-    photo_url: null,
+    photo_url: 'test-photo.jpg',
     ocr_extracted_number: null,
     ocr_extracted_name: null,
     document_number_hash: null,
@@ -46,14 +48,18 @@ async function makeTestItem(status: 'at_agent' | 'claimed') {
 }
 
 async function makeTestClaimForItem(itemId: string, suffix: string) {
-  const claimId = `TEST-CLAIM-CUSTODY-${suffix}`;
+  const claimId = `TEST-CLAIM-CUSTODY-${testRunId}-${suffix}`;
   await db.createClaim({
     id: claimId,
     item_id: itemId,
     owner_phone: `+2547000000${suffix}`,
     security_answers: { lastDigits: '0000', color: 'black', lostDetails: 'test fixture' },
     verification_tier: 1,
-    status: 'pending_verification',
+    // The claims table enforces at most one "active" claim per item
+    // (uq_claims_one_active_per_item); these fixtures create two claims per
+    // item, so both start in the excluded 'disputed' status against real
+    // Postgres (createDispute marks them 'disputed' anyway).
+    status: 'disputed',
     owner_id_proof_url: null,
     payment_reference: null,
     owner_identifying_details: null,
@@ -77,7 +83,7 @@ describe('createDispute never corrupts physical custody state', () => {
       const claim2 = await makeTestClaimForItem(itemId, `B${counter}`);
 
       await db.createDispute({
-        id: `TEST-DSP-${counter++}`,
+        id: `TEST-DSP-${testRunId}-${counter++}`,
         item_id: itemId,
         claimant_1_claim_id: claim1,
         claimant_2_claim_id: claim2,
@@ -100,7 +106,7 @@ describe('createDispute never corrupts physical custody state', () => {
     const claim2 = await makeTestClaimForItem(itemId, `D${counter}`);
 
     await db.createDispute({
-      id: `TEST-DSP-${counter++}`,
+      id: `TEST-DSP-${testRunId}-${counter++}`,
       item_id: itemId,
       claimant_1_claim_id: claim1,
       claimant_2_claim_id: claim2,

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { db } from '../database';
+import { ensureTestCategory, testRunId } from './ensureTestCategory';
 
 // Regression test for a real bug found and fixed while building the social
 // retry sweep: the in-memory mock query engine (src/db/index.ts,
@@ -20,11 +21,12 @@ import { db } from '../database';
 
 let counter = 0;
 async function makeTestItem() {
-  const id = `TEST-ITEM-MOCKCMP-${counter++}`;
+  const id = `TEST-ITEM-MOCKCMP-${testRunId}-${counter++}`;
+  await ensureTestCategory('phone');
   await db.createItem({
     id,
     category_id: 'phone',
-    photo_url: null,
+    photo_url: 'test-photo.jpg',
     ocr_extracted_number: null,
     ocr_extracted_name: null,
     document_number_hash: null,

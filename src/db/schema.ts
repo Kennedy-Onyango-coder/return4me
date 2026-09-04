@@ -192,7 +192,7 @@ export const claims = pgTable("claims", {
     // response the application-level check already produces.
     uq_claims_one_active_per_item: uniqueIndex("uq_claims_one_active_per_item")
       .on(table.item_id)
-      .where(sql`${table.status} NOT IN ('disputed', 'rejected', 'refunded', 'payment_window_expired')`),
+      .where(sql`${table.status} NOT IN ('disputed', 'rejected', 'refunding', 'refunded', 'payment_window_expired')`),
   };
 });
 

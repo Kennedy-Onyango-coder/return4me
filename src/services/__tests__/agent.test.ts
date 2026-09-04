@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { AgentMatchingService } from '../agent';
 import { db } from '../../db/database';
+import { ensureTestCategory, testRunId } from '../../db/__tests__/ensureTestCategory';
 
 // P0 REGRESSION TEST — src/services/agent.ts, assignNearestAgent().
 //
@@ -21,11 +22,11 @@ import { db } from '../../db/database';
 
 let counter = 0;
 async function makeTestAgent(opts: { status?: 'active' | 'suspended' | 'pending'; lat?: number | null; lon?: number | null }) {
-  const id = `TEST-AGENT-MATCHING-${counter++}`;
+  const id = `TEST-AGENT-MATCHING-${testRunId}-${counter++}`;
   await db.createAgent({
     id,
     business_name: `Test Agent ${id}`,
-    contact_phone: '+254700000020',
+    contact_phone: `+254${testRunId}${counter}`,
     location_address: 'Test Location',
     latitude: opts.lat ?? null,
     longitude: opts.lon ?? null,
@@ -113,11 +114,12 @@ describe('AgentMatchingService.assignNearestAgent — never assigns an arbitrary
 
   it('G. Manual assignment via adminUpdateItem succeeds and clears needs_manual_agent_reassignment', async () => {
     const agentId = await makeTestAgent({ status: 'active', lat: -1.28, lon: 36.82 });
-    const itemId = 'TEST-ITEM-MANUAL-ASSIGN';
+    const itemId = `TEST-ITEM-MANUAL-ASSIGN-${testRunId}`;
+    await ensureTestCategory('phone');
     await db.createItem({
       id: itemId,
       category_id: 'phone',
-      photo_url: null,
+      photo_url: 'test-photo.jpg',
       ocr_extracted_number: null,
       ocr_extracted_name: null,
       document_number_hash: null,

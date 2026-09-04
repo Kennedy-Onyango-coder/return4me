@@ -21,7 +21,13 @@ describe('production database fail-closed guarantee', () => {
   it('throws at import time when DATABASE_URL is missing in production', async () => {
     vi.resetModules();
     process.env.NODE_ENV = 'production';
-    delete process.env.DATABASE_URL;
+    // Set to EMPTY STRING rather than `delete`: db/index.ts calls
+    // dotenv.config() at import time, and dotenv does not override variables
+    // that already exist in process.env — but it WOULD re-populate a deleted
+    // one from a developer's local .env file, silently defeating this test
+    // whenever one was present. An empty string still counts as "missing" to
+    // the fail-closed guard (dbUrl = process.env.DATABASE_URL || '').
+    process.env.DATABASE_URL = '';
 
     await expect(import('../index')).rejects.toThrow(/DATABASE_URL/i);
   });

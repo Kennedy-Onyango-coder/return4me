@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { db } from '../database';
+import { ensureTestCategory, testRunId } from './ensureTestCategory';
 
 // Regression test for a real performance gap: db.getItems() does an
 // unconditional `SELECT * FROM items` with no WHERE clause — every status,
@@ -15,11 +16,31 @@ import { db } from '../database';
 
 let counter = 0;
 async function makeTestItem(status: 'at_agent' | 'awaiting_dropoff' | 'claimed', agentId: string | null) {
-  const id = `TEST-ITEM-SCOPEDQUERY-${counter++}`;
+  const id = `TEST-ITEM-SCOPEDQUERY-${testRunId}-${counter++}`;
+  await ensureTestCategory('national-id');
+  if (agentId) {
+    // items.assigned_agent_id has a real FK to agents(id); the mock doesn't
+    // enforce it. Create the agent so the fixture is valid against real
+    // Postgres too.
+    await db.createAgent({
+      id: agentId,
+      business_name: 'Test Scoped Agent',
+      contact_phone: `+254${testRunId}${counter}`,
+      location_address: 'Test Location',
+      latitude: null,
+      longitude: null,
+      mpesa_till_or_paybill: '123456',
+      payout_method_type: 'Till Number',
+      status: 'active',
+      refundable_deposit: 0,
+      national_id_hash: 'test-hash-scoped',
+      needs_manual_geocoding: false,
+    } as any);
+  }
   await db.createItem({
     id,
     category_id: 'national-id',
-    photo_url: null,
+    photo_url: 'test-photo.jpg',
     ocr_extracted_number: null,
     ocr_extracted_name: null,
     document_number_hash: null,
@@ -68,25 +89,25 @@ describe('getItemsByStatus returns exactly the matching-status subset', () => {
 
 describe('getItemsByAgent returns exactly the matching-agent subset', () => {
   it('returns only items assigned to the given agent', async () => {
-    const agentAItem = await makeTestItem('at_agent', 'AGENT-SCOPEDQUERY-A');
-    const agentBItem = await makeTestItem('at_agent', 'AGENT-SCOPEDQUERY-B');
+    const agentAItem = await makeTestItem('at_agent', `AGENT-SCOPEDQUERY-A-${testRunId}`);
+    const agentBItem = await makeTestItem('at_agent', `AGENT-SCOPEDQUERY-B-${testRunId}`);
     const unassignedItem = await makeTestItem('awaiting_dropoff', null);
 
-    const result = await db.getItemsByAgent('AGENT-SCOPEDQUERY-A');
+    const result = await db.getItemsByAgent(`AGENT-SCOPEDQUERY-A-${testRunId}`);
     const ids = result.map(i => i.id);
 
     expect(ids).toContain(agentAItem);
     expect(ids).not.toContain(agentBItem);
     expect(ids).not.toContain(unassignedItem);
-    expect(result.every(i => i.assigned_agent_id === 'AGENT-SCOPEDQUERY-A')).toBe(true);
+    expect(result.every(i => i.assigned_agent_id === `AGENT-SCOPEDQUERY-A-${testRunId}`)).toBe(true);
   });
 
   it('matches what getItems() + an application-level agent filter would return (parity)', async () => {
-    await makeTestItem('at_agent', 'AGENT-SCOPEDQUERY-PARITY');
+    await makeTestItem('at_agent', `AGENT-SCOPEDQUERY-PARITY-${testRunId}`);
     const all = await db.getItems();
-    const expected = all.filter(i => i.assigned_agent_id === 'AGENT-SCOPEDQUERY-PARITY').map(i => i.id).sort();
+    const expected = all.filter(i => i.assigned_agent_id === `AGENT-SCOPEDQUERY-PARITY-${testRunId}`).map(i => i.id).sort();
 
-    const scoped = await db.getItemsByAgent('AGENT-SCOPEDQUERY-PARITY');
+    const scoped = await db.getItemsByAgent(`AGENT-SCOPEDQUERY-PARITY-${testRunId}`);
     const actual = scoped.map(i => i.id).sort();
 
     expect(actual).toEqual(expected);

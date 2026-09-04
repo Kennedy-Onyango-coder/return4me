@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { db } from '../database';
+import { ensureTestCategory, testRunId } from './ensureTestCategory';
 
 // P1 REGRESSION TEST — social publication idempotency (schema.ts,
 // social_publications; database.ts, claimSocialPublicationSlot /
@@ -14,11 +15,12 @@ import { db } from '../database';
 
 let counter = 0;
 async function makeTestItem() {
-  const id = `TEST-ITEM-SOCIAL-${counter++}`;
+  const id = `TEST-ITEM-SOCIAL-${testRunId}-${counter++}`;
+  await ensureTestCategory('phone');
   await db.createItem({
     id,
     category_id: 'phone',
-    photo_url: null,
+    photo_url: 'test-photo.jpg',
     ocr_extracted_number: null,
     ocr_extracted_name: null,
     document_number_hash: null,

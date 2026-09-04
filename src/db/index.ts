@@ -843,7 +843,7 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     // Belt-and-braces against the claim-creation race (see the matching
     // comment in schema.ts) — at most one non-terminal claim per item at
     // the database level. Also missing from this incremental path entirely.
-    `CREATE UNIQUE INDEX IF NOT EXISTS uq_claims_one_active_per_item ON claims(item_id) WHERE status NOT IN ('disputed', 'rejected', 'refunded', 'payment_window_expired')`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_claims_one_active_per_item ON claims(item_id) WHERE status NOT IN ('disputed', 'rejected', 'refunding', 'refunded', 'payment_window_expired')`,
     // Per-transaction payout reconciliation on the ledger — see the
     // matching comment in schema.ts. Added alongside the schema/SQL
     // changes in the same pass this time, rather than as a follow-up fix.

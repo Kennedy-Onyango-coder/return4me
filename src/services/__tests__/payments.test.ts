@@ -1,6 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { isPlaceholderKey } from '../payments';
 import { PaymentService } from '../payments';
+import { db } from '../../db/database';
+import { ensureTestCategory, testRunId } from '../../db/__tests__/ensureTestCategory';
 
 // isPlaceholderKey is the single gate that decides whether a payment
 // call actually hits IntaSend with real money, or safely no-ops into
@@ -92,7 +94,43 @@ describe('payment simulation production fail-closed guarantee', () => {
     delete process.env.INTASEND_PUBLISHABLE_KEY;
     delete process.env.INTASEND_SECRET_KEY;
 
-    const result = await PaymentService.triggerMpesaStkPush('+254712345678', 500, 'TEST-CLAIM-SIM-3');
+    // The simulation writes a real ledger row (payment_received) for the
+    // given claim; the ledger has a real FK to claims(id) -> items(id).
+    // Create the parent rows so the fixture is valid against real Postgres.
+    await ensureTestCategory('phone');
+    await db.createItem({
+      id: `TEST-ITEM-SIM-3-${testRunId}`,
+      category_id: 'phone',
+      photo_url: 'test-photo.jpg',
+      ocr_extracted_number: null,
+      ocr_extracted_name: null,
+      document_number_hash: null,
+      document_name_fuzzy: null,
+      location_description: 'Test location',
+      latitude: null,
+      longitude: null,
+      finder_phone: '+254700000007',
+      assigned_agent_id: null,
+      status: 'at_agent',
+      flaggedForReview: false,
+      isDescriptionOnly: false,
+      description: null,
+      is_sensitive_document: false,
+      rejection_reason: null,
+    } as any);
+    await db.createClaim({
+      id: `TEST-CLAIM-SIM-3-${testRunId}`,
+      item_id: `TEST-ITEM-SIM-3-${testRunId}`,
+      owner_phone: '+254712345678',
+      security_answers: { lastDigits: '0000', color: 'black', lostDetails: 'test fixture' },
+      verification_tier: 1,
+      status: 'pending_payment',
+      owner_id_proof_url: null,
+      payment_reference: null,
+      owner_identifying_details: null,
+    });
+
+    const result = await PaymentService.triggerMpesaStkPush('+254712345678', 500, `TEST-CLAIM-SIM-3-${testRunId}`);
     expect(result.success).toBe(true);
     // Simulation must always be unmistakably labeled as such.
     expect(result.message).toMatch(/SIMULATION/);

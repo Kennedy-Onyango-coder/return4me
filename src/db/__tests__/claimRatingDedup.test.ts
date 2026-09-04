@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import { db } from '../database';
+import { ensureTestCategory, testRunId } from './ensureTestCategory';
 
 // Regression test for a real, previously-unflagged gap: POST
 // /api/claims/:id/rate was completely unauthenticated, unrate-limited, and
@@ -41,12 +42,30 @@ describe('POST /api/claims/:id/rate is rate-limited, status-gated, and dedup-gua
 
 let counter = 0;
 async function makeTestItemWithAgent() {
-  const agentId = `AGENT-RATEDEDUP-${counter}`;
-  const itemId = `TEST-ITEM-RATEDEDUP-${counter++}`;
+  const agentId = `AGENT-RATEDEDUP-${testRunId}-${counter}`;
+  const itemId = `TEST-ITEM-RATEDEDUP-${testRunId}-${counter++}`;
+  await ensureTestCategory('national-id');
+  // items.assigned_agent_id has a real FK to agents(id); the mock doesn't
+  // enforce it. Create the agent so the fixture is valid against real
+  // Postgres too.
+  await db.createAgent({
+    id: agentId,
+    business_name: 'Test Rating Agent',
+    contact_phone: `+254${testRunId}${counter}`,
+    location_address: 'Test Location',
+    latitude: null,
+    longitude: null,
+    mpesa_till_or_paybill: '123456',
+    payout_method_type: 'Till Number',
+    status: 'active',
+    refundable_deposit: 0,
+    national_id_hash: 'test-hash-rating',
+    needs_manual_geocoding: false,
+  } as any);
   await db.createItem({
     id: itemId,
     category_id: 'national-id',
-    photo_url: null,
+    photo_url: 'test-photo.jpg',
     ocr_extracted_number: null,
     ocr_extracted_name: null,
     document_number_hash: null,
@@ -67,7 +86,7 @@ async function makeTestItemWithAgent() {
 }
 
 async function makeTestClaim(itemId: string, status: 'escrow_held' | 'pending_settlement' | 'released') {
-  const claimId = `TEST-CLAIM-RATEDEDUP-${counter++}`;
+  const claimId = `TEST-CLAIM-RATEDEDUP-${testRunId}-${counter++}`;
   await db.createClaim({
     id: claimId,
     item_id: itemId,
@@ -107,9 +126,13 @@ describe('markClaimRatedIfNotAlready enforces at most one rating per claim', () 
   });
 
   it('two different claims can each be rated independently (dedup is per-claim, not global)', async () => {
-    const { itemId } = await makeTestItemWithAgent();
-    const claimA = await makeTestClaim(itemId, 'released');
-    const claimB = await makeTestClaim(itemId, 'released');
+    // Two separate items: the claims table enforces at most one "active"
+    // claim per item (uq_claims_one_active_per_item), so two 'released'
+    // claims cannot share an item against real Postgres.
+    const { itemId: itemIdA } = await makeTestItemWithAgent();
+    const { itemId: itemIdB } = await makeTestItemWithAgent();
+    const claimA = await makeTestClaim(itemIdA, 'released');
+    const claimB = await makeTestClaim(itemIdB, 'released');
 
     expect(await db.markClaimRatedIfNotAlready(claimA)).toBe(true);
     expect(await db.markClaimRatedIfNotAlready(claimB)).toBe(true);

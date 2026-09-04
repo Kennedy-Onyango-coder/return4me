@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { db } from '../database';
+import { ensureTestCategory, testRunId } from './ensureTestCategory';
 
 // Tests for db.recordItemVerification — the Agent correction workflow.
 // Covers the highest-value scenarios from the design brief's numbered
@@ -17,11 +18,12 @@ async function makeTestItem(opts: {
   description?: string | null;
   location?: string;
 }) {
-  const id = `TEST-ITEM-VERIFY-${counter++}`;
+  const id = `TEST-ITEM-VERIFY-${testRunId}-${counter++}`;
+  await ensureTestCategory(opts.category ?? 'national-id');
   await db.createItem({
     id,
     category_id: opts.category ?? 'national-id',
-    photo_url: null,
+    photo_url: 'test-photo.jpg',
     ocr_extracted_number: opts.documentNumber ?? null,
     ocr_extracted_name: opts.name ?? null,
     document_number_hash: null,
@@ -41,7 +43,27 @@ async function makeTestItem(opts: {
   return id;
 }
 
-const AGENT_ID = 'TEST-AGENT-VERIFY';
+const AGENT_ID = `TEST-AGENT-VERIFY-${testRunId}`;
+
+beforeAll(async () => {
+  // item_verification_changes.agent_id has a real FK to agents(id); the mock
+  // doesn't enforce it. Create the agent so recordItemVerification is valid
+  // against real Postgres too.
+  await db.createAgent({
+    id: AGENT_ID,
+    business_name: 'Test Verification Agent',
+    contact_phone: `+254${testRunId}1`,
+    location_address: 'Test Location',
+    latitude: null,
+    longitude: null,
+    mpesa_till_or_paybill: '123456',
+    payout_method_type: 'Till Number',
+    status: 'active',
+    refundable_deposit: 0,
+    national_id_hash: 'test-hash-verify',
+    needs_manual_geocoding: false,
+  } as any);
+});
 
 describe('recordItemVerification — confirming as reported (test 1/2)', () => {
   it('Finder submits correct information, Agent confirms without changes — verification_status becomes confirmed_as_reported, no audit rows', async () => {

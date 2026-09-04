@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { db } from '../database';
+import { testRunId } from './ensureTestCategory';
 
 // P1 FINANCIAL INVARIANT TEST — "Use locked values from the item. Do not
-// recalculate historical claims using today's category fee."
 //
 // The scenario this protects against: an admin edits a category's fee
 // split (e.g. changes Finder from 25% to 10%) AFTER an item in that
@@ -15,7 +15,11 @@ import { db } from '../database';
 // promised, could silently change out from under them mid-claim.
 
 async function makeFreshCategory(suffix: string, finderShare: number, agentShare: number, platformShare: number) {
-  const id = `test-cat-invariant-${suffix}`;
+  const id = `test-cat-invariant-${testRunId}-${suffix}`;
+  // Idempotent: real Postgres enforces the categories PK, so re-running this
+  // suite against the same database must not attempt a duplicate insert.
+  const existing = await db.getCategories();
+  if (existing.some((c) => c.id === id)) return id;
   await db.createCategory({
     id,
     name_en: 'Test Category',
@@ -30,11 +34,11 @@ async function makeFreshCategory(suffix: string, finderShare: number, agentShare
 }
 
 async function makeFreshAgent(suffix: string) {
-  const id = `TEST-AGENT-INVARIANT-${suffix}`;
+  const id = `TEST-AGENT-INVARIANT-${testRunId}-${suffix}`;
   await db.createAgent({
     id,
     business_name: 'Test Agent Hub',
-    contact_phone: '+254700000010',
+    contact_phone: `+254${testRunId}${suffix === 'A' ? '10' : '20'}`,
     location_address: 'Test Location',
     latitude: null,
     longitude: null,
@@ -53,11 +57,11 @@ describe('financial invariant: locked historical fee/split survives a later cate
     const categoryId = await makeFreshCategory('A', 250, 350, 400); // 25/35/40 split of 1000
     const agentId = await makeFreshAgent('A');
 
-    const itemId = 'TEST-ITEM-INVARIANT-A';
+    const itemId = `TEST-ITEM-INVARIANT-${testRunId}-A`;
     await db.createItem({
       id: itemId,
       category_id: categoryId,
-      photo_url: null,
+      photo_url: 'test-photo.jpg',
       ocr_extracted_number: null,
       ocr_extracted_name: null,
       document_number_hash: null,
@@ -79,7 +83,7 @@ describe('financial invariant: locked historical fee/split survives a later cate
       locked_platform_share: 400,
     } as any);
 
-    const claimId = 'TEST-CLAIM-INVARIANT-A';
+    const claimId = `TEST-CLAIM-INVARIANT-${testRunId}-A`;
     await db.createClaim({
       id: claimId,
       item_id: itemId,
@@ -126,11 +130,11 @@ describe('financial invariant: locked historical fee/split survives a later cate
     const categoryId = await makeFreshCategory('B', 92.51, 129.52, 148.06); // sums to 370.09
     const agentId = await makeFreshAgent('B');
 
-    const itemId = 'TEST-ITEM-INVARIANT-B';
+    const itemId = `TEST-ITEM-INVARIANT-${testRunId}-B`;
     await db.createItem({
       id: itemId,
       category_id: categoryId,
-      photo_url: null,
+      photo_url: 'test-photo.jpg',
       ocr_extracted_number: null,
       ocr_extracted_name: null,
       document_number_hash: null,
@@ -152,7 +156,7 @@ describe('financial invariant: locked historical fee/split survives a later cate
       locked_platform_share: 148.06,
     } as any);
 
-    const claimId = 'TEST-CLAIM-INVARIANT-B';
+    const claimId = `TEST-CLAIM-INVARIANT-${testRunId}-B`;
     await db.createClaim({
       id: claimId,
       item_id: itemId,

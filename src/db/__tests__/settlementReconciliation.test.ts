@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { db } from '../database';
+import { ensureTestCategory, testRunId } from './ensureTestCategory';
 
 // This pins down the actual financial-safety property behind the P0/P1
 // settlement rework: a batch payout (finder + agent, sent together via
@@ -17,8 +18,32 @@ import { db } from '../database';
 // network behavior already covered by services/payments.ts.
 
 async function makeTestClaim(suffix: string) {
-  const claimId = `TEST-CLAIM-${suffix}`;
-  const itemId = `TEST-ITEM-${suffix}`;
+  const claimId = `TEST-CLAIM-${testRunId}-${suffix}`;
+  const itemId = `TEST-ITEM-${testRunId}-${suffix}`;
+  // Real Postgres enforces claims.item_id -> items(id) and
+  // items.category_id -> categories(id); the mock does not. Create the
+  // parent rows so this fixture is valid in both environments.
+  await ensureTestCategory('phone');
+  await db.createItem({
+    id: itemId,
+    category_id: 'phone',
+    photo_url: 'test-photo.jpg',
+    ocr_extracted_number: null,
+    ocr_extracted_name: null,
+    document_number_hash: null,
+    document_name_fuzzy: null,
+    location_description: 'Test location',
+    latitude: null,
+    longitude: null,
+    finder_phone: '+254700000004',
+    assigned_agent_id: null,
+    status: 'at_agent',
+    flaggedForReview: false,
+    isDescriptionOnly: false,
+    description: null,
+    is_sensitive_document: false,
+    rejection_reason: null,
+  } as any);
   await db.createClaim({
     id: claimId,
     item_id: itemId,
@@ -230,10 +255,34 @@ describe('payout reconciliation — 6 provider-response scenarios (mocked, match
 // ever win.
 describe('duplicate payment webhook / provider callback idempotency', () => {
   it('a second attemptClaimEscrowHold for the same claim (simulating a duplicate webhook delivery) does not re-transition an already-escrowed claim', async () => {
-    const claimId = `TEST-CLAIM-WEBHOOK-DUP`;
+    const claimId = `TEST-CLAIM-WEBHOOK-DUP-${testRunId}`;
+    const itemId = `TEST-ITEM-WEBHOOK-DUP-${testRunId}`;
+    // Create the parent item: claims.item_id -> items(id) and
+    // items.category_id -> categories(id) are real FKs against Postgres.
+    await ensureTestCategory('phone');
+    await db.createItem({
+      id: itemId,
+      category_id: 'phone',
+      photo_url: 'test-photo.jpg',
+      ocr_extracted_number: null,
+      ocr_extracted_name: null,
+      document_number_hash: null,
+      document_name_fuzzy: null,
+      location_description: 'Test location',
+      latitude: null,
+      longitude: null,
+      finder_phone: '+254700000009',
+      assigned_agent_id: null,
+      status: 'at_agent',
+      flaggedForReview: false,
+      isDescriptionOnly: false,
+      description: null,
+      is_sensitive_document: false,
+      rejection_reason: null,
+    } as any);
     await db.createClaim({
       id: claimId,
-      item_id: `TEST-ITEM-WEBHOOK-DUP`,
+      item_id: itemId,
       owner_phone: '+254700000099',
       security_answers: { lastDigits: '0000', color: 'black', lostDetails: 'test fixture' },
       verification_tier: 1,

@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { db } from '../database';
 import { classifyHttpFailure } from '../../services/social';
+import { ensureTestCategory, testRunId } from './ensureTestCategory';
 
 // P0 REGRESSION TEST — social-publication retry/reconciliation state
 // machine (services/social.ts: PublicationOutcome, classifyHttpFailure,
@@ -42,11 +43,12 @@ describe('classifyHttpFailure distinguishes retryable from permanent HTTP failur
 
 let counter = 0;
 async function makeTestItem() {
-  const id = `TEST-ITEM-SOCIALRETRY-${counter++}`;
+  const id = `TEST-ITEM-SOCIALRETRY-${testRunId}-${counter++}`;
+  await ensureTestCategory('phone');
   await db.createItem({
     id,
     category_id: 'phone',
-    photo_url: null,
+    photo_url: 'test-photo.jpg',
     ocr_extracted_number: null,
     ocr_extracted_name: null,
     document_number_hash: null,

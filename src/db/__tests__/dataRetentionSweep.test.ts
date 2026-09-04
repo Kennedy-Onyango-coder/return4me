@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { db } from '../database';
+import { ensureTestCategory, testRunId } from './ensureTestCategory';
 
 // P1 REGRESSION TEST — data retention (docs/DATA_RETENTION_POLICY.md).
 // getClaimsWithExpiredHandoverPhotos / purgeHandoverPhoto /
@@ -21,12 +22,13 @@ import { db } from '../database';
 
 let counter = 0;
 async function makeReleasedClaimWithPhoto(photoUrl: string | null) {
-  const itemId = `TEST-ITEM-RETENTION-${counter++}`;
-  const claimId = `TEST-CLAIM-RETENTION-${counter++}`;
+  const itemId = `TEST-ITEM-RETENTION-${testRunId}-${counter++}`;
+  const claimId = `TEST-CLAIM-RETENTION-${testRunId}-${counter++}`;
+  await ensureTestCategory('phone');
   await db.createItem({
     id: itemId,
     category_id: 'phone',
-    photo_url: null,
+    photo_url: 'test-photo.jpg',
     ocr_extracted_number: null,
     ocr_extracted_name: null,
     document_number_hash: null,
@@ -91,10 +93,10 @@ describe('getClaimsWithExpiredHandoverPhotos', () => {
   });
 
   it('never returns a claim that is not in "released" status, even with an old-enough timestamp and a photo present', async () => {
-    const itemId = `TEST-ITEM-RETENTION-NOTRELEASED-${counter++}`;
-    const claimId = `TEST-CLAIM-RETENTION-NOTRELEASED-${counter++}`;
+    const itemId = `TEST-ITEM-RETENTION-NOTRELEASED-${testRunId}-${counter++}`;
+    const claimId = `TEST-CLAIM-RETENTION-NOTRELEASED-${testRunId}-${counter++}`;
     await db.createItem({
-      id: itemId, category_id: 'phone', photo_url: null, ocr_extracted_number: null,
+      id: itemId, category_id: 'phone', photo_url: 'test-photo.jpg', ocr_extracted_number: null,
       ocr_extracted_name: null, document_number_hash: null, document_name_fuzzy: null,
       location_description: 'x', latitude: null, longitude: null, finder_phone: '+254700000003',
       assigned_agent_id: null, status: 'claimed', flaggedForReview: false, isDescriptionOnly: true,
