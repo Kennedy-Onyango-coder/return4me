@@ -486,7 +486,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
   };
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-8 fade-in">
+    <div className="max-w-4xl mx-auto px-4 py-8">
       
       {/* Search & Listing View */}
       {verificationStep === 'search' && (

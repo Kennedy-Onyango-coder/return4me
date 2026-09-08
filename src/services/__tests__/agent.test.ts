@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { AgentMatchingService } from '../agent';
-import { db } from '../../db/database';
+import { db, type Agent } from '../../db/database';
 import { ensureTestCategory, testRunId } from '../../db/__tests__/ensureTestCategory';
 
 // P0 REGRESSION TEST — src/services/agent.ts, assignNearestAgent().
@@ -21,6 +21,10 @@ import { ensureTestCategory, testRunId } from '../../db/__tests__/ensureTestCate
 // a thrown error that would fail the Finder's report.
 
 let counter = 0;
+function stubAgents(agents: Array<Partial<Agent>>) {
+  vi.spyOn(db, 'getAgents').mockResolvedValue(agents as Agent[]);
+}
+
 async function makeTestAgent(opts: { status?: 'active' | 'suspended' | 'pending'; lat?: number | null; lon?: number | null }) {
   const id = `TEST-AGENT-MATCHING-${testRunId}-${counter++}`;
   await db.createAgent({
@@ -42,19 +46,12 @@ async function makeTestAgent(opts: { status?: 'active' | 'suspended' | 'pending'
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('AgentMatchingService.assignNearestAgent — never assigns an arbitrary agent', () => {
-  // D/E/F run FIRST, deliberately, before any other test in this file
-  // creates a coordinated active agent. GPS Haversine matching has no
-  // distance cutoff by design (a genuinely-nearest agent 1000km away is
-  // still a real match, not an arbitrary one — that's correct, not a
-  // bug), so once ANY active agent with coordinates exists anywhere in
-  // the shared test database, D/E/F's "nothing usable exists" premise no
-  // longer holds. Ordering, not a DB reset, is what keeps these
-  // independent — vitest runs tests within a file in declaration order.
-
   it('D. No active agents at all → NO automatic assignment, and does NOT throw (would otherwise fail the Finder\'s report outright)', async () => {
+    stubAgents([]);
     const result = await AgentMatchingService.assignNearestAgent(null, null, '');
     expect(result.agent).toBeNull();
     expect(result.method).toBe('manual_required');
@@ -62,7 +59,7 @@ describe('AgentMatchingService.assignNearestAgent — never assigns an arbitrary
   });
 
   it('E. Active agents exist but NONE have coordinates on file → NO automatic assignment (can\'t compute distance to nothing)', async () => {
-    await makeTestAgent({ status: 'active', lat: null, lon: null });
+    stubAgents([{ status: 'active', latitude: null, longitude: null }]);
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => [] }));
     const result = await AgentMatchingService.assignNearestAgent(-1.3, 36.8, 'irrelevant text, geocoding also fails');
     // Even though an active agent exists, none has usable coordinates, so
@@ -74,13 +71,13 @@ describe('AgentMatchingService.assignNearestAgent — never assigns an arbitrary
   });
 
   it('F. A suspended agent must never be matched, even if it has coordinates and is the only agent in range', async () => {
-    await makeTestAgent({ status: 'suspended', lat: -1.2921, lon: 36.8219 });
+    stubAgents([{ status: 'suspended', latitude: -1.2921, longitude: 36.8219 }]);
     const result = await AgentMatchingService.assignNearestAgent(-1.2921, 36.8219, '');
     expect(result.agent).toBeNull();
   });
 
   it('A. GPS location available and an agent with coordinates exists → confidently matched via GPS', async () => {
-    await makeTestAgent({ lat: -1.2921, lon: 36.8219 }); // Nairobi CBD
+    stubAgents([{ status: 'active', latitude: -1.2921, longitude: 36.8219 }]);
     const result = await AgentMatchingService.assignNearestAgent(-1.2921, 36.8219, '');
     expect(result.agent).not.toBeNull();
     expect(result.method).toBe('gps_haversine');
@@ -88,7 +85,7 @@ describe('AgentMatchingService.assignNearestAgent — never assigns an arbitrary
   });
 
   it('B. GPS unavailable but address geocoding succeeds → confidently matched via geocoded text', async () => {
-    await makeTestAgent({ lat: -1.2921, lon: 36.8219 });
+    stubAgents([{ status: 'active', latitude: -1.2921, longitude: 36.8219 }]);
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
       json: async () => [{ lat: '-1.2921', lon: '36.8219' }],
@@ -100,11 +97,7 @@ describe('AgentMatchingService.assignNearestAgent — never assigns an arbitrary
   });
 
   it('C. an agent DOES exist and is matchable via GPS, but this call deliberately supplies neither coordinates nor geocodable text → NO automatic assignment', async () => {
-    // By this point in the file, at least one active/coordinated agent
-    // already exists (from A/B above) — proving this scenario properly
-    // now means proving that even with a matchable agent available, a
-    // request that supplies NO usable location signal at all still
-    // correctly falls through to manual, rather than matching anyway.
+    stubAgents([{ status: 'active', latitude: -1.2921, longitude: 36.8219 }]);
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => [] }));
     const result = await AgentMatchingService.assignNearestAgent(null, null, '');
     expect(result.agent).toBeNull();

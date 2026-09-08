@@ -21,16 +21,9 @@ export default defineConfig(() => {
         output: {
           manualChunks(id) {
             if (id.includes('node_modules')) {
-              if (id.includes('react') || id.includes('react-dom')) {
-                return 'vendor-core';
-              }
-              if (id.includes('lucide-react')) {
-                return 'vendor-icons';
-              }
-              if (id.includes('recharts') || id.includes('d3') || id.includes('recharts-scale')) {
-                return 'vendor-charts';
-              }
-              return 'vendor-lib';
+              // Keep React and its consumers together to avoid cyclic chunk
+              // initialization (observed as createContext on undefined at startup).
+              return 'vendor';
             }
           },
         },
