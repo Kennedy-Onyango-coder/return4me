@@ -17,6 +17,7 @@ import { OcrService } from './services/ocr';
 import { uploadBase64Image } from './services/storage';
 import { SocialService } from './services/social';
 import { computeRecoveryFee } from './services/feeEngine';
+import { validateVerificationAnswers, toAgentVerificationEvidence } from './services/verificationValidation';
 import bcrypt from 'bcryptjs';
 import * as Sentry from '@sentry/node';
 import * as OTPAuth from 'otpauth';
@@ -82,6 +83,41 @@ function toOwnerSafeAgentView(agent: any): any {
     rating_count: agent.rating_count,
   };
 }
+
+// Public/claimant tracking DTO for a claim. Deliberately excludes
+// security_answers, owner_phone/email, owner_identifying_details,
+// owner_id_proof_url, payment_reference and all internal/operational fields.
+// These are the only fields the OwnerView tracking modal actually reads.
+function toOwnerSafeClaimView(claim: any): any {
+  if (!claim) return null;
+  return {
+    id: claim.id,
+    status: claim.status,
+    agent_confirmed_at: claim.agent_confirmed_at || null,
+  };
+}
+
+// Public/claimant tracking DTO for an item. Mirrors the masked public search
+// result shape: no finder contact data, no OCR-extracted identity fields, no
+// plaintext document number or hash, and no photo for sensitive documents.
+function toOwnerSafeItemView(item: any): any {
+  if (!item) return null;
+  const isSensitive = item.is_sensitive_document !== false;
+  return {
+    id: item.id,
+    category_id: item.category_id,
+    is_sensitive_document: isSensitive,
+    photo_url: isSensitive ? null : item.photo_url,
+    document_name_fuzzy: item.isDescriptionOnly
+      ? 'Bidhaa ya Maelezo'
+      : item.document_name_fuzzy || (isSensitive ? 'Mwenye ID' : 'Bidhaa Bila Hati'),
+    location_description: item.location_description,
+    description: item.isDescriptionOnly || !isSensitive ? item.description : null,
+    isDescriptionOnly: item.isDescriptionOnly,
+    created_at: item.created_at,
+  };
+}
+
 
 function checkSecret(name: string, val: string | undefined, minLen: number = 32) {
   if (!val) {
@@ -1497,6 +1533,24 @@ async function startServer() {
       return res.status(400).json({ error: 'Ni lazima ukubali Vigezo na Masharti yetu kabla ya kuendelea (You must agree to our Terms and Privacy Policy).' });
     }
 
+    // The frontend previously fell back to a hardcoded sandbox number when a
+    // phone was missing. That fallback must never reach production identity
+    // handling: a claim's owner_phone is the handle used for OTP, pickup-code
+    // delivery and claimant lookup, so the server now requires a real value.
+    const normalizedOwnerPhone = toE164Kenyan(String(ownerPhone).replace(/\s+/g, ''));
+    if (!/^\+254\d{9}$/.test(normalizedOwnerPhone)) {
+      return res.status(400).json({ error: 'Nambari ya simu halali ya Kenya inahitajika. / A valid Kenyan phone number is required.' });
+    }
+
+    const ownerIdentifyingDetailValue =
+      typeof ownerIdentifyingDetails === 'string' ? ownerIdentifyingDetails.trim() : '';
+    if (!ownerIdentifyingDetailValue) {
+      return res.status(400).json({ error: 'Maelezo ya kitambulisho yanahitajika. / An identifying detail is required.' });
+    }
+    if (ownerIdentifyingDetailValue.length > 300) {
+      return res.status(400).json({ error: 'Maelezo ya kitambulisho ni marefu kupita kiasi. / Identifying detail is too long.' });
+    }
+
     try {
       const strikeCount = await db.getPaymentStrikeCount(ownerPhone);
       if (strikeCount >= 3) {
@@ -1519,6 +1573,19 @@ async function startServer() {
       if (!claimability.allowed) {
         return res.status(423).json({ error: claimabilityErrorMessage(claimability.reason) });
       }
+
+      // Server-authoritative verification profile enforcement. The category is
+      // the item's SERVER-KNOWN category, never a category supplied by the
+      // claimant. Unknown keys, wrong types, oversized/forbidden values and
+      // missing required fields are rejected before anything is stored.
+      const categoryId = item.category_id || 'other-item';
+      const validation = validateVerificationAnswers(categoryId, securityAnswers);
+      if (!validation.ok) {
+        return res.status(400).json({
+          error: `Majibu ya usalama si sahihi. ${validation.error} / Verification answers are invalid. ${validation.error}`,
+        });
+      }
+      const sanitizedAnswers = validation.sanitized;
 
       // If ID proof is provided, validate its signature and upload to S3 storage
       let idProofUrl: string | null = null;
@@ -1545,7 +1612,7 @@ async function startServer() {
 
         if (sameOwnerClaim) {
           return res.json({
-            claim: sameOwnerClaim,
+            claim: toOwnerSafeClaimView(sameOwnerClaim),
             message: 'Unarejelea claim yako ya awali.',
           });
         }
@@ -1565,14 +1632,14 @@ async function startServer() {
           const newClaim = await db.createClaim({
             id: newClaimCode,
             item_id: itemId,
-            owner_phone: ownerPhone,
+            owner_phone: normalizedOwnerPhone,
             owner_email: ownerEmail || null,
-            security_answers: securityAnswers,
+            security_answers: sanitizedAnswers,
             verification_tier: verificationTier || 1,
             status: 'disputed',
             owner_id_proof_url: idProofUrl,
             payment_reference: null,
-            owner_identifying_details: ownerIdentifyingDetails || null,
+            owner_identifying_details: ownerIdentifyingDetailValue || null,
           });
 
           // Generate a dispute. createDispute() only marks both claims
@@ -1606,7 +1673,7 @@ async function startServer() {
 
           return res.status(409).json({
             error: 'Bidhaa hii tayari inadaiwa na mtu mwingine. Mzozo (Dispute) umefunguliwa na utachunguzwa na wasimamizi wetu.',
-            claim: newClaim,
+            claim: toOwnerSafeClaimView(newClaim),
             isDisputed: true
           });
         }
@@ -1616,7 +1683,7 @@ async function startServer() {
       // Skip for non-sensitive items
       let tierPassed = true;
       if (item.is_sensitive_document !== false && item.ocr_extracted_number) {
-        const lastDigitsInput = securityAnswers.lastDigits ? securityAnswers.lastDigits.trim().toUpperCase() : '';
+        const lastDigitsInput = sanitizedAnswers.lastDigits ? sanitizedAnswers.lastDigits.toUpperCase() : '';
         if (lastDigitsInput) {
           // 1. Raw comparison (removing non-alphanumeric, case-insensitive)
           const rawOcr = item.ocr_extracted_number.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -1667,14 +1734,14 @@ async function startServer() {
         claim = await db.createClaim({
           id: claimCode,
           item_id: itemId,
-          owner_phone: ownerPhone,
+          owner_phone: normalizedOwnerPhone,
           owner_email: ownerEmail || null,
-          security_answers: securityAnswers,
+          security_answers: sanitizedAnswers,
           verification_tier: isTier3 ? 3 : 2,
           status: 'pending_verification',
           owner_id_proof_url: idProofUrl,
           payment_reference: null,
-          owner_identifying_details: ownerIdentifyingDetails || null,
+          owner_identifying_details: ownerIdentifyingDetailValue || null,
         });
       } catch (raceErr: any) {
         const isUniqueViolation = raceErr?.code === '23505' || String(raceErr?.cause?.code) === '23505' || /uq_claims_one_active_per_item/.test(String(raceErr?.message || raceErr?.cause?.message || ''));
@@ -1700,7 +1767,7 @@ async function startServer() {
 
       res.json({
         success: true,
-        claim,
+        claim: toOwnerSafeClaimView(claim),
         warning,
         message: isTier3
           ? 'Thibitisho la Tier 1 na Tier 3 limepita! Tafadhali thibitisha OTP yako ili uendelee kwenye malipo.'
@@ -2031,8 +2098,8 @@ async function startServer() {
 
       res.json({
         success: true,
-        claim,
-        item,
+        claim: toOwnerSafeClaimView(claim),
+        item: toOwnerSafeItemView(item),
         agent: toOwnerSafeAgentView(agent),
       });
     } catch (e: any) {
@@ -2445,7 +2512,15 @@ async function startServer() {
           ));
           return {
             ...item,
-            associatedClaim,
+            associatedClaim: associatedClaim ? {
+              id: associatedClaim.id,
+              status: associatedClaim.status,
+              agent_confirmed_at: associatedClaim.agent_confirmed_at || null,
+              // Operational evidence only: the subset the assigned agent needs to
+              // physically compare against the item, never the raw claim row.
+              owner_identifying_details: associatedClaim.owner_identifying_details || null,
+              security_answers: toAgentVerificationEvidence(item.category_id || 'other-item', associatedClaim.security_answers),
+            } : undefined,
           };
         }),
       });

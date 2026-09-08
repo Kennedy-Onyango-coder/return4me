@@ -236,6 +236,12 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
       return;
     }
 
+    if (!ownerPhone.trim()) {
+      setErrorMsg(lang === 'en' ? 'Please enter your phone number before claiming.' : 'Tafadhali weka nambari yako ya simu kabla ya kudai.');
+      setSearchLoading(false);
+      return;
+    }
+
     if (ownerEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ownerEmail)) {
       setErrorMsg('Tafadhali weka barua pepe sahihi (Please enter a valid email address).');
       setSearchLoading(false);
@@ -248,7 +254,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           itemId: selectedItem.id,
-          ownerPhone: ownerPhone || '0700000000', // Safe default fallback for sandbox
+          ownerPhone,
           securityAnswers: answers,
           verificationTier: submittedIdProofBase64 ? 3 : 2,
           idProofBase64: submittedIdProofBase64,
