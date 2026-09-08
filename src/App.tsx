@@ -610,7 +610,7 @@ export default function App() {
                   </div>
                   <div className="flex gap-2">
                     <span className="text-[10px] bg-emerald-50 text-primary-green border border-emerald-100 font-extrabold px-3.5 py-1.5 rounded-full uppercase tracking-wider">
-                      KES 500 Average Fee
+                      {lang === 'en' ? 'Transparent Per-Category Fees' : 'Ada Wazi kwa Kila Kategoria'}
                     </span>
                   </div>
                 </div>
