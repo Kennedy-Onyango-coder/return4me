@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { translations } from '../types';
+import VerificationForm from './VerificationForm';
+import { trapModalFocus } from '../utils/modalFocus';
 import { Search, AlertCircle, ShieldAlert, CheckCircle, Smartphone, ArrowRight, Loader2, Coins, MapPin, Star, Lock, Eye, Clock, XCircle, AlertTriangle } from 'lucide-react';
 
 interface OwnerViewProps {
@@ -86,12 +88,6 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
   >('search');
 
   // Verification Form states
-  const [lastDigits, setLastDigits] = useState('');
-  const [colorDetail, setColorDetail] = useState('');
-  const [lostDetails, setLostDetails] = useState('');
-  const [lastNameOnDoc, setLastNameOnDoc] = useState('');
-  const [whereLost, setWhereLost] = useState('');
-  const [plateNumber, setPlateNumber] = useState('');
   const [ownerPhone, setOwnerPhone] = useState('');
   const [ownerEmail, setOwnerEmail] = useState('');
   const [otpCode, setOtpCode] = useState('');
@@ -104,8 +100,6 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
   const [trackError, setTrackError] = useState('');
   const [trackResult, setTrackResult] = useState<any | null>(null);
 
-  const [idProofBase64, setIdProofBase64] = useState<string | null>(null);
-  const [idUploadConsent, setIdUploadConsent] = useState(false);
   const [agreedTerms, setAgreedTerms] = useState(false);
 
   // Confidence Gate states
@@ -140,12 +134,47 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           setTimeLeft(Math.floor(diff / 1000));
         }
       };
-      
+
       calculateTimeLeft();
       const timer = setInterval(calculateTimeLeft, 1000);
       return () => clearInterval(timer);
     }
   }, [verificationStep, paidClaim?.agent_confirmed_at]);
+
+  // Track My Claim modal: lock background scroll, manage focus
+  const trackModalTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const trackModalRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (showTrackModal) {
+      const previousOverflow = document.body.style.overflow;
+      const handleKeyDown = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          setShowTrackModal(false);
+        } else if (trackModalRef.current) {
+          trapModalFocus(event, trackModalRef.current);
+        }
+      };
+      document.addEventListener('keydown', handleKeyDown);
+      // Lock background scrolling so user cannot scroll the page behind the modal
+      document.body.style.overflow = 'hidden';
+      // Move focus into the modal's first input for immediate keyboard access
+      const timer = setTimeout(() => {
+        const el = document.getElementById('track-claim-id');
+        if (el) el.focus();
+      }, 50);
+      return () => {
+        clearTimeout(timer);
+        document.removeEventListener('keydown', handleKeyDown);
+        // Restore background scrolling when modal closes
+        document.body.style.overflow = previousOverflow;
+        // Return focus to the trigger button so screen-reader users aren't lost
+        if (trackModalTriggerRef.current) {
+          trackModalTriggerRef.current.focus();
+        }
+      };
+    }
+  }, [showTrackModal]);
 
   // Agent Rating
   const [userRating, setUserRating] = useState<number | null>(null);
@@ -195,20 +224,14 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
     handleSearch();
   }, [selectedCat, selectedArea]);
 
-  // Submit Tier 1 Security answers
-  const handleTier1Submit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Submit Tier 1 Security answers — collected by the category-specific
+  // VerificationForm (field keys are defined in verificationProfiles.ts).
+  const handleTier1Submit = async (answers: Record<string, string>, submittedIdProofBase64: string | null) => {
     setErrorMsg('');
     setSearchLoading(true);
 
     if (!agreedTerms) {
       setErrorMsg('Ni lazima ukubali Vigezo na Masharti yetu kabla ya kuendelea (You must agree to our Terms of Service and Privacy Policy to continue).');
-      setSearchLoading(false);
-      return;
-    }
-
-    if (idProofBase64 && !idUploadConsent) {
-      setErrorMsg('Ni lazima ukubali usindikaji wa kitambulisho chako ili kuendelea (You must consent to ID processing).');
       setSearchLoading(false);
       return;
     }
@@ -226,16 +249,9 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
         body: JSON.stringify({
           itemId: selectedItem.id,
           ownerPhone: ownerPhone || '0700000000', // Safe default fallback for sandbox
-          securityAnswers: {
-            lastDigits,
-            color: colorDetail,
-            lostDetails,
-            lastNameOnDoc,
-            whereLost,
-            plateNumber,
-          },
-          verificationTier: idProofBase64 ? 3 : 2,
-          idProofBase64,
+          securityAnswers: answers,
+          verificationTier: submittedIdProofBase64 ? 3 : 2,
+          idProofBase64: submittedIdProofBase64,
           termsAccepted: agreedTerms,
           ownerIdentifyingDetails,
           ownerEmail,
@@ -481,6 +497,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             <h1 className="text-3xl font-extrabold text-primary-green mb-2">{t.ownerTitle}</h1>
             <p className="text-stone-600 text-sm max-w-xl mx-auto">{t.ownerSubtitle}</p>
             <button
+              ref={trackModalTriggerRef}
               type="button"
               onClick={() => {
                 setShowTrackModal(true);
@@ -490,7 +507,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               className="inline-flex items-center space-x-2 bg-emerald-50 hover:bg-emerald-100 text-primary-green border border-emerald-200 px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer"
             >
               <Clock size={14} className="text-accent-orange" />
-              <span>{lang === 'sw' ? 'Track My Existing Claim (Fuatilia Ombi Lako)' : 'Track My Existing Claim'}</span>
+              <span>{lang === 'sw' ? 'Fuatilia Ombi Lako' : 'Track My Existing Claim'}</span>
             </button>
           </div>
 
@@ -731,212 +748,14 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           </div>
 
           <div className="space-y-4">
-            <div className="space-y-1.5">
-              <label htmlFor="owner-identifying-details" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">
-                Maelezo ya Utambulisho (Provide 1-2 identifying details) *
-              </label>
-              <textarea
-                id="owner-identifying-details"
-                value={ownerIdentifyingDetails}
-                onChange={(e) => setOwnerIdentifyingDetails(e.target.value)}
-                placeholder="E.g. What is the full name, ID number, birth date, or unique physical characteristics of this document/item?"
-                className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-xs focus:outline-none focus:border-accent-orange"
-                rows={3}
-                required
-              />
-              <p className="text-[10px] text-stone-400">These details are kept strictly private and used solely by the Hub Agent to verify you before handing over.</p>
-            </div>
-
-            <div className="flex items-start space-x-2 pt-2 pb-1 bg-amber-50/50 p-3 rounded-xl border border-amber-100">
-              <input
-                id="confidence-checkbox"
-                type="checkbox"
-                checked={isConfident}
-                onChange={(e) => setIsConfident(e.target.checked)}
-                className="mt-1 h-4 w-4 rounded border-stone-300 text-primary-green focus:ring-primary-green cursor-pointer"
-                required
-              />
-              <label htmlFor="confidence-checkbox" className="text-xs text-stone-700 leading-tight select-none cursor-pointer">
-                Nathibitisha kwa uaminifu kuwa mimi ndiye mmiliki halali wa hati hii (I am reasonably confident this is my item and I am not making a fraudulent claim). *
-              </label>
-            </div>
-          </div>
-
-          <div className="flex space-x-3 pt-3">
-            <button
-              type="button"
-              onClick={() => setVerificationStep('search')}
-              className="flex-1 bg-stone-100 hover:bg-stone-200 text-stone-700 py-3 rounded-xl font-bold transition text-xs"
-            >
-              Back
-            </button>
-            <button
-              type="button"
-              disabled={!isConfident || !ownerIdentifyingDetails.trim()}
-              onClick={() => setVerificationStep('tier1_security')}
-              className="flex-1 bg-accent-orange hover:bg-accent-hover text-white py-3 rounded-xl font-bold transition text-xs disabled:opacity-50 cursor-pointer"
-            >
-              Proceed to Claim
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Tier 1 Security verification */}
-      {verificationStep === 'tier1_security' && (
-        <div className="bg-white rounded-3xl border border-stone-100 p-6 md:p-8 shadow-xl max-w-xl mx-auto space-y-6 fade-in">
-          <div className="text-center">
-            <h2 className="text-2xl font-extrabold text-primary-green mb-1">{t.verifyTitle}</h2>
-            <p className="text-stone-500 text-xs">{t.verifySubtitle}</p>
-          </div>
-
-          {errorMsg && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-xs flex items-center space-x-2">
-              <AlertCircle size={16} />
-              <span>{errorMsg}</span>
-            </div>
-          )}
-
-          <form onSubmit={handleTier1Submit} className="space-y-4">
-            
-            {selectedItem.is_sensitive_document !== false ? (
-              <>
-                {/* Last 4 digits security check */}
-                <div className="space-y-1">
-                  <label htmlFor="owner-last-digits" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">{t.lastDigitsQuest} *</label>
-                  <input
-                    id="owner-last-digits"
-                    type="text"
-                    value={lastDigits}
-                    onChange={(e) => setLastDigits(e.target.value)}
-                    maxLength={4}
-                    className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-brand-beige font-mono focus:outline-none focus:border-accent-orange"
-                    placeholder="e.g. 4812"
-                    required
-                  />
-                </div>
-
-                {/* Last Name on Document */}
-                <div className="space-y-1">
-                  <label htmlFor="owner-last-name-doc" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">
-                    {lang === 'sw' ? 'Jina la Mwisho Kwenye Hati *' : 'Last Name on Document *'}
-                  </label>
-                  <input
-                    id="owner-last-name-doc"
-                    type="text"
-                    value={lastNameOnDoc}
-                    onChange={(e) => setLastNameOnDoc(e.target.value)}
-                    className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-brand-beige focus:outline-none focus:border-accent-orange uppercase"
-                    placeholder="e.g. KAMAU"
-                    required
-                  />
-                </div>
-
-                {/* Where Lost */}
-                <div className="space-y-1">
-                  <label htmlFor="owner-where-lost" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">
-                    {lang === 'sw' ? 'Mahali au Gari/Matatu Ilipopotea *' : 'Where Lost (Specific Location/Bus/Matatu) *'}
-                  </label>
-                  <input
-                    id="owner-where-lost"
-                    type="text"
-                    value={whereLost}
-                    onChange={(e) => setWhereLost(e.target.value)}
-                    className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-brand-beige focus:outline-none focus:border-accent-orange"
-                    placeholder="e.g. Super Metro matatu from CBD to Westlands"
-                    required
-                  />
-                </div>
-
-                {/* Full Plate Number (if applicable) */}
-                <div className="space-y-1">
-                  <label htmlFor="owner-plate-number" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">
-                    {lang === 'sw' ? 'Bamba la Nambari la Chombo (Ikiwa Inahusika)' : 'Full Vehicle Plate Number (If Applicable)'}
-                  </label>
-                  <input
-                    id="owner-plate-number"
-                    type="text"
-                    value={plateNumber}
-                    onChange={(e) => setPlateNumber(e.target.value)}
-                    className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-brand-beige font-mono focus:outline-none focus:border-accent-orange uppercase"
-                    placeholder="e.g. KDG 123A"
-                  />
-                </div>
-
-                {/* Color detail */}
-                <div className="space-y-1">
-                  <label htmlFor="owner-color-detail" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">{t.colorQuest} *</label>
-                  <input
-                    id="owner-color-detail"
-                    type="text"
-                    value={colorDetail}
-                    onChange={(e) => setColorDetail(e.target.value)}
-                    className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-brand-beige focus:outline-none focus:border-accent-orange"
-                    placeholder="e.g. blue plastic wallet, black casing"
-                    required
-                  />
-                </div>
-
-                {/* Extra details */}
-                <div className="space-y-1">
-                  <label htmlFor="owner-lost-details" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">{t.extraQuest}</label>
-                  <textarea
-                    id="owner-lost-details"
-                    value={lostDetails}
-                    onChange={(e) => setLostDetails(e.target.value)}
-                    rows={2}
-                    className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-brand-beige focus:outline-none focus:border-accent-orange"
-                    placeholder="e.g. lost inside a Super Metro matatu going to Westlands"
-                  />
-                </div>
-
-                {/* Optional ID Proof upload (Tier 3) */}
-                <div className="space-y-1">
-                  <label htmlFor="owner-id-proof-upload" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">
-                    Upload National ID/Passport (For Tier 3 verification)
-                  </label>
-                  <input
-                    id="owner-id-proof-upload"
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) {
-                        const reader = new FileReader();
-                        reader.onloadend = () => {
-                          setIdProofBase64(reader.result as string);
-                        };
-                        reader.readAsDataURL(file);
-                      }
-                    }}
-                    className="block w-full text-xs text-stone-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-orange-50 file:text-accent-orange hover:file:bg-orange-100 cursor-pointer"
-                  />
-                  {idProofBase64 && (
-                    <div className="space-y-2">
-                      <p className="text-[11px] text-emerald-600 font-semibold flex items-center space-x-1">
-                        <span>✓ Kitambulisho kimepakiwa na kitahifadhiwa salama (Tier 3 Activated)</span>
-                      </p>
-                      <div className="flex items-start space-x-2 bg-stone-50 p-2.5 rounded-lg border border-stone-200">
-                        <input
-                          id="id-upload-consent"
-                          type="checkbox"
-                          checked={idUploadConsent}
-                          onChange={(e) => setIdUploadConsent(e.target.checked)}
-                          className="mt-0.5 h-3.5 w-3.5 rounded border-stone-300 text-primary-green focus:ring-primary-green cursor-pointer"
-                          required
-                        />
-                        <label htmlFor="id-upload-consent" className="text-[10px] text-stone-600 leading-tight select-none cursor-pointer">
-                          I explicitly consent to the processing and secure storage of my government identity card/passport for physical owner verification in accordance with ODPC standards. *
-                        </label>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </>
-            ) : null}
+            <p className="text-[11px] text-stone-500 bg-sky-50/50 border border-sky-100 rounded-xl p-3">
+              {lang === 'sw'
+                ? 'Hatua ya mwacha: Kuendelea kuthibitisha usalama ulikwenda katika VerificationForm (maswali zikitumia bidhaa).'
+                : 'Next you will answer category-specific security questions about this item to prove ownership. Your answers stay private and are only used to verify you.'}
+            </p>
 
             {/* Contact Phone for OTP */}
-            <div className="space-y-1 border-t border-stone-200 pt-4">
+            <div className="space-y-1">
               <label htmlFor="owner-phone" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">Your Phone Number (For SMS OTP) *</label>
               <input
                 id="owner-phone"
@@ -997,29 +816,45 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 . *
               </label>
             </div>
+          </div>
 
-            <div className="flex space-x-3 pt-3">
-              <button
-                type="button"
-                onClick={() => setVerificationStep('confidence_gate')}
-                className="flex-1 bg-stone-100 hover:bg-stone-200 text-stone-700 py-3 rounded-xl font-bold transition text-xs"
-              >
-                Back
-              </button>
-              <button
-                type="submit"
-                disabled={searchLoading}
-                className="flex-1 bg-accent-orange hover:bg-accent-hover text-white py-3 rounded-xl font-bold transition text-xs cursor-pointer flex items-center justify-center space-x-2 disabled:opacity-50"
-              >
-                {searchLoading ? (
-                  <Loader2 className="animate-spin" size={16} />
-                ) : (
-                  <span>Verify & Send OTP</span>
-                )}
-              </button>
-            </div>
-          </form>
+          <div className="flex space-x-3 pt-3">
+            <button
+              type="button"
+              onClick={() => setVerificationStep('search')}
+              className="flex-1 bg-stone-100 hover:bg-stone-200 text-stone-700 py-3 rounded-xl font-bold transition text-xs"
+            >
+              Back
+            </button>
+            <button
+              type="button"
+              disabled={!agreedTerms || !ownerPhone.trim()}
+              onClick={() => setVerificationStep('tier1_security')}
+              className="flex-1 bg-accent-orange hover:bg-accent-hover text-white py-3 rounded-xl font-bold transition text-xs disabled:opacity-50 cursor-pointer"
+            >
+              Proceed to Claim
+            </button>
+          </div>
         </div>
+      )}
+
+      {/* Tier 1 Security verification — category-specific questions rendered by
+          VerificationForm using the declarative profiles in
+          src/config/verificationProfiles.ts */}
+      {verificationStep === 'tier1_security' && selectedItem && (
+        <VerificationForm
+          lang={lang}
+          categoryId={selectedItem.category_id || 'other-item'}
+          isSensitiveDocument={selectedItem.is_sensitive_document !== false}
+          onSubmit={handleTier1Submit}
+          onBack={() => setVerificationStep('confidence_gate')}
+          isConfident={isConfident}
+          setIsConfident={setIsConfident}
+          ownerIdentifyingDetails={ownerIdentifyingDetails}
+          setOwnerIdentifyingDetails={setOwnerIdentifyingDetails}
+          errorMsg={errorMsg}
+          isVerifyingClaim={searchLoading}
+        />
       )}
 
       {/* Tier 2 OTP validation */}
@@ -1393,9 +1228,6 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               setVerificationStep('search');
               setSelectedItem(null);
               setPaidClaim(null);
-              setLastDigits('');
-              setColorDetail('');
-              setLostDetails('');
               setOwnerPhone('');
               setOtpCode('');
               setRatingSubmitted(false);
@@ -1490,9 +1322,6 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               setVerificationStep('search');
               setSelectedItem(null);
               setPaidClaim(null);
-              setLastDigits('');
-              setColorDetail('');
-              setLostDetails('');
               setOwnerPhone('');
               setOtpCode('');
               setRatingSubmitted(false);
@@ -1509,17 +1338,30 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
       {/* TRACK MY CLAIM MODAL */}
       {showTrackModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 fade-in">
-          <div className="bg-white rounded-3xl p-6 md:p-8 max-w-lg w-full space-y-5 shadow-2xl relative border border-stone-100">
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowTrackModal(false);
+          }}
+        >
+          <div
+            className="bg-white rounded-3xl p-6 md:p-8 max-w-lg w-full max-h-[90vh] overflow-y-auto space-y-5 shadow-2xl relative border border-stone-100"
+            role="dialog"
+            ref={trackModalRef}
+            tabIndex={-1}
+            aria-modal="true"
+            aria-label={lang === 'sw' ? 'Fuatilia Ombi Lako' : 'Track My Claim'}
+          >
             <div className="flex items-center justify-between border-b border-stone-100 pb-3">
               <h3 className="text-xl font-extrabold text-primary-green flex items-center gap-2">
                 <Clock size={20} className="text-accent-orange" />
-                <span>{lang === 'sw' ? 'Fuatilia Ombi Lako (Track My Claim)' : 'Track My Claim'}</span>
+                <span>{lang === 'sw' ? 'Fuatilia Ombi Lako' : 'Track My Claim'}</span>
               </h3>
               <button
                 type="button"
                 onClick={() => setShowTrackModal(false)}
-                className="text-stone-400 hover:text-stone-600 font-bold text-lg cursor-pointer px-2"
+                className="text-stone-400 hover:text-stone-600 font-bold text-lg cursor-pointer px-2 py-1 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg hover:bg-stone-100"
+                aria-label={lang === 'sw' ? 'Funga' : 'Close'}
               >
                 ✕
               </button>
@@ -1655,7 +1497,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                       }
                       setShowTrackModal(false);
                     }}
-                    className="w-full bg-primary-green hover:bg-primary-green-dark text-white py-3 rounded-xl font-bold text-sm transition flex items-center justify-center space-x-2 cursor-pointer"
+                    className="w-full bg-primary-green hover:bg-primary-hover text-white py-3 rounded-xl font-bold text-sm transition flex items-center justify-center space-x-2 cursor-pointer"
                   >
                     <span>
                       {trackResult.claim.status === 'pending_payment'

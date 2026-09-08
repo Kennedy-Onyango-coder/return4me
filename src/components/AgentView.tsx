@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { translations } from '../types';
+import ClaimVerificationEvidence from './ClaimVerificationEvidence';
 import { ShieldCheck, Plus, CheckCircle, PackageOpen, HelpCircle, Loader2, ArrowRight, AlertCircle, Phone, Lock, Eye, Camera, Upload } from 'lucide-react';
 
 interface AgentViewProps {
@@ -1165,31 +1166,11 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
                                 against what they say in person now. This is the agent's real
                                 evidence for a non-document item; it was being collected but
                                 never shown here before. */}
-                            {(item.associatedClaim?.owner_identifying_details || item.associatedClaim?.security_answers?.lostDetails || item.associatedClaim?.security_answers?.color) && (
-                              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-left space-y-1.5">
-                                <p className="text-[9px] font-extrabold text-amber-700 uppercase tracking-widest">
-                                  {lang === 'en' ? 'Claimant stated (before seeing item) — verify it matches:' : 'Alichosema mdai (kabla ya kuona bidhaa) — thibitisha inalingana:'}
-                                </p>
-                                {item.associatedClaim?.owner_identifying_details && (
-                                  <p className="text-xs text-stone-700 font-medium">
-                                    <span className="font-bold">{lang === 'en' ? 'Identifying detail: ' : 'Alama ya utambulisho: '}</span>
-                                    {item.associatedClaim.owner_identifying_details}
-                                  </p>
-                                )}
-                                {item.associatedClaim?.security_answers?.color && (
-                                  <p className="text-xs text-stone-700 font-medium">
-                                    <span className="font-bold">{lang === 'en' ? 'Color: ' : 'Rangi: '}</span>
-                                    {item.associatedClaim.security_answers.color}
-                                  </p>
-                                )}
-                                {item.associatedClaim?.security_answers?.lostDetails && (
-                                  <p className="text-xs text-stone-700 font-medium">
-                                    <span className="font-bold">{lang === 'en' ? 'Circumstances: ' : 'Mazingira: '}</span>
-                                    {item.associatedClaim.security_answers.lostDetails}
-                                  </p>
-                                )}
-                              </div>
-                            )}
+                            <ClaimVerificationEvidence
+                              lang={lang}
+                              answers={item.associatedClaim.security_answers}
+                              identifyingDetails={item.associatedClaim.owner_identifying_details}
+                            />
 
                             <button
                               onClick={() => handleConfirmViewing(item.associatedClaim.id)}

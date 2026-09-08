@@ -350,51 +350,51 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
       </AnimatePresence>
 
       {/* Mobile Bottom Tab Bar Navigation (Below md) */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-brand-border z-30 py-2 px-4 flex justify-around items-center shadow-[0_-4px_12px_rgba(0,0,0,0.05)]">
+      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-brand-border z-30 py-2 px-4 pb-[max(0.5rem,env(safe-area-inset-bottom))] flex justify-around items-center shadow-[0_-4px_12px_rgba(0,0,0,0.05)]">
         <button
           onClick={() => handleNavClick('home')}
-          className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 transition-all ${
+          className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 py-1 transition-all ${
             currentView === 'home' ? 'text-primary-green' : 'text-brand-muted-text'
           }`}
         >
           <Home size={18} />
-          <span className="text-[9px] font-extrabold uppercase tracking-wider">Home</span>
+          <span className="text-[10px] font-extrabold uppercase tracking-wider">{lang === 'sw' ? 'Mwanzo' : 'Home'}</span>
         </button>
         <button
           onClick={() => handleNavClick('owner')}
-          className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 transition-all ${
+          className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 py-1 transition-all ${
             currentView === 'owner' ? 'text-primary-green' : 'text-brand-muted-text'
           }`}
         >
           <Search size={18} />
-          <span className="text-[9px] font-extrabold uppercase tracking-wider">Search</span>
+          <span className="text-[10px] font-extrabold uppercase tracking-wider">{lang === 'sw' ? 'Tafuta' : 'Search'}</span>
         </button>
         <button
           onClick={() => handleNavClick('finder')}
-          className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 transition-all ${
+          className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 py-1 transition-all ${
             currentView === 'finder' ? 'text-primary-green' : 'text-brand-muted-text'
           }`}
         >
           <MapPin size={18} />
-          <span className="text-[9px] font-extrabold uppercase tracking-wider">Report</span>
+          <span className="text-[10px] font-extrabold uppercase tracking-wider">{lang === 'sw' ? 'Ripoti' : 'Report'}</span>
         </button>
         <button
           onClick={() => handleNavClick('agent')}
-          className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 transition-all ${
+          className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 py-1 transition-all ${
             currentView === 'agent' ? 'text-primary-green' : 'text-brand-muted-text'
           }`}
         >
           <Globe size={18} />
-          <span className="text-[9px] font-extrabold uppercase tracking-wider">Agent</span>
+          <span className="text-[10px] font-extrabold uppercase tracking-wider">{lang === 'sw' ? 'Wakala' : 'Agent'}</span>
         </button>
         <button
           onClick={() => setIsOpen(true)}
-          className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 transition-all ${
+          className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 py-1 transition-all ${
             isOpen ? 'text-primary-green' : 'text-brand-muted-text'
           }`}
         >
           <Menu size={18} />
-          <span className="text-[9px] font-extrabold uppercase tracking-wider">More</span>
+          <span className="text-[10px] font-extrabold uppercase tracking-wider">{lang === 'sw' ? 'Zaidi' : 'More'}</span>
         </button>
       </div>
     </>

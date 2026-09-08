@@ -278,7 +278,7 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <main className="flex-grow flex flex-col md:flex-row max-w-7xl w-full mx-auto border-x border-brand-border bg-white shadow-sm pb-16 md:pb-0">
+      <main className="flex-grow flex flex-col md:flex-row max-w-7xl w-full mx-auto border-x border-brand-border bg-white shadow-sm pb-24 md:pb-0">
         
         {/* LANDING / HERO VIEW */}
         {currentView === 'home' && (

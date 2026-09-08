@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { translations } from '../types';
-import { Camera, Upload, AlertCircle, AlertTriangle, MapPin, CheckCircle, Shield, ArrowRight, Loader2, RefreshCw } from 'lucide-react';
+import { Camera, Upload, AlertCircle, AlertTriangle, MapPin, CheckCircle, Shield, ArrowRight, Loader2, RefreshCw, X } from 'lucide-react';
 
 interface FinderViewProps {
   lang: 'en' | 'sw';
@@ -401,22 +401,32 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                 </div>
               </div>
             ) : photoBase64 ? (
-              <div className="relative rounded-2xl overflow-hidden border border-stone-200 bg-brand-beige group aspect-video">
+              <div className="relative rounded-2xl overflow-hidden border border-stone-200 bg-brand-beige aspect-video">
                 <img src={photoBase64} alt="Found item document" className="w-full h-full object-contain" />
-                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition space-x-3">
+                {/* Photo controls: always visible (no hover dependency for touch devices) */}
+                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-3 flex items-center justify-center space-x-3">
                   <button
                     type="button"
                     onClick={startCamera}
-                    className="bg-white text-primary-green p-3 rounded-full hover:bg-stone-100 shadow-md transition"
-                    title="Retake camera snap"
-                    aria-label="Retake camera snap"
+                    className="bg-white text-primary-green p-2.5 rounded-full hover:bg-stone-100 shadow-md transition"
+                    title={lang === 'sw' ? 'Piga picha tena' : 'Retake photo'}
+                    aria-label={lang === 'sw' ? 'Piga picha tena' : 'Retake photo'}
                   >
-                    <Camera size={20} />
+                    <Camera size={18} />
                   </button>
-                  <label className="bg-white text-primary-green p-3 rounded-full hover:bg-stone-100 shadow-md transition cursor-pointer" aria-label="Upload a photo file instead">
-                    <Upload size={20} />
+                  <label className="bg-white text-primary-green p-2.5 rounded-full hover:bg-stone-100 shadow-md transition cursor-pointer" aria-label={lang === 'sw' ? 'Pakia picha' : 'Upload a photo'}>
+                    <Upload size={18} />
                     <input type="file" accept="image/*" onChange={handleFileUpload} className="hidden" />
                   </label>
+                  <button
+                    type="button"
+                    onClick={() => { setPhotoBase64(null); setExtractedName(''); setExtractedNumber(''); }}
+                    className="bg-red-50 text-red-600 p-2.5 rounded-full hover:bg-red-100 shadow-md transition"
+                    title={lang === 'sw' ? 'Ondoa picha' : 'Remove photo'}
+                    aria-label={lang === 'sw' ? 'Ondoa picha' : 'Remove photo'}
+                  >
+                    <X size={18} />
+                  </button>
                 </div>
               </div>
             ) : (
@@ -427,7 +437,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                 </div>
                 <div className="space-y-1">
                   <p className="text-sm font-bold text-stone-700">Take a photo or upload file</p>
-                  <p className="text-xs text-stone-400">Capture the ID/passport face cleanly to enable smart document detail suggestions.</p>
+                  <p className="text-xs text-stone-400">{lang === 'sw' ? 'Picha itasaidia kulinganisha ripoti yako na bidhaa zilizopotezwa na wamiliki.' : 'A clear photo helps match your report with lost items owned by others.'}</p>
                 </div>
                 <div className="flex items-center justify-center space-x-3">
                   <button
@@ -647,8 +657,10 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                   <h4 className="text-xs font-bold text-emerald-900">
                     {lang === 'en' ? '✓ Precise Agent Match Enabled!' : '✓ Unganisho Sahihi wa Wakala Umewashwa!'}
                   </h4>
-                  <p className="text-[10px] text-emerald-700 font-mono mt-0.5 truncate">
-                    GPS: {latitude.toFixed(5)}, {longitude.toFixed(5)}
+                  <p className="text-[10px] text-emerald-700 mt-0.5">
+                    {lang === 'en'
+                      ? 'Location captured to help match your report with the nearest Return4me Agent.'
+                      : 'Mahali yamehifadhiwa ili kusaidia kulinganisha ripoti yako na Wakala wa Return4me aliye karibu.'}
                   </p>
                 </div>
                 <button
