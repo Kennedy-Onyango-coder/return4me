@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { toE164Kenyan, hashCode, timingSafeEqualHex, generateToken, verifyToken, sendCodeViaSms, maskPhoneForLog } from '../auth';
+import { toE164Kenyan, hashCode, timingSafeEqualHex, generateToken, verifyToken, sendCodeViaSms, maskPhoneForLog, isAdminSessionCurrent } from '../auth';
 
 // These four functions were chosen deliberately: they're pure (no DB, no
 // network), but they sit directly behind three of the security fixes made
@@ -145,6 +145,65 @@ describe('generateToken / verifyToken', () => {
     const start = Date.now();
     while (Date.now() - start < 5) { /* busy-wait a few ms */ }
     expect(verifyToken(token)).toBeNull();
+  });
+});
+
+// P0 regression coverage for the admin-login "accepted then immediately logged
+// out" bug. An admin JWT is minted with tokenVersion: admin.token_version (see
+// server.ts /api/auth/admin-login and /api/auth/admin-login/verify-2fa).
+// verifyToken() must preserve that value on decode, because
+// requireCurrentAdminSession() re-checks req.user.tokenVersion against the
+// live account on every protected admin request and isAdminSessionCurrent()
+// deliberately fails closed when tokenVersion is missing. If verifyToken()
+// drops it, every validly-signed admin token is rejected the moment it hits
+// /api/admin/dashboard (401 -> the frontend shows "session expired or invalid").
+// These tests would fail on the buggy build: verifyToken returned
+// tokenVersion === undefined, so the round-trip and the active-account
+// acceptance assertions below both fail.
+describe('admin session tokenVersion — generateToken → verifyToken → isAdminSessionCurrent propagation', () => {
+  const buildAdminToken = (tokenVersion: number, role: 'admin' = 'admin') =>
+    generateToken(
+      { userId: 'admin-1', phone: '+254700000000', role, username: 'return4me_admin', tokenVersion },
+      '4h'
+    );
+
+  it('verifyToken preserves the tokenVersion that was embedded at signing time', () => {
+    const token = buildAdminToken(7);
+    const decoded = verifyToken(token);
+    expect(decoded).not.toBeNull();
+    expect(decoded?.role).toBe('admin');
+    expect(decoded?.tokenVersion).toBe(7);
+  });
+
+  it('an admin token minted at tokenVersion N is accepted for an active account at version N', () => {
+    const token = buildAdminToken(3);
+    const decoded = verifyToken(token);
+    expect(decoded).not.toBeNull();
+    const admin = { is_active: true, token_version: 3 };
+    expect(isAdminSessionCurrent(admin, decoded?.tokenVersion)).toBe(true);
+  });
+
+  it('an admin token whose tokenVersion is missing (undefined on decode) is rejected — fails closed', () => {
+    const admin = { is_active: true, token_version: 1 };
+    // undefined is exactly what requireCurrentAdminSession receives when
+    // verifyToken() drops the field on a real, validly-signed admin token.
+    expect(isAdminSessionCurrent(admin, undefined)).toBe(false);
+  });
+
+  it('an admin token whose tokenVersion mismatches the account is rejected', () => {
+    const token = buildAdminToken(1); // minted at version 1
+    const decoded = verifyToken(token);
+    expect(decoded?.tokenVersion).toBe(1);
+    // The account has since been bumped (e.g. 2FA disabled) to version 2.
+    const adminAtVersion2 = { is_active: true, token_version: 2 };
+    expect(isAdminSessionCurrent(adminAtVersion2, decoded?.tokenVersion)).toBe(false);
+  });
+
+  it('an inactive admin is rejected even when the tokenVersion matches', () => {
+    const token = buildAdminToken(2);
+    const decoded = verifyToken(token);
+    const inactive = { is_active: false, token_version: 2 };
+    expect(isAdminSessionCurrent(inactive, decoded?.tokenVersion)).toBe(false);
   });
 });
 

@@ -172,6 +172,18 @@ export function verifyToken(token: string): SessionPayload | null {
       role: decoded.role,
       agentId: decoded.agentId,
       username: decoded.username,
+      // P0 propagation fix: the SessionPayload embeds the admin_users
+      // token_version current at issuance (see SessionPayload.tokenVersion and
+      // server.ts's admin-login routes). requireCurrentAdminSession re-checks
+      // that version against the live account on EVERY request — but if it is
+      // dropped here, req.user.tokenVersion becomes undefined and
+      // isAdminSessionCurrent() fails closed ("typeof undefined !== 'number'").
+      // Every validly-signed admin token was therefore rejected the instant it
+      // reached the first protected admin route, which is exactly the
+      // "admin login accepted, then immediately logged out" symptom. Preserve
+      // the already-verified value exactly; absent/undefined stays absent so
+      // stale pre-version tokens still fail closed.
+      tokenVersion: decoded.tokenVersion,
     };
   } catch (e) {
     return null;
