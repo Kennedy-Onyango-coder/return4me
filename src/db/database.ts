@@ -162,11 +162,13 @@ export interface Claim {
   id: string; // Handover/release code
   item_id: string;
   owner_phone: string;
-  security_answers: {
-    lastDigits: string;
-    color: string;
-    lostDetails: string;
-  };
+  // Category-driven verification answers stored in a JSONB column. The keys
+  // depend on the item's category verification profile (e.g. national-id →
+  // {lastDigits, fullName, ...}; other-item → {description, ...}); legacy claims
+  // may carry pre-profile keys. Never assume a fixed lastDigits/color/lostDetails
+  // shape — readers must respect the category profile or treat the record as
+  // opaque evidence (see toAgentVerificationEvidence).
+  security_answers: Record<string, string>;
   verification_tier: 1 | 2 | 3;
   // pending_settlement: item has been physically handed over (pickup code +
   // handover photo verified) and the payout split is booked in the ledger as

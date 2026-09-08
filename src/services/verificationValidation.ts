@@ -44,11 +44,37 @@ export const LEGACY_EVIDENCE_KEYS = [
   'colorDetail',
 ];
 
-export type AnswerValidation =
-  | { ok: true; sanitized: Record<string, string> }
-  | { ok: false; error: string };
+export interface AnswerValidationSuccess {
+  ok: true;
+  sanitized: Record<string, string>;
+}
 
-function fail(message: string): AnswerValidation {
+export interface AnswerValidationFailure {
+  ok: false;
+  error: string;
+}
+
+export type AnswerValidation = AnswerValidationSuccess | AnswerValidationFailure;
+
+// The project compiles WITHOUT `strict` (tsconfig.json omits it). Under
+// strictNullChecks:false, TypeScript's truthiness/negation narrowing of a
+// boolean-literal discriminant is unreliable — `if (!validation.ok)` fails to
+// exclude the ok:true member. These explicit user-defined type guards make the
+// union narrowing correct regardless of strict mode, without weakening the
+// union or resorting to `any`.
+export function isAnswerValidationSuccess(
+  validation: AnswerValidation
+): validation is AnswerValidationSuccess {
+  return validation.ok === true;
+}
+
+export function isAnswerValidationFailure(
+  validation: AnswerValidation
+): validation is AnswerValidationFailure {
+  return validation.ok === false;
+}
+
+function fail(message: string): AnswerValidationFailure {
   return { ok: false, error: message };
 }
 

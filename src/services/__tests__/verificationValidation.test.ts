@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   validateVerificationAnswers,
   toAgentVerificationEvidence,
+  isAnswerValidationFailure,
   LEGACY_EVIDENCE_KEYS,
 } from '../verificationValidation';
 
@@ -42,7 +43,7 @@ describe('validateVerificationAnswers', () => {
       homeAddress: 'not a profile key',
     });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toMatch(/Unknown verification field/);
+    if (isAnswerValidationFailure(result)) expect(result.error).toMatch(/Unknown verification field/);
   });
 
   it('rejects fields whose key suggests a credential/secret even if they reach the payload', () => {
@@ -52,7 +53,7 @@ describe('validateVerificationAnswers', () => {
         [forbiddenKey]: 'x',
       });
       expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.error).toMatch(/disallowed field/);
+      if (isAnswerValidationFailure(result)) expect(result.error).toMatch(/disallowed field/);
     }
   });
 
@@ -62,13 +63,13 @@ describe('validateVerificationAnswers', () => {
       fullName: 'Ali Hassan',
     });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toMatch(/must be a single text value/);
+    if (isAnswerValidationFailure(result)) expect(result.error).toMatch(/must be a single text value/);
   });
 
   it('rejects a submission missing a required field', () => {
     const result = validateVerificationAnswers('national-id', { fullName: 'Ali Hassan' });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toMatch(/lastDigits/);
+    if (isAnswerValidationFailure(result)) expect(result.error).toMatch(/lastDigits/);
   });
 
   it('rejects a required field that is blank after trimming', () => {
@@ -153,5 +154,37 @@ describe('toAgentVerificationEvidence', () => {
     expect(toAgentVerificationEvidence('national-id', null)).toEqual({});
     expect(toAgentVerificationEvidence('national-id', ['lastDigits', '1234'])).toEqual({});
     expect(toAgentVerificationEvidence('national-id', 'nope')).toEqual({});
+  });
+});
+
+describe('declarative category profiles drive the persisted answer contract (type contract)', () => {
+  // Guards against regressing the domain model back to a single hard-coded
+  // {lastDigits, color, lostDetails} shape. Different categories must validate
+  // and store their OWN profile fields, with no fabricated universal keys.
+  it('two materially different categories produce different, non-fabricated sanitized keys', () => {
+    const id = validateVerificationAnswers('national-id', { lastDigits: 'K4X1', fullName: 'Ali Hassan' });
+    expect(id.ok).toBe(true);
+    if (id.ok) {
+      expect(id.sanitized).toEqual({ lastDigits: 'K4X1', fullName: 'Ali Hassan' });
+      expect(id.sanitized).not.toHaveProperty('color');
+      expect(id.sanitized).not.toHaveProperty('lostDetails');
+    }
+
+    const keys = validateVerificationAnswers('bunch-of-keys', { keyCount: '7', distinctiveMarks: 'red tag' });
+    expect(keys.ok).toBe(true);
+    if (keys.ok) expect(keys.sanitized).toEqual({ keyCount: '7', distinctiveMarks: 'red tag' });
+
+    const padlock = validateVerificationAnswers('padlock', { color: 'black' });
+    expect(padlock.ok).toBe(true);
+    if (padlock.ok) expect(padlock.sanitized).toEqual({ color: 'black' });
+  });
+
+  it('evidence built per category only carries that category (or explicit legacy) keys', () => {
+    // color is not part of the national-id profile and not a legacy key → dropped.
+    expect(toAgentVerificationEvidence('national-id', { lastDigits: '1234', color: 'x', cvv: '123' }))
+      .toEqual({ lastDigits: '1234' });
+    // single-key category has no lastDigits/color; only its own field survives.
+    expect(toAgentVerificationEvidence('single-key', { distinctiveMarks: 'edge scratch' }))
+      .toEqual({ distinctiveMarks: 'edge scratch' });
   });
 });

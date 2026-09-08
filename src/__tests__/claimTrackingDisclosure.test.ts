@@ -155,4 +155,16 @@ describe('server-side verification validation is enforced on submit', () => {
     expect(submit).toMatch(/sanitizedAnswers/);
     expect(submit).not.toMatch(/security_answers: securityAnswers/);
   });
+  it('the validation category comes from the server-side item, never the claimant body', () => {
+    const submit = routeBody('post', '/api/claims/submit');
+    // The category used for validation is read off the item the server just
+    // fetched by id — a claimant-supplied category cannot steer validation.
+    expect(submit).toMatch(/const categoryId = item\.category_id \|\| 'other-item';/);
+    expect(submit).not.toMatch(/categoryId\s*[:=][^;]*req\.body/);
+    // The destructured claim body must not include a claimant-controlled category.
+    const bodyStart = serverTs.indexOf("app.post('/api/claims/submit'");
+    const body = serverTs.slice(bodyStart, bodyStart + 300);
+    expect(body).not.toMatch(/category/i);
+  });
+
 });

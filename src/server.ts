@@ -17,7 +17,7 @@ import { OcrService } from './services/ocr';
 import { uploadBase64Image } from './services/storage';
 import { SocialService } from './services/social';
 import { computeRecoveryFee } from './services/feeEngine';
-import { validateVerificationAnswers, toAgentVerificationEvidence } from './services/verificationValidation';
+import { validateVerificationAnswers, toAgentVerificationEvidence, isAnswerValidationFailure } from './services/verificationValidation';
 import bcrypt from 'bcryptjs';
 import * as Sentry from '@sentry/node';
 import * as OTPAuth from 'otpauth';
@@ -1580,7 +1580,7 @@ async function startServer() {
       // missing required fields are rejected before anything is stored.
       const categoryId = item.category_id || 'other-item';
       const validation = validateVerificationAnswers(categoryId, securityAnswers);
-      if (!validation.ok) {
+      if (isAnswerValidationFailure(validation)) {
         return res.status(400).json({
           error: `Majibu ya usalama si sahihi. ${validation.error} / Verification answers are invalid. ${validation.error}`,
         });
