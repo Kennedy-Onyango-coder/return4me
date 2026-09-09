@@ -1664,6 +1664,41 @@ class DatabaseEngine {
     }
   }
 
+  // Atomic, race-safe expiry of a payment window (closes audit finding C1).
+  // The expiry sweep and the inline claim-expiry check must never overwrite a
+  // claim that a webhook has since confirmed paid. Sequence:
+  //   T1 sweep reads claim in 'pending_payment' (snapshot)
+  //   T2 webhook CAS wins pending_payment -> escrow_held (real money received)
+  //   T3 sweep writes 'payment_window_expired' unconditionally  <-- clobbers it
+  // An unconditional status write therefore turns a genuinely-paid claim into
+  // 'payment_window_expired' — the owner gets a payment strike and is pushed to
+  // pay again (a potential double charge), and the escrow_held terminal truth
+  // is lost. Guarded by WHERE status='pending_payment' (compare-and-swap,
+  // mirroring attemptClaimEscrowHold): returns true ONLY if THIS call performed
+  // the transition. If the claim is already past 'pending_payment' (the webhook
+  // won the race, or it was already expired), no change is made and false is
+  // returned, so the caller can never record a strike or clobber a payment.
+  public async expirePendingPaymentClaim(claimId: string): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(claimsTable)
+        .set({ status: "payment_window_expired", updated_at: new Date() })
+        .where(and(eq(claimsTable.id, claimId), eq(claimsTable.status, "pending_payment")))
+        .returning({ id: claimsTable.id });
+      if (rows.length > 0) {
+        await this.logAudit(
+          "SYSTEM",
+          "UPDATE_CLAIM_STATUS",
+          `Claim ${claimId} status changed to payment_window_expired`
+        );
+      }
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Failed to expire pending payment claim:", error);
+      return false;
+    }
+  }
+
   // POST /api/claims/:id/rate is unauthenticated (owners aren't logged in)
   // and only takes a claim ID from a guessable, low-entropy space — see the
   // route comment. Without a dedup mechanism, the same claim ID could be
@@ -1764,8 +1799,16 @@ class DatabaseEngine {
     }
   }
 
-  // Approve Agent
+  // Approve Agent (also used to re-activate a suspended Agent).
+  // Verifies the target actually exists so the admin route can never report
+  // "approved" for an id that matches no row (a false-success). Idempotent for
+  // an existing Agent — approving an already-active Agent or re-activating a
+  // suspended one is a valid no-op transition — but a non-existent id throws.
   public async approveAgent(agentId: string, adminUser: string): Promise<void> {
+    const existing = await this.getAgent(agentId).catch(() => null);
+    if (!existing) {
+      throw new Error("Agent not found.");
+    }
     try {
       await drizzleDb.update(agentsTable).set({ status: "active" }).where(eq(agentsTable.id, agentId));
       await this.logAudit(
@@ -1779,8 +1822,15 @@ class DatabaseEngine {
     }
   }
 
-  // Suspend Agent
+  // Suspend Agent.
+  // Verifies the target actually exists so the route can never report
+  // "suspended" for an id that matches no row. Idempotent for an existing
+  // Agent (suspending an already-suspended one is a valid no-op transition).
   public async suspendAgent(agentId: string, adminUser: string): Promise<void> {
+    const existing = await this.getAgent(agentId).catch(() => null);
+    if (!existing) {
+      throw new Error("Agent not found.");
+    }
     try {
       await drizzleDb.update(agentsTable).set({ status: "suspended" }).where(eq(agentsTable.id, agentId));
       await this.logAudit(
@@ -2044,7 +2094,7 @@ class DatabaseEngine {
   // Finalizes a refund after the real M-Pesa transfer has actually
   // succeeded via IntaSend. Only ever called post-transfer — never marks a
   // ledger entry 'completed' for money that hasn't actually moved.
-  public async finalizeClaimRefund(claimId: string, amount: string, phone: string): Promise<boolean> {
+  public async finalizeClaimRefund(claimId: string, amount: string, phone: string, adminUser = "SYSTEM"): Promise<boolean> {
     try {
       return await drizzleDb.transaction(async (tx) => {
         // Idempotency guard: only a claim currently locked in 'refunding'
@@ -2061,13 +2111,24 @@ class DatabaseEngine {
         // real, non-money-moving side effect (the ledger/audit record) is
         // still a genuine double-write worth preventing even though the
         // underlying bank transfer itself isn't re-triggered here.
-        const claimRows = await tx
-          .select()
-          .from(claimsTable)
-          .where(and(eq(claimsTable.id, claimId), eq(claimsTable.status, "refunding")));
-        if (claimRows.length === 0) return false;
-        const claim = claimRows[0];
-        await tx.update(claimsTable).set({ status: "refunded", updated_at: new Date() }).where(eq(claimsTable.id, claimId));
+        // Atomic compare-and-swap: only a claim currently 'refunding' can be
+        // finalized, and the transition itself is the guard. A guarded
+        // UPDATE ... WHERE status='refunding' (NOT a SELECT-then-blind-UPDATE)
+        // closes the race where two concurrent finalizes — or a concurrent
+        // revert — could both pass an earlier read of 'refunding' and then both
+        // write, producing a duplicate ledger/audit entry or contradictory
+        // terminal states. Whichever writer's conditional UPDATE wins owns the
+        // claim; the loser matches zero rows and returns false (never writes a
+        // second ledger/audit row). All of this is inside one transaction, so
+        // the claim state, the item status, the refund ledger row and the audit
+        // entry commit together or not at all.
+        const updatedRows = await tx
+          .update(claimsTable)
+          .set({ status: "refunded", updated_at: new Date() })
+          .where(and(eq(claimsTable.id, claimId), eq(claimsTable.status, "refunding")))
+          .returning();
+        if (updatedRows.length === 0) return false;
+        const claim = updatedRows[0];
         if (claim?.item_id) {
           await tx.update(itemsTable).set({ status: "at_agent" }).where(eq(itemsTable.id, claim.item_id));
         }
@@ -2084,9 +2145,9 @@ class DatabaseEngine {
         const auditId = "AUD-" + Math.random().toString(36).substr(2, 9).toUpperCase();
         await tx.insert(auditLogTable).values({
           id: auditId,
-          admin_user: "SYSTEM",
-          action: "REFUND_ESCROW",
-          details: `Refunded ${amount} KES to owner ${phone} for claim ${claimId} after real M-Pesa disbursement succeeded.`,
+          admin_user: adminUser,
+          action: "REFUND_FINALIZED",
+          details: `Claim ${claimId}: refund of ${amount} KES to ${phone} reconciled as EXECUTED by ${adminUser} after provider confirmation. Claim finalized as refunded.`,
         });
         return true;
       });
@@ -2108,18 +2169,74 @@ class DatabaseEngine {
   // and (b) make the denied loser look like a still-competing claimant to the
   // claim-submit duplicate detection. The fact that the loser's money is
   // still held in escrow and needs a manual refund is recorded here in the
-  // audit log (REFUND_FAILED_REVERTED) and remains recoverable via the
+  // audit log (REFUND_REVERTED) and remains recoverable via the
   // claim's still-set payment_reference — it is a financial reconciliation
   // concern, not a claim-status concern.
-  public async revertClaimRefundLock(claimId: string, reason: string): Promise<void> {
+  public async revertClaimRefundLock(claimId: string, reason: string, adminUser = "SYSTEM"): Promise<boolean> {
     try {
-      await drizzleDb
+      const rows = await drizzleDb
         .update(claimsTable)
         .set({ status: "rejected", updated_at: new Date() })
-        .where(and(eq(claimsTable.id, claimId), eq(claimsTable.status, "refunding")));
-      await this.logAudit("SYSTEM", "REFUND_FAILED_REVERTED", `Refund attempt for claim ${claimId} failed and the losing claim was rejected: ${reason}. The claimant's escrow balance still requires manual admin refund.`);
+        .where(and(eq(claimsTable.id, claimId), eq(claimsTable.status, "refunding")))
+        .returning({ id: claimsTable.id });
+      if (rows.length > 0) {
+        await this.logAudit(
+          adminUser,
+          "REFUND_REVERTED",
+          `Claim ${claimId}: refund reconciled as NOT EXECUTED by ${adminUser} after provider confirmation (${reason}). Losing claim rejected; the claimant's escrow balance still requires a manual refund.`
+        );
+      }
+      return rows.length > 0;
     } catch (error) {
       console.error("Failed to revert claim refund lock:", error);
+      throw new Error("Failed to revert claim refund lock.", { cause: error });
+    }
+  }
+
+  // Refund reconciliation registry (admin operational view). Lists every claim
+  // currently locked in 'refunding' — i.e. a losing dispute claimant whose real
+  // M-Pesa refund was attempted but ended in an UNKNOWN provider outcome. Such
+  // claims are safe (Return4me never auto-retries them) but they are otherwise
+  // an operational orphan: nothing surfaces them for the manual provider check
+  // the A1 discipline requires. This query is the discoverability half of the
+  // reconciliation workflow; the admin finalize/revert endpoints act on exactly
+  // these claims. Each item carries the refund amount re-derived the same way
+  // resolveDispute derives it (the item's locked fee, else its category fee).
+  public async getRefundReconciliationClaims(): Promise<
+    Array<{ claimId: string; itemId: string | null; ownerPhone: string; refundAmount: string; waitingSince: string }>
+  > {
+    try {
+      const claims = await drizzleDb.select().from(claimsTable);
+      const refunding = claims.filter((c) => c.status === "refunding");
+      if (refunding.length === 0) return [];
+
+      const items = await drizzleDb.select().from(itemsTable);
+      const itemById = new Map(items.map((i) => [i.id, i]));
+      const categories = await drizzleDb.select().from(categoriesTable);
+      const categoryById = new Map(categories.map((c) => [c.id, c]));
+
+      return refunding.map((c) => {
+        const item = c.item_id ? itemById.get(c.item_id) : null;
+        let amount = 0;
+        if (item && item.locked_total_fee !== null && item.locked_total_fee !== undefined) {
+          const locked = parseFloat(String(item.locked_total_fee));
+          if (!isNaN(locked)) amount = locked;
+        }
+        if (amount === 0 && item?.category_id) {
+          const cat = categoryById.get(item.category_id);
+          if (cat) amount = parseFloat(String(cat.total_fee)) || 0;
+        }
+        return {
+          claimId: c.id,
+          itemId: c.item_id ?? null,
+          ownerPhone: c.owner_phone,
+          refundAmount: String(amount),
+          waitingSince: c.updated_at ? new Date(c.updated_at).toISOString() : new Date(c.created_at ?? 0).toISOString(),
+        };
+      });
+    } catch (error) {
+      console.error("Failed to list refund reconciliation claims:", error);
+      throw new Error("Failed to list refund reconciliation claims.", { cause: error });
     }
   }
 

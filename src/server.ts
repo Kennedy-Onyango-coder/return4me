@@ -3203,7 +3203,7 @@ async function startServer() {
           result.refundNeededForClaimId
         );
         if (refundResult.outcome === 'completed') {
-          await db.finalizeClaimRefund(result.refundNeededForClaimId, result.refundAmount, result.refundPhone);
+          await db.finalizeClaimRefund(result.refundNeededForClaimId, result.refundAmount, result.refundPhone, adminIdentifier);
         } else if (refundResult.outcome === 'unknown') {
           // FIX #4 (audit finding A1): a network timeout/exception means we
           // do NOT know whether IntaSend executed the refund. Treating that
@@ -3231,7 +3231,7 @@ async function startServer() {
           // Definite provider rejection (IntaSend received the request and
           // refused it) — the refund was NOT executed, so reverting the
           // claim's refund lock is safe.
-          await db.revertClaimRefundLock(result.refundNeededForClaimId, 'IntaSend refund disbursement rejected by provider');
+          await db.revertClaimRefundLock(result.refundNeededForClaimId, 'IntaSend refund disbursement rejected by provider', adminIdentifier);
           return res.status(207).json({
             success: true,
             message: 'Mzozo umetatuliwa, lakini urejeshaji wa fedha wa mdai aliyeshindwa umeshindwa kufaulu. Msimamizi anahitaji kufuatilia kwa mkono. / Dispute resolved, but the losing claimant\'s refund failed to go through. Manual admin follow-up is required.',
@@ -3241,6 +3241,83 @@ async function startServer() {
       }
 
       res.json({ success: true, message: 'Mzozo umetatuliwa kikamilifu kulingana na ushahidi uliowasilishwa.' });
+    } catch (e: any) {
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
+    }
+  });
+
+  // ============================================================
+  // REFUND RECONCILIATION (A1 unknown-outcome operational workflow)
+  // ============================================================
+  // A refund whose real provider outcome is UNKNOWN (network/timeout during the
+  // IntaSend call) is deliberately left with claim.status='refunding' and is
+  // NEVER automatically retried. Those claims are safe from duplication but
+  // were otherwise operationally orphaned: nothing surfaced them for the manual
+  // provider check the A1 discipline requires. These three routes make them
+  // discoverable and reconcile-able. Neither finalize nor revert ever triggers a
+  // refund — finalize merely records an already-executed transfer as refunded;
+  // revert records that the transfer did not execute.
+  app.get('/api/admin/refund-reconciliation', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
+    try {
+      if (req.user?.role !== 'admin') {
+        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+      }
+      const claims = await db.getRefundReconciliationClaims();
+      const items = claims.map((c) => ({
+        claimId: c.claimId,
+        itemId: c.itemId,
+        ownerPhone: maskPhoneForLog(c.ownerPhone),
+        refundAmount: c.refundAmount,
+        waitingSince: c.waitingSince,
+        status: 'refunding',
+        reason: 'unknown_provider_outcome',
+      }));
+      res.json({ success: true, items });
+    } catch (e: any) {
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
+    }
+  });
+
+  app.post('/api/admin/refund-reconciliation/:claimId/finalize', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
+    try {
+      if (req.user?.role !== 'admin') {
+        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+      }
+      const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
+      const claimId = req.params.claimId;
+      // Re-derive amount/recipient from the DB — never trust the client.
+      const found = (await db.getRefundReconciliationClaims()).find((c) => c.claimId === claimId);
+      if (!found || !found.ownerPhone) {
+        return res.status(409).json({ error: 'Dai hili halipo katika hali ya refunding. / This claim is not awaiting refund reconciliation.' });
+      }
+      if (parseFloat(found.refundAmount) <= 0) {
+        return res.status(409).json({ error: 'Kiasi cha kurejesha hakijaweza kubainishwa. / The refund amount could not be resolved.' });
+      }
+      const finalized = await db.finalizeClaimRefund(claimId, found.refundAmount, found.ownerPhone, adminIdentifier);
+      if (!finalized) {
+        return res.status(409).json({ error: 'Dai hili halikuwa tena katika hali ya refunding. / This claim is no longer in the refunding state.' });
+      }
+      res.json({ success: true, message: 'Refund imethibitishwa kuwa imefanyika na dai limekamilishwa. / Refund confirmed executed and claim finalized.' });
+    } catch (e: any) {
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
+    }
+  });
+
+  app.post('/api/admin/refund-reconciliation/:claimId/revert', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
+    try {
+      if (req.user?.role !== 'admin') {
+        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+      }
+      const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
+      const claimId = req.params.claimId;
+      const reason = (req.body && typeof req.body.reason === 'string' && req.body.reason.trim())
+        ? req.body.reason.trim()
+        : 'Admin confirmed with the provider that the refund was NOT executed';
+      const reverted = await db.revertClaimRefundLock(claimId, reason, adminIdentifier);
+      if (!reverted) {
+        return res.status(409).json({ error: 'Dai hili halikuwa katika hali ya refunding. / This claim was not in the refunding state.' });
+      }
+      res.json({ success: true, message: 'Urejeshaji umehakikiwa kuwa haukufanyika na dai limefungwa. / Refund confirmed NOT executed and claim closed.' });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
@@ -3907,9 +3984,12 @@ async function checkClaimExpiry(claim: any): Promise<any> {
     if (Date.now() - confirmedTime > 15 * 60 * 1000) {
       console.log(`[INLINE-CHECK] Claim ${claim.id} payment window expired. Expiring now.`);
       try {
-        await db.updateClaimStatus(claim.id, 'payment_window_expired');
-        await db.recordPaymentStrike(claim.owner_phone);
-        // Get updated claim
+        const expired = await db.expirePendingPaymentClaim(claim.id);
+        if (expired) {
+          await db.recordPaymentStrike(claim.owner_phone);
+        }
+        // Get updated claim (authoritative state — the claim may have been
+        // confirmed paid by a webhook that won the expiry race while we read).
         const updated = await db.getClaim(claim.id);
         if (updated) {
           return updated;
@@ -3993,8 +4073,10 @@ async function expireStaleClaims() {
         if (now - confirmedTime > 15 * 60 * 1000) {
           console.log(`[SWEEP] Claim ${claim.id} payment window expired. Transitioning status and recording strike for ${maskPhoneForLog(claim.owner_phone)}`);
           try {
-            await db.updateClaimStatus(claim.id, 'payment_window_expired');
-            await db.recordPaymentStrike(claim.owner_phone);
+            const expired = await db.expirePendingPaymentClaim(claim.id);
+            if (expired) {
+              await db.recordPaymentStrike(claim.owner_phone);
+            }
           } catch (err) {
             console.error(`Failed to expire claim ${claim.id} in sweep:`, err);
           }

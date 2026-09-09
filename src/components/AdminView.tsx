@@ -21,6 +21,11 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
   const [activeTab, setActiveTab] = useState<'stats' | 'agents' | 'disputes' | 'ledger' | 'review' | 'categories' | 'strikes' | 'found_items'>('stats');
   const [dashboardData, setDashboardData] = useState<any | null>(null);
   const [dashboardLoading, setDashboardLoading] = useState(false);
+  // Guards against duplicate concurrent /api/admin/dashboard fetches (e.g. the
+  // login-time fetch overlapping a refetch triggered by entering the Agents tab
+  // while a request is already in flight). fetchDashboardData() returns early if
+  // a fetch is already running; the flag is cleared in its finally block.
+  const dashboardFetchInFlightRef = useRef(false);
   const [dataError, setDataError] = useState('');
   const [actionSuccess, setActionSuccess] = useState('');
   const [actionWarning, setActionWarning] = useState('');
@@ -31,6 +36,13 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
   // admin-only endpoint (GET /api/admin/settings/pause-status) rather than
   // folded into the heavier dashboard payload.
   const [pauseStatuses, setPauseStatuses] = useState<Record<string, boolean> | null>(null);
+
+  // Refund reconciliation (A1 unknown-outcome workflow): claims locked in
+  // 'refunding' whose provider outcome is UNKNOWN. Safe (never auto-retried)
+  // but must be manually reconciled by an admin against the provider.
+  const [refundReconcileItems, setRefundReconcileItems] = useState<any[] | null>(null);
+  const [refundReconcileLoading, setRefundReconcileLoading] = useState(false);
+  const [refundReconcileProcessing, setRefundReconcileProcessing] = useState<string | null>(null);
 
   // Admin 2FA enrollment (Security section, stats tab)
   const [twoFaSetupData, setTwoFaSetupData] = useState<{ secret: string; otpauthUrl: string } | null>(null);
@@ -217,6 +229,10 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
 
   const fetchDashboardData = async () => {
     if (!token) return;
+    // Avoid a duplicate concurrent request (e.g. login fetch + a tab-entry
+    // refetch overlapping). The one already in flight is authoritative enough.
+    if (dashboardFetchInFlightRef.current) return;
+    dashboardFetchInFlightRef.current = true;
     setDataError('');
     setDashboardLoading(true);
     try {
@@ -250,6 +266,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
     } catch (e: any) {
       setDataError(e.message);
     } finally {
+      dashboardFetchInFlightRef.current = false;
       setDashboardLoading(false);
     }
   };
@@ -472,6 +489,29 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
       fetchAdminCategories();
     }
   }, [activeTab]);
+
+  // Keep the Agents directory authoritative. /api/admin/dashboard is fetched on
+  // login and after admin mutations, so if a new agent registers (or is
+  // approved/suspended) while this admin is ALREADY authenticated, the list can
+  // otherwise go stale the moment the admin returns to the Agents tab. Re-pull
+  // on tab entry instead of showing a stale/no-longer-accurate agent list.
+  // Deps intentionally [activeTab] only (matching the categories effect above):
+  // fetch-on-login already covers token changes, and including token here would
+  // double-fetch when a login happens while already on the Agents tab.
+  useEffect(() => {
+    if (activeTab === 'agents' && token) {
+      fetchDashboardData();
+    }
+  }, [activeTab]);
+
+  // Load refund-reconciliation claims when the admin opens the Disputes tab
+  // (where these are surfaced) and whenever the admin session changes.
+  useEffect(() => {
+    if (activeTab === 'disputes' && token) {
+      fetchRefundReconciliation();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, token]);
 
   useEffect(() => {
     const fetchCategories = async () => {
@@ -833,6 +873,80 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
       })
       .catch(err => setDataError(err.message))
       .finally(() => setAdminActionProcessing(false));
+  };
+
+  // Refund reconciliation (A1): fetch claims awaiting manual refund reconciliation.
+  const fetchRefundReconciliation = async () => {
+    if (!token) return;
+    setRefundReconcileLoading(true);
+    try {
+      const response = await fetch('/api/admin/refund-reconciliation', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to fetch refund reconciliation.');
+      }
+      setRefundReconcileItems(Array.isArray(data.items) ? data.items : []);
+    } catch (e: any) {
+      setRefundReconcileItems((prev) => prev ?? []);
+    } finally {
+      setRefundReconcileLoading(false);
+    }
+  };
+
+  // Admin has verified with the provider that the refund WAS executed.
+  const handleRefundFinalize = (claimId: string) => {
+    if (window.confirm(
+      'Confirm REFUND EXECUTED?\n\nHave you verified directly with the payment provider (IntaSend) that this refund actually reached the claimant? Selecting "OK" records the claim as refunded and closes it. It will NOT send any money.\n\nClaim: ' + claimId
+    )) {
+      setRefundReconcileProcessing(claimId);
+      setDataError('');
+      setActionWarning('');
+      setActionSuccess('');
+      fetch(`/api/admin/refund-reconciliation/${encodeURIComponent(claimId)}/finalize`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then(async (res) => {
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Finalize failed.');
+          setActionSuccess(data.message);
+          fetchRefundReconciliation();
+          fetchDashboardData();
+        })
+        .catch((err) => setDataError(err.message))
+        .finally(() => setRefundReconcileProcessing(null));
+    }
+  };
+
+  // Admin has verified with the provider that the refund was NOT executed.
+  const handleRefundRevert = (claimId: string) => {
+    if (window.confirm(
+      'Confirm REFUND NOT EXECUTED?\n\nHave you verified directly with the payment provider (IntaSend) that this refund was NOT sent? Selecting "OK" rejects the losing claim and flags the held escrow for a manual refund. It will NOT send any money.\n\nClaim: ' + claimId
+    )) {
+      setRefundReconcileProcessing(claimId);
+      setDataError('');
+      setActionWarning('');
+      setActionSuccess('');
+      fetch(`/api/admin/refund-reconciliation/${encodeURIComponent(claimId)}/revert`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ reason: 'Admin confirmed with the provider that the refund was NOT executed.' }),
+      })
+        .then(async (res) => {
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Revert failed.');
+          setActionWarning(data.message);
+          fetchRefundReconciliation();
+          fetchDashboardData();
+        })
+        .catch((err) => setDataError(err.message))
+        .finally(() => setRefundReconcileProcessing(null));
+    }
   };
 
   // Resolve Dispute
@@ -2193,6 +2307,59 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               <div className="space-y-1">
                 <h2 className="text-lg font-bold text-primary-green">{t.openDisputes}</h2>
                 <p className="text-stone-500 text-xs">{t.disputeDesc}</p>
+              </div>
+
+              {/* REFUNDS REQUIRING RECONCILIATION (A1 unknown-outcome workflow) */}
+              <div className="bg-white border border-amber-200 rounded-3xl p-5 shadow-sm">
+                <div className="flex items-start justify-between gap-3 mb-3">
+                  <div>
+                    <h3 className="font-extrabold text-sm text-amber-700 uppercase tracking-widest">Refunds Requiring Reconciliation</h3>
+                    <p className="text-[11px] text-stone-500 mt-1">
+                      Claims locked in <span className="font-mono">refunding</span> — a real refund was attempted but the provider outcome is UNKNOWN (network/timeout). No automatic retry is ever issued. Verify the outcome with the payment provider (IntaSend) before choosing an action. Neither action sends money.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={fetchRefundReconciliation}
+                    disabled={refundReconcileLoading}
+                    className="text-[10px] font-bold text-stone-500 hover:text-stone-800 border border-stone-200 rounded-lg px-2 py-1 disabled:opacity-50 shrink-0"
+                  >Refresh</button>
+                </div>
+
+                {refundReconcileLoading ? (
+                  <p className="text-xs text-stone-400 py-3">Loading&hellip;</p>
+                ) : !refundReconcileItems || refundReconcileItems.length === 0 ? (
+                  <p className="text-xs text-stone-400 py-2">No refunds currently require reconciliation.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {refundReconcileItems.map((item: any) => (
+                      <div key={item.claimId} className="border border-stone-100 rounded-xl p-3 space-y-1">
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                          <span className="font-mono font-bold text-stone-800">Claim: {item.claimId}</span>
+                          <span className="text-stone-500">Item: {item.itemId || '\u2014'}</span>
+                          <span className="text-stone-500">Recipient: {item.ownerPhone}</span>
+                          <span className="text-stone-500">Amount: KES {item.refundAmount}</span>
+                          <span className="text-stone-500">Waiting since: {item.waitingSince ? new Date(item.waitingSince).toLocaleString() : '\u2014'}</span>
+                          <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[9px] font-bold uppercase">Outcome UNKNOWN</span>
+                        </div>
+                        <div className="flex flex-wrap gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => handleRefundFinalize(item.claimId)}
+                            disabled={refundReconcileProcessing === item.claimId}
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold px-3 py-1.5 rounded-lg disabled:opacity-50"
+                          >Confirm refund EXECUTED</button>
+                          <button
+                            type="button"
+                            onClick={() => handleRefundRevert(item.claimId)}
+                            disabled={refundReconcileProcessing === item.claimId}
+                            className="bg-red-600 hover:bg-red-700 text-white text-[11px] font-bold px-3 py-1.5 rounded-lg disabled:opacity-50"
+                          >Confirm refund NOT executed</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {dashboardData.disputes.length === 0 ? (
