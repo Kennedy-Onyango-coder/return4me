@@ -33,6 +33,16 @@ export const EmailService = {
     const client = getResendClient();
 
     if (!client) {
+      // No Resend client (API key missing/placeholder). In development/sandbox
+      // this prints to a console outbox and returns true so dev flows work
+      // without a real provider. In production there is NO simulated delivery:
+      // pretending an email was sent when it was not would create false
+      // operational confidence (e.g. a "payment confirmed" or "handover" email
+      // the customer never received), so production FAILS CLOSED.
+      if (process.env.NODE_ENV === 'production') {
+        console.error('[EMAIL SERVICE] RESEND_API_KEY is not configured in production — refusing to claim the email was sent. No delivery happened.');
+        return false;
+      }
       console.log(`\n=================== [SANDBOX EMAIL OUTBOX] ===================`);
       console.log(`To: ${to}`);
       console.log(`From: ${fromEmail}`);
@@ -83,8 +93,8 @@ export const EmailService = {
           
           <!-- Header -->
           <div style="background-color: #0f172a; padding: 32px 24px; text-align: center;">
-            <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.025em;">Jamoko Solutions Ltd</h1>
-            <p style="color: #94a3b8; margin: 8px 0 0 0; font-size: 14px;">Lost & Found Verification Service / Huduma ya Kupata Bidhaa Zilizopotea</p>
+            <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.025em;">Return4me</h1>
+            <p style="color: #94a3b8; margin: 8px 0 0 0; font-size: 14px;">Lost-and-found help for Kenya / Huduma ya kurudisha vitu vilivyopotea</p>
           </div>
 
           <!-- Body Content -->
@@ -168,7 +178,7 @@ export const EmailService = {
 
           <!-- Footer -->
           <div style="background-color: #f8fafc; padding: 24px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 12px; color: #64748b;">
-            <p style="margin: 0;">&copy; ${new Date().getFullYear()} Jamoko Solutions Ltd. All rights reserved.</p>
+            <p style="margin: 0;">&copy; ${new Date().getFullYear()} Return4me. All rights reserved.</p>
             <p style="margin: 4px 0 0 0;">Nairobi, Kenya | support@return4me.co.ke</p>
           </div>
 
@@ -196,8 +206,8 @@ export const EmailService = {
           
           <!-- Header -->
           <div style="background-color: #0f172a; padding: 32px 24px; text-align: center;">
-            <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.025em;">Jamoko Solutions Ltd</h1>
-            <p style="color: #94a3b8; margin: 8px 0 0 0; font-size: 14px;">Lost & Found Verification Service / Huduma ya Kupata Bidhaa Zilizopotea</p>
+            <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.025em;">Return4me</h1>
+            <p style="color: #94a3b8; margin: 8px 0 0 0; font-size: 14px;">Lost-and-found help for Kenya / Huduma ya kurudisha vitu vilivyopotea</p>
           </div>
 
           <!-- Body Content -->
@@ -231,7 +241,7 @@ export const EmailService = {
                 </table>
               </div>
               <p style="font-size: 14px; color: #334155; margin-top: 16px;">
-                Thank you for using Jamoko Solutions Ltd as your trusted partner.
+                Thank you for using Return4me as your trusted partner.
               </p>
             </div>
 
@@ -263,7 +273,7 @@ export const EmailService = {
                 </table>
               </div>
               <p style="font-size: 14px; color: #334155; margin-top: 16px;">
-                Asante kwa kutumia Jamoko Solutions Ltd kama mshirika wako unayemwamini.
+                Asante kwa kutumia Return4me kama mshirika wako unayemwamini.
               </p>
             </div>
 
@@ -271,7 +281,7 @@ export const EmailService = {
 
           <!-- Footer -->
           <div style="background-color: #f8fafc; padding: 24px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 12px; color: #64748b;">
-            <p style="margin: 0;">&copy; ${new Date().getFullYear()} Jamoko Solutions Ltd. All rights reserved.</p>
+            <p style="margin: 0;">&copy; ${new Date().getFullYear()} Return4me. All rights reserved.</p>
             <p style="margin: 4px 0 0 0;">Nairobi, Kenya | support@return4me.co.ke</p>
           </div>
 
@@ -303,7 +313,7 @@ export const EmailService = {
           
           <div style="background-color: #991b1b; padding: 24px; text-align: center; color: #ffffff;">
             <h1 style="margin: 0; font-size: 20px; font-weight: 700;">Manual Reassignment Review Required</h1>
-            <p style="margin: 4px 0 0 0; font-size: 13px; color: #fecaca;">Jamoko Solutions Ltd - Admin Operations Alert</p>
+            <p style="margin: 4px 0 0 0; font-size: 13px; color: #fecaca;">Return4me - Admin Operations Alert</p>
           </div>
 
           <div style="padding: 24px; color: #374151;">
@@ -343,7 +353,7 @@ export const EmailService = {
           </div>
 
           <div style="background-color: #f9fafb; padding: 16px; text-align: center; border-top: 1px solid #e5e7eb; font-size: 11px; color: #9ca3af;">
-            This is an automated system security notification from Jamoko Solutions Ltd.
+            This is an automated internal notification from Return4me.
           </div>
 
         </div>
@@ -370,8 +380,8 @@ export const EmailService = {
           
           <!-- Header -->
           <div style="background-color: #0f172a; padding: 32px 24px; text-align: center;">
-            <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.025em;">Jamoko Solutions Ltd</h1>
-            <p style="color: #94a3b8; margin: 8px 0 0 0; font-size: 14px;">Lost & Found Verification Service / Huduma ya Kupata Bidhaa Zilizopotea</p>
+            <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.025em;">Return4me</h1>
+            <p style="color: #94a3b8; margin: 8px 0 0 0; font-size: 14px;">Lost-and-found help for Kenya / Huduma ya kurudisha vitu vilivyopotea</p>
           </div>
 
           <!-- Body Content -->
@@ -439,7 +449,7 @@ export const EmailService = {
 
           <!-- Footer -->
           <div style="background-color: #f8fafc; padding: 24px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 12px; color: #64748b;">
-            <p style="margin: 0;">&copy; ${new Date().getFullYear()} Jamoko Solutions Ltd. All rights reserved.</p>
+            <p style="margin: 0;">&copy; ${new Date().getFullYear()} Return4me. All rights reserved.</p>
             <p style="margin: 4px 0 0 0;">Nairobi, Kenya | support@return4me.co.ke</p>
           </div>
 
@@ -465,8 +475,8 @@ export const EmailService = {
           
           <!-- Header -->
           <div style="background-color: #0f172a; padding: 32px 24px; text-align: center;">
-            <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.025em;">Jamoko Solutions Ltd</h1>
-            <p style="color: #94a3b8; margin: 8px 0 0 0; font-size: 14px;">Lost & Found Verification Service / Huduma ya Kupata Bidhaa Zilizopotea</p>
+            <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 700; letter-spacing: -0.025em;">Return4me</h1>
+            <p style="color: #94a3b8; margin: 8px 0 0 0; font-size: 14px;">Lost-and-found help for Kenya / Huduma ya kurudisha vitu vilivyopotea</p>
           </div>
 
           <!-- Body Content -->
@@ -540,7 +550,7 @@ export const EmailService = {
 
           <!-- Footer -->
           <div style="background-color: #f8fafc; padding: 24px; text-align: center; border-top: 1px solid #e2e8f0; font-size: 12px; color: #64748b;">
-            <p style="margin: 0;">&copy; ${new Date().getFullYear()} Jamoko Solutions Ltd. All rights reserved.</p>
+            <p style="margin: 0;">&copy; ${new Date().getFullYear()} Return4me. All rights reserved.</p>
             <p style="margin: 4px 0 0 0;">Nairobi, Kenya | support@return4me.co.ke</p>
           </div>
 

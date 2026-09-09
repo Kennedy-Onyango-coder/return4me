@@ -679,9 +679,9 @@ export default function App() {
       {/* Geometric Balance Micro-Footer */}
       <footer className="h-auto py-6 bg-brand-light-gray border-t border-brand-border px-4 sm:px-12 flex flex-col sm:flex-row items-center justify-between gap-4 text-[10px] text-brand-muted-text font-medium w-full">
         <div className="text-center sm:text-left">
-          &copy; {new Date().getFullYear()} Jamoko Solutions Ltd. All rights reserved. Vetted & Physical Handovers only.
+          &copy; {new Date().getFullYear()} Return4me. All rights reserved. Vetted & Physical Handovers only.
           <div className="mt-1 font-semibold text-stone-400">
-            ODPC Reg. No. [PENDING] | Data Protection Officer:{' '}
+            Data Protection Officer:{' '}
             <a href="mailto:dpo@return4me.co.ke" className="hover:underline text-primary-green">
               dpo@return4me.co.ke
             </a>

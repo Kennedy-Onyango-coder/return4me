@@ -64,6 +64,15 @@ const atSenderId = sanitizeEnvValue(process.env.AFRICASTALKING_SENDER_ID);
 
 const isAtDummy = isPlaceholderKey(atApiKey) || isPlaceholderKey(atUsername);
 
+// Explicit live-SMS enable switch. Live SMS may only be sent when this is
+// explicitly "true". Missing/invalid/false => SMS is treated as DISABLED
+// (console simulation in non-production; an explicit non-delivery failure in
+// production so the caller is never led to believe an SMS was sent when it was
+// not). This makes accidental real SMS (and accidental billing) impossible:
+// presence of keys alone no longer enables live delivery, matching the rest of
+// the codebase's "production behavior must be explicit" pattern.
+const smsEnabled = process.env.SMS_ENABLED === 'true';
+
 let atSMSClient: any = null;
 
 if (!isAtDummy) {
@@ -193,6 +202,76 @@ export function verifyToken(token: string): SessionPayload | null {
 
 // --- AUTH SERVICES ---
 
+const SMS_UNAVAILABLE_MESSAGE =
+  'Imeshindwa kutuma SMS. Tafadhali jaribu tena au tumia njia nyingine. / SMS delivery is temporarily unavailable. Please try again or use another method.';
+
+/**
+ * Normalizes an Africa's Talking SMS `send()` response into a safe,
+ * caller-facing result. Africa's Talking resolves (does NOT throw) for many
+ * per-recipient rejections — most importantly a `UserInBlacklist` recipient,
+ * which the SDK reports inside `SMSMessageData.Recipients` (statusCode 406).
+ * The classic success statusCode is 101. Treating a resolved promise as
+ * "delivered" would therefore report a blacklisted recipient as success:true.
+ *
+ * Rules:
+ *  - If any recipient reports an accepted/success code, the send is success.
+ *  - Otherwise, if any recipient reports blacklist (406 / "blacklist"), the
+ *    send FAILED and is NOT retryable by the application.
+ *  - Other explicit non-success recipient statuses => failure, retryable.
+ *  - A response with no recipient-level detail is treated as accepted (we
+ *    cannot prove rejection) but the sender logs the raw payload for
+ *    reconciliation.
+ * Returns only normalized fields — never the raw provider payload.
+ */
+export function normalizeAtSmsResult(
+  response: any
+): { success: boolean; failureReason: string | null; retryable: boolean } {
+  const recipients =
+    response?.SMSMessageData?.Recipients ??
+    (Array.isArray(response?.Recipients) ? response.Recipients : null) ??
+    (Array.isArray(response) ? response : null);
+
+  if (!Array.isArray(recipients) || recipients.length === 0) {
+    // No recipient-level detail returned — we cannot confirm rejection, and we
+    // must not invent one. Treat as accepted; the caller logs the raw response.
+    return { success: true, failureReason: null, retryable: false };
+  }
+
+  let anyAccepted = false;
+  let blacklisted = false;
+  let rejected = false;
+
+  for (const r of recipients) {
+    const status = String(r?.status ?? '').trim().toLowerCase();
+    const code = r?.statusCode;
+    const isAccepted =
+      status === 'success' ||
+      status === 'sent' ||
+      status === 'accepted' ||
+      status === 'queued' ||
+      Number(code) === 101 ||
+      Number(code) === 104;
+    if (isAccepted) {
+      anyAccepted = true;
+    } else if (status.includes('blacklist') || Number(code) === 406) {
+      blacklisted = true;
+    } else if (status !== '' && status !== 'pending') {
+      rejected = true;
+    }
+  }
+
+  if (anyAccepted) return { success: true, failureReason: null, retryable: false };
+  if (blacklisted) {
+    return { success: false, failureReason: 'blacklisted_recipient', retryable: false };
+  }
+  if (rejected) {
+    return { success: false, failureReason: 'provider_rejected', retryable: true };
+  }
+  // Recipients present but no resolvable disposition — safest to treat as
+  // accepted (no evidence of rejection) and log for reconciliation.
+  return { success: true, failureReason: null, retryable: false };
+}
+
 /**
  * Sends a numeric code to a Kenyan phone number via SMS — shared by both
  * phone-verification OTP (requestOTP below) and claim-specific OTP
@@ -202,14 +281,26 @@ export function verifyToken(token: string): SessionPayload | null {
  * with different expiry/attempt semantics — this function only owns
  * actual delivery, not code generation or persistence.
  *
- * In sandbox/dev fallback mode (no real Africa's Talking credentials
- * configured), the code is printed to the console with an unmistakable
- * "SIMULATION" label — this is the ONLY path that ever logs a real OTP
- * code, and it never runs when real credentials are configured. The real-
- * delivery path deliberately never logs the code itself.
+ * Live SMS is sent only when BOTH real credentials AND SMS_ENABLED=true are
+ * configured. In simulation/dev fallback mode (no credentials, or SMS_ENABLED
+ * not true and non-production), the code is printed to the console with an
+ * unmistakable "SIMULATION" label — the ONLY path that ever logs a real OTP
+ * code. In production, when SMS cannot actually be delivered
+ * (SMS_ENABLED missing/false or no provider configured), this returns failure
+ * so the caller is never told an SMS was sent when it was not.
  */
 export async function sendCodeViaSms(cleanPhone: string, code: string, label: string, message: string): Promise<{ success: boolean; message: string }> {
-  if (isAtDummy || !atSMSClient) {
+  const canSendLive = smsEnabled && !isAtDummy && !!atSMSClient;
+
+  if (!canSendLive) {
+    if (!isAtDummy && atSMSClient) {
+      console.warn(`[SMS ${label} GATEWAY] Real Africa's Talking credentials are configured but SMS_ENABLED is not set to "true". ${process.env.NODE_ENV === 'production' ? 'Refusing to send live SMS in production; failing closed.' : 'Skipping live SMS (dev/sandbox).'}`);
+    }
+    if (process.env.NODE_ENV === 'production') {
+      // Production must never report a simulated/non-delivered SMS as success.
+      console.warn(`[SMS ${label} GATEWAY] SMS is not deliverable in this configuration (SMS_ENABLED missing/false, or provider not configured). Not claiming delivery.`);
+      return { success: false, message: SMS_UNAVAILABLE_MESSAGE };
+    }
     console.log(`\n========================================\n[SMS ${label} GATEWAY - SIMULATION, DEV/SANDBOX ONLY] Sending code ${code} to ${maskPhoneForLog(cleanPhone)}\n========================================\n`);
     return { success: true, message };
   }
@@ -225,6 +316,14 @@ export async function sendCodeViaSms(cleanPhone: string, code: string, label: st
   try {
     const response = await atSMSClient.send(options);
     console.log(`[SMS ${label} GATEWAY] Africa's Talking response:`, JSON.stringify(response));
+    // A provider that accepted the message is NOT implied by a resolved
+    // promise — per-recipient rejections (e.g. blacklist, statusCode 406) also
+    // resolve. Inspect the recipient dispositions before reporting success.
+    const normalized = normalizeAtSmsResult(response);
+    if (!normalized.success) {
+      console.error(`[SMS ${label} GATEWAY] Africa's Talking did not accept the message (${normalized.failureReason}).`);
+      return { success: false, message: SMS_UNAVAILABLE_MESSAGE };
+    }
     return { success: true, message };
   } catch (error: any) {
     console.error(`[SMS ${label} GATEWAY ERROR] Africa's Talking send failed:`, error);
@@ -233,7 +332,7 @@ export async function sendCodeViaSms(cleanPhone: string, code: string, label: st
     // forward straight to res.json({ error: ... }), reaching the end user
     // verbatim. The full error is already logged above for debugging; the
     // caller-facing message stays generic.
-    return { success: false, message: 'Imeshindwa kutuma ujumbe wa SMS. Tafadhali jaribu tena. / Failed to send SMS. Please try again.' };
+    return { success: false, message: SMS_UNAVAILABLE_MESSAGE };
   }
 }
 
@@ -247,29 +346,37 @@ export const AuthService = {
       return { success: false, message: 'Tafadhali weka nambari sahihi ya simu ya Safaricom/Airtel (e.g., 0712345678).' };
     }
 
+    // Canonicalize to a single E.164 form once, at the store boundary, so the
+    // same number entered as 0712..., 0112..., +254712... or 254712... always
+    // maps to exactly one OTP key (see toE164Kenyan).
+    const canonicalPhone = toE164Kenyan(cleanPhone);
+
     // Generate 4-digit code using secure cryptographic random values
     const code = crypto.randomInt(1000, 10000).toString();
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 mins validity
 
     // Persisted to Postgres (not an in-memory Map) so the OTP survives a
     // server restart/redeploy and multiple server instances can share state.
-    await db.setOtp(cleanPhone, hashCode(code), expiresAt);
+    await db.setOtp(canonicalPhone, hashCode(code), expiresAt);
 
-    return sendCodeViaSms(cleanPhone, code, 'OTP', `Msimbo wa OTP umetumwa kwa nambari yako ya simu ya ${cleanPhone}.`);
+    return sendCodeViaSms(canonicalPhone, code, 'OTP', `Msimbo wa OTP umetumwa kwa nambari yako ya simu ya ${canonicalPhone}.`);
   },
 
   // Verify OTP code with automatic brute-force invalidation after 5 attempts.
   // Backed by Postgres now, so this is async — callers must await it.
   async verifyOTP(phone: string, code: string): Promise<{ success: boolean; message: string }> {
     const cleanPhone = phone.replace(/\s+/g, '');
-    const record = await db.getOtp(cleanPhone);
+    // Look up by the same canonical E.164 key used at store time, so a user who
+    // requests with 0712... and verifies with +2547... still matches.
+    const canonicalPhone = toE164Kenyan(cleanPhone);
+    const record = await db.getOtp(canonicalPhone);
 
     if (!record) {
       return { success: false, message: 'Hakuna OTP iliyoombwa kwa nambari hii au muda wake umeisha. / No OTP requested for this phone or it has expired.' };
     }
 
     if (record.expires_at.getTime() < Date.now()) {
-      await db.deleteOtp(cleanPhone);
+      await db.deleteOtp(canonicalPhone);
       return { success: false, message: 'Muda wa OTP umeisha. Tafadhali omba msimbo mpya. / OTP has expired. Please request a new code.' };
     }
 
@@ -280,9 +387,9 @@ export const AuthService = {
     );
     const codeMatches = timingSafeEqualHex(hashCode(code), record.code_hash);
     if (!codeMatches && !isMockBypass) {
-      const attempts = await db.incrementOtpAttempts(cleanPhone);
+      const attempts = await db.incrementOtpAttempts(canonicalPhone);
       if (attempts >= 5) {
-        await db.deleteOtp(cleanPhone);
+        await db.deleteOtp(canonicalPhone);
         return {
           success: false,
           message: 'Umekosea msimbo wa OTP mara 5. OTP hii imefutwa kwa usalama wako. Tafadhali omba msimbo mpya. / You have entered the wrong OTP 5 times. This OTP has been invalidated for security. Please request a new code.'
@@ -295,16 +402,25 @@ export const AuthService = {
     }
 
     // Success! Clear OTP
-    await db.deleteOtp(cleanPhone);
+    await db.deleteOtp(canonicalPhone);
     return { success: true, message: 'Msimbo umethibitishwa kikamilifu! / Code successfully verified!' };
   },
 
   // Reusable low-level SMS sender (falls back to console logging in sandbox
   // mode) so other flows — like the claim pickup code — can send an SMS
-  // without duplicating the Africa's Talking wiring.
+  // without duplicating the Africa's Talking wiring. Same live-SMS gate and
+  // recipient-level acceptance check as sendCodeViaSms: live sending requires
+  // SMS_ENABLED=true (otherwise dev/sandbox simulation, except in production
+  // where non-deliverable SMS returns false), and a provider response that
+  // did not accept the recipient (e.g. blacklist) is NOT reported as success.
   async sendSms(phone: string, message: string): Promise<boolean> {
     const cleanPhone = phone.replace(/\s+/g, '');
-    if (isAtDummy || !atSMSClient) {
+    const canSendLive = smsEnabled && !isAtDummy && !!atSMSClient;
+    if (!canSendLive) {
+      if (process.env.NODE_ENV === 'production') {
+        console.warn('[SMS GATEWAY] SMS is not deliverable in this configuration. Not claiming delivery.');
+        return false;
+      }
       console.log(`\n========================================\n[SMS GATEWAY - SIMULATION] Sending to ${maskPhoneForLog(cleanPhone)}: ${message}\n========================================\n`);
       return true;
     }
@@ -315,7 +431,7 @@ export const AuthService = {
       }
       const response = await atSMSClient.send(options);
       console.log('[SMS GATEWAY] Africa\'s Talking response:', JSON.stringify(response));
-      return true;
+      return normalizeAtSmsResult(response).success;
     } catch (error: any) {
       console.error('[SMS GATEWAY ERROR] Africa\'s Talking send failed:', error);
       return false;
