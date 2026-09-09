@@ -1029,6 +1029,12 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           {/* Checkout triggers */}
           <div className="space-y-3">
             <span className="text-xs text-stone-400 block font-medium">Secured M-Pesa Payment</span>
+            {errorMsg && (
+              <div className="bg-red-50 border border-red-100 text-red-700 text-xs rounded-2xl p-4 flex items-start space-x-2 text-left">
+                <AlertCircle size={16} className="shrink-0 mt-0.5" />
+                <span>{errorMsg}</span>
+              </div>
+            )}
             <button
               onClick={triggerEscrowPayment}
               disabled={isPaying}

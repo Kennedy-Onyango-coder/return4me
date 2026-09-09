@@ -106,6 +106,23 @@ for (const key of OUTBOUND_PROVIDER_ENV_VARS) {
 // individual tests that set NODE_ENV='production' locally and restore it).
 process.env.NODE_ENV = 'test';
 
+// JWT_SECRET: tests that re-import services/auth.ts under a local
+// NODE_ENV='production' (e.g. smsDelivery.test.ts verifying the SMS
+// fail-closed gate) hit auth.ts's production boot guard, which fatally
+// throws when JWT_SECRET is missing or placeholder. Locally a developer's
+// populated .env supplies one; CI has no .env at all, so those imports
+// died at module-initialisation ("FATAL: JWT_SECRET ..."). A deterministic
+// SYNTHETIC test-only value keeps those imports alive so the actual
+// production fail-closed SMS/email logic stays under test.
+//
+// This is NOT a credential: it is a committed test fixture, never used to
+// sign anything real. The MY_TEST_ONLY_ prefix is deliberate — the CI
+// committed-secret scanner (ci.yml) ignores MY_* values, so this fixture
+// can never be mistaken for (or rejected as) a leaked production secret,
+// and it must never be copied into any real environment.
+process.env.JWT_SECRET =
+  'MY_TEST_ONLY_JWT_SIGNING_SECRET_0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0';
+
 // The mock-OTP bypass must stay off by default so no test can accidentally
 // pass because it accepted the hardcoded '1234'/'4114' development codes.
 process.env.ALLOW_MOCK_OTP_BYPASS = 'false';
