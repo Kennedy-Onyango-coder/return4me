@@ -51,7 +51,9 @@ describe('Email delivery semantics (email.ts)', () => {
   });
 
   it('returns provider failure as false (no false success)', async () => {
-    process.env.RESEND_API_KEY = 're_test_key';
+    // MY_TEST_ONLY_* fixture: unmistakably synthetic (see setup.testEnv.ts),
+    // non-placeholder so email.ts still constructs the (mocked) Resend client.
+    process.env.RESEND_API_KEY = 'MY_TEST_ONLY_FAKE_RESEND_API_KEY';
     vi.doMock('resend', () => ({
       Resend: class {
         emails = { send: async () => ({ error: { message: 'rejected' } }) };

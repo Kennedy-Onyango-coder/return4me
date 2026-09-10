@@ -20,8 +20,8 @@ describe('SMS delivery semantics (auth.ts)', () => {
     const prev = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
     process.env.SMS_ENABLED = 'false';
-    process.env.AFRICASTALKING_API_KEY = 'real-key';
-    process.env.AFRICASTALKING_USERNAME = 'real-user';
+    process.env.AFRICASTALKING_API_KEY = 'MY_TEST_ONLY_FAKE_SMS_API_KEY';
+    process.env.AFRICASTALKING_USERNAME = 'MY_TEST_ONLY_FAKE_SMS_USER';
     // Satisfy the db/index.ts production boot guard; the DB is never used here.
     process.env.DATABASE_URL = 'postgresql://test:test@localhost:5432/test?sslmode=require';
     try {
@@ -36,8 +36,8 @@ describe('SMS delivery semantics (auth.ts)', () => {
 
   it('simulates (with an unmistakable label) instead of sending in dev when the flag is off', async () => {
     process.env.SMS_ENABLED = 'false';
-    process.env.AFRICASTALKING_API_KEY = 'real-key';
-    process.env.AFRICASTALKING_USERNAME = 'real-user';
+    process.env.AFRICASTALKING_API_KEY = 'MY_TEST_ONLY_FAKE_SMS_API_KEY';
+    process.env.AFRICASTALKING_USERNAME = 'MY_TEST_ONLY_FAKE_SMS_USER';
     const mod = await import('../auth.ts');
     // Non-production: no live SMS is sent, but the sandbox simulation result is
     // allowed so local flows keep working. Live sending still requires the flag.
@@ -86,8 +86,8 @@ describe('SMS delivery semantics (auth.ts)', () => {
 
   it('treats a provider exception path as non-success (sendSms returns false on throw)', async () => {
     process.env.SMS_ENABLED = 'true';
-    process.env.AFRICASTALKING_API_KEY = 'live-key';
-    process.env.AFRICASTALKING_USERNAME = 'live-user';
+    process.env.AFRICASTALKING_API_KEY = 'MY_TEST_ONLY_FAKE_SMS_API_KEY';
+    process.env.AFRICASTALKING_USERNAME = 'MY_TEST_ONLY_FAKE_SMS_USER';
     vi.doMock('africastalking', () => ({
       default: () => ({
         SMS: { send: async () => { throw new Error('socket hang up AT-500'); } },
@@ -100,8 +100,8 @@ describe('SMS delivery semantics (auth.ts)', () => {
 
   it('never reports a blacklisted recipient as success', async () => {
     process.env.SMS_ENABLED = 'true';
-    process.env.AFRICASTALKING_API_KEY = 'live-key';
-    process.env.AFRICASTALKING_USERNAME = 'live-user';
+    process.env.AFRICASTALKING_API_KEY = 'MY_TEST_ONLY_FAKE_SMS_API_KEY';
+    process.env.AFRICASTALKING_USERNAME = 'MY_TEST_ONLY_FAKE_SMS_USER';
     vi.doMock('africastalking', () => ({
       default: () => ({
         SMS: {
