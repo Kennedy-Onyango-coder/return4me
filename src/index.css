@@ -27,6 +27,28 @@
   --color-r4m-orange: #EC7E0D;
   --color-r4m-green-light: #196323;
   --color-r4m-cream: #FDF8EE;
+
+  /* RETURN4ME SEMANTIC STATUS TOKENS
+     One vocabulary for every success/pending/failure/informational surface
+     in the app. Components must use these (via the ui/ primitives or these
+     utility names) instead of scattering raw emerald-/amber-/red-/sky-*
+     palette classes, so status semantics stay consistent and themeable.
+     Meaning:  success = verified / completed / released
+               warning = pending / action required
+               danger  = failed / blocked / destructive
+               info    = neutral informational notice */
+  --color-status-success: #15803D;      /* green-700 — AA on white for text/icons */
+  --color-status-success-surface: #ECFDF5; /* green-50 tint */
+  --color-status-success-border: #BBF7D0;  /* green-200 */
+  --color-status-warning: #B45309;      /* amber-700 */
+  --color-status-warning-surface: #FEF3C7;
+  --color-status-warning-border: #FDE68A;
+  --color-status-danger: #B91C1C;       /* red-700 */
+  --color-status-danger-surface: #FEF2F2;
+  --color-status-danger-border: #FECACA;
+  --color-status-info: #0369A1;         /* sky-700 */
+  --color-status-info-surface: #F0F9FF;
+  --color-status-info-border: #E0F2FE;
 }
 
 body {
@@ -48,5 +70,45 @@ body {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+/* RETURN4ME ACCESSIBILITY FOUNDATION — FOCUS-VISIBILITY.
+   The app used bare `focus:outline-none` in several places (border-color
+   changes only), which drops the keyboard-focus indicator for users who
+   don't see color borders (WCAG 2.4.7). This global rule guarantees a
+   visible focus ring for keyboard navigation everywhere, without styling
+   mouse clicks (modern browsers only apply :focus-visible to keyboard/
+   programmatic focus). Colors: accent-orange ring on cream surfaces,
+   white ring on dark green surfaces — both ≥3:1 against their backdrop. */
+:focus-visible {
+  outline: 2px solid var(--color-accent-orange);
+  outline-offset: 2px;
+  border-radius: 0.25rem;
+}
+
+.bg-primary-green :focus-visible,
+.bg-primary-hover :focus-visible,
+.bg-stone-900 :focus-visible {
+  outline-color: white;
+}
+
+/* SUBTLE MOTION POLICY (Phase 2A)
+   The design system intentionally ships no entrance/parallax animation.
+   The one existing decorative animation (.fade-in page entrance) is
+   disabled for users who prefer reduced motion; interactive components
+   rely only on transition-colors/shadow/transform, which these media
+   queries also neutralize. */
+@media (prefers-reduced-motion: reduce) {
+  .fade-in {
+    animation: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

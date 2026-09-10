@@ -1,0 +1,663 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { translations } from '../types';
+import {
+  Search, MapPin, ShieldCheck, Globe, CheckCircle, Lock, Package,
+  Loader2, Sparkles, Users, CreditCard,
+  ChevronLeft, ChevronRight, Smartphone, Handshake, HeartHandshake,
+} from 'lucide-react';
+import Button from './ui/Button';
+import Badge from './ui/Badge';
+import SectionHeading from './ui/SectionHeading';
+import EmptyState from './ui/EmptyState';
+import Skeleton from './ui/Skeleton';
+
+type ViewName = 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy';
+
+interface HomeViewProps {
+  lang: 'en' | 'sw';
+  setLang: (lang: 'en' | 'sw') => void;
+  setView: (view: ViewName) => void;
+  categories: any[];
+  categoriesLoading: boolean;
+  categoriesError: boolean;
+  activeAgentsCount: number | null;
+  recentItems: any[];
+  recentItemsLoading: boolean;
+  recentItemsError: boolean;
+}
+
+const CATEGORY_ICONS: Record<string, React.ReactNode> = {
+  'national-id': <Search size={22} />,
+  'vehicle-logbook': <MapPin size={22} />,
+  'driving-licence': <ShieldCheck size={22} />,
+  'number-plate': <ShieldCheck size={22} />,
+};
+
+export default function HomeView(props: HomeViewProps) {
+  const {
+    lang, setView, categories, categoriesLoading, categoriesError,
+    activeAgentsCount, recentItems, recentItemsLoading, recentItemsError,
+  } = props;
+  const t = translations[lang];
+
+  const getCategoryName = (categoryId: string) => {
+    const cat = categories.find((c: any) => c.id === categoryId);
+    if (cat) return lang === 'en' ? cat.name_en : cat.name_sw;
+    if (categoryId === 'national-id') return lang === 'en' ? 'National ID' : 'Kitambulisho cha Kitaifa';
+    if (categoryId === 'vehicle-logbook') return lang === 'en' ? 'Vehicle Logbook' : 'Kitabu cha Magari';
+    if (categoryId === 'driving-licence') return lang === 'en' ? 'Driving Licence' : 'Leseni ya Udereva';
+    if (categoryId === 'number-plate') return lang === 'en' ? 'Number Plate' : 'Nambari ya Gari';
+    return categoryId;
+  };
+
+  const getCategoryIcon = (categoryId: string) => CATEGORY_ICONS[categoryId] ?? <Globe size={22} />;
+
+  type SlideAction = { label: string; view?: ViewName; scroll?: boolean; icon?: React.ReactNode };
+  interface HeroSlide {
+    img: string;
+    alt: string;
+    eyebrow: string;
+    h1: React.ReactNode;
+    copy: string;
+    primary: SlideAction;
+    secondary: SlideAction;
+  }
+
+  // ── HERO SLIDESHOW STATE ────────────────────────────────────────────────
+  const [current, setCurrent] = useState(0);
+  const reducedMotion = typeof window !== 'undefined'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const goToSlide = useCallback((i: number) => {
+    setCurrent(((i % 4) + 4) % 4);
+  }, []);
+  const nextSlide = useCallback(() => goToSlide(current + 1), [goToSlide, current]);
+  const prevSlide = useCallback(() => goToSlide(current - 1), [goToSlide, current]);
+
+  // Pause auto-advance for users who prefer reduced motion.
+  useEffect(() => {
+    if (reducedMotion) return;
+    const id = window.setInterval(() => {
+      setCurrent((c) => (c + 1) % 4);
+    }, 6500);
+    return () => window.clearInterval(id);
+  }, [reducedMotion]);
+
+  const scrollToHowItWorks = () => {
+    document.getElementById('how-it-works')?.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth' });
+  };
+
+  const handleSlideAction = (action: SlideAction) => {
+    if (action.scroll) {
+      scrollToHowItWorks();
+    } else if (action.view) {
+      setView(action.view);
+    }
+  };
+
+  const handleCarouselKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowRight') { e.preventDefault(); nextSlide(); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); prevSlide(); }
+  };
+
+  // Basic mobile swipe (touch) support for the hero slideshow.
+  const touchX = React.useRef<number | null>(null);
+  const onTouchStart = (e: React.TouchEvent) => { touchX.current = e.touches[0].clientX; };
+  const onTouchEnd = (e: React.TouchEvent) => {
+    if (touchX.current === null) return;
+    const dx = e.changedTouches[0].clientX - touchX.current;
+    touchX.current = null;
+    if (Math.abs(dx) > 40) {
+      if (dx < 0) nextSlide(); else prevSlide();
+    }
+  };
+
+  // ── HERO STORYLINE ───────────────────────────────────────────────────────
+  // Four real Return4me photos tell one story in order:
+  //   FIND → REPORT / CONNECT → TRUSTED HANDOVER → SUCCESSFUL RETURN
+  const slides: HeroSlide[] = [
+    {
+      img: 'return4me-hero-found-id-nairobi',
+      alt: lang === 'en' ? 'Person finding a lost identification card on a Nairobi street' : 'Mtu akipata kadi ya kitambulisho iliyopotea mitaani Nairobi',
+      eyebrow: 'Return4me',
+      h1: (
+        <>
+          {lang === 'en' ? "Found something that isn't yours?" : 'Umepata kitu kisicho chako?'}
+          <span className="block text-accent-orange mt-2">
+            {lang === 'en' ? 'Help reconnect it with the person who lost it.' : 'Saidia kikirudi kwa mwenye kilichopoteza.'}
+          </span>
+        </>
+      ),
+      copy: lang === 'en'
+        ? "Return4me's secure lost-and-found network returns found items to their owners — verified, safe and fast."
+        : 'Mtandao salama wa Return4me hurejesha vitu vilivyopatikana kwa wamiliki wao — uliothibitishwa, salama na haraka.',
+      primary: { label: lang === 'en' ? 'Report a Found Item' : 'Ripoti Kitu Kilichopatikana', view: 'finder', icon: <MapPin size={18} aria-hidden="true" /> },
+      secondary: { label: lang === 'en' ? 'I Lost Something' : 'Nimepoteza Kitu', view: 'owner', icon: <Search size={18} aria-hidden="true" /> },
+    },
+    {
+      img: 'return4me-agent-handover',
+      alt: lang === 'en' ? 'Person handing a found item to a Return4me agent' : 'Mtu akimkabidhi wakala wa Return4me kitu kilichopatikana',
+      eyebrow: 'Trusted handover',
+      h1: (
+        <>
+          {lang === 'en' ? 'Safe hands. Real people.' : 'Mikono salama. Watu wa kweli.'}
+          <span className="block text-accent-orange mt-2">
+            {lang === 'en' ? 'Connect with trusted Return4me agents who complete every return.' : 'Ungana na mawakala wa Return4me wanaoaminika wanaokamilisha kila urejeshaji.'}
+          </span>
+        </>
+      ),
+      copy: lang === 'en'
+        ? 'A national network of vetted agents handles drop-offs and verified handovers close to home.'
+        : 'Mtandao wa kitaifa wa mawakala waliothibitishwa hutunza uwasilishaji na urejeshaji uliothibitishwa karibu na nyumbani.',
+      primary: { label: lang === 'en' ? 'Find an Agent' : 'Tafuta Wakala', view: 'agent', icon: <Globe size={18} aria-hidden="true" /> },
+      secondary: { label: lang === 'en' ? 'How It Works' : 'Inavyofanya Kazi', scroll: true },
+    },
+    {
+      img: 'return4me-app-user-nairobi',
+      alt: lang === 'en' ? 'Kenyan user using the Return4me platform on a smartphone' : 'Mkenya akitumia jukwaa la Return4me kwenye simu',
+      eyebrow: 'Digital platform',
+      h1: (
+        <>
+          {lang === 'en' ? 'Lost-and-found, made simpler.' : 'Kutafuta-kurudisha, kumerahisishwa.'}
+          <span className="block text-accent-orange mt-2">
+            {lang === 'en' ? 'Report, verify and follow your journey through Return4me.' : 'Ripoti, thibitisha na ufuatilie safari yako kupitia Return4me.'}
+          </span>
+        </>
+      ),
+      copy: lang === 'en'
+        ? 'Start with a single report on your phone. The platform matches items and protects every step of the return.'
+        : 'Anza kwa ripoti moja kwenye simu yako. Jukwaa linaoanisha vitu na kulinda kila hatua ya urejeshaji.',
+      primary: { label: lang === 'en' ? 'Report an Item' : 'Ripoti Kitu', view: 'finder', icon: <Smartphone size={18} aria-hidden="true" /> },
+      secondary: { label: lang === 'en' ? 'How It Works' : 'Inavyofanya Kazi', scroll: true },
+    },
+    {
+      img: 'return4me-successful-return',
+      alt: lang === 'en' ? 'Lost item being returned to its owner through Return4me' : 'Kitu kilichopotea kinarejeshwa kwa mmiliki wake kupitia Return4me',
+      eyebrow: 'Successful returns',
+      h1: (
+        <>
+          {lang === 'en' ? "Lost doesn't have to mean gone forever." : 'Kupoteza hakumaanishi kutoweka milele.'}
+          <span className="block text-accent-orange mt-2">
+            {lang === 'en' ? 'Return4me helps people reconnect with the things that matter.' : 'Return4me husaidia watu kuungana tena na vile walivyopenda.'}
+          </span>
+        </>
+      ),
+      copy: lang === 'en'
+        ? 'Every return is a story — a phone, an ID or a treasured keepsake, finally back where it belongs.'
+        : 'Kila urejeshaji ni hadithi — simu, kitambulisho au kitu kinachopendwa — kurudi mahali pake.',
+      primary: { label: lang === 'en' ? 'Get Started' : 'Anza', view: 'owner', icon: <Search size={18} aria-hidden="true" /> },
+      secondary: { label: lang === 'en' ? 'How It Works' : 'Inavyofanya Kazi', scroll: true },
+    },
+  ];
+
+  const steps = [
+    { icon: <Search size={20} />, title: lang === 'en' ? 'Report' : 'Ripoti', desc: lang === 'en' ? 'Tell us what you lost or found' : 'Tuambie ulichopoteza ulichopata' },
+    { icon: <ShieldCheck size={20} />, title: lang === 'en' ? 'Match & Verify' : 'Oanisha & Thibitisha', desc: lang === 'en' ? 'We match items and verify rightful owners' : 'Tunaoanisha vitu na kuthibitisha wamiliki' },
+    { icon: <Lock size={20} />, title: lang === 'en' ? 'Pay Securely' : 'Lipia kwa Usalama', desc: lang === 'en' ? 'Escrow-protected M-Pesa payment' : 'Malipo ya M-Pesa yaliyolindwa na escrow' },
+    { icon: <CheckCircle size={20} />, title: lang === 'en' ? 'Collect' : 'Chukua', desc: lang === 'en' ? 'Verified handover at an agent point' : 'Uwasilishaji uliothibitishwa katika kituo cha wakala' },
+  ];
+
+  return (
+    <div className="w-full">
+      {/* ───────── HERO STORY SLIDESHOW ───────── */}
+      <section
+        role="region"
+        aria-roledescription="carousel"
+        aria-label={lang === 'en' ? 'How Return4me works' : 'Jinsi Return4me inavyofanya kazi'}
+        onKeyDown={handleCarouselKeyDown}
+        tabIndex={-1}
+        className="relative isolate overflow-hidden bg-primary-green focus:outline-none"
+        onTouchStart={onTouchStart}
+        onTouchEnd={onTouchEnd}
+      >
+        {/* Crossfading photo layers (FIND → CONNECT → HANDOVER → RETURN) */}
+        {slides.map((s, i) => {
+          const active = i === current;
+          return (
+            <div
+              key={s.img}
+              aria-hidden={active ? undefined : true}
+              className={`absolute inset-0 transition-opacity duration-700 motion-reduce:transition-none ${active ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+            >
+              <picture className="absolute inset-0">
+                <source
+                  type="image/webp"
+                  srcSet={`/assets/${s.img}-430w.webp 430w, /assets/${s.img}-768w.webp 768w, /assets/${s.img}-1024w.webp 1024w, /assets/${s.img}-1440w.webp 1440w`}
+                  sizes="100vw"
+                />
+                <img
+                  src={`/assets/${s.img}-430w.webp`}
+                  alt={active ? s.alt : ''}
+                  width="1672"
+                  height="941"
+                  loading="eager"
+                  fetchPriority={i === 0 ? 'high' : 'auto'}
+                  decoding="async"
+                  className="h-full w-full object-cover object-center"
+                />
+              </picture>
+              {/* Directional gradient — left-heavy so the headline stays legible; photo stays visible */}
+              <div className="absolute inset-0 bg-gradient-to-r from-primary-green/95 via-primary-green/55 to-primary-green/20" />
+              <div className="absolute inset-0 bg-gradient-to-t from-primary-green/85 via-transparent to-transparent" />
+            </div>
+          );
+        })}
+
+        {/* Foreground content */}
+        <div className="relative mx-auto max-w-7xl px-5 sm:px-12 pt-14 pb-20 sm:pt-20 sm:pb-24 lg:pt-28 lg:pb-28 min-h-[520px] sm:min-h-[560px] lg:min-h-[600px] flex items-center">
+          <div className="max-w-2xl w-full">
+            {slides.map((s, i) => {
+              const active = i === current;
+              return (
+                <div key={s.img} className={active ? 'fade-in' : 'hidden'}>
+                  <div className="mb-5 flex items-center gap-2 text-accent-orange">
+                    <Sparkles size={16} aria-hidden="true" />
+                    <span className="text-xs font-bold uppercase tracking-widest">{s.eyebrow}</span>
+                  </div>
+                  <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-white leading-tight">
+                    {s.h1}
+                  </h1>
+                  <p className="mt-5 text-sm sm:text-base text-white/90 max-w-xl leading-relaxed">
+                    {s.copy}
+                  </p>
+                  <div className="mt-8 flex flex-col sm:flex-row gap-3">
+                    <Button variant="primary" size="lg" onClick={() => handleSlideAction(s.primary)} className="min-h-[48px]">
+                      {s.primary.icon}
+                      {s.primary.label}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="lg"
+                      onClick={() => handleSlideAction(s.secondary)}
+                      className="min-h-[48px] border-white text-white bg-transparent hover:bg-white/10 hover:text-white"
+                    >
+                      {s.secondary.label}
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Previous / next controls */}
+        <button
+          type="button"
+          onClick={prevSlide}
+          aria-label={lang === 'en' ? 'Previous slide' : 'Slaidi iliyotangulia'}
+          className="absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 z-10 w-10 h-10 rounded-full bg-black/30 hover:bg-black/50 text-white flex items-center justify-center transition-colors motion-reduce:transition-none"
+        >
+          <ChevronLeft size={22} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          onClick={nextSlide}
+          aria-label={lang === 'en' ? 'Next slide' : 'Slaidi inayofuata'}
+          className="absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 z-10 w-10 h-10 rounded-full bg-black/30 hover:bg-black/50 text-white flex items-center justify-center transition-colors motion-reduce:transition-none"
+        >
+          <ChevronRight size={22} aria-hidden="true" />
+        </button>
+
+        {/* Slide indicators */}
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2">
+          {slides.map((s, i) => (
+            <button
+              key={s.img}
+              type="button"
+              onClick={() => goToSlide(i)}
+              aria-label={lang === 'en' ? `Go to slide ${i + 1}` : `Nenda kwenye slaidi ${i + 1}`}
+              aria-current={i === current ? 'true' : undefined}
+              className={`w-2.5 h-2.5 rounded-full transition-colors motion-reduce:transition-none ${i === current ? 'bg-accent-orange' : 'bg-white/50 hover:bg-white/80'}`}
+            />
+          ))}
+        </div>
+      </section>
+
+      {/* ───────── TRUST STRIP ───────── */}
+      <section className="bg-white border-b border-brand-border">
+        <div className="mx-auto max-w-7xl px-5 sm:px-12 py-5">
+          <div className="flex flex-wrap items-center justify-center gap-x-8 gap-y-3 text-xs sm:text-sm font-semibold text-brand-muted-text">
+            <span className="flex items-center gap-2">
+              <ShieldCheck size={16} className="text-status-success" aria-hidden="true" />
+              {lang === 'en' ? 'Vetted Agents Only' : 'Mawakala Waliothibitishwa Pekee'}
+            </span>
+            <span className="flex items-center gap-2">
+              <Users size={16} className="text-status-success" aria-hidden="true" />
+              {activeAgentsCount !== null
+                ? (lang === 'en' ? `${activeAgentsCount} Active Agents` : `Wakala ${activeAgentsCount} Hai`)
+                : (lang === 'en' ? 'Growing Agent Network' : 'Mtandao wa Wakala Unaokua')}
+            </span>
+            <span className="flex items-center gap-2">
+              <CreditCard size={16} className="text-status-success" aria-hidden="true" />
+              {lang === 'en' ? 'M-Pesa Supported' : 'Inatumia M-Pesa'}
+            </span>
+            <span className="flex items-center gap-2">
+              <Lock size={16} className="text-status-success" aria-hidden="true" />
+              {lang === 'en' ? 'Secure Escrow' : 'Escrow Salama'}
+            </span>
+          </div>
+        </div>
+      </section>
+
+      {/* ───────── CATEGORIES ───────── */}
+      <section className="bg-brand-beige py-14 sm:py-20">
+        <div className="mx-auto max-w-7xl px-5 sm:px-12">
+          <SectionHeading
+            eyebrow={lang === 'en' ? 'What gets lost' : 'Kinachopotea'}
+            title={lang === 'en' ? 'Common lost items' : 'Vitu vinavyopotea sana'}
+            description={lang === 'en' ? 'We cover the items Kenyans lose most often.' : 'Tunavifunika vitu ambavyo Wakenyaji hupoteza sana.'}
+          />
+          {categoriesLoading ? (
+            <div className="mt-8 grid grid-cols-2 lg:grid-cols-4 gap-4">
+              {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-28" />)}
+            </div>
+          ) : categoriesError ? (
+            <div className="mt-8">
+              <EmptyState
+                icon={Package}
+                title={lang === 'en' ? 'Could not load categories' : 'Haikuweza kupakia kategoria'}
+                description={lang === 'en' ? 'Please refresh the page.' : 'Tafadhali onyesa upya ukurasa.'}
+              />
+            </div>
+          ) : (
+            <div className="mt-8 grid grid-cols-2 lg:grid-cols-4 gap-4">
+              {categories.map((cat: any) => (
+                <button
+                  key={cat.id}
+                  onClick={() => setView('owner')}
+                  className="group bg-white rounded-2xl border border-brand-border p-5 text-left transition-all hover:shadow-lg hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange"
+                >
+                  <div className="w-11 h-11 rounded-xl bg-primary-green/10 text-primary-green flex items-center justify-center mb-3 group-hover:bg-primary-green group-hover:text-white transition-colors">
+                    {getCategoryIcon(cat.id)}
+                  </div>
+                  <p className="text-sm font-extrabold text-brand-dark-text">
+                    {lang === 'en' ? cat.name_en : cat.name_sw}
+                  </p>
+                  <p className="text-xs text-brand-muted-text mt-1">
+                    {lang === 'en' ? `From KES ${cat.total_fee}` : `Kuanzia KES ${cat.total_fee}`}
+                  </p>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+
+
+
+
+      {/* ───────── RECENT FOUND ITEMS ───────── */}
+      <section className="bg-white py-14 sm:py-20 border-t border-brand-border">
+        <div className="mx-auto max-w-7xl px-5 sm:px-12">
+          <SectionHeading
+            eyebrow={lang === 'en' ? 'Recently found' : 'Vilivyopatikana hivi karibuni'}
+            title={lang === 'en' ? 'Items waiting for owners' : 'Vitu vinavyosubiri wamiliki'}
+            description={lang === 'en' ? 'These items have been found and are safely held by verified agents.' : 'Hivi vitu vimepatikana na vimeshikiliwa na wakala waliothibitishwa.'}
+          />
+          {recentItemsLoading ? (
+            <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {[1, 2, 3].map((i) => <Skeleton key={i} className="h-40" />)}
+            </div>
+          ) : recentItemsError ? (
+            <div className="mt-8">
+              <EmptyState
+                icon={Package}
+                title={lang === 'en' ? 'Could not load items' : 'Haikuweza kupakia vitu'}
+                description={lang === 'en' ? 'Please refresh the page.' : 'Tafadhali onyesa upya ukurasa.'}
+              />
+            </div>
+          ) : recentItems.length === 0 ? (
+            <div className="mt-8">
+              <EmptyState
+                icon={Package}
+                title={lang === 'en' ? 'No items waiting' : 'Hakuna vitu vinavyosubiri'}
+                description={lang === 'en' ? 'Check back soon — new items are added regularly.' : 'Rudi hivi karibuni — vitu vipya vinaongezwa mara kwa mara.'}
+              />
+            </div>
+          ) : (
+            <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {recentItems.map((item: any) => {
+                const isSensitive = item.is_sensitive_document;
+                return (
+                  <div key={item.id} className="bg-brand-beige/50 rounded-2xl border border-brand-border overflow-hidden flex flex-col">
+                    <div className="aspect-[4/3] bg-brand-light-gray relative">
+                      {isSensitive ? (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center text-brand-muted-text">
+                          <Lock size={28} aria-hidden="true" />
+                          <span className="text-xs font-bold mt-2">{lang === 'en' ? 'Photo hidden for privacy' : 'Picha imefichwa kwa faragha'}</span>
+                        </div>
+                      ) : (
+                        <img
+                          src={item.photo_url}
+                          alt={lang === 'en' ? 'Found item photo' : 'Picha ya kitu kilichopatikana'}
+                          loading="lazy"
+                          decoding="async"
+                          width="400"
+                          height="300"
+                          className="w-full h-full object-cover"
+                        />
+                      )}
+                    </div>
+                    <div className="p-4 flex-1 flex flex-col">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-extrabold text-brand-dark-text truncate">
+                          {getCategoryName(item.category_id)}
+                        </p>
+                        <Badge variant="success">{lang === 'en' ? 'Found' : 'Imepatikana'}</Badge>
+                      </div>
+                      <p className="text-xs text-brand-muted-text mt-1 line-clamp-2">
+                        {isSensitive
+                          ? (lang === 'en' ? 'Details hidden for privacy' : 'Maelezo yamefichwa kwa faragha')
+                          : (item.description || item.location_description || (lang === 'en' ? 'No description available' : 'Hakuna maelezo'))}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* ───────── HOW IT WORKS ───────── */}
+      <section id="how-it-works" className="bg-brand-beige py-14 sm:py-20 border-t border-brand-border scroll-mt-20">
+        <div className="mx-auto max-w-7xl px-5 sm:px-12">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-14 items-center">
+            {/* Image left — the physical handover */}
+            <div className="relative order-1 overflow-hidden rounded-3xl shadow-lg">
+              <img
+                src="/assets/return4me-agent-handover-1024w.webp"
+                srcSet="/assets/return4me-agent-handover-430w.webp 430w, /assets/return4me-agent-handover-768w.webp 768w, /assets/return4me-agent-handover-1024w.webp 1024w, /assets/return4me-agent-handover-1440w.webp 1440w"
+                sizes="(min-width:1024px) 45vw, 100vw"
+                alt={lang === 'en' ? 'Person handing a found item to a Return4me agent' : 'Mtu akimkabidhi wakala wa Return4me kitu kilichopatikana'}
+                width="1672"
+                height="941"
+                loading="lazy"
+                decoding="async"
+                className="w-full h-full object-cover aspect-[4/3]"
+              />
+            </div>
+            {/* Steps right */}
+            <div className="order-2">
+              <SectionHeading
+                eyebrow={lang === 'en' ? 'How it works' : 'Inavyofanya kazi'}
+                title={lang === 'en' ? 'Four simple steps' : 'Hatua nne rahisi'}
+                description={lang === 'en' ? 'From report to recovery — we handle the hard parts.' : 'Kutoka ripoti hadi urejeshaji — tunashughulikia magumu.'}
+              />
+              <ol className="mt-6 space-y-5">
+                {steps.map((step, i) => (
+                  <li key={i} className="flex items-start gap-4">
+                    <span className="w-7 h-7 rounded-full bg-accent-orange text-white text-xs font-extrabold flex items-center justify-center shrink-0">
+                      {i + 1}
+                    </span>
+                    <div>
+                      <p className="text-sm font-extrabold text-brand-dark-text">{step.title}</p>
+                      <p className="text-xs text-brand-muted-text mt-1 leading-relaxed">{step.desc}</p>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ───────── DIGITAL PLATFORM ───────── */}
+      <section className="bg-white py-14 sm:py-20 border-t border-brand-border">
+        <div className="mx-auto max-w-7xl px-5 sm:px-12">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-14 items-center">
+            {/* Text left */}
+            <div>
+              <SectionHeading
+                eyebrow={lang === 'en' ? 'Digital platform' : 'Jukwaa la kidijitali'}
+                title={lang === 'en' ? 'Everything starts with a report.' : 'Yote huanza na ripoti.'}
+                description={lang === 'en'
+                  ? 'From your phone you can start and manage the return journey — no offices to visit, no forms to post.'
+                  : 'Kutoka kwenye simu yako unaweza kuanza na kusimamia safari ya urejeshaji — hakuna ofisi za kuenda, hakuna fomu za kutuma.'}
+              />
+              <div className="mt-6 space-y-3">
+          {[
+            { icon: <Search size={16} aria-hidden="true" />, t: lang === 'en' ? 'Report a lost item' : 'Ripoti kitu kilichopotea' },
+            { icon: <MapPin size={16} aria-hidden="true" />, t: lang === 'en' ? 'Report a found item' : 'Ripoti kitu kilichopatikana' },
+            { icon: <ShieldCheck size={16} aria-hidden="true" />, t: lang === 'en' ? 'Verify identity securely' : 'Thibitisha utambulisho kwa usalama' },
+            { icon: <CheckCircle size={16} aria-hidden="true" />, t: lang === 'en' ? 'Track a claim you have started' : 'Fuatilia daima uliyoianzisha' },
+            { icon: <Handshake size={16} aria-hidden="true" />, t: lang === 'en' ? 'Connect with a vetted agent for the handover' : 'Ungana na wakala aliyeidhinishwa kwa uwasilishaji' },
+          ].map((f) => (
+            <li key={f.t} className="flex items-center gap-3">
+              <span className="w-9 h-9 rounded-xl bg-primary-green/10 text-primary-green flex items-center justify-center shrink-0">
+                {f.icon}
+              </span>
+              <span className="text-sm font-semibold text-brand-dark-text">{f.t}</span>
+            </li>
+          ))}
+        </div>
+      </div>
+      {/* Image right — the app/platform experience */}
+      <div className="relative">
+        <div className="overflow-hidden rounded-3xl shadow-lg">
+          <img
+            src="/assets/return4me-app-user-nairobi-1024w.webp"
+            srcSet="/assets/return4me-app-user-nairobi-430w.webp 430w, /assets/return4me-app-user-nairobi-768w.webp 768w, /assets/return4me-app-user-nairobi-1024w.webp 1024w, /assets/return4me-app-user-nairobi-1440w.webp 1440w"
+            sizes="(min-width:1024px) 45vw, 100vw"
+            alt={lang === 'en' ? 'Kenyan user using the Return4me platform on a smartphone' : 'Mkenya akitumia jukwaa la Return4me kwenye simu'}
+            width="1672"
+            height="941"
+            loading="lazy"
+            decoding="async"
+            className="w-full h-full object-cover aspect-[4/3]"
+          />
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+      {/* ───────── SUCCESSFUL RETURN / WHY IT MATTERS ───────── */}
+      <section className="bg-brand-beige py-14 sm:py-20 border-t border-brand-border">
+        <div className="mx-auto max-w-7xl px-5 sm:px-12">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-14 items-center">
+            {/* Image left — the human outcome */}
+            <div className="relative overflow-hidden rounded-3xl shadow-lg">
+              <img
+                src="/assets/return4me-successful-return-1024w.webp"
+                srcSet="/assets/return4me-successful-return-430w.webp 430w, /assets/return4me-successful-return-768w.webp 768w, /assets/return4me-successful-return-1024w.webp 1024w, /assets/return4me-successful-return-1440w.webp 1440w"
+                sizes="(min-width:1024px) 45vw, 100vw"
+                alt={lang === 'en' ? 'Lost item being returned to its owner through Return4me' : 'Kitu kilichopotea kinarejeshwa kwa mmiliki wake kupitia Return4me'}
+                width="1672"
+                height="941"
+                loading="lazy"
+                decoding="async"
+                className="w-full h-full object-cover aspect-[4/3]"
+              />
+            </div>
+            {/* Message right */}
+            <div>
+              <div className="flex items-center gap-2 text-accent-orange mb-3">
+                <HeartHandshake size={18} aria-hidden="true" />
+                <span className="text-[11px] font-extrabold uppercase tracking-widest">
+                  {lang === 'en' ? 'Successful returns' : 'Urejeshaji uliofanikiwa'}
+                </span>
+              </div>
+              <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-primary-green">
+                {lang === 'en' ? 'Because getting something back matters.' : 'Kwa sababu kupata kitu kinarejeshwa ni muhimu.'}
+              </h2>
+              <p className="mt-4 text-sm sm:text-base text-brand-muted-text leading-relaxed max-w-xl">
+                {lang === 'en'
+                  ? 'Every lost item has a person behind it. Return4me exists to make the journey back possible — safely, transparently and with real people nearby.'
+                  : 'Kila kitu kilichopotea kina mtu nyuma yake. Return4me ipo kurahisisha safari ya kurudi — kwa usalama, kwa uwazi na kwa watu halisi wa karibu.'}
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ───────── FEES / TRANSPARENCY ───────── */}
+      <section className="bg-white py-14 sm:py-20 border-t border-brand-border">
+        <div className="mx-auto max-w-7xl px-5 sm:px-12">
+          <SectionHeading
+            eyebrow={lang === 'en' ? 'Transparent fees' : 'Ada wazi'}
+            title={lang === 'en' ? 'Know what you pay' : 'Jua unalolipa'}
+            description={lang === 'en' ? 'Every fee is split transparently between you, the finder, and the agent.' : 'Kila ada inagawanywa wazi kati yako, mpataji, na wakala.'}
+          />
+          {categoriesLoading ? (
+            <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-48" />)}
+            </div>
+          ) : (
+            <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {categories.map((cat: any) => (
+                <div key={cat.id} className="bg-brand-beige/50 rounded-2xl border border-brand-border p-5">
+                  <p className="text-sm font-extrabold text-brand-dark-text mb-3">
+                    {lang === 'en' ? cat.name_en : cat.name_sw}
+                  </p>
+                  <div className="space-y-2 text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-brand-muted-text">{lang === 'en' ? 'Total fee' : 'Ada yote'}</span>
+                      <span className="font-bold text-brand-dark-text">KES {cat.total_fee}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-brand-muted-text">{lang === 'en' ? 'Finder gets' : 'Mpataji anapata'}</span>
+                      <span className="font-bold text-status-success">KES {cat.finder_share}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-brand-muted-text">{lang === 'en' ? 'Agent gets' : 'Wakala anapata'}</span>
+                      <span className="font-bold text-status-info">KES {cat.agent_share}</span>
+                    </div>
+                    <div className="flex justify-between border-t border-brand-border pt-2 mt-2">
+                      <span className="text-brand-muted-text">{lang === 'en' ? 'Platform' : 'Jukwaa'}</span>
+                      <span className="font-bold text-brand-dark-text">KES {cat.platform_share}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* ───────── FINAL CTA ───────── */}
+      <section className="bg-primary-green py-14 sm:py-20">
+        <div className="mx-auto max-w-3xl px-5 sm:px-12 text-center">
+          <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
+            {lang === 'en' ? 'Ready to get started?' : 'Tayari kuanza?'}
+          </h2>
+          <p className="mt-3 text-sm sm:text-base text-white/80 max-w-xl mx-auto">
+            {lang === 'en'
+              ? 'Whether you lost something or found something, we\'re here to help.'
+              : 'Iwe umepoteza kitu au umepata kitu, tuko hapa kukusaidia.'}
+          </p>
+          <div className="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
+            <Button variant="secondary" size="lg" onClick={() => setView('owner')} className="min-h-[48px]">
+              <Search size={18} aria-hidden="true" />
+              {t.ownerBtn}
+            </Button>
+            <Button variant="outline" size="lg" onClick={() => setView('finder')} className="min-h-[48px] border-white text-white hover:bg-white/10 hover:text-white">
+              <MapPin size={18} aria-hidden="true" />
+              {t.finderBtn}
+            </Button>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  );
+}

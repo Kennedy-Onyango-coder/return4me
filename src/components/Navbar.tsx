@@ -98,7 +98,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
           {/* Desktop Translation and Account Controls (lg and above) */}
           <div className="hidden lg:flex items-center space-x-4">
             {/* Geometric Language Toggle */}
-            <div className="flex bg-brand-light-gray p-1 rounded-md text-[11px] font-bold">
+            <div className="flex bg-brand-light-gray p-1 rounded-md text-xs font-bold">
               <button
                 onClick={() => setLang('en')}
                 className={`px-3 py-1 rounded transition-all cursor-pointer ${
@@ -142,7 +142,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
               </div>
             )}
             {token && (
-              <span className="text-[10px] bg-emerald-50 text-primary-green font-extrabold px-2 py-1 rounded uppercase tracking-wider">
+              <span className="text-xs bg-emerald-50 text-primary-green font-extrabold px-2 py-1 rounded uppercase tracking-wider">
                 {lang === 'en' ? 'Active' : 'Hai'}
               </span>
             )}
@@ -198,7 +198,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
               {/* Drawer Links */}
               <div className="flex-1 overflow-y-auto p-5 space-y-5">
                 <div className="space-y-1.5">
-                  <p className="text-[10px] font-bold text-brand-muted-text uppercase tracking-widest px-3 mb-2">
+                  <p className="text-xs font-bold text-brand-muted-text uppercase tracking-widest px-3 mb-2">
                     {lang === 'en' ? 'Main Menu' : 'Menyu Kuu'}
                   </p>
                   
@@ -259,7 +259,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
 
                 {/* System Pages */}
                 <div className="space-y-1.5 pt-4 border-t border-brand-border/60">
-                  <p className="text-[10px] font-bold text-brand-muted-text uppercase tracking-widest px-3 mb-2">
+                  <p className="text-xs font-bold text-brand-muted-text uppercase tracking-widest px-3 mb-2">
                     {lang === 'en' ? 'Legals & Info' : 'Sheria na Taarifa'}
                   </p>
                   
@@ -295,7 +295,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
               <div className="p-5 border-t border-brand-border bg-brand-light-gray/30 space-y-4">
                 {/* Localized Language Selector */}
                 <div>
-                  <label className="block text-[10px] font-bold text-brand-muted-text uppercase tracking-widest mb-2 px-1">
+                  <label className="block text-xs font-bold text-brand-muted-text uppercase tracking-widest mb-2 px-1">
                     {lang === 'en' ? 'Select Language' : 'Chagua Lugha'}
                   </label>
                   <div className="grid grid-cols-2 bg-white border border-brand-border p-1 rounded-xl text-xs font-bold shadow-xs">
@@ -336,11 +336,11 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                       <div className="w-8 h-8 rounded-full bg-brand-light-gray flex items-center justify-center text-accent-orange">
                         <User size={14} />
                       </div>
-                      <span className="text-[11px] font-bold text-brand-dark-text">
+                      <span className="text-xs font-bold text-brand-dark-text">
                         {lang === 'en' ? 'Guest Account' : 'Akaunti ya Mgeni'}
                       </span>
                     </div>
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    
                   </div>
                 )}
               </div>
@@ -358,7 +358,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
           }`}
         >
           <Home size={18} />
-          <span className="text-[10px] font-extrabold uppercase tracking-wider">{lang === 'sw' ? 'Mwanzo' : 'Home'}</span>
+          <span className="text-xs font-extrabold uppercase tracking-wider">{lang === 'sw' ? 'Mwanzo' : 'Home'}</span>
         </button>
         <button
           onClick={() => handleNavClick('owner')}
@@ -367,7 +367,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
           }`}
         >
           <Search size={18} />
-          <span className="text-[10px] font-extrabold uppercase tracking-wider">{lang === 'sw' ? 'Tafuta' : 'Search'}</span>
+          <span className="text-xs font-extrabold uppercase tracking-wider">{lang === 'sw' ? 'Tafuta' : 'Search'}</span>
         </button>
         <button
           onClick={() => handleNavClick('finder')}
@@ -376,7 +376,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
           }`}
         >
           <MapPin size={18} />
-          <span className="text-[10px] font-extrabold uppercase tracking-wider">{lang === 'sw' ? 'Ripoti' : 'Report'}</span>
+          <span className="text-xs font-extrabold uppercase tracking-wider">{lang === 'sw' ? 'Ripoti' : 'Report'}</span>
         </button>
         <button
           onClick={() => handleNavClick('agent')}
@@ -385,7 +385,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
           }`}
         >
           <Globe size={18} />
-          <span className="text-[10px] font-extrabold uppercase tracking-wider">{lang === 'sw' ? 'Wakala' : 'Agent'}</span>
+          <span className="text-xs font-extrabold uppercase tracking-wider">{lang === 'sw' ? 'Wakala' : 'Agent'}</span>
         </button>
         <button
           onClick={() => setIsOpen(true)}
@@ -394,7 +394,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
           }`}
         >
           <Menu size={18} />
-          <span className="text-[10px] font-extrabold uppercase tracking-wider">{lang === 'sw' ? 'Zaidi' : 'More'}</span>
+          <span className="text-xs font-extrabold uppercase tracking-wider">{lang === 'sw' ? 'Zaidi' : 'More'}</span>
         </button>
       </div>
     </>
