@@ -1,7 +1,7 @@
 import React, { forwardRef } from 'react';
 import { Loader2 } from 'lucide-react';
 
-export type ButtonVariant = 'primary' | 'secondary' | 'accent' | 'outline' | 'ghost' | 'danger';
+export type ButtonVariant = 'primary' | 'secondary' | 'accent' | 'outline' | 'inverse' | 'ghost' | 'danger';
 export type ButtonSize = 'sm' | 'md' | 'lg';
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
@@ -41,10 +41,19 @@ const variantClasses: Record<ButtonVariant, string> = {
   // Accent — the important financial / recovery CTA (M-Pesa escrow actions).
   accent:
     'bg-accent-orange hover:bg-accent-hover text-white shadow-sm shadow-accent-orange/20 border border-transparent transition-colors',
+  // Outline — visible on both light and dark backgrounds via strong border
+  // and solid button surface that never disappears into photographic backdrops.
   outline:
-    'bg-white hover:bg-primary-green/5 text-primary-green border border-primary-green/40 transition-colors',
+    'bg-white hover:bg-brand-light-gray text-primary-green border-2 border-primary-green/40 hover:border-primary-green transition-colors shadow-sm',
+  // Inverse — for dark/photographic backgrounds (hero slides). Semi-transparent
+  // white surface with strong border ensures visibility without relying on text
+  // color alone. Better than overriding outline which creates invisible text.
+  inverse:
+    'bg-white/15 hover:bg-white/25 text-white border-2 border-white/70 hover:border-white transition-colors shadow-sm',
+  // Ghost — subtle, for inline actions on light surfaces.
   ghost:
     'bg-transparent hover:bg-primary-green/10 text-primary-green border border-transparent transition-colors',
+  // Danger — destructive actions.
   danger:
     'bg-status-danger hover:bg-red-800 text-white border border-transparent transition-colors',
 };

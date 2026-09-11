@@ -26,7 +26,7 @@ export default function TermsView({ lang, setView }: TermsViewProps) {
       {/* Advisory Notice */}
       <div className="p-4 bg-orange-50 border border-orange-200 rounded-2xl text-xs text-orange-800 space-y-1">
         <p className="font-extrabold uppercase tracking-wider flex items-center gap-1.5">
-          <span>⚠️ Legal Draft Status Notice</span>
+          <span>Legal Draft Status Notice</span>
         </p>
         <p>
           This document is a professionally structured compliance draft prepared in accordance with Kenyan commercial and consumer protection statutes. It is designed to be reviewed and signed off by a licensed advocate of the High Court of Kenya prior to formal public implementation.
@@ -296,7 +296,7 @@ export default function TermsView({ lang, setView }: TermsViewProps) {
           onClick={() => setView('home')}
           className="bg-primary-green hover:bg-primary-hover text-white px-6 py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition cursor-pointer"
         >
-          {lang === 'en' ? '← Back to Home' : '← Rudi Nyumbani'}
+          {lang === 'en' ? 'Back to Home' : 'Rudi Nyumbani'}
         </button>
       </div>
     </div>

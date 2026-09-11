@@ -1,15 +1,17 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { translations } from '../types';
 import {
-  Search, MapPin, ShieldCheck, Globe, CheckCircle, Lock, Package,
-  Loader2, Sparkles, Users, CreditCard,
-  ChevronLeft, ChevronRight, Smartphone, Handshake, HeartHandshake,
+  Search, MapPin, ShieldCheck, Lock, Package,
+  Users, CreditCard, ChevronLeft, ChevronRight,
+  PhoneCall, Key, Car, Wallet, Luggage, Laptop,
+  Sparkles, ScanLine, Smartphone, CheckCircle, ArrowRight, Clock, Monitor
 } from 'lucide-react';
 import Button from './ui/Button';
 import Badge from './ui/Badge';
 import SectionHeading from './ui/SectionHeading';
 import EmptyState from './ui/EmptyState';
 import Skeleton from './ui/Skeleton';
+import { motion, AnimatePresence } from 'motion/react';
 
 type ViewName = 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy';
 
@@ -25,13 +27,6 @@ interface HomeViewProps {
   recentItemsLoading: boolean;
   recentItemsError: boolean;
 }
-
-const CATEGORY_ICONS: Record<string, React.ReactNode> = {
-  'national-id': <Search size={22} />,
-  'vehicle-logbook': <MapPin size={22} />,
-  'driving-licence': <ShieldCheck size={22} />,
-  'number-plate': <ShieldCheck size={22} />,
-};
 
 export default function HomeView(props: HomeViewProps) {
   const {
@@ -50,9 +45,7 @@ export default function HomeView(props: HomeViewProps) {
     return categoryId;
   };
 
-  const getCategoryIcon = (categoryId: string) => CATEGORY_ICONS[categoryId] ?? <Globe size={22} />;
-
-  type SlideAction = { label: string; view?: ViewName; scroll?: boolean; icon?: React.ReactNode };
+  type SlideAction = { label: string; view?: ViewName; scroll?: boolean };
   interface HeroSlide {
     img: string;
     alt: string;
@@ -130,8 +123,8 @@ export default function HomeView(props: HomeViewProps) {
       copy: lang === 'en'
         ? "Return4me's secure lost-and-found network returns found items to their owners — verified, safe and fast."
         : 'Mtandao salama wa Return4me hurejesha vitu vilivyopatikana kwa wamiliki wao — uliothibitishwa, salama na haraka.',
-      primary: { label: lang === 'en' ? 'Report a Found Item' : 'Ripoti Kitu Kilichopatikana', view: 'finder', icon: <MapPin size={18} aria-hidden="true" /> },
-      secondary: { label: lang === 'en' ? 'I Lost Something' : 'Nimepoteza Kitu', view: 'owner', icon: <Search size={18} aria-hidden="true" /> },
+      primary: { label: lang === 'en' ? 'Report a Found Item' : 'Ripoti Kitu Kilichopatikana', view: 'finder' },
+      secondary: { label: lang === 'en' ? 'I Lost Something' : 'Nimepoteza Kitu', view: 'owner' },
     },
     {
       img: 'return4me-agent-handover',
@@ -148,7 +141,7 @@ export default function HomeView(props: HomeViewProps) {
       copy: lang === 'en'
         ? 'A national network of vetted agents handles drop-offs and verified handovers close to home.'
         : 'Mtandao wa kitaifa wa mawakala waliothibitishwa hutunza uwasilishaji na urejeshaji uliothibitishwa karibu na nyumbani.',
-      primary: { label: lang === 'en' ? 'Find an Agent' : 'Tafuta Wakala', view: 'agent', icon: <Globe size={18} aria-hidden="true" /> },
+      primary: { label: lang === 'en' ? 'Find an Agent' : 'Tafuta Wakala', view: 'agent' },
       secondary: { label: lang === 'en' ? 'How It Works' : 'Inavyofanya Kazi', scroll: true },
     },
     {
@@ -166,7 +159,7 @@ export default function HomeView(props: HomeViewProps) {
       copy: lang === 'en'
         ? 'Start with a single report on your phone. The platform matches items and protects every step of the return.'
         : 'Anza kwa ripoti moja kwenye simu yako. Jukwaa linaoanisha vitu na kulinda kila hatua ya urejeshaji.',
-      primary: { label: lang === 'en' ? 'Report an Item' : 'Ripoti Kitu', view: 'finder', icon: <Smartphone size={18} aria-hidden="true" /> },
+      primary: { label: lang === 'en' ? 'Report an Item' : 'Ripoti Kitu', view: 'finder' },
       secondary: { label: lang === 'en' ? 'How It Works' : 'Inavyofanya Kazi', scroll: true },
     },
     {
@@ -184,17 +177,69 @@ export default function HomeView(props: HomeViewProps) {
       copy: lang === 'en'
         ? 'Every return is a story — a phone, an ID or a treasured keepsake, finally back where it belongs.'
         : 'Kila urejeshaji ni hadithi — simu, kitambulisho au kitu kinachopendwa — kurudi mahali pake.',
-      primary: { label: lang === 'en' ? 'Get Started' : 'Anza', view: 'owner', icon: <Search size={18} aria-hidden="true" /> },
+      primary: { label: lang === 'en' ? 'Get Started' : 'Anza', view: 'owner' },
       secondary: { label: lang === 'en' ? 'How It Works' : 'Inavyofanya Kazi', scroll: true },
     },
   ];
 
+  // ── HOW IT WORKS STEPS ──────────────────────────────────────────────────
   const steps = [
-    { icon: <Search size={20} />, title: lang === 'en' ? 'Report' : 'Ripoti', desc: lang === 'en' ? 'Tell us what you lost or found' : 'Tuambie ulichopoteza ulichopata' },
-    { icon: <ShieldCheck size={20} />, title: lang === 'en' ? 'Match & Verify' : 'Oanisha & Thibitisha', desc: lang === 'en' ? 'We match items and verify rightful owners' : 'Tunaoanisha vitu na kuthibitisha wamiliki' },
-    { icon: <Lock size={20} />, title: lang === 'en' ? 'Pay Securely' : 'Lipia kwa Usalama', desc: lang === 'en' ? 'Escrow-protected M-Pesa payment' : 'Malipo ya M-Pesa yaliyolindwa na escrow' },
-    { icon: <CheckCircle size={20} />, title: lang === 'en' ? 'Collect' : 'Chukua', desc: lang === 'en' ? 'Verified handover at an agent point' : 'Uwasilishaji uliothibitishwa katika kituo cha wakala' },
+    {
+      title: lang === 'en' ? 'Report' : 'Ripoti',
+      desc: lang === 'en'
+        ? 'Tell us what you lost or found — a photo, a location, a few details.'
+        : 'Tuambie ulichopoteza au umepata — picha, mahali, maelezo machache.',
+    },
+    {
+      title: lang === 'en' ? 'Match & Verify' : 'Oanisha & Thibitisha',
+      desc: lang === 'en'
+        ? 'Return4me checks for matches and verifies rightful ownership securely.'
+        : 'Return4me huangalia mechi na kuthibitisha umiliki halali kwa usalama.',
+    },
+    {
+      title: lang === 'en' ? 'Pay Securely' : 'Lipia kwa Usalama',
+      desc: lang === 'en'
+        ? 'Payment is held in escrow via M-Pesa until the item is returned.'
+        : 'Malipo huhifadhiwa kwa escrow kupitia M-Pesa hadi kitu kurudishwe.',
+    },
+    {
+      title: lang === 'en' ? 'Collect' : 'Chukua',
+      desc: lang === 'en'
+        ? 'Collect your item from a verified agent — or receive it from a finder.'
+        : 'Chukua kitu chako kutoka kwa wakala aliyeidhinishwa — au kipokee kutoka mpataji.',
+    },
   ];
+
+  // Category icon mapping for visual consistency
+  const getCategoryIcon = (categoryId: string) => {
+    switch (categoryId) {
+      case 'national-id':
+      case 'driving-licence':
+        return Key;
+      case 'vehicle-logbook':
+      case 'number-plate':
+        return Car;
+      case 'phone':
+      case 'smartphone':
+        return PhoneCall;
+      case 'wallet':
+      case 'cash':
+        return Wallet;
+      case 'laptop':
+      case 'tablet':
+        return Laptop;
+      case 'bag':
+      case 'luggage':
+        return Luggage;
+      case 'keys':
+        return Key;
+      case 'jewellery':
+      case 'watch':
+        return Sparkles;
+      default:
+        return Package;
+    }
+  };
 
   return (
     <div className="w-full">
@@ -209,7 +254,7 @@ export default function HomeView(props: HomeViewProps) {
         onTouchStart={onTouchStart}
         onTouchEnd={onTouchEnd}
       >
-        {/* Crossfading photo layers (FIND → CONNECT → HANDOVER → RETURN) */}
+        {/* Crossfading photo layers: FIND, CONNECT, HANDOVER, RETURN */}
         {slides.map((s, i) => {
           const active = i === current;
           return (
@@ -235,45 +280,51 @@ export default function HomeView(props: HomeViewProps) {
                   className="h-full w-full object-cover object-center"
                 />
               </picture>
-              {/* Directional gradient — left-heavy so the headline stays legible; photo stays visible */}
-              <div className="absolute inset-0 bg-gradient-to-r from-primary-green/95 via-primary-green/55 to-primary-green/20" />
-              <div className="absolute inset-0 bg-gradient-to-t from-primary-green/85 via-transparent to-transparent" />
+              {/* Directional gradient overlay — left-heavy so headline stays legible; photo stays visible */}
+              <div className="absolute inset-0 bg-gradient-to-r from-primary-green/20 via-primary-green/8 to-transparent" />
+              {/* Subtle top gradient for additional contrast */}
+              <div className="absolute inset-0 bg-gradient-to-t from-primary-green/15 via-transparent to-transparent" />
             </div>
           );
         })}
 
         {/* Foreground content */}
-        <div className="relative mx-auto max-w-7xl px-5 sm:px-12 pt-14 pb-20 sm:pt-20 sm:pb-24 lg:pt-28 lg:pb-28 min-h-[520px] sm:min-h-[560px] lg:min-h-[600px] flex items-center">
+        <div className="relative z-10 mx-auto max-w-7xl px-5 sm:px-12 pt-16 pb-20 sm:pt-20 sm:pb-24 lg:pt-28 lg:pb-28 min-h-[520px] sm:min-h-[560px] lg:min-h-[600px] flex items-center">
           <div className="max-w-2xl w-full">
             {slides.map((s, i) => {
               const active = i === current;
               return (
-                <div key={s.img} className={active ? 'fade-in' : 'hidden'}>
-                  <div className="mb-5 flex items-center gap-2 text-accent-orange">
-                    <Sparkles size={16} aria-hidden="true" />
-                    <span className="text-xs font-bold uppercase tracking-widest">{s.eyebrow}</span>
+                <motion.div
+                  key={s.img}
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={active ? { opacity: 1, y: 0 } : { opacity: 0, y: 8 }}
+                  transition={{ duration: 0.4, ease: 'easeOut' }}
+                  className={active ? '' : 'hidden'}
+                >
+                  <div className="mb-4 flex items-center gap-2">
+                    <span className="inline-block h-0.5 w-8 bg-accent-orange rounded-full" />
+                    <span className="text-xs font-bold uppercase tracking-widest text-white/90">{s.eyebrow}</span>
                   </div>
-                  <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-white leading-tight">
+                  <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-white leading-[1.1] sm:leading-tight">
                     {s.h1}
                   </h1>
                   <p className="mt-5 text-sm sm:text-base text-white/90 max-w-xl leading-relaxed">
                     {s.copy}
                   </p>
                   <div className="mt-8 flex flex-col sm:flex-row gap-3">
-                    <Button variant="primary" size="lg" onClick={() => handleSlideAction(s.primary)} className="min-h-[48px]">
-                      {s.primary.icon}
+                    <Button variant="primary" size="lg" onClick={() => handleSlideAction(s.primary)} className="min-h-[48px] px-8">
                       {s.primary.label}
                     </Button>
                     <Button
-                      variant="outline"
+                      variant="inverse"
                       size="lg"
                       onClick={() => handleSlideAction(s.secondary)}
-                      className="min-h-[48px] border-white text-white bg-transparent hover:bg-white/10 hover:text-white"
+                      className="min-h-[48px] px-6"
                     >
                       {s.secondary.label}
                     </Button>
                   </div>
-                </div>
+                </motion.div>
               );
             })}
           </div>
@@ -298,7 +349,7 @@ export default function HomeView(props: HomeViewProps) {
         </button>
 
         {/* Slide indicators */}
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2">
+        <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3">
           {slides.map((s, i) => (
             <button
               key={s.img}
@@ -306,8 +357,11 @@ export default function HomeView(props: HomeViewProps) {
               onClick={() => goToSlide(i)}
               aria-label={lang === 'en' ? `Go to slide ${i + 1}` : `Nenda kwenye slaidi ${i + 1}`}
               aria-current={i === current ? 'true' : undefined}
-              className={`w-2.5 h-2.5 rounded-full transition-colors motion-reduce:transition-none ${i === current ? 'bg-accent-orange' : 'bg-white/50 hover:bg-white/80'}`}
-            />
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-all duration-300 motion-reduce:transition-none ${i === current ? 'bg-accent-orange text-white shadow-md shadow-accent-orange/30' : 'bg-white/20 hover:bg-white/30 text-white/70 hover:text-white'}`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full transition-all ${i === current ? 'bg-white scale-110' : 'bg-white/60'}`} />
+              <span className="text-xs font-bold uppercase tracking-wider">{i + 1}</span>
+            </button>
           ))}
         </div>
       </section>
@@ -338,17 +392,17 @@ export default function HomeView(props: HomeViewProps) {
         </div>
       </section>
 
-      {/* ───────── CATEGORIES ───────── */}
+      {/* ───────── SERVICE DISCOVERY / CATEGORIES ───────── */}
       <section className="bg-brand-beige py-14 sm:py-20">
         <div className="mx-auto max-w-7xl px-5 sm:px-12">
           <SectionHeading
-            eyebrow={lang === 'en' ? 'What gets lost' : 'Kinachopotea'}
-            title={lang === 'en' ? 'Common lost items' : 'Vitu vinavyopotea sana'}
-            description={lang === 'en' ? 'We cover the items Kenyans lose most often.' : 'Tunavifunika vitu ambavyo Wakenyaji hupoteza sana.'}
+            eyebrow={lang === 'en' ? 'What can we help recover?' : 'Tunaweza kusaidia nini kurejeshwa?'}
+            title={lang === 'en' ? 'Common items people lose' : 'Vitu vinavyopotea sana'}
+            description={lang === 'en' ? 'From identification documents and cards to money and vehicle records.' : 'Kutoka kwa hati na kadi hadi pesa na rekodi za magari.'}
           />
           {categoriesLoading ? (
             <div className="mt-8 grid grid-cols-2 lg:grid-cols-4 gap-4">
-              {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-28" />)}
+              {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-32" />)}
             </div>
           ) : categoriesError ? (
             <div className="mt-8">
@@ -360,30 +414,34 @@ export default function HomeView(props: HomeViewProps) {
             </div>
           ) : (
             <div className="mt-8 grid grid-cols-2 lg:grid-cols-4 gap-4">
-              {categories.map((cat: any) => (
-                <button
-                  key={cat.id}
-                  onClick={() => setView('owner')}
-                  className="group bg-white rounded-2xl border border-brand-border p-5 text-left transition-all hover:shadow-lg hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange"
-                >
-                  <div className="w-11 h-11 rounded-xl bg-primary-green/10 text-primary-green flex items-center justify-center mb-3 group-hover:bg-primary-green group-hover:text-white transition-colors">
-                    {getCategoryIcon(cat.id)}
-                  </div>
-                  <p className="text-sm font-extrabold text-brand-dark-text">
-                    {lang === 'en' ? cat.name_en : cat.name_sw}
-                  </p>
-                  <p className="text-xs text-brand-muted-text mt-1">
-                    {lang === 'en' ? `From KES ${cat.total_fee}` : `Kuanzia KES ${cat.total_fee}`}
-                  </p>
-                </button>
-              ))}
+              {categories.map((cat: any) => {
+                const Icon = getCategoryIcon(cat.id);
+                return (
+                  <button
+                    key={cat.id}
+                    onClick={() => setView('owner')}
+                    className="group bg-white rounded-2xl border border-brand-border p-5 text-left transition-all duration-200 hover:shadow-lg hover:-translate-y-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange focus-visible:ring-offset-2"
+                  >
+                    <div className="w-10 h-10 rounded-xl bg-primary-green/10 flex items-center justify-center mb-3 group-hover:bg-accent-orange/15 transition-colors">
+                      <Icon size={20} className="text-primary-green group-hover:text-accent-orange transition-colors" aria-hidden="true" />
+                    </div>
+                    <p className="text-sm font-extrabold text-brand-dark-text leading-snug">
+                      {lang === 'en' ? cat.name_en : cat.name_sw}
+                    </p>
+                    <p className="text-xs text-brand-muted-text mt-1">
+                      {lang === 'en' ? 'Lost or found' : 'Imepotea au imepatikana'}
+                    </p>
+                    <div className="mt-3 flex items-center gap-1 text-xs font-bold text-accent-orange opacity-0 group-hover:opacity-100 transition-opacity">
+                      <span>{lang === 'en' ? 'Report / Find' : 'Ripoti / Tafuta'}</span>
+                      <ArrowRight size={12} aria-hidden="true" />
+                    </div>
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>
       </section>
-
-
-
 
       {/* ───────── RECENT FOUND ITEMS ───────── */}
       <section className="bg-white py-14 sm:py-20 border-t border-brand-border">
@@ -395,9 +453,17 @@ export default function HomeView(props: HomeViewProps) {
           />
           {recentItemsLoading ? (
             <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {[1, 2, 3].map((i) => <Skeleton key={i} className="h-40" />)}
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="bg-brand-beige/50 rounded-2xl border border-brand-border overflow-hidden">
+                  <Skeleton shape="rect" className="aspect-[4/3]" />
+                  <div className="p-4 space-y-2">
+                    <Skeleton shape="text" className="w-3/4 h-4" />
+                    <Skeleton shape="text" className="w-1/2 h-3" />
+                  </div>
+                </div>
+              ))}
             </div>
-          ) : recentItemsError ? (
+           ) : recentItemsError ? (
             <div className="mt-8">
               <EmptyState
                 icon={Package}
@@ -411,46 +477,85 @@ export default function HomeView(props: HomeViewProps) {
                 icon={Package}
                 title={lang === 'en' ? 'No items waiting' : 'Hakuna vitu vinavyosubiri'}
                 description={lang === 'en' ? 'Check back soon — new items are added regularly.' : 'Rudi hivi karibuni — vitu vipya vinaongezwa mara kwa mara.'}
+                action={
+                  <Button variant="accent" size="sm" onClick={() => setView('finder')}>
+                    <MapPin size={14} aria-hidden="true" />
+                    {lang === 'en' ? 'Report a Found Item' : 'Ripoti Kitu Kilichopatikana'}
+                  </Button>
+                }
               />
             </div>
           ) : (
             <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {recentItems.map((item: any) => {
                 const isSensitive = item.is_sensitive_document;
+                const hasPhoto = item.photo_url && !isSensitive;
+                const statusText = item.status === 'claimed'
+                  ? (lang === 'en' ? 'Claimed' : 'Imechingwa')
+                  : item.status === 'at_agent'
+                  ? (lang === 'en' ? 'With Agent' : 'Na Wakala')
+                  : (lang === 'en' ? 'Found' : 'Imepatikana');
+                const statusVariant = item.status === 'claimed' ? 'warning' : item.status === 'at_agent' ? 'info' : 'success';
+                
                 return (
-                  <div key={item.id} className="bg-brand-beige/50 rounded-2xl border border-brand-border overflow-hidden flex flex-col">
-                    <div className="aspect-[4/3] bg-brand-light-gray relative">
-                      {isSensitive ? (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center text-brand-muted-text">
-                          <Lock size={28} aria-hidden="true" />
-                          <span className="text-xs font-bold mt-2">{lang === 'en' ? 'Photo hidden for privacy' : 'Picha imefichwa kwa faragha'}</span>
-                        </div>
-                      ) : (
+                  <motion.div
+                    key={item.id}
+                    whileHover={{ y: -4 }}
+                    whileTap={{ scale: 0.98 }}
+                    className="group relative bg-white rounded-2xl border border-brand-border overflow-hidden transition-all hover:shadow-lg focus-within:ring-2 focus-within:ring-accent-orange motion-reduce:transition-none"
+                  >
+                    {/* Thumbnail area */}
+                    <div className="aspect-[4/3] bg-brand-light-gray relative overflow-hidden">
+                      {hasPhoto ? (
                         <img
                           src={item.photo_url}
-                          alt={lang === 'en' ? 'Found item photo' : 'Picha ya kitu kilichopatikana'}
+                          alt={lang === 'en' ? `${getCategoryName(item.category_id)} - found item` : `${getCategoryName(item.category_id)} - kitu kilichopatikana`}
                           loading="lazy"
                           decoding="async"
                           width="400"
                           height="300"
-                          className="w-full h-full object-cover"
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                         />
+                      ) : (
+                        <div className="absolute inset-0 flex flex-col items-center justify-center text-brand-muted-text bg-brand-light-gray">
+                          <Lock size={28} aria-hidden="true" className="mb-2" />
+                          <span className="text-xs font-bold">
+                            {isSensitive
+                              ? (lang === 'en' ? 'Photo hidden for privacy' : 'Picha imefichwa kwa faragha')
+                              : (lang === 'en' ? 'No photo available' : 'Hakuna picha')}
+                          </span>
+                        </div>
                       )}
-                    </div>
-                    <div className="p-4 flex-1 flex flex-col">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-sm font-extrabold text-brand-dark-text truncate">
-                          {getCategoryName(item.category_id)}
-                        </p>
-                        <Badge variant="success">{lang === 'en' ? 'Found' : 'Imepatikana'}</Badge>
+                      {/* Status badge */}
+                      <div className="absolute top-3 left-3">
+                        <Badge variant={statusVariant} icon={item.status === 'claimed' ? Lock : item.status === 'at_agent' ? ShieldCheck : Package}>
+                          {statusText}
+                        </Badge>
                       </div>
-                      <p className="text-xs text-brand-muted-text mt-1 line-clamp-2">
+                      {/* Hover action hint */}
+                      <div className="absolute inset-0 bg-primary-green/0 group-hover:bg-primary-green/5 transition-colors duration-300" />
+                    </div>
+                    
+                    {/* Content */}
+                    <div className="p-4 flex-1 flex flex-col">
+                      <h3 className="text-sm font-extrabold text-brand-dark-text truncate">
+                        {getCategoryName(item.category_id)}
+                      </h3>
+                      <p className="text-xs text-brand-muted-text mt-1 line-clamp-2 flex-1">
                         {isSensitive
                           ? (lang === 'en' ? 'Details hidden for privacy' : 'Maelezo yamefichwa kwa faragha')
                           : (item.description || item.location_description || (lang === 'en' ? 'No description available' : 'Hakuna maelezo'))}
                       </p>
+                      <div className="mt-3 pt-3 border-t border-brand-border flex items-center justify-between">
+                        <span className="text-xs text-brand-muted-text">
+                          {new Date(item.created_at).toLocaleDateString(lang === 'en' ? 'en-US' : 'sw-KE', { month: 'short', day: 'numeric', year: 'numeric' })}
+                        </span>
+                        <span className="text-xs font-mono text-brand-dark-text bg-brand-light-gray px-2 py-1 rounded">
+                          {item.id.substring(0, 8).toUpperCase()}
+                        </span>
+                      </div>
                     </div>
-                  </div>
+                  </motion.div>
                 );
               })}
             </div>
@@ -514,22 +619,20 @@ export default function HomeView(props: HomeViewProps) {
                   ? 'From your phone you can start and manage the return journey — no offices to visit, no forms to post.'
                   : 'Kutoka kwenye simu yako unaweza kuanza na kusimamia safari ya urejeshaji — hakuna ofisi za kuenda, hakuna fomu za kutuma.'}
               />
-              <div className="mt-6 space-y-3">
+              <ul className="mt-6 space-y-3 text-sm font-semibold text-brand-dark-text">
           {[
-            { icon: <Search size={16} aria-hidden="true" />, t: lang === 'en' ? 'Report a lost item' : 'Ripoti kitu kilichopotea' },
-            { icon: <MapPin size={16} aria-hidden="true" />, t: lang === 'en' ? 'Report a found item' : 'Ripoti kitu kilichopatikana' },
-            { icon: <ShieldCheck size={16} aria-hidden="true" />, t: lang === 'en' ? 'Verify identity securely' : 'Thibitisha utambulisho kwa usalama' },
-            { icon: <CheckCircle size={16} aria-hidden="true" />, t: lang === 'en' ? 'Track a claim you have started' : 'Fuatilia daima uliyoianzisha' },
-            { icon: <Handshake size={16} aria-hidden="true" />, t: lang === 'en' ? 'Connect with a vetted agent for the handover' : 'Ungana na wakala aliyeidhinishwa kwa uwasilishaji' },
-          ].map((f) => (
-            <li key={f.t} className="flex items-center gap-3">
-              <span className="w-9 h-9 rounded-xl bg-primary-green/10 text-primary-green flex items-center justify-center shrink-0">
-                {f.icon}
-              </span>
-              <span className="text-sm font-semibold text-brand-dark-text">{f.t}</span>
+            lang === 'en' ? 'Report a lost item' : 'Ripoti kitu kilichopotea',
+            lang === 'en' ? 'Report a found item' : 'Ripoti kitu kilichopatikana',
+            lang === 'en' ? 'Verify identity securely' : 'Thibitisha utambulisho kwa usalama',
+            lang === 'en' ? 'Track a claim you have started' : 'Fuatilia daima uliyoianzisha',
+            lang === 'en' ? 'Connect with a vetted agent for the handover' : 'Ungana na wakala aliyeidhinishwa kwa uwasilishaji',
+          ].map((ft) => (
+            <li key={ft} className="flex items-center gap-2.5">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent-orange shrink-0" aria-hidden="true" />
+              {ft}
             </li>
           ))}
-        </div>
+        </ul>
       </div>
       {/* Image right — the app/platform experience */}
       <div className="relative">
@@ -571,11 +674,8 @@ export default function HomeView(props: HomeViewProps) {
             </div>
             {/* Message right */}
             <div>
-              <div className="flex items-center gap-2 text-accent-orange mb-3">
-                <HeartHandshake size={18} aria-hidden="true" />
-                <span className="text-[11px] font-extrabold uppercase tracking-widest">
-                  {lang === 'en' ? 'Successful returns' : 'Urejeshaji uliofanikiwa'}
-                </span>
+              <div className="text-[11px] font-extrabold uppercase tracking-widest text-accent-orange mb-3">
+                {lang === 'en' ? 'Successful returns' : 'Urejeshaji uliofanikiwa'}
               </div>
               <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-primary-green">
                 {lang === 'en' ? 'Because getting something back matters.' : 'Kwa sababu kupata kitu kinarejeshwa ni muhimu.'}

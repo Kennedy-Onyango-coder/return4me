@@ -192,7 +192,7 @@ export default function VerificationForm({
             {idProofBase64 && (
               <div className="space-y-2">
                 <p className="text-[10px] text-emerald-600 font-semibold flex items-center space-x-1">
-                  <span>✓ {lang === 'sw' ? 'Picha imepakiawa na Imehifadhiwa salama' : 'Photo uploaded and stored securely'}</span>
+                  <span>{lang === 'sw' ? 'Picha imepakiawa na Imehifadhiwa salama' : 'Photo uploaded and stored securely'}</span>
                 </p>
                 <div className="flex items-start space-x-2 bg-stone-50 p-2.5 rounded-lg border border-stone-200">
                   <input

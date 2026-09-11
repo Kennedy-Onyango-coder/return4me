@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { translations } from '../types';
 import VerificationForm from './VerificationForm';
 import { trapModalFocus } from '../utils/modalFocus';
-import { Search, AlertCircle, ShieldAlert, CheckCircle, Smartphone, ArrowRight, Loader2, Coins, MapPin, Star, Lock, Eye, Clock, XCircle, AlertTriangle } from 'lucide-react';
+import { Search, AlertCircle, ShieldAlert, CheckCircle, Smartphone, ArrowRight, Loader2, Coins, MapPin, Lock, Eye, Clock, X, XCircle, AlertTriangle } from 'lucide-react';
 
 interface OwnerViewProps {
   lang: 'en' | 'sw';
@@ -1117,7 +1117,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 disabled={isPaying}
                 className="w-full bg-amber-100 hover:bg-amber-200 text-amber-800 py-3 rounded-2xl font-bold text-xs transition cursor-pointer disabled:opacity-50 border border-dashed border-amber-300"
               >
-                {lang === 'en' ? '🧪 Simulate Payment Success (test mode only)' : '🧪 Iga Malipo Yaliyofaulu (hali ya majaribio)'}
+                {lang === 'en' ? 'Simulate Payment Success (test mode only)' : 'Iga Malipo Yaliyofaulu (hali ya majaribio)'}
               </button>
             )}
           </div>
@@ -1195,7 +1195,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
           {simulatedPickupCode && (
             <div className="bg-amber-50 border border-dashed border-amber-300 text-amber-800 p-3 rounded-xl text-[11px] font-bold">
-              🧪 {lang === 'sw' ? 'Hali ya majaribio: msimbo huu umeonyeshwa hapa kwa sababu SMS/barua pepe halisi haitumwi wakati wa majaribio ya ndani.' : 'Test mode: this code is shown here because real SMS/email isn\'t sent during local testing.'}
+              {lang === 'sw' ? 'Hali ya majaribio: msimbo huu umeonyeshwa hapa kwa sababu SMS/barua pepe halisi haitumwi wakati wa majaribio ya ndani.' : 'Test mode: this code is shown here because real SMS/email isn\'t sent during local testing.'}
             </div>
           )}
 
@@ -1218,7 +1218,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           <div className="border-t border-stone-100 pt-5 space-y-3">
             <h4 className="text-xs font-extrabold text-primary-green uppercase tracking-wider">{t.rateAgentLabel}</h4>
             {ratingSubmitted ? (
-              <span className="text-xs text-emerald-600 font-bold block">✓ Thank you for supporting community trust in Kenya!</span>
+              <span className="text-xs text-emerald-600 font-bold block">Thank you for supporting community trust in Kenya!</span>
             ) : (
               <div className="flex items-center justify-center space-x-2">
                 {[1, 2, 3, 4, 5].map((star) => (
@@ -1228,7 +1228,11 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                     onClick={() => submitRating(star)}
                     className="text-stone-300 hover:text-accent-orange transition"
                   >
-                    <Star size={24} className={userRating && userRating >= star ? "fill-accent-orange text-accent-orange" : ""} />
+                    <div
+                      className={`w-5 h-5 rounded-full flex items-center justify-center text-white text-[10px] font-extrabold ${userRating && userRating >= star ? 'bg-accent-orange' : 'bg-stone-200'}`}
+                    >
+                      {star}
+                    </div>
                   </button>
                 ))}
               </div>
@@ -1351,7 +1355,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
       {/* TRACK MY CLAIM MODAL */}
       {showTrackModal && (
         <div
-          className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 z-50"
+          className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50"
           onClick={(e) => {
             if (e.target === e.currentTarget) setShowTrackModal(false);
           }}
@@ -1375,7 +1379,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 className="text-stone-400 hover:text-stone-600 font-bold text-lg cursor-pointer px-2 py-1 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg hover:bg-stone-100"
                 aria-label={lang === 'sw' ? 'Funga' : 'Close'}
               >
-                ✕
+                <X size={18} aria-hidden="true" />
               </button>
             </div>
 
@@ -1465,16 +1469,16 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 {trackResult.item && (
                   <div className="space-y-1 border-t border-stone-200 pt-2">
                     <p className="font-bold text-primary-green text-sm">{trackResult.item.document_name_fuzzy || 'Found Item'}</p>
-                    <p className="text-stone-600">📍 Location: {trackResult.item.location_description}</p>
+                    <p className="text-stone-600">Location: {trackResult.item.location_description}</p>
                   </div>
                 )}
 
                 {trackResult.agent && (
                   <div className="bg-white p-3 rounded-xl border border-stone-200 space-y-1">
-                    <p className="font-bold text-stone-800">🏢 Assigned Agent Hub:</p>
+                    <p className="font-bold text-stone-800">Assigned Agent Hub:</p>
                     <p className="text-primary-green font-extrabold">{trackResult.agent.business_name}</p>
                     <p className="text-stone-500">{trackResult.agent.location_address}</p>
-                    <p className="text-stone-500 font-mono">📞 {trackResult.agent.contact_phone}</p>
+                    <p className="text-stone-500 font-mono">{trackResult.agent.contact_phone}</p>
                   </div>
                 )}
 

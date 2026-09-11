@@ -1754,7 +1754,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
 
                           {/* Expanded Details Body */}
                           {isExpanded && (
-                            <div className="border-t border-stone-100 bg-stone-50/50 p-5 space-y-4 animate-fade-in text-xs text-stone-600">
+                            <div className="border-t border-stone-100 bg-stone-50/50 p-5 space-y-4 fade-in text-xs text-stone-600">
                               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                                 {/* Column 1: Verification / Details */}
                                 <div className="space-y-2">
@@ -1784,12 +1784,12 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                                         rel="noopener noreferrer"
                                         className="text-primary-green hover:underline font-bold inline-flex items-center space-x-1"
                                       >
-                                        <span>🌐 View on Google Maps</span>
+                                        <span>View on Google Maps</span>
                                       </a>
                                     </>
                                   ) : (
                                     <div className="space-y-2">
-                                      <p className="text-red-500 font-bold">⚠️ GPS coordinates unavailable — this agent cannot receive GPS-matched items until fixed</p>
+                                      <p className="text-red-500 font-bold">GPS coordinates unavailable — this agent cannot receive GPS-matched items until fixed</p>
                                       {locationFormAgentId === agent.id ? (
                                         <div className="flex flex-wrap items-end gap-2 p-2 bg-white border border-stone-200 rounded-xl">
                                           <div>
@@ -1835,7 +1835,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                                             rel="noopener noreferrer"
                                             className="text-primary-green hover:underline text-[10px] font-bold"
                                           >
-                                            🔍 Look up on Google Maps
+                                            Look up on Google Maps
                                           </a>
                                         </div>
                                       ) : (
@@ -1861,12 +1861,12 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                                   <p className="flex items-center gap-1.5">
                                     <b>Rating Score:</b> 
                                     <span className="bg-amber-50 text-amber-800 font-extrabold px-2 py-0.5 rounded border border-amber-100 flex items-center gap-0.5">
-                                      ★ {parseFloat(agent.rating || '5.0').toFixed(1)}
+                                      {parseFloat(agent.rating || '5.0').toFixed(1)}
                                     </span>
                                     <span>({agent.rating_count || 0} reviews)</span>
                                   </p>
                                   <div className="bg-red-50 border border-red-100 p-2 rounded-xl space-y-1 mt-1">
-                                    <p className="font-bold text-red-800 text-[11px]">⚠️ Warnings: {agent.warning_count || 0}</p>
+                                    <p className="font-bold text-red-800 text-[11px]">Warnings: {agent.warning_count || 0}</p>
                                     {agent.last_warning_reason && (
                                       <p className="text-[10px] text-red-600 italic">"Last: {agent.last_warning_reason}"</p>
                                     )}
@@ -2198,7 +2198,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                                 {/* Matching Stats & Location details */}
                                 <div className="col-span-2 pt-1 border-t border-stone-50 text-[11px]">
                                   <p className="text-stone-500">
-                                    📍 <b>Location:</b> {item.location_description}
+                                    <b>Location:</b> {item.location_description}
                                   </p>
                                   {item.latitude && item.longitude && (
                                     <p className="text-stone-400 font-mono text-[10px] mt-0.5">
@@ -2554,7 +2554,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                         <img
                           src={selectedReviewItem.photo_url}
                           alt="Document to review"
-                          className="w-full h-full object-contain animate-fade-in"
+                          className="w-full h-full object-contain fade-in"
                           referrerPolicy="no-referrer"
                         />
                       </div>
@@ -2620,9 +2620,9 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                             <p>Calculated Distance: <span className="font-bold text-stone-900">{parseFloat(selectedReviewItem.agent_assignment_distance_km).toFixed(2)} km</span></p>
                           )}
                           {selectedReviewItem.needs_manual_agent_reassignment ? (
-                            <p className="text-red-600 font-sans font-extrabold uppercase animate-pulse">⚠️ Reassigned to Default Backup Agent (Needs Manual Correction)</p>
+                            <p className="text-red-600 font-sans font-extrabold uppercase animate-pulse">Reassigned to Default Backup Agent (Needs Manual Correction)</p>
                           ) : (
-                            <p className="text-emerald-600 font-sans font-extrabold uppercase">✓ Successfully Auto-Assigned</p>
+                            <p className="text-emerald-600 font-sans font-extrabold uppercase">Successfully Auto-Assigned</p>
                           )}
                         </div>
                       )}
@@ -2745,7 +2745,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                                       <p>Distance: <span className="font-bold">{parseFloat(item.agent_assignment_distance_km).toFixed(2)} km</span></p>
                                     )}
                                     {item.needs_manual_agent_reassignment && (
-                                      <p className="text-red-600 font-bold uppercase animate-pulse">⚠️ Needs Manual Reassignment</p>
+                                      <p className="text-red-600 font-bold uppercase animate-pulse">Needs Manual Reassignment</p>
                                     )}
                                   </div>
                                 )}
@@ -2760,7 +2760,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                                     {item.reputation.autoFlag && (
                                       <div className="flex flex-col gap-1 mt-1">
                                         <span className="bg-red-100 text-red-800 text-[9px] font-black px-2 py-0.5 rounded-full inline-block uppercase text-center w-fit">
-                                          ⚠️ Poor Reputation Block
+                                          Poor Reputation Block
                                         </span>
                                         <button
                                           type="button"
@@ -3021,11 +3021,11 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                           <div className="text-[10px] mt-1 font-semibold">
                             {isMatch ? (
                               <span className="flex items-center space-x-1">
-                                <span>✅ Perfect match! Payout split equations balance successfully.</span>
+                                <span>Perfect match! Payout split equations balance successfully.</span>
                               </span>
                             ) : (
                               <span>
-                                ⚠️ Discrepancy: Difference of KES {difference}. Split sum (Finder + Agent + Platform) must sum to the Total Fee exactly.
+                                Discrepancy: Difference of KES {difference}. Split sum (Finder + Agent + Platform) must sum to the Total Fee exactly.
                               </span>
                             )}
                           </div>
@@ -3109,7 +3109,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                       </div>
                       {parseFloat((Number(catFormFinderPct) + Number(catFormAgentPct) + Number(catFormPlatformPct)).toFixed(2)) !== 100 && (
                         <p className="text-[10px] font-bold text-red-700">
-                          ⚠️ Finder % + Agent % + Platform % = {(Number(catFormFinderPct) + Number(catFormAgentPct) + Number(catFormPlatformPct)).toFixed(2)}%, not 100%. The platform share absorbs the difference at settlement time, but percentages should sum to 100 for clarity.
+                          Finder % + Agent % + Platform % = {(Number(catFormFinderPct) + Number(catFormAgentPct) + Number(catFormPlatformPct)).toFixed(2)}%, not 100%. The platform share absorbs the difference at settlement time, but percentages should sum to 100 for clarity.
                         </p>
                       )}
                     </div>
@@ -3235,7 +3235,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                 <button
                   onClick={fetchPaymentStrikes}
                   disabled={paymentStrikesLoading}
-                  className="bg-stone-900 hover:bg-stone-800 text-white font-extrabold px-4 py-2 rounded-xl text-xs flex items-center space-x-1.5 transition cursor-pointer disabled:opacity-50 animate-fade-in"
+                  className="bg-stone-900 hover:bg-stone-800 text-white font-extrabold px-4 py-2 rounded-xl text-xs flex items-center space-x-1.5 transition cursor-pointer disabled:opacity-50 fade-in"
                 >
                   {paymentStrikesLoading ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />}
                   <span>Reload list</span>
@@ -3319,8 +3319,8 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
 
       {/* Custom Confirmation Modal */}
       {confirmModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white border border-stone-200 rounded-3xl p-6 shadow-xl max-w-sm w-full space-y-4 animate-scale-up">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-stone-900/60 fade-in">
+          <div className="bg-white border border-stone-200 rounded-xl p-6 shadow-xl max-w-sm w-full space-y-4 fade-in">
             <div className="flex items-start space-x-3 text-amber-600">
               <ShieldAlert className="w-6 h-6 shrink-0 mt-0.5" />
               <div className="space-y-1">
@@ -3357,7 +3357,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
       {lightboxImage && (
         <div 
           onClick={() => setLightboxImage(null)}
-          className="fixed inset-0 z-[120] bg-black/90 flex items-center justify-center p-4 cursor-zoom-out animate-fade-in"
+          className="fixed inset-0 z-[120] bg-black/90 flex items-center justify-center p-4 cursor-zoom-out fade-in"
           role="dialog"
           aria-modal="true"
           aria-label="Zoomed photograph"

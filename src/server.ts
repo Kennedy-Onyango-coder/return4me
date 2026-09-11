@@ -219,16 +219,16 @@ if (isSentryBackendEnabled) {
 console.log('================================================================');
 console.log('                   RETURN4ME ENVIRONMENT CHECK                  ');
 console.log('================================================================');
-console.log(`.env File Detected:      ${realEnvExists ? '✅ Yes' : '❌ No (Using default fallback process envs/example)'}`);
-console.log(`DATABASE_URL:            ${process.env.DATABASE_URL ? '✅ Configured' : '❌ Missing'}`);
-console.log(`JWT_SECRET:              ${process.env.JWT_SECRET ? '✅ Configured' : '❌ Missing'}`);
-console.log(`DOC_HASH_SALT:           ${process.env.DOC_HASH_SALT ? '✅ Configured' : '❌ Missing'}`);
-console.log(`ADMIN_PASSCODE:          ${process.env.ADMIN_PASSCODE ? '✅ Configured' : '❌ Missing'}`);
-console.log(`INTASEND_PUBLISHABLE:    ${process.env.INTASEND_PUBLISHABLE_KEY ? '✅ Configured' : '❌ Missing'}`);
-console.log(`INTASEND_SECRET:         ${process.env.INTASEND_SECRET_KEY ? '✅ Configured' : '❌ Missing'}`);
-console.log(`ALLOW_MOCK_OTP_BYPASS:   ${process.env.ALLOW_MOCK_OTP_BYPASS === 'true' ? '⚠️ ENABLED (Insecure)' : '✅ Disabled'}`);
-console.log(`GEMINI_API_KEY:          ${process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY' ? '✅ Configured (Real OCR Active)' : '⚠️ Missing or placeholder'}`);
-console.log(`GROQ_API_KEY:            ${process.env.GROQ_API_KEY && process.env.GROQ_API_KEY !== 'MY_GROQ_API_KEY' ? '✅ Configured (Secondary OCR Active)' : '⚠️ Missing or placeholder'}`);
+console.log(`.env File Detected:      ${realEnvExists ? '[OK] Yes' : '[MISSING] No (Using default fallback process envs/example)'}`);
+console.log(`DATABASE_URL:            ${process.env.DATABASE_URL ? '[OK] Configured' : '[MISSING] Missing'}`);
+console.log(`JWT_SECRET:              ${process.env.JWT_SECRET ? '[OK] Configured' : '[MISSING] Missing'}`);
+console.log(`DOC_HASH_SALT:           ${process.env.DOC_HASH_SALT ? '[OK] Configured' : '[MISSING] Missing'}`);
+console.log(`ADMIN_PASSCODE:          ${process.env.ADMIN_PASSCODE ? '[OK] Configured' : '[MISSING] Missing'}`);
+console.log(`INTASEND_PUBLISHABLE:    ${process.env.INTASEND_PUBLISHABLE_KEY ? '[OK] Configured' : '[MISSING] Missing'}`);
+console.log(`INTASEND_SECRET:         ${process.env.INTASEND_SECRET_KEY ? '[OK] Configured' : '[MISSING] Missing'}`);
+console.log(`ALLOW_MOCK_OTP_BYPASS:   ${process.env.ALLOW_MOCK_OTP_BYPASS === 'true' ? '[WARNING] ENABLED (Insecure)' : '[OK] Disabled'}`);
+console.log(`GEMINI_API_KEY:          ${process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY' ? '[OK] Configured (Real OCR Active)' : '[WARNING] Missing or placeholder'}`);
+console.log(`GROQ_API_KEY:            ${process.env.GROQ_API_KEY && process.env.GROQ_API_KEY !== 'MY_GROQ_API_KEY' ? '[OK] Configured (Secondary OCR Active)' : '[WARNING] Missing or placeholder'}`);
 console.log('================================================================');
 console.log('Database pool created, SSL enabled');
 console.log('================================================================');
@@ -245,7 +245,7 @@ const isFreshlyCloned = !realEnvExists ||
 
 if (isRealGoogleKey && isFreshlyCloned) {
   console.warn("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-  console.warn("⚠️  SECURITY WARNING: REAL GOOGLE API KEY DETECTED IN UNCONFIGURED STATE!");
+  console.warn("[WARNING]  SECURITY WARNING: REAL GOOGLE API KEY DETECTED IN UNCONFIGURED STATE!");
   console.warn("Your GEMINI_API_KEY format matches a real Google API key (starts with 'AQ.' or 'AIzaSy').");
   console.warn("However, the application appears to be running in an unconfigured, freshly-cloned,");
   console.warn("or example fallback state where standard security placeholders are still active.");
@@ -633,7 +633,7 @@ async function startServer() {
       }
       console.error('================================================================');
     } else {
-      console.log('[DATABASE ENGINE] Categories integrity check: ALL OK ✅');
+      console.log('[DATABASE ENGINE] Categories integrity check: ALL OK [OK]');
     }
 
   } catch (err) {

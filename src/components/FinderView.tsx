@@ -403,9 +403,9 @@ export default function FinderView({ lang, categories, categoriesLoading = false
             ) : photoBase64 ? (
               <div className="relative rounded-2xl overflow-hidden border border-stone-200 bg-brand-beige aspect-video">
                 <img src={photoBase64} alt="Found item document" className="w-full h-full object-contain" />
-                {/* Photo controls: always visible (no hover dependency for touch devices) */}
-                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-3 flex items-center justify-center space-x-3">
-                  <button
+                {/* Controls */}
+              <div className="flex items-center justify-center gap-2 pb-3">
+                <button
                     type="button"
                     onClick={startCamera}
                     className="bg-white text-primary-green p-2.5 rounded-full hover:bg-stone-100 shadow-md transition"
@@ -620,7 +620,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                   <MapPin className="text-accent-orange shrink-0 mt-0.5" size={18} />
                   <div className="space-y-1">
                     <h4 className="text-xs font-bold text-stone-900 leading-none">
-                      {lang === 'en' ? '📍 Enable Location for Nearest Agent Link' : '📍 Ruhusu Mahali Ulipo ili Kupata Wakala wa Karibu'}
+                      {lang === 'en' ? 'Enable Location for Nearest Agent Link' : 'Ruhusu Mahali Ulipo ili Kupata Wakala wa Karibu'}
                     </h4>
                     <p className="text-[11px] text-stone-600 leading-normal">
                       {lang === 'en' 
@@ -655,7 +655,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                 </div>
                 <div className="flex-1 min-w-0">
                   <h4 className="text-xs font-bold text-emerald-900">
-                    {lang === 'en' ? '✓ Precise Agent Match Enabled!' : '✓ Unganisho Sahihi wa Wakala Umewashwa!'}
+                    {lang === 'en' ? 'Precise Agent Match Enabled!' : 'Unganisho Sahihi wa Wakala Umewashwa!'}
                   </h4>
                   <p className="text-[10px] text-emerald-700 mt-0.5">
                     {lang === 'en'
@@ -699,7 +699,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
               required
             />
             <span className="text-[10px] text-stone-400 block leading-tight">
-              🔒 Privacy Assurance: Your phone number is encrypted in the ledger, used strictly for B2C payouts, and is NEVER displayed to claimants.
+              Privacy Assurance: Your phone number is encrypted in the ledger, used strictly for B2C payouts, and is NEVER displayed to claimants.
             </span>
           </div>
 

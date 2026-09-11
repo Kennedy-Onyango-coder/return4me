@@ -660,7 +660,7 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
                         className="block w-full text-xs text-stone-500 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-emerald-50 file:text-primary-green hover:file:bg-emerald-100 cursor-pointer"
                       />
                       {shopPhotoBase64 && (
-                        <p className="text-[11px] text-emerald-600 font-semibold">✓ Picha ya duka imepakiwa (Shop photo selected)</p>
+                        <p className="text-[11px] text-emerald-600 font-semibold">Picha ya duka imepakiwa (Shop photo selected)</p>
                       )}
                     </div>
 
@@ -688,7 +688,7 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
                         className="block w-full text-xs text-stone-500 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-orange-50 file:text-accent-orange hover:file:bg-orange-100 cursor-pointer"
                       />
                       {idDocumentPhotoBase64 && (
-                        <p className="text-[11px] text-emerald-600 font-semibold">✓ Picha ya kitambulisho imepakiwa (ID photo selected)</p>
+                        <p className="text-[11px] text-emerald-600 font-semibold">Picha ya kitambulisho imepakiwa (ID photo selected)</p>
                       )}
                     </div>
                   </div>
@@ -1227,8 +1227,8 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
 
       {/* Custom Confirmation Modal */}
       {confirmModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white border border-stone-200 rounded-3xl p-6 shadow-xl max-w-sm w-full space-y-4 animate-scale-up">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-stone-900/60 fade-in">
+          <div className="bg-white border border-stone-200 rounded-3xl p-6 shadow-xl max-w-sm w-full space-y-4 fade-in">
             <div className="flex items-start space-x-3 text-amber-600">
               <CheckCircle className="w-6 h-6 shrink-0 mt-0.5 animate-pulse" />
               <div className="space-y-1">
@@ -1263,8 +1263,8 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
 
       {/* Handover Pickup Code Modal */}
       {pickupCodeModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white border border-stone-200 rounded-3xl p-6 shadow-xl max-w-sm w-full space-y-4 animate-scale-up">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-stone-900/60 fade-in">
+          <div className="bg-white border border-stone-200 rounded-3xl p-6 shadow-xl max-w-sm w-full space-y-4 fade-in">
             <div className="flex items-start space-x-3 text-amber-600">
               <CheckCircle className="w-6 h-6 shrink-0 mt-0.5" />
               <div className="space-y-1">
