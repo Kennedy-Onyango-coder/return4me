@@ -1636,11 +1636,17 @@ async function startServer() {
       // claimant on a laptop or phone is exactly as much a collision risk as
       // a second claimant on a national ID; the item shouldn't be handed to
       // "whoever clicked claim first" in either case.
+      // Only ACTIVE claims count here. A claim whose status is in
+      // INACTIVE_CLAIM_STATUSES is a CLOSED attempt (most importantly:
+      // 'payment_window_expired' = simple abandonment, NOT a competing
+      // claimant and NOT a dispute). Historical records stay in the DB
+      // for audit; they must simply stop acting as live reservations.
       {
         const cleanOwnerPhone = ownerPhone.replace(/\s+/g, '');
+        const isActiveClaim = (c: { status: string }) => !INACTIVE_CLAIM_STATUSES.has(c.status);
         const sameOwnerClaim = (await db.getClaims()).find(c => 
           c.item_id === itemId && 
-          c.status !== 'disputed' && 
+          isActiveClaim(c) &&
           c.owner_phone && 
           c.owner_phone.replace(/\s+/g, '') === cleanOwnerPhone
         );
@@ -1654,7 +1660,7 @@ async function startServer() {
 
         const existingClaims = (await db.getClaims()).filter(c => 
           c.item_id === itemId && 
-          c.status !== 'disputed' &&
+          isActiveClaim(c) &&
           c.owner_phone &&
           c.owner_phone.replace(/\s+/g, '') !== cleanOwnerPhone
         );
@@ -4549,6 +4555,23 @@ async function releaseDueSettlements() {
  * inline anywhere else; if a new claimability condition is needed, add it
  * here once.
  */
+  // Section: historical vs. active claims. A claim in one of these statuses
+  // is a CLOSED attempt — an audit/history record, NOT an active reservation
+  // on the item. It must never count as a "competing claimant" below:
+  // payment expiry (payment_window_expired) in particular is simple
+  // abandonment, and the item's own status ('at_agent') already reflects
+  // that it is physically back in the agent's custody and claimable again.
+  // Treating an expired payment attempt as a live rival claimant used to
+  // file a bogus dispute the moment the legitimate owner (or anyone else)
+  // tried again — payment expiry is not a dispute and not another claimant.
+  const INACTIVE_CLAIM_STATUSES = new Set<string>([
+    'payment_window_expired', // abandoned/unpaid within the 15-minute window
+    'disputed',               // already pulled into the dispute workflow
+    'rejected',               // failed owner verification
+    'refunded',               // money returned, claim finished
+    'released',               // item handed over and settled
+  ]);
+
 async function canCreateClaim(item: FoundItem, preFetchedDisputes?: Dispute[]): Promise<{ allowed: boolean; reason: string }> {
   if (!item) return { allowed: false, reason: 'not_found' };
 
