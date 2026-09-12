@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { translations } from '../types';
-import { Globe, User, ShieldCheck, MapPin, Search, Home, Menu, X, LogOut, Info, FileText } from 'lucide-react';
+import { Globe, User, ShieldCheck, MapPin, Search, Home, Menu, X, LogOut } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface NavbarProps {
@@ -28,6 +28,21 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
     setIsOpen(false);
   };
 
+  const navLinkClass = (view) =>
+    'relative px-3 py-2 text-sm font-medium transition-colors cursor-pointer rounded-md ' +
+    (currentView === view
+      ? 'text-primary-green'
+      : 'text-brand-muted-text hover:text-brand-dark-text');
+
+  const navLinkUnderline = (view) =>
+    currentView === view ? (
+      <motion.span
+        layoutId="nav-underline"
+        className="absolute bottom-0 left-3 right-3 h-0.5 bg-primary-green rounded-full"
+        transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+      />
+    ) : null;
+
   return (
     <>
       <header className="bg-white text-brand-dark-text sticky top-0 z-40 h-16 md:h-20 border-b border-brand-border flex items-center">
@@ -54,107 +69,75 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
             />
           </div>
 
-          {/* Desktop Navigation Controls (lg and above) */}
-          <nav className="hidden lg:flex items-center space-x-4">
-            <button
-              onClick={() => handleNavClick('home')}
-              className={`flex items-center space-x-1.5 px-4 py-2 rounded-lg text-sm font-bold transition-all cursor-pointer ${
-                currentView === 'home' ? 'bg-primary-green text-white shadow-md shadow-primary-green/25' : 'text-brand-dark-text hover:text-primary-green hover:underline'
-              }`}
-            >
-              <Home size={16} />
-              <span>{lang === 'en' ? 'Home' : 'Mwanzo'}</span>
+          <nav className="hidden lg:flex items-center gap-1" aria-label={lang === 'en' ? 'Main navigation' : 'Navishan kuu'}>
+            <button onClick={() => handleNavClick('home')} className={navLinkClass('home')}>
+              {lang === 'en' ? 'Home' : 'Mwanzo'}
+              {navLinkUnderline('home')}
             </button>
-            <button
-              onClick={() => handleNavClick('owner')}
-              className={`flex items-center space-x-1.5 px-4 py-2 rounded-lg text-sm font-bold transition-all cursor-pointer ${
-                currentView === 'owner' ? 'bg-primary-green text-white shadow-md shadow-primary-green/25' : 'text-brand-dark-text hover:text-primary-green hover:underline'
-              }`}
-            >
-              <Search size={16} />
-              <span>{t.ownerBtn}</span>
+            <button onClick={() => handleNavClick('owner')} className={navLinkClass('owner')}>
+              {t.ownerBtn}
+              {navLinkUnderline('owner')}
             </button>
-            <button
-              onClick={() => handleNavClick('finder')}
-              className={`flex items-center space-x-1.5 px-4 py-2 rounded-lg text-sm font-bold transition-all cursor-pointer ${
-                currentView === 'finder' ? 'bg-primary-green text-white shadow-md shadow-primary-green/25' : 'text-brand-dark-text hover:text-primary-green hover:underline'
-              }`}
-            >
-              <MapPin size={16} />
-              <span>{t.finderBtn}</span>
+            <button onClick={() => handleNavClick('finder')} className={navLinkClass('finder')}>
+              {t.finderBtn}
+              {navLinkUnderline('finder')}
             </button>
-            <button
-              onClick={() => handleNavClick('agent')}
-              className={`flex items-center space-x-1.5 px-4 py-2 rounded-lg text-sm font-bold transition-all cursor-pointer ${
-                currentView === 'agent' ? 'bg-primary-green text-white shadow-md shadow-primary-green/25' : 'text-brand-dark-text hover:text-primary-green hover:underline'
-              }`}
-            >
-              <Globe size={16} />
-              <span>{t.agentBtn}</span>
+            <button onClick={() => handleNavClick('agent')} className={navLinkClass('agent')}>
+              {t.agentBtn}
+              {navLinkUnderline('agent')}
             </button>
-
+            {isAdmin && (
+              <button onClick={() => handleNavClick('admin')} className={navLinkClass('admin')}>
+                {t.adminBtn}
+                {navLinkUnderline('admin')}
+              </button>
+            )}
           </nav>
 
-          {/* Desktop Translation and Account Controls (lg and above) */}
-          <div className="hidden lg:flex items-center space-x-4">
-            {/* Geometric Language Toggle */}
-            <div className="flex bg-brand-light-gray p-1 rounded-md text-xs font-bold">
-              <button
-                onClick={() => setLang('en')}
-                className={`px-3 py-1 rounded transition-all cursor-pointer ${
-                  lang === 'en' ? 'bg-white shadow-sm text-primary-green' : 'text-brand-muted-text'
-                }`}
-              >
-                ENGLISH
-              </button>
-              <button
-                onClick={() => setLang('sw')}
-                className={`px-3 py-1 rounded transition-all cursor-pointer ${
-                  lang === 'sw' ? 'bg-white shadow-sm text-primary-green' : 'text-brand-muted-text'
-                }`}
-              >
-                KISWAHILI
-              </button>
-            </div>
-
-            {/* Account Info / Logout */}
+          <div className="hidden lg:flex items-center gap-3">
+            <button
+              onClick={() => setLang(lang === 'en' ? 'sw' : 'en')}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-brand-muted-text hover:text-brand-dark-text transition-colors cursor-pointer rounded-md"
+              aria-label={t.langToggle}
+            >
+              <Globe size={15} />
+              <span>{lang === 'en' ? 'SW' : 'EN'}</span>
+            </button>
+            <div className="h-5 w-px bg-brand-border" />
             {token ? (
               <button
                 onClick={logout}
-                className="bg-accent-orange hover:bg-accent-hover text-white text-xs font-bold px-4 py-2 rounded-lg shadow-lg shadow-orange-500/20 transition cursor-pointer flex items-center space-x-1"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-brand-muted-text hover:text-accent-orange transition-colors cursor-pointer rounded-md"
               >
-                <LogOut size={12} />
+                <LogOut size={15} />
                 <span>{t.logout}</span>
               </button>
             ) : (
-              <div className="w-8 h-8 rounded-full bg-brand-light-gray flex items-center justify-center text-accent-orange border border-brand-border">
-                <User size={16} />
+              <div className="flex items-center gap-1.5 px-2 py-1.5 text-sm font-medium text-brand-muted-text">
+                <User size={15} />
+                <span>{lang === 'en' ? 'Guest' : 'Mgeni'}</span>
               </div>
             )}
           </div>
 
-          {/* Mobile / Tablet Menu Button (Below lg) */}
-          <div className="flex lg:hidden items-center space-x-3">
-            {/* Simple Account Status or Language Indicator on top bar */}
-            {!token && (
-              <div className="w-8 h-8 rounded-full bg-brand-light-gray flex items-center justify-center text-accent-orange border border-brand-border">
-                <User size={14} />
-              </div>
-            )}
-            {token && (
-              <span className="text-xs bg-emerald-50 text-primary-green font-semibold px-2 py-1 rounded">
-                {lang === 'en' ? 'Active' : 'Hai'}
-              </span>
-            )}
-            
+          <div className="flex lg:hidden items-center gap-2">
             <button
-              onClick={() => setIsOpen(!isOpen)}
-              className="p-2.5 rounded-xl border border-brand-border bg-brand-light-gray/60 hover:bg-brand-light-gray text-brand-dark-text hover:text-primary-green transition-all cursor-pointer focus:outline-none"
-              aria-label="Toggle menu"
+              onClick={() => setLang(lang === 'en' ? 'sw' : 'en')}
+              className="flex items-center gap-1 px-2.5 py-1.5 text-sm font-medium text-brand-muted-text hover:text-brand-dark-text transition-colors cursor-pointer rounded-md"
+              aria-label={t.langToggle}
             >
-              {isOpen ? <X size={20} /> : <Menu size={20} />}
+              <Globe size={15} />
+              <span>{lang === 'en' ? 'SW' : 'EN'}</span>
+            </button>
+            <button
+              onClick={() => setIsOpen(true)}
+              className="p-2 rounded-md text-brand-dark-text hover:text-primary-green transition-colors cursor-pointer"
+              aria-label={lang === 'sw' ? 'Fungua menyu' : 'Open menu'}
+            >
+              <Menu size={22} />
             </button>
           </div>
+
         </div>
       </header>
 
@@ -272,7 +255,6 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                         : 'text-brand-dark-text hover:bg-brand-light-gray'
                     }`}
                   >
-                    <FileText size={18} />
                     <span>{lang === 'en' ? 'Terms of Service' : 'Masharti ya Matumizi'}</span>
                   </button>
 
@@ -285,7 +267,6 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                         : 'text-brand-dark-text hover:bg-brand-light-gray'
                     }`}
                   >
-                    <Info size={18} />
                     <span>{lang === 'en' ? 'Privacy Policy' : 'Sera ya Faragha'}</span>
                   </button>
                 </div>
