@@ -85,7 +85,7 @@ export default function VerificationForm({
   const sensitiveInputClass = `${baseInputClass} font-mono`;
 
   return (
-    <div className="bg-white rounded-3xl border border-stone-100 p-6 md:p-8 shadow-xl max-w-xl mx-auto space-y-6 fade-in">
+    <div className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm max-w-xl mx-auto space-y-6 fade-in">
       <div className="text-center">
         <h2 className="text-2xl font-extrabold text-primary-green mb-1">{t.verifyTitle}</h2>
         <p className="text-stone-500 text-xs">{t.verifySubtitle}</p>

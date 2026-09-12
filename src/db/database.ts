@@ -15,11 +15,12 @@ import {
   claim_otps as claimOtpsTable,
   claim_pickup_codes as claimPickupCodesTable,
   claim_payment_auth as claimPaymentAuthTable,
+  payment_sessions as paymentSessionsTable,
   platform_settings as platformSettingsTable,
   social_publications as socialPublicationsTable,
   item_verification_changes as itemVerificationChangesTable,
 } from "./schema.ts";
-import { eq, and, or, isNull, isNotNull, inArray, lte } from "drizzle-orm";
+import { eq, and, or, isNull, isNotNull, inArray, lte, sql } from "drizzle-orm";
 import { getSignedPhotoUrl } from "../services/storage.ts";
 
 // Local copy of the phone-masking helper (also defined in services/auth.ts
@@ -3394,6 +3395,194 @@ class DatabaseEngine {
     } catch (error) {
       console.error("Failed to get claim payment authorization token:", error);
       return undefined;
+    }
+  }
+
+  // --- PAYMENT SESSIONS (server-controlled, single-claim payment attempts) ---
+  // See the payment_sessions table in schema.ts and the routes in server.ts.
+  // These primitives mirror the CAS patterns used elsewhere in this file
+  // (attemptClaimEscrowHold, expirePendingPaymentClaim, ...) so a payment can
+  // never be double-initiated, double-confirmed, or attached to a second claim.
+
+  public async createPaymentSession(input: {
+    id: string;
+    claimId: string;
+    amount: number;
+    currency?: string;
+    payerPhone: string | null;
+    method?: string;
+    expiresAt: Date;
+  }): Promise<boolean> {
+    try {
+      await drizzleDb.insert(paymentSessionsTable).values({
+        id: input.id,
+        claim_id: input.claimId,
+        amount: String(input.amount),
+        currency: input.currency || 'KES',
+        payer_phone: input.payerPhone,
+        method: input.method || 'mpesa_stk',
+        status: 'created',
+        expires_at: input.expiresAt,
+      });
+      return true;
+    } catch (error) {
+      console.error("Failed to create payment session:", error);
+      return false;
+    }
+  }
+
+  private mapPaymentSession(row: any): any {
+    return {
+      id: row.id,
+      claim_id: row.claim_id,
+      amount: row.amount != null ? parseFloat(String(row.amount)) : null,
+      currency: row.currency,
+      payer_phone: row.payer_phone,
+      method: row.method,
+      status: row.status,
+      provider_invoice_id: row.provider_invoice_id,
+      provider_reference: row.provider_reference,
+      failure_reason: row.failure_reason,
+      created_at: row.created_at ? new Date(row.created_at as any) : null,
+      expires_at: row.expires_at ? new Date(row.expires_at as any) : null,
+      confirmed_at: row.confirmed_at ? new Date(row.confirmed_at as any) : null,
+    };
+  }
+
+  public async getPaymentSessionById(id: string): Promise<any | undefined> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(paymentSessionsTable)
+        .where(eq(paymentSessionsTable.id, id));
+      if (rows.length === 0) return undefined;
+      return this.mapPaymentSession(rows[0]);
+    } catch (error) {
+      console.error("Failed to get payment session:", error);
+      return undefined;
+    }
+  }
+
+  public async getPaymentSessionByProviderInvoice(invoiceId: string): Promise<any | undefined> {
+    try {
+      if (!invoiceId) return undefined;
+      const rows = await drizzleDb
+        .select()
+        .from(paymentSessionsTable)
+        .where(eq(paymentSessionsTable.provider_invoice_id, invoiceId));
+      if (rows.length === 0) return undefined;
+      return this.mapPaymentSession(rows[0]);
+    } catch (error) {
+      console.error("Failed to get payment session by provider invoice:", error);
+      return undefined;
+    }
+  }
+
+  public async listPaymentSessionsForClaim(claimId: string): Promise<any[]> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(paymentSessionsTable)
+        .where(eq(paymentSessionsTable.claim_id, claimId));
+      return rows.map((r: any) => this.mapPaymentSession(r));
+    } catch (error) {
+      console.error("Failed to list payment sessions for claim:", error);
+      return [];
+    }
+  }
+
+  // Concurrency-safe reservation of an STK initiation. A session may only move
+  // from 'created' -> 'payment_initiated' once; the winner of this CAS is the
+  // only caller that may issue the provider STK push. A concurrent or repeated
+  // request loses the CAS and must NOT call the provider again.
+  public async reservePaymentSession(id: string): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(paymentSessionsTable)
+        .set({ status: 'payment_initiated' })
+        .where(and(eq(paymentSessionsTable.id, id), eq(paymentSessionsTable.status, 'created')))
+        .returning();
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Failed to reserve payment session:", error);
+      return false;
+    }
+  }
+
+  // After the provider call, records the provider invoice/reference and moves the
+  // reserved session to 'pending' (awaiting provider confirmation). Only the
+  // reservation winner can be in the 'payment_initiated' state at this point.
+  public async finalizePaymentSessionInitiated(
+    id: string,
+    providerInvoiceId: string,
+    providerReference: string
+  ): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(paymentSessionsTable)
+        .set({
+          status: 'pending',
+          provider_invoice_id: providerInvoiceId,
+          provider_reference: providerReference,
+        })
+        .where(and(eq(paymentSessionsTable.id, id), eq(paymentSessionsTable.status, 'payment_initiated')))
+        .returning();
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Failed to finalize payment session initiation:", error);
+      return false;
+    }
+  }
+
+  // Records a provider/initiation failure on a session that has not yet been
+  // confirmed (and is not already terminal). Never called on a confirmed session.
+  public async markPaymentSessionFailed(id: string, reason: string): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(paymentSessionsTable)
+        .set({ status: 'failed', failure_reason: reason })
+        .where(and(eq(paymentSessionsTable.id, id), sql`${paymentSessionsTable.status} IN ('created', 'payment_initiated', 'pending')`))
+        .returning();
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Failed to mark payment session as failed:", error);
+      return false;
+    }
+  }
+
+  // Compare-and-swap: pending -> confirmed, once. A duplicate/retried provider
+  // webhook for an already-confirmed session is a no-op (returns false), one
+  // layer of the end-to-end webhook idempotency (the claim-level
+  // attemptClaimEscrowHold is the other).
+  public async attemptPaymentSessionConfirm(id: string): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(paymentSessionsTable)
+        .set({ status: 'confirmed', confirmed_at: new Date() })
+        .where(and(eq(paymentSessionsTable.id, id), eq(paymentSessionsTable.status, 'pending')))
+        .returning();
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Failed to confirm payment session:", error);
+      return false;
+    }
+  }
+
+  // Marks the given non-terminal payment session as expired (returns true only
+  // if THIS call performed the transition). Used by the authoritative
+  // server-side expiry path so a session is never left dangling past its window
+  // and an expired session can never be reused to initiate or confirm payment.
+  public async expirePaymentSession(id: string): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(paymentSessionsTable)
+        .set({ status: 'expired' })
+        .where(and(eq(paymentSessionsTable.id, id), sql`${paymentSessionsTable.status} IN ('created', 'pending')`))
+        .returning();
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Failed to expire payment session:", error);
+      return false;
     }
   }
 

@@ -118,6 +118,41 @@ function toOwnerSafeItemView(item: any): any {
   };
 }
 
+// Hand-built (never `.spread`) DTO for a payment session returned to the owner
+// flow. Contains ONLY the fields the owner payment UI needs and safe-to-show
+// operational status — never the provider secret, never raw provider internals.
+// payer_phone is returned (it is the user's own number, entered this session,
+// and the UI must show which number received the prompt); it is NOT the claim's
+// owner_phone unless the user chose the same number.
+function toSafePaymentSession(session: any): any {
+  if (!session) return null;
+  return {
+    id: session.id,
+    claim_id: session.claim_id,
+    amount: session.amount,
+    currency: session.currency,
+    method: session.method,
+    status: session.status,
+    payer_phone: session.payer_phone,
+    created_at: session.created_at ? new Date(session.created_at).toISOString() : null,
+    expires_at: session.expires_at ? new Date(session.expires_at).toISOString() : null,
+    confirmed_at: session.confirmed_at ? new Date(session.confirmed_at).toISOString() : null,
+  };
+}
+
+// Resolves the authoritative amount owed for a claim's payment, using exactly
+// the same rule /pay uses: the item's locked_total_fee when present and valid,
+// otherwise the category's total_fee. The payer/browser never supplies this.
+function resolveAuthoritativePaymentFee(item: any, category: any): number {
+  let fee = Number(category ? category.total_fee : 0);
+  if (Number.isNaN(fee)) fee = 0;
+  if (item && item.locked_total_fee !== undefined && item.locked_total_fee !== null) {
+    const lockedVal = typeof item.locked_total_fee === 'string' ? parseFloat(item.locked_total_fee) : Number(item.locked_total_fee);
+    if (!Number.isNaN(lockedVal) && lockedVal > 0) fee = lockedVal;
+  }
+  return fee;
+}
+
 
 function checkSecret(name: string, val: string | undefined, minLen: number = 32) {
   if (!val) {
@@ -1938,6 +1973,248 @@ async function startServer() {
     }
   });
 
+  // --- PAYMENT SESSIONS (server-controlled, single-claim payment attempts) ---
+  // This is the PRIMARY payment path, replacing the old rule that the payer's
+  // M-Pesa phone must equal the claim's owner_phone. Opening a session for a
+  // claim still requires proving ownership of the claim (phone == owner_phone,
+  // the same bar /payment-auth always used) — that proof has NOT been deleted,
+  // just moved: the session becomes the bearer of authorization, and the
+  // session's payer_phone (below) may legitimately differ from owner_phone. The
+  // server computes the amount; the browser supplies none of it.
+
+  // Create a new payment session for a claim.
+  app.post('/api/claims/:id/payment-session', claimGuessLimiter, async (req, res) => {
+    const claimId = req.params.id;
+    const { phone, payerPhone } = req.body;
+
+    if (await isPlatformOperationPaused(pauseSettingKey('payments'))) {
+      return res.status(503).json({ error: PAUSED_MESSAGES.payments });
+    }
+
+    try {
+      const claim = await db.getClaim(claimId);
+      if (!claim) {
+        return res.status(404).json({ error: 'Claim haikupatikana.' });
+      }
+      if (claim.status !== 'pending_payment') {
+        return res.status(400).json({ error: 'Lazima kwanza uthibitishwe na wakala kabla ya kulipa. / You must be confirmed by the agent in person before you can pay.' });
+      }
+      const freshClaim = await checkClaimExpiry(claim);
+      if (!freshClaim || freshClaim.status !== 'pending_payment') {
+        return res.status(410).json({ error: 'Muda wa malipo umeisha. / The payment window has expired.' });
+      }
+
+      if (!phone) {
+        return res.status(400).json({ error: 'Nambari ya simu inahitajika. / Phone number is required.' });
+      }
+      // Ownership proof (unchanged security bar): you must know the claim's
+      // registered owner phone to open a session for it. This is NOT the rule
+      // for the payer M-Pesa number — see payerPhone below.
+      const normalizedInput = toE164Kenyan(String(phone).replace(/\s+/g, ''));
+      const normalizedOwner = toE164Kenyan(String(claim.owner_phone || '').replace(/\s+/g, ''));
+      if (normalizedInput !== normalizedOwner) {
+        return res.status(403).json({
+          error: 'Nambari ya simu uliyoweka hailingani na iliyotumiwa kutengeneza claim hii. / The phone number provided does not match the one used to create this claim.'
+        });
+      }
+
+      // Payer M-Pesa number — may differ from owner_phone. Must be a valid
+      // Kenyan number when supplied; defaults to owner_phone when omitted.
+      let normalizedPayer = normalizedOwner;
+      if (payerPhone !== undefined && payerPhone !== null && String(payerPhone).trim() !== '') {
+        const candidate = toE164Kenyan(String(payerPhone).replace(/\s+/g, ''));
+        if (!/^\+254\d{9}$/.test(candidate)) {
+          return res.status(400).json({ error: 'Nambari ya simu ya M-Pesa sio sahihi. / Enter a valid Kenyan M-Pesa number.' });
+        }
+        normalizedPayer = candidate;
+      }
+
+      const item = await db.getItem(claim.item_id);
+      if (!item) {
+        return res.status(404).json({ error: 'Bidhaa inayodaiwa haikupatikana.' });
+      }
+      const claimability = await canCreateClaim(item);
+      if (!claimability.allowed) {
+        return res.status(423).json({ error: claimabilityErrorMessage(claimability.reason) });
+      }
+      const category = await db.getCategory(item.category_id);
+      if (!category) {
+        return res.status(404).json({ error: 'Ada ya kategoria haikupatikana.' });
+      }
+
+      // Authoritative server-side amount — never taken from the client.
+      const resolvedFee = resolveAuthoritativePaymentFee(item, category);
+
+      // Reuse an existing active (non-terminal) session for this claim so a
+      // refresh or tab-reopen never spawns duplicate concurrent sessions.
+      const existing = (await db.listPaymentSessionsForClaim(claimId))
+        .find((s: any) => !['confirmed', 'failed', 'cancelled', 'expired'].includes(s.status));
+      if (existing) {
+        return res.json({ success: true, paymentSession: toSafePaymentSession(existing), reused: true });
+      }
+
+      // Session window == the claim's payment window (agent_confirmed_at + 15 min).
+      const baseMs = claim.agent_confirmed_at ? new Date(claim.agent_confirmed_at).getTime() : Date.now();
+      const expiresAt = new Date(baseMs + 15 * 60 * 1000);
+      const sessionId = 'PS-' + crypto.randomBytes(8).toString('hex').toUpperCase();
+      const created = await db.createPaymentSession({
+        id: sessionId,
+        claimId,
+        amount: resolvedFee,
+        currency: 'KES',
+        payerPhone: normalizedPayer,
+        method: 'mpesa_stk',
+        expiresAt,
+      });
+      if (!created) {
+        return res.status(500).json({ error: 'Kushindwa kuunda session ya malipo. / Failed to create the payment session.' });
+      }
+
+      const session = await db.getPaymentSessionById(sessionId);
+      await db.logAudit('CLAIMANT', 'PAYMENT_SESSION_CREATED', `Payment session ${sessionId} created for claim ${claimId} (KES ${resolvedFee}).`);
+      res.json({ success: true, paymentSession: toSafePaymentSession(session), reused: false });
+    } catch (e: any) {
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
+    }
+  });
+
+  // Initiate the M-Pesa STK push for a payment session. Requires the short-lived
+  // ownership token minted by /payment-auth (which itself requires knowing the
+  // claim's owner phone), so triggering a real payment still proves ownership.
+  app.post('/api/claims/:id/payment-session/:sessionId/initiate', claimGuessLimiter, async (req, res) => {
+    const claimId = req.params.id;
+    const sessionId = req.params.sessionId;
+    const { paymentAuthToken } = req.body;
+
+    if (await isPlatformOperationPaused(pauseSettingKey('payments'))) {
+      return res.status(503).json({ error: PAUSED_MESSAGES.payments });
+    }
+
+    try {
+      const claim = await db.getClaim(claimId);
+      if (!claim) {
+        return res.status(404).json({ error: 'Claim haikupatikana.' });
+      }
+      if (claim.status !== 'pending_payment') {
+        return res.status(400).json({ error: 'Lazima kwanza uthibitishwe na wakala kabla ya kulipa. / You must be confirmed by the agent in person before you can pay.' });
+      }
+      const freshClaim = await checkClaimExpiry(claim);
+      if (!freshClaim || freshClaim.status !== 'pending_payment') {
+        return res.status(410).json({ error: 'Muda wa malipo umeisha. / The payment window has expired.' });
+      }
+
+      // Authorization to spend: present a valid, unexpired ownership token.
+      if (!paymentAuthToken) {
+        return res.status(403).json({ error: 'Idhini ya malipo imekosekana. Tafadhali omba idhini mpya kabla ya kulipa. / Payment authorization is missing. Please request authorization before paying.' });
+      }
+      const authRecord = await db.getClaimPaymentAuthToken(claimId);
+      if (!authRecord || authRecord.expires_at.getTime() < Date.now() || !timingSafeEqualHex(hashCode(String(paymentAuthToken)), authRecord.token_hash)) {
+        return res.status(403).json({ error: 'Idhini ya malipo si sahihi au imeisha muda. Tafadhali omba idhini mpya. / Payment authorization is invalid or has expired. Please request a new authorization.' });
+      }
+
+      const session = await db.getPaymentSessionById(sessionId);
+      if (!session) {
+        return res.status(404).json({ error: 'Session ya malipo haikupatikana. / Payment session not found.' });
+      }
+      // A payment session is bound to exactly ONE claim. Refuse any attempt to
+      // use a session opened for a different claim.
+      if (session.claim_id !== claimId) {
+        return res.status(403).json({ error: 'Session ya malipo haihusiani na claim hii. / This payment session does not belong to this claim.' });
+      }
+      if (['confirmed', 'failed', 'cancelled', 'expired'].includes(session.status)) {
+        return res.status(409).json({ error: 'Session ya malipo haitumiki tena. / This payment session is no longer usable.' });
+      }
+      if (new Date(session.expires_at).getTime() < Date.now()) {
+        await db.expirePaymentSession(sessionId);
+        return res.status(410).json({ error: 'Muda wa session ya malipo umeisha. / The payment session has expired.' });
+      }
+
+      const item = await db.getItem(claim.item_id);
+      if (!item) {
+        return res.status(404).json({ error: 'Bidhaa inayodaiwa haikupatikana.' });
+      }
+      const claimability = await canCreateClaim(item);
+      if (!claimability.allowed) {
+        return res.status(423).json({ error: claimabilityErrorMessage(claimability.reason) });
+      }
+
+      // Concurrency-safe: only the caller that wins the created -> payment_initiated
+      // CAS may issue the provider STK push. A repeated/double request loses and
+      // is told so (it does NOT trigger a second push).
+      const reserved = await db.reservePaymentSession(sessionId);
+      if (!reserved) {
+        const current = await db.getPaymentSessionById(sessionId);
+        const stillActive = current && ['created', 'payment_initiated', 'pending'].includes(current.status)
+          && new Date(current.expires_at).getTime() >= Date.now();
+        if (stillActive) {
+          return res.json({ success: true, paymentSession: toSafePaymentSession(current), alreadyInitiated: true });
+        }
+        return res.status(409).json({ error: 'Session ya malipo haikuweza kuanzishwa. / The payment session could not be initiated.' });
+      }
+
+      // Authoritative amount and payer phone come from the session, never the body.
+      const paymentResult = await PaymentService.triggerMpesaStkPush(
+        session.payer_phone || claim.owner_phone,
+        session.amount,
+        session.claim_id
+      );
+      if (!paymentResult.success) {
+        await db.markPaymentSessionFailed(sessionId, paymentResult.message || 'STK initiation failed');
+        return res.status(400).json({ error: paymentResult.message || 'Malipo hayakufaulu, jaribu tena.' });
+      }
+
+      await db.finalizePaymentSessionInitiated(sessionId, paymentResult.checkoutRequestId, paymentResult.mpesaReceiptCode);
+      await db.logAudit('CLAIMANT', 'PAYMENT_SESSION_INITIATED', `M-Pesa STK push requested for session ${sessionId} (claim ${claimId}, KES ${session.amount}).`);
+
+      const updated = await db.getPaymentSessionById(sessionId);
+      res.json({ success: true, paymentSession: toSafePaymentSession(updated), alreadyInitiated: false });
+    } catch (e: any) {
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
+    }
+  });
+
+  // Authoritative payment-session status for the frontend polling loop. The
+  // frontend can never mark a payment confirmed here; it can only observe what
+  // the backend/provider have recorded. Also enforces server-side expiry on both
+  // the claim and the session.
+  app.get('/api/claims/:id/payment-session/:sessionId/status', async (req, res) => {
+    const claimId = req.params.id;
+    const sessionId = req.params.sessionId;
+    try {
+      let claim = await db.getClaim(claimId);
+      if (!claim) {
+        return res.status(404).json({ error: 'Claim haikupatikana.' });
+      }
+      claim = await checkClaimExpiry(claim);
+
+      const session = await db.getPaymentSessionById(sessionId);
+      if (!session) {
+        return res.status(404).json({ error: 'Session ya malipo haikupatikana. / Payment session not found.' });
+      }
+      // Cross-claim isolation: this session is simply not visible under another
+      // claim's URL.
+      if (session.claim_id !== claimId) {
+        return res.status(403).json({ error: 'Session ya malipo haihusiani na claim hii. / This payment session does not belong to this claim.' });
+      }
+
+      // Authoritative server-side session expiry: a session past its window that
+      // is not yet terminal is expired here (not by a browser countdown).
+      if (!['confirmed', 'failed', 'cancelled', 'expired'].includes(session.status)
+        && new Date(session.expires_at).getTime() < Date.now()) {
+        await db.expirePaymentSession(sessionId);
+        session.status = 'expired';
+      }
+
+      res.json({
+        success: true,
+        claim: { id: claim.id, status: claim.status },
+        paymentSession: toSafePaymentSession(session),
+      });
+    } catch (e: any) {
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
+    }
+  });
+
   // 7. INTASEND M-PESA STK PUSH & WEBHOOKS
   app.post('/api/claims/:id/pay', claimGuessLimiter, async (req, res) => {
     const claimId = req.params.id;
@@ -2238,6 +2515,43 @@ async function startServer() {
     if (!claim) return null;
     const item = await db.getItem(claim.item_id);
     if (!item) return null;
+
+    // --- PAYMENT-SESSION RESOLUTION (primary production payment path) ---
+    // If this provider invoice belongs to a payment session, verify it is bound
+    // to THIS claim (cross-claim isolation) and reconcile the confirmed amount
+    // against the session's authoritative amount. This is stronger than the
+    // claim-fee fallback below because the session also pins the amount the
+    // payer was actually prompted for, so a webhook can never confirm a
+    // different claim or a different amount than the payer was charged.
+    const session = await db.getPaymentSessionByProviderInvoice(invoiceId);
+    if (session) {
+      if (session.claim_id !== claimId) {
+        console.error(`[WEBHOOK SESSION] Refusing confirmation: invoice ${invoiceId} belongs to payment session ${session.id} for claim ${session.claim_id}, not claim ${claimId}. Cross-claim payment blocked.`);
+        await db.logAudit('SYSTEM', 'WEBHOOK_CROSS_CLAIM_REFUSED', `Invoice ${invoiceId} tried to confirm claim ${claimId} but belongs to session ${session.id} of claim ${session.claim_id}. Refused.`);
+        return null;
+      }
+      if (confirmedAmount !== undefined && confirmedAmount !== null && confirmedAmount !== '') {
+        const sessionAmountRecon = reconcileWebhookAmount(confirmedAmount, session.amount);
+        if (sessionAmountRecon === 'mismatch') {
+          console.error(`[WEBHOOK SESSION AMOUNT] Refusing to confirm session ${session.id} for claim ${claimId}: webhook amount ${confirmedAmount} != session amount ${session.amount}. Invoice ${invoiceId}.`);
+          await db.logAudit('SYSTEM', 'WEBHOOK_AMOUNT_MISMATCH_REFUSED', `Claim ${claimId} session ${session.id}: webhook amount ${confirmedAmount} did not match session amount ${session.amount} (invoice ${invoiceId}). Refused.`);
+          return null;
+        }
+      }
+      // Per-session idempotency: only an unreserved, non-terminal session is
+      // marked confirmed here; a duplicate webhook for an already-confirmed
+      // session is a no-op. The claim-level CAS below is the outer idempotency
+      // guard.
+      const sessionConfirmed = await db.attemptPaymentSessionConfirm(session.id);
+      if (!sessionConfirmed && session.status !== 'confirmed') {
+        // The session wasn't in 'pending' (e.g. it was already confirmed). This
+        // is safe to proceed from only when it's already confirmed; otherwise do
+        // not let a session that was never initiated confirm the claim.
+        console.warn(`[WEBHOOK SESSION] Invoice ${invoiceId} for session ${session.id} was not in a confirmable state (status=${session.status}).`);
+        return null;
+      }
+    }
+
     const categoriesForReconciliation = await db.getCategories();
     const catForReconciliation = categoriesForReconciliation.find(c => c.id === item.category_id);
     let expectedFee = catForReconciliation ? catForReconciliation.total_fee : '0.00';

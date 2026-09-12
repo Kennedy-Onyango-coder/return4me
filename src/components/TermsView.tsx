@@ -1,5 +1,4 @@
 import React from 'react';
-import { Scale, Coins, AlertTriangle, RefreshCw, FileText, ShieldCheck, HelpCircle } from 'lucide-react';
 
 interface TermsViewProps {
   lang: 'en' | 'sw';
@@ -10,11 +9,7 @@ export default function TermsView({ lang, setView }: TermsViewProps) {
   return (
     <div className="max-w-4xl mx-auto px-6 py-12 space-y-12 fade-in">
       {/* Header */}
-      <div className="border-b border-brand-border pb-8 text-center sm:text-left">
-        <span className="inline-flex items-center space-x-1 bg-orange-50 text-accent-orange border border-orange-100 font-extrabold px-3 py-1 rounded-full text-xs uppercase mb-4">
-          <Scale size={12} />
-          <span>Legal Agreement & Terms</span>
-        </span>
+      <div className="border-b border-brand-border pb-8">
         <h1 className="text-4xl font-extrabold text-primary-green tracking-tight">
           {lang === 'en' ? 'Terms of Service' : 'Vigezo na Masharti'}
         </h1>
@@ -25,57 +20,50 @@ export default function TermsView({ lang, setView }: TermsViewProps) {
 
       {/* Advisory Notice */}
       <div className="p-4 bg-orange-50 border border-orange-200 rounded-2xl text-xs text-orange-800 space-y-1">
-        <p className="font-extrabold uppercase tracking-wider flex items-center gap-1.5">
-          <span>Legal Draft Status Notice</span>
+        <p className="font-extrabold uppercase tracking-wider">
+          {lang === 'en' ? 'Legal Draft Status Notice' : 'Tuhizo ya Hali ya Ratiba'}
         </p>
         <p>
-          This document is a professionally structured compliance draft prepared in accordance with Kenyan commercial and consumer protection statutes. It is designed to be reviewed and signed off by a licensed advocate of the High Court of Kenya prior to formal public implementation.
+          {lang === 'en'
+            ? 'This document is a professionally structured compliance draft prepared in accordance with Kenyan commercial and consumer protection statutes. It is designed to be reviewed and signed off by a licensed advocate of the High Court of Kenya prior to formal public implementation.'
+            : 'Hati hii ni ratiba ya utaratibu iliyotengenezwa kwa kufuata sheria za biashara na usalama wa watumiaji wa Kenya. Inaundwa ili kuwa hakikisha na sahihiwa na mwanasheria mmiliki wa Mahakama ya Juu ya Kenya kabla ya utekelezaji wa umma.'}
         </p>
       </div>
 
-      {/* Grid of core terms */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="p-5 bg-stone-50 rounded-2xl border border-stone-200/60 space-y-3">
-          <div className="w-10 h-10 bg-orange-50 rounded-xl flex items-center justify-center text-accent-orange">
-            <Coins size={20} />
-          </div>
-          <h3 className="font-extrabold text-brand-dark-text text-sm">
-            {lang === 'en' ? 'Licensed Escrow' : 'Eskrow Yenye Leseni'}
-          </h3>
-          <p className="text-xs text-stone-500 leading-relaxed">
+      {/* Core principles */}
+      <div className="border-l-2 border-accent-orange pl-6 space-y-4 text-sm text-stone-600">
+        <p className="flex">
+          <span className="w-2 h-2 rounded-full bg-accent-orange mr-3 mt-1.5 flex-shrink-0"></span>
+          <span>
             {lang === 'en'
               ? 'All retrieval fees are processed securely via our CBK-authorized payment partner. We never hold user balances directly.'
-              : 'Ada zote za urejeshaji huchakatwa kwa usalama kupitia mshirika wetu aliyopewa leseni na CBK.'}
-          </p>
-        </div>
-
-        <div className="p-5 bg-stone-50 rounded-2xl border border-stone-200/60 space-y-3">
-          <div className="w-10 h-10 bg-orange-50 rounded-xl flex items-center justify-center text-accent-orange">
-            <AlertTriangle size={20} />
-          </div>
-          <h3 className="font-extrabold text-brand-dark-text text-sm">
-            {lang === 'en' ? 'Zero Fraud Tolerance' : 'Sera ya Kupinga Ulaghai'}
-          </h3>
-          <p className="text-xs text-stone-500 leading-relaxed">
+              : 'Ada zote za urejeshaji huchakatwa kwa usalama kupitia mshirika wetu aliyopewa leseni na CBK. Sisi hutiririka viwimbi vya mtumiaji moja kwa moja.'}
+          </span>
+        </p>
+        <p className="flex">
+          <span className="w-2 h-2 rounded-full bg-accent-orange mr-3 mt-1.5 flex-shrink-0"></span>
+          <span>
             {lang === 'en'
               ? 'Submitting fraudulent document claims is illegal. We actively coordinate with Kenyan authorities (DCI) on violations.'
-              : 'Kupakia madai ghushi ya hati ni kinyume cha sheria. Tunashirikiana kwa karibu na mamlaka za usalama (DCI).'}
-          </p>
-        </div>
-
-        <div className="p-5 bg-stone-50 rounded-2xl border border-stone-200/60 space-y-3">
-          <div className="w-10 h-10 bg-orange-50 rounded-xl flex items-center justify-center text-accent-orange">
-            <RefreshCw size={20} />
-          </div>
-          <h3 className="font-extrabold text-brand-dark-text text-sm">
-            {lang === 'en' ? 'Refund Safeguards' : 'Uhuru wa Marejesho'}
-          </h3>
-          <p className="text-xs text-stone-500 leading-relaxed">
+              : 'Kupakia madai ghushi ya hati ni kinyume cha sheria. Tunashirikiana kwa karibu na mamlaka za usalama (DCI) kuhusu ukiwaaji.'}
+          </span>
+        </p>
+        <p className="flex">
+          <span className="w-2 h-2 rounded-full bg-accent-orange mr-3 mt-1.5 flex-shrink-0"></span>
+          <span>
+            {lang === 'en'
+              ? 'Every fee is split transparently between finder, agent, and Return4me. No hidden charges.'
+              : 'Kila ada huugawanywa kwa uwazi kati ya mvugulu, wakala, na Return4me. Hakuna ada zilizofichwa.'}
+          </span>
+        </p>
+        <p className="flex">
+          <span className="w-2 h-2 rounded-full bg-accent-orange mr-3 mt-1.5 flex-shrink-0"></span>
+          <span>
             {lang === 'en'
               ? 'If the physical agent is unable to produce the matched item, you are entitled to a full, instant refund.'
               : 'Ikitokea kuwa wakala wa makabidhiano hawezi kutoa hati yako, utarejeshewa pesa zako zote mara moja.'}
-          </p>
-        </div>
+          </span>
+        </p>
       </div>
 
       {/* Main text content */}

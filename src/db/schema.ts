@@ -380,6 +380,32 @@ export const claim_payment_auth = pgTable("claim_payment_auth", {
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
+// 6b. PAYMENT SESSIONS TABLE
+// See the narrative on the payment-session endpoints in server.ts. A single
+// claim may have at most one active (non-terminal) session at a time.
+export const payment_sessions = pgTable("payment_sessions", {
+  id: varchar("id", { length: 64 }).primaryKey(),
+  claim_id: varchar("claim_id", { length: 50 }).references(() => claims.id, { onDelete: "cascade" }),
+  amount: numeric("amount", { precision: 10, scale: 2 }).notNull(),
+  currency: varchar("currency", { length: 3 }).default("KES").notNull(),
+  payer_phone: varchar("payer_phone", { length: 20 }),
+  method: varchar("method", { length: 20 }).default("mpesa_stk").notNull(),
+  status: varchar("status", { length: 30 }).default("created").notNull(),
+  provider_invoice_id: varchar("provider_invoice_id", { length: 100 }),
+  provider_reference: varchar("provider_reference", { length: 100 }),
+  failure_reason: text("failure_reason"),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+  confirmed_at: timestamp("confirmed_at", { withTimezone: true }),
+}, (table) => {
+  return {
+    idx_payment_sessions_claim: index("idx_payment_sessions_claim").on(table.claim_id),
+    uq_payment_sessions_provider_invoice: uniqueIndex("uq_payment_sessions_provider_invoice")
+      .on(table.provider_invoice_id)
+      .where(sql`provider_invoice_id IS NOT NULL`),
+  };
+});
+
 // Small generic key/value store for platform-wide toggles that need to
 // persist across server restarts and be flippable at runtime by an admin —
 // currently just the social-media publishing emergency stop

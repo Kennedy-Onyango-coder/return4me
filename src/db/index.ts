@@ -24,7 +24,8 @@ const mockDatabaseState: Record<string, any[]> = {
   ledger: [],
   audit_log: [],
   phone_reputations: [],
-  admin_users: []
+  admin_users: [],
+  payment_sessions: []
 };
 
 // Evaluate logical WHERE conditions recursively
@@ -926,6 +927,39 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     // comment on admin_users.token_version in schema.ts. Must exist here,
     // not just schema.ts, for an already-running database to pick it up.
     `ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS token_version INTEGER NOT NULL DEFAULT 1`,
+    // Payment-session table — see the matching comment on payment_sessions
+    // in schema.ts. Enforced DDL version of the Drizzle definition; must be
+    // present in this incremental path (not just sql/schema.sql) so an
+    // already-running database picks it up.
+    `CREATE TABLE IF NOT EXISTS payment_sessions (
+      id VARCHAR(64) PRIMARY KEY,
+      claim_id VARCHAR(50) REFERENCES claims(id) ON DELETE CASCADE,
+      amount NUMERIC(10,2) NOT NULL,
+      currency VARCHAR(3) NOT NULL DEFAULT 'KES',
+      payer_phone VARCHAR(20),
+      method VARCHAR(20) NOT NULL DEFAULT 'mpesa_stk',
+      status VARCHAR(30) NOT NULL DEFAULT 'created',
+      provider_invoice_id VARCHAR(100),
+      provider_reference VARCHAR(100),
+      failure_reason TEXT,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      confirmed_at TIMESTAMPTZ
+    )`,
+    `ALTER TABLE payment_sessions DROP CONSTRAINT IF EXISTS payment_sessions_status_check`,
+    `ALTER TABLE payment_sessions ADD CONSTRAINT payment_sessions_status_check CHECK (status IN ('created', 'payment_initiated', 'pending', 'confirmed', 'failed', 'cancelled', 'expired'))`,
+    `CREATE INDEX IF NOT EXISTS idx_payment_sessions_claim ON payment_sessions(claim_id)`,
+    // Database-level uniqueness guarantee for provider invoice references —
+    // the recommended hardening from the payment pre-commit security audit.
+    // Partial: several sessions may legitimately have provider_invoice_id =
+    // NULL (the invoice only exists after IntaSend accepts the STK push), but
+    // two sessions must never share the same non-null invoice reference. This
+    // is an ADDITIONAL defense on top of the application-level CAS
+    // (reservePaymentSession / attemptPaymentSessionConfirm /
+    // attemptClaimEscrowHold), which remains in database.ts. Must be in this
+    // incremental path, not just schema.ts, for an already-running database
+    // to pick it up.
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_sessions_provider_invoice ON payment_sessions(provider_invoice_id) WHERE provider_invoice_id IS NOT NULL`,
   ];
   let migrationFailureCount = 0;
   for (const sql of statements) {

@@ -488,7 +488,7 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
       
       {/* 1. NOT LOGGED IN / ONBOARDING VIEW */}
       {!token && (
-        <div className="bg-white rounded-3xl border border-stone-100 p-6 md:p-8 shadow-xl max-w-lg mx-auto space-y-6">
+        <div className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm max-w-lg mx-auto space-y-6">
           <div className="text-center space-y-2">
             <h1 className="text-3xl font-extrabold text-primary-green">{t.agentTitle}</h1>
             <p className="text-stone-500 text-xs max-w-sm mx-auto">{t.agentSubtitle}</p>
@@ -765,7 +765,7 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
 
       {/* 2. PENDING APPROVAL VIEW */}
       {token && agentStatus === 'pending' && (
-        <div className="bg-white rounded-3xl border border-stone-100 p-8 shadow-xl max-w-md mx-auto text-center space-y-5 fade-in">
+        <div className="bg-white rounded-2xl border border-stone-100 p-8 shadow-sm max-w-md mx-auto text-center space-y-5 fade-in">
           <div className="w-16 h-16 bg-orange-100 text-accent-orange rounded-full flex items-center justify-center mx-auto">
             <Lock size={32} />
           </div>
@@ -802,7 +802,7 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
         <div className="space-y-8 fade-in">
           
           {/* Hub Profile Banner */}
-          <div className="bg-primary-green text-white p-6 rounded-3xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          <div className="bg-primary-green text-white p-6 rounded-2xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <div>
               <span className="bg-emerald-800 text-accent-orange border border-emerald-700 text-[10px] font-extrabold px-3 py-1 rounded-full uppercase tracking-wider inline-block mb-2">
                 Verified Return4me Partner Point
@@ -818,7 +818,7 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
 
           {/* Total Earnings Card — your commission share after each escrow release */}
           {agentEarnings && (
-            <div className="bg-white border border-stone-100 rounded-3xl p-6 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+            <div className="bg-white border border-stone-100 rounded-2xl p-6 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
               <div>
                 <span className="text-stone-400 text-[10px] font-extrabold uppercase tracking-widest block">
                   {lang === 'en' ? 'Total Earned (your commission share)' : 'Jumla Uliyopata (sehemu yako ya kamisheni)'}
@@ -844,7 +844,7 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             
             {/* Confirm finder dropoff */}
-            <div className="bg-white rounded-3xl border border-stone-100 p-5 shadow-lg space-y-4">
+            <div className="bg-white rounded-2xl border border-stone-100 p-5 shadow-lg space-y-4">
               <div className="flex items-center space-x-2 text-primary-green">
                 <ShieldCheck size={20} className="text-accent-orange" />
                 <h3 className="font-extrabold text-sm uppercase tracking-wide">{t.confirmDropBtn}</h3>
@@ -874,7 +874,7 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
             </div>
 
             {/* Hub rules note */}
-            <div className="bg-emerald-50 border border-emerald-100 text-primary-green p-5 rounded-3xl text-xs space-y-1">
+            <div className="bg-emerald-50 border border-emerald-100 text-primary-green p-5 rounded-2xl text-xs space-y-1">
               <span className="font-bold block">Hub Handover Golden Rule:</span>
               <span>Always visually match the name on the owner national ID against the document name on the system before typing collection codes! Incorrect handovers result in permanent agent suspension.</span>
             </div>
@@ -1228,7 +1228,7 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
       {/* Custom Confirmation Modal */}
       {confirmModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-stone-900/60 fade-in">
-          <div className="bg-white border border-stone-200 rounded-3xl p-6 shadow-xl max-w-sm w-full space-y-4 fade-in">
+          <div className="bg-white border border-stone-200 rounded-2xl p-6 shadow-sm max-w-sm w-full space-y-4 fade-in">
             <div className="flex items-start space-x-3 text-amber-600">
               <CheckCircle className="w-6 h-6 shrink-0 mt-0.5 animate-pulse" />
               <div className="space-y-1">
@@ -1264,7 +1264,7 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
       {/* Handover Pickup Code Modal */}
       {pickupCodeModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-stone-900/60 fade-in">
-          <div className="bg-white border border-stone-200 rounded-3xl p-6 shadow-xl max-w-sm w-full space-y-4 fade-in">
+          <div className="bg-white border border-stone-200 rounded-2xl p-6 shadow-sm max-w-sm w-full space-y-4 fade-in">
             <div className="flex items-start space-x-3 text-amber-600">
               <CheckCircle className="w-6 h-6 shrink-0 mt-0.5" />
               <div className="space-y-1">

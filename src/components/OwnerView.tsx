@@ -36,6 +36,27 @@ function getClaimStatusDisplay(status: string, lang: 'en' | 'sw'): { label: stri
   return { label: lang === 'sw' ? entry.sw : entry.en, className: entry.className };
 }
 
+// Mirrors the backend's canonical Kenyan phone normalization (toE164Kenyan in
+// services/auth.ts) and its /^\+254\d{9}$/ validity check (server.ts). Kept as
+// a local, pure copy here so the browser bundle does not pull in backend
+// DB/PSP dependencies, while staying byte-for-byte consistent with the server
+// so the client can never enable the STK button for a number the backend would
+// reject. Accepts the standard formats the rest of the payment flow accepts:
+// 0712345678, 0112345678, 254712345678, +254712345678 (internal spaces ok).
+function normalizeKenyanPhoneForPayer(raw: string): string {
+  let clean = (raw || '').replace(/\s+/g, '');
+  if (clean.startsWith('07') && clean.length === 10) return '+254' + clean.slice(1);
+  if (clean.startsWith('01') && clean.length === 10) return '+254' + clean.slice(1);
+  if (clean.startsWith('254') && clean.length === 12) return '+' + clean;
+  if (clean.startsWith('+254')) return clean;
+  return clean;
+}
+function isValidKenyanPhoneForPayer(raw: string): boolean {
+  const clean = (raw || '').replace(/\s+/g, '');
+  if (!clean) return false;
+  return /^\+254\d{9}$/.test(normalizeKenyanPhoneForPayer(clean));
+}
+
 export default function OwnerView({ lang, categories, categoriesLoading = false, categoriesError = false }: OwnerViewProps) {
   const t = translations[lang];
 
@@ -89,6 +110,12 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
   // Verification Form states
   const [ownerPhone, setOwnerPhone] = useState('');
+  // M-Pesa number that should receive the STK prompt. MAY differ from
+  // owner_phone (the claim's registered phone): eCitizen-style, a payer can pay
+  // for a claim from a different valid Safaricom number. Defaults to owner_phone.
+  const [payerPhone, setPayerPhone] = useState('');
+  // The server-side payment session this claim is currently paying with.
+  const [paymentSessionId, setPaymentSessionId] = useState('');
   const [ownerEmail, setOwnerEmail] = useState('');
   const [otpCode, setOtpCode] = useState('');
 
@@ -404,16 +431,18 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
     pollingIntervalRef.current = interval;
   };
 
-  // Simulated/Real STK Push escrow checkout
+  // M-Pesa STK Push via a server-controlled payment session.
+  // 1. payment-auth: prove ownership (phone == claim owner phone) for a short-lived token.
+  // 2. payment-session: create (or reuse) a claim-bound session pinning the
+  //    authoritative server amount and the payer's M-Pesa number (may differ
+  //    from the owner phone). Nothing in the request is trusted as an amount.
+  // 3. initiate: trigger the STK push; idempotent server-side (one push/session).
   const triggerEscrowPayment = async () => {
+    if (!paidClaim?.id) return;
     setIsPaying(true);
     setErrorMsg('');
 
     try {
-      // Short-lived, single-purpose payment authorization: proves we know
-      // the claim's registered phone number (right before paying, not once
-      // at claim submission) and gets a token that /pay now requires. See
-      // the matching comment on /api/claims/:id/payment-auth in server.ts.
       const authResponse = await fetch(`/api/claims/${paidClaim.id}/payment-auth`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -424,28 +453,73 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
         throw new Error(authData.error || 'Payment authorization failed');
       }
 
-      const response = await fetch(`/api/claims/${paidClaim.id}/pay`, {
+      const createResponse = await fetch(`/api/claims/${paidClaim.id}/payment-session`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: ownerPhone, paymentAuthToken: authData.paymentAuthToken }),
+        body: JSON.stringify({ phone: ownerPhone, payerPhone: payerPhone.trim() || ownerPhone }),
       });
+      const createData = await createResponse.json();
+      if (!createResponse.ok) {
+        throw new Error(createData.error || 'Failed to create the payment session');
+      }
+      const sessionId = createData.paymentSession?.id;
+      if (!sessionId) {
+        throw new Error('Payment session was not created');
+      }
+      setPaymentSessionId(sessionId);
 
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Payment trigger failed');
+      const initiateResponse = await fetch(`/api/claims/${paidClaim.id}/payment-session/${sessionId}/initiate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paymentAuthToken: authData.paymentAuthToken }),
+      });
+      const initiateData = await initiateResponse.json();
+      if (!initiateResponse.ok) {
+        throw new Error(initiateData.error || 'Payment initiation failed');
       }
 
-      setPaidClaim(data.claim);
-      if (data.agent) {
-        setSelectedItem(prev => prev ? { ...prev, agent: data.agent } : null);
-      }
       setVerificationStep('payment_polling');
-      startPollingPaymentStatus(data.claim.id);
+      startPollingPaymentStatus(paidClaim.id);
     } catch (e: any) {
       console.error(e);
       setErrorMsg(e.message);
     } finally {
       setIsPaying(false);
+    }
+  };
+
+  // "Check payment status" — asks the BACKEND, never trusts the browser. It
+  // cannot mark a payment confirmed itself; it only reflects what the server
+  // and payment provider have actually recorded.
+  const checkPaymentStatus = async () => {
+    if (!paidClaim?.id || !paymentSessionId) {
+      setErrorMsg(lang === 'en' ? 'No active payment session yet. Please send the M-Pesa prompt first.' : 'Hakuna session ya malipo bado. Tafadhali tuma ombi la M-Pesa kwanza.');
+      return;
+    }
+    setErrorMsg('');
+    try {
+      const response = await fetch(`/api/claims/${paidClaim.id}/payment-session/${paymentSessionId}/status`);
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Could not fetch payment status');
+      }
+      const s = data.paymentSession;
+      const claimStatus = data.claim?.status;
+      if (s?.status === 'confirmed' || claimStatus === 'escrow_held' || claimStatus === 'released') {
+        if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+        setPollingStatus('success');
+        setVerificationStep('handover_success');
+      } else if (s?.status === 'expired' || claimStatus === 'payment_window_expired') {
+        if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+        setVerificationStep('payment_window_expired');
+      } else if (s?.status === 'failed') {
+        setErrorMsg(lang === 'en' ? 'The payment failed. Please try a new payment.' : 'Malipo yameshindikana. Tafadhali jaribu tena.');
+      } else {
+        setPollingStatus('pending');
+      }
+    } catch (e: any) {
+      console.error(e);
+      setErrorMsg(e.message);
     }
   };
 
@@ -525,7 +599,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           )}
 
           {/* Search Box / Filters */}
-          <form onSubmit={handleSearch} className="bg-white rounded-3xl border border-stone-100 p-6 shadow-xl space-y-4">
+          <form onSubmit={handleSearch} className="bg-white rounded-2xl border border-stone-100 p-6 shadow-sm space-y-4">
             <div className="flex flex-col md:flex-row gap-3">
               <div className="flex-1 relative">
                 <input
@@ -662,7 +736,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 {searchResults.map(item => {
                   const cat = categories.find(c => c.id === item.category_id);
                   return (
-                    <div key={item.id} className="bg-white rounded-3xl border border-stone-100 p-5 shadow-md flex items-start space-x-4">
+                    <div key={item.id} className="bg-white rounded-2xl border border-stone-100 p-5 shadow-md flex items-start space-x-4">
                       {/* Document photo */}
                       <div className="w-20 h-20 bg-brand-beige rounded-2xl overflow-hidden shrink-0 border border-stone-200 flex items-center justify-center">
                         {item.is_sensitive_document ? (
@@ -721,7 +795,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
       {/* Confidence Gate Step */}
       {verificationStep === 'confidence_gate' && selectedItem && (
-        <div className="bg-white rounded-3xl border border-stone-100 p-6 md:p-8 shadow-xl max-w-xl mx-auto space-y-6 fade-in">
+        <div className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm max-w-xl mx-auto space-y-6 fade-in">
           <div className="text-center space-y-2">
             <h2 className="text-2xl font-extrabold text-primary-green">Thibitisha Umiliki (Confirm Confidence)</h2>
             <p className="text-stone-500 text-xs">Please review the item details and confirm you are the rightful owner before proceeding to the verification step.</p>
@@ -865,7 +939,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
       {/* Tier 2 OTP validation */}
       {verificationStep === 'tier2_otp' && (
-        <div className="bg-white rounded-3xl border border-stone-100 p-6 md:p-8 shadow-xl max-w-xl mx-auto space-y-6 text-center fade-in">
+        <div className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm max-w-xl mx-auto space-y-6 text-center fade-in">
           <div className="w-12 h-12 bg-orange-50 text-accent-orange rounded-full flex items-center justify-center mx-auto">
             <Smartphone size={24} />
           </div>
@@ -915,12 +989,12 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
       {/* Payment step */}
       {verificationStep === 'payment' && (
-        <div className="bg-white rounded-3xl border border-stone-100 p-6 md:p-8 shadow-xl max-w-xl mx-auto space-y-6 text-center fade-in">
+        <div className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm max-w-xl mx-auto space-y-6 text-center fade-in">
           <div className="w-14 h-14 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
             <Coins size={28} />
           </div>
           <div>
-            <h2 className="text-xl font-extrabold text-primary-green mb-1">{t.paymentTitle}</h2>
+            <h2 className="text-xl font-extrabold text-primary-green mb-1">{lang === 'en' ? 'Complete Payment to Continue' : 'Maliza Malipo Kuendelea'}</h2>
             <p className="text-stone-500 text-xs">{t.paymentSubtitle}</p>
           </div>
 
@@ -1029,6 +1103,61 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           {/* Checkout triggers */}
           <div className="space-y-3">
             <span className="text-xs text-stone-400 block font-medium">Secured M-Pesa Payment</span>
+
+            {/* M-Pesa number that will receive the STK Push prompt. The payer may use a
+                different valid M-Pesa number than the claim's registered phone
+                (eCitizen-style); it is validated here and re-validated by the
+                server when the payment session is created. */}
+            <div className="bg-brand-beige rounded-2xl border border-stone-200 p-4 text-left space-y-2">
+              <label htmlFor="mpesa-payment-phone" className="block text-xs font-bold text-stone-500 uppercase tracking-wider">
+                {t.mpesaPhoneLabel}
+              </label>
+              <input
+                id="mpesa-payment-phone"
+                type="tel"
+                inputMode="numeric"
+                autoComplete="tel"
+                value={payerPhone || ownerPhone}
+                onChange={(e) => setPayerPhone(e.target.value)}
+                placeholder="e.g. 0712 345 678"
+                className="w-full border border-stone-300 rounded-xl px-3 py-3 text-base font-mono bg-white focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30"
+                aria-invalid={(payerPhone || ownerPhone).trim() !== '' && !isValidKenyanPhoneForPayer(payerPhone || ownerPhone)}
+              />
+              <p className="text-stone-500 text-xs">
+                {lang === 'en'
+                  ? 'Enter the Safaricom number that should receive the payment prompt. You may use a different M-Pesa number than the one registered on the claim — your payment stays securely linked to this claim.'
+                  : 'Wea nambari ya Safaricom itakayopokea ombi la malipo. Unaweza kutumia nambari tofauti ya M-Pesa kuliko ile iliyobaki kwenye claim — malipo yako yataunganishwa kwa usalama na claim hii.'}
+              </p>
+              {(() => {
+                const candidate = (payerPhone || ownerPhone).trim();
+                if (candidate === '') {
+                  return (
+                    <p className="text-stone-500 text-xs">
+                      {lang === 'en' ? 'Enter an M-Pesa phone number.' : 'Wea nambari ya M-Pesa.'}
+                    </p>
+                  );
+                }
+                if (!isValidKenyanPhoneForPayer(candidate)) {
+                  return (
+                    <p className="text-red-600 text-xs font-medium flex items-center space-x-1" role="alert">
+                      <AlertCircle size={14} className="shrink-0" />
+                      <span>{lang === 'en' ? 'Enter a valid Kenyan M-Pesa number.' : 'Wea nambari halali ya M-Pesa ya Kenya.'}</span>
+                    </p>
+                  );
+                }
+                return (
+                  <p className="text-emerald-600 text-xs flex items-center space-x-1">
+                    <CheckCircle size={14} className="shrink-0" />
+                    <span>
+                      {lang === 'en'
+                        ? 'Payment prompt will be sent to this number.'
+                        : 'Ombi la malipo litatumwa kwa nambari hii.'}
+                    </span>
+                  </p>
+                );
+              })()}
+            </div>
+
             {errorMsg && (
               <div className="bg-red-50 border border-red-100 text-red-700 text-xs rounded-2xl p-4 flex items-start space-x-2 text-left">
                 <AlertCircle size={16} className="shrink-0 mt-0.5" />
@@ -1037,17 +1166,17 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             )}
             <button
               onClick={triggerEscrowPayment}
-              disabled={isPaying}
+              disabled={isPaying || !isValidKenyanPhoneForPayer(payerPhone || ownerPhone)}
               className="w-full bg-accent-orange hover:bg-accent-hover text-white py-3.5 rounded-2xl font-bold transition flex items-center justify-center space-x-2 shadow-lg shadow-orange-500/10 cursor-pointer disabled:opacity-50"
             >
               {isPaying ? (
                 <>
                   <Loader2 className="animate-spin" size={18} />
-                  <span>Invoking STK Push callback...</span>
+                  <span>{lang === 'en' ? 'Sending payment prompt...' : 'Inatuma ombi la malipo...'}</span>
                 </>
               ) : (
                 <>
-                  <span>{t.stkBtn}</span>
+                  <span>{lang === 'en' ? 'Send M-Pesa STK Push' : 'Tuma M-Pesa STK Push'}</span>
                   <ArrowRight size={18} />
                 </>
               )}
@@ -1058,7 +1187,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
       {/* Payment Polling confirmation screen */}
       {verificationStep === 'payment_polling' && (
-        <div className="bg-white rounded-3xl border border-stone-100 p-6 md:p-8 shadow-xl max-w-xl mx-auto text-center space-y-6 fade-in">
+        <div className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm max-w-xl mx-auto text-center space-y-6 fade-in">
           <div className="w-14 h-14 bg-orange-50 text-accent-orange rounded-full flex items-center justify-center mx-auto">
             <Loader2 className="animate-spin text-accent-orange" size={28} />
           </div>
@@ -1068,8 +1197,8 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             </h2>
             <p className="text-stone-500 text-xs">
               {lang === 'en' 
-                ? 'We have sent an M-Pesa STK Push to your phone. Please enter your PIN to complete the escrow payment.' 
-                : 'Tumetuma ombi la M-Pesa (STK Push) kwa simu yako. Tafadhali weka PIN yako ili kukamilisha malipo.'}
+                ? `A payment request has been sent to ${payerPhone || ownerPhone}. Complete the payment on your phone using your M-Pesa PIN. Return4me is waiting for confirmation from the payment provider.`
+                : `Ombi la malipo limetumwa kwa ${payerPhone || ownerPhone}. Kamilisha malipo kwenye simu yako kwa kutumia PIN ya M-Pesa. Return4me inasubiri uthibitisho kutoka kwa mtoa-huduma wa malipo.`}
             </p>
           </div>
 
@@ -1096,6 +1225,14 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           )}
 
           <div className="space-y-3 pt-2">
+            <button
+              onClick={checkPaymentStatus}
+              disabled={isPaying}
+              className="w-full bg-accent-orange hover:bg-accent-hover text-white py-3 rounded-2xl font-bold text-xs transition cursor-pointer disabled:opacity-50"
+            >
+              <span>{lang === 'en' ? 'Check payment status' : 'Angalia hali ya malipo'}</span>
+            </button>
+
             <button
               onClick={triggerEscrowPayment}
               disabled={isPaying}
@@ -1126,7 +1263,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
       {/* Physical pickup handover success */}
       {verificationStep === 'handover_success' && (
-        <div className="bg-white rounded-3xl border border-stone-100 p-6 md:p-8 shadow-xl max-w-xl mx-auto text-center space-y-6 fade-in">
+        <div className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm max-w-xl mx-auto text-center space-y-6 fade-in">
           <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
             <CheckCircle size={36} />
           </div>
@@ -1261,7 +1398,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
       {/* Awaiting agent in-person verification step */}
       {verificationStep === 'awaiting_agent_confirmation' && (
-        <div className="bg-white rounded-3xl border border-stone-100 p-6 md:p-8 shadow-xl max-w-xl mx-auto space-y-6 text-center fade-in">
+        <div className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm max-w-xl mx-auto space-y-6 text-center fade-in">
           <div className="w-14 h-14 bg-amber-50 text-amber-500 rounded-full flex items-center justify-center mx-auto animate-pulse">
             <Eye size={28} />
           </div>
@@ -1318,7 +1455,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
       {/* Payment window expired step */}
       {verificationStep === 'payment_window_expired' && (
-        <div className="bg-white rounded-3xl border border-stone-100 p-6 md:p-8 shadow-xl max-w-xl mx-auto space-y-6 text-center fade-in">
+        <div className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm max-w-xl mx-auto space-y-6 text-center fade-in">
           <div className="w-14 h-14 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto">
             <XCircle size={28} />
           </div>
@@ -1361,7 +1498,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           }}
         >
           <div
-            className="bg-white rounded-3xl p-6 md:p-8 max-w-lg w-full max-h-[90vh] overflow-y-auto space-y-5 shadow-2xl relative border border-stone-100"
+            className="bg-white rounded-2xl p-6 md:p-8 max-w-lg w-full max-h-[90vh] overflow-y-auto space-y-5 shadow-sm relative border border-stone-100"
             role="dialog"
             ref={trackModalRef}
             tabIndex={-1}

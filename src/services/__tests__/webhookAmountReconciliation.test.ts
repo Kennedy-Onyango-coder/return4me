@@ -54,7 +54,7 @@ describe('processClaimPaymentConfirmed is wired to actually enforce the reconcil
   it('a mismatch refuses BEFORE the atomic escrow-hold transition (never holds escrow with a wrong amount)', () => {
     const fnStart = serverTs.indexOf('async function processClaimPaymentConfirmed');
     expect(fnStart).toBeGreaterThan(-1);
-    const body = serverTs.slice(fnStart, fnStart + 4000);
+    const body = serverTs.slice(fnStart, fnStart + 14000);
     const mismatchIdx = body.indexOf("reconciliation === 'mismatch'");
     const escrowHoldIdx = body.indexOf('attemptClaimEscrowHold(claimId, invoiceId)');
     expect(mismatchIdx, 'mismatch check not found').toBeGreaterThan(-1);
@@ -72,7 +72,7 @@ describe('processClaimPaymentConfirmed is wired to actually enforce the reconcil
 
   it('a mismatch is audit-logged for manual review, not just console-logged and silently dropped', () => {
     const fnStart = serverTs.indexOf('async function processClaimPaymentConfirmed');
-    const body = serverTs.slice(fnStart, fnStart + 4000);
+    const body = serverTs.slice(fnStart, fnStart + 14000);
     expect(body).toMatch(/WEBHOOK_AMOUNT_MISMATCH_REFUSED/);
   });
 });

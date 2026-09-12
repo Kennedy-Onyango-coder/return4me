@@ -1168,7 +1168,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
       
       {/* 1. SECURE ADMIN PASSCODE LOGIN (No public signups allowed to prevent privilege-escalation) */}
       {!token && (
-        <div className="bg-white rounded-3xl border border-stone-100 p-6 md:p-8 shadow-xl max-w-md mx-auto space-y-6">
+        <div className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm max-w-md mx-auto space-y-6">
           <div className="text-center space-y-2">
             <div className="w-12 h-12 bg-stone-900 text-white rounded-full flex items-center justify-center mx-auto">
               <ShieldCheck size={24} />
@@ -1269,7 +1269,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
       )}
 
       {token && !dashboardData && dataError && (
-        <div className="bg-red-50 border border-red-100 p-6 rounded-3xl max-w-md mx-auto text-center space-y-4 my-8">
+        <div className="bg-red-50 border border-red-100 p-6 rounded-2xl max-w-md mx-auto text-center space-y-4 my-8">
           <AlertCircle className="w-12 h-12 text-red-500 mx-auto" />
           <h2 className="text-sm font-extrabold text-red-800">Failed to Load Dashboard</h2>
           <p className="text-xs text-red-600">{dataError}</p>
@@ -1280,7 +1280,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
       )}
 
       {token && !dashboardLoading && !dashboardData && !dataError && (
-        <div className="bg-white rounded-3xl border border-stone-100 p-8 text-center space-y-4 shadow-sm max-w-md mx-auto my-8">
+        <div className="bg-white rounded-2xl border border-stone-100 p-8 text-center space-y-4 shadow-sm max-w-md mx-auto my-8">
           <HelpCircle className="w-12 h-12 text-stone-300 mx-auto" />
           <h2 className="text-lg font-bold text-stone-800">No Dashboard Data Available</h2>
           <p className="text-xs text-stone-500">The console returned no statistical or audit record metrics at this time.</p>
@@ -1499,7 +1499,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               </div>
 
               {/* Admin 2FA / Security */}
-              <div className="bg-white border border-stone-100 rounded-3xl p-6 shadow-sm space-y-4">
+              <div className="bg-white border border-stone-100 rounded-2xl p-6 shadow-sm space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="font-extrabold text-sm text-stone-500 uppercase tracking-widest flex items-center gap-2">
                     <ShieldCheck size={16} />
@@ -1602,7 +1602,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               </div>
 
               {/* Audit logs timeline */}
-              <div className="bg-white border border-stone-100 rounded-3xl p-6 shadow-sm space-y-4">
+              <div className="bg-white border border-stone-100 rounded-2xl p-6 shadow-sm space-y-4">
                 <h3 className="font-extrabold text-sm text-stone-500 uppercase tracking-widest">Real-time Platform Audit Logs</h3>
                 <div className="h-60 overflow-y-auto border border-stone-100 rounded-xl font-mono text-[10px] p-4 bg-brand-beige space-y-2 leading-tight">
                   {dashboardData.auditLogs.map((log: any) => (
@@ -1994,7 +1994,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               </div>
 
               {/* Filters Panel */}
-              <div className="bg-white border border-stone-100 rounded-3xl p-5 shadow-sm space-y-4">
+              <div className="bg-white border border-stone-100 rounded-2xl p-5 shadow-sm space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                   {/* Search bar */}
                   <div className="md:col-span-2 space-y-1">
@@ -2095,7 +2095,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
 
                 if (filteredItems.length === 0) {
                   return (
-                    <div className="bg-white border border-stone-100 rounded-3xl p-12 text-center text-stone-400 text-xs">
+                    <div className="bg-white border border-stone-100 rounded-2xl p-12 text-center text-stone-400 text-xs">
                       {lang === 'en' ? 'No found items match your filters.' : 'Hakuna vitu vilivyopatikana vinavyolingana na vigezo vyako.'}
                     </div>
                   );
@@ -2107,7 +2107,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                       // Lookup agent
                       const agentObj = dashboardData.agents.find((a: any) => a.id === item.assigned_agent_id);
                       return (
-                        <div key={item.id} className="bg-white border border-stone-100 rounded-3xl p-5 shadow-sm hover:border-stone-200 transition flex flex-col md:flex-row gap-5">
+                        <div key={item.id} className="bg-white border border-stone-100 rounded-2xl p-5 shadow-sm hover:border-stone-200 transition flex flex-col md:flex-row gap-5">
                           {/* Image Thumbnail with zoom trigger */}
                           <div 
                             onClick={() => setLightboxImage(item.photo_url)}
@@ -2310,7 +2310,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               </div>
 
               {/* REFUNDS REQUIRING RECONCILIATION (A1 unknown-outcome workflow) */}
-              <div className="bg-white border border-amber-200 rounded-3xl p-5 shadow-sm">
+              <div className="bg-white border border-amber-200 rounded-2xl p-5 shadow-sm">
                 <div className="flex items-start justify-between gap-3 mb-3">
                   <div>
                     <h3 className="font-extrabold text-sm text-amber-700 uppercase tracking-widest">Refunds Requiring Reconciliation</h3>
@@ -2369,7 +2369,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               ) : (
                 <div className="space-y-4">
                   {dashboardData.disputes.map((dispute: any) => (
-                    <div key={dispute.id} className="bg-white border border-stone-100 rounded-3xl p-5 shadow-sm space-y-4">
+                    <div key={dispute.id} className="bg-white border border-stone-100 rounded-2xl p-5 shadow-sm space-y-4">
                       <div className="flex justify-between items-center pb-3 border-b border-stone-100">
                         <div>
                           <span className="text-xs font-mono font-bold text-red-600">DISPUTE: {dispute.id}</span>
@@ -2440,7 +2440,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                   the item but whose real M-Pesa payout is still inside the
                   dispute window. Released automatically once settleAt passes,
                   or immediately here via admin override (audit-logged). */}
-              <div className="bg-white border border-stone-100 rounded-3xl shadow-sm p-5 space-y-3">
+              <div className="bg-white border border-stone-100 rounded-2xl shadow-sm p-5 space-y-3">
                 <div>
                   <h3 className="text-sm font-extrabold text-stone-800">Pending Settlements</h3>
                   <p className="text-[11px] text-stone-500">
@@ -2483,7 +2483,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                 )}
               </div>
 
-              <div className="bg-white border border-stone-100 rounded-3xl shadow-sm overflow-hidden">
+              <div className="bg-white border border-stone-100 rounded-2xl shadow-sm overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse">
                     <thead>
@@ -2535,7 +2535,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               </div>
 
               {selectedReviewItem ? (
-                <div className="bg-white border border-stone-200 rounded-3xl p-6 md:p-8 shadow-md space-y-6 max-w-2xl mx-auto">
+                <div className="bg-white border border-stone-200 rounded-2xl p-6 md:p-8 shadow-md space-y-6 max-w-2xl mx-auto">
                   <div className="flex justify-between items-center border-b border-stone-100 pb-3">
                     <h3 className="font-extrabold text-stone-900">Reviewing Item: {selectedReviewItem.id}</h3>
                     <button
@@ -2817,7 +2817,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               </div>
 
               {showCategoryForm ? (
-                <div className="bg-white border border-stone-200 rounded-3xl p-6 md:p-8 shadow-md space-y-6 max-w-2xl mx-auto">
+                <div className="bg-white border border-stone-200 rounded-2xl p-6 md:p-8 shadow-md space-y-6 max-w-2xl mx-auto">
                   <div className="flex justify-between items-center border-b border-stone-100 pb-3">
                     <h3 className="font-extrabold text-stone-900">
                       {showCategoryForm === 'create' ? 'Create New Category' : `Editing Category: ${catFormId}`}
@@ -3140,7 +3140,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                   </form>
                 </div>
               ) : (
-                <div className="bg-white border border-stone-100 rounded-3xl overflow-hidden shadow-sm">
+                <div className="bg-white border border-stone-100 rounded-2xl overflow-hidden shadow-sm">
                   {adminCategoriesLoading ? (
                     <div className="flex flex-col items-center justify-center py-12 space-y-2">
                       <Loader2 className="animate-spin text-primary-green w-6 h-6" />
@@ -3242,7 +3242,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                 </button>
               </div>
 
-              <div className="bg-white border border-stone-100 rounded-3xl overflow-hidden shadow-sm">
+              <div className="bg-white border border-stone-100 rounded-2xl overflow-hidden shadow-sm">
                 {paymentStrikesLoading ? (
                   <div className="flex flex-col items-center justify-center py-12 space-y-2">
                     <Loader2 className="animate-spin text-primary-green w-6 h-6" />
@@ -3320,7 +3320,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
       {/* Custom Confirmation Modal */}
       {confirmModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-stone-900/60 fade-in">
-          <div className="bg-white border border-stone-200 rounded-xl p-6 shadow-xl max-w-sm w-full space-y-4 fade-in">
+          <div className="bg-white border border-stone-200 rounded-xl p-6 shadow-sm max-w-sm w-full space-y-4 fade-in">
             <div className="flex items-start space-x-3 text-amber-600">
               <ShieldAlert className="w-6 h-6 shrink-0 mt-0.5" />
               <div className="space-y-1">

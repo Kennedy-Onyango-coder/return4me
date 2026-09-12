@@ -287,7 +287,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
 
       {/* Success View / Handover instructions */}
       {dropoffResult ? (
-        <div className="bg-white rounded-3xl border border-stone-100 p-6 md:p-8 shadow-xl text-center space-y-6">
+        <div className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm text-center space-y-6">
           <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto text-emerald-600">
             <CheckCircle size={36} />
           </div>
@@ -374,7 +374,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
         </div>
       ) : (
         /* Form View */
-        <form onSubmit={submitFoundReport} className="bg-white rounded-3xl border border-stone-100 p-6 md:p-8 shadow-xl space-y-6">
+        <form onSubmit={submitFoundReport} className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm space-y-6">
           
           {/* Photo Capture Section */}
           <div className="space-y-3">

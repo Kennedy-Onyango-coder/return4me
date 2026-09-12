@@ -102,7 +102,7 @@ export default function Modal({
         aria-modal="true"
         aria-labelledby="r4m-modal-title"
         tabIndex={-1}
-        className={`relative bg-white w-full sm:max-w-lg max-h-[90vh] sm:max-h-[85vh] flex flex-col rounded-t-3xl sm:rounded-3xl border border-brand-border shadow-xl outline-none ${className}`}
+        className={`relative bg-white w-full sm:max-w-lg max-h-[90vh] sm:max-h-[85vh] flex flex-col rounded-t-2xl sm:rounded-2xl border border-brand-border shadow-sm outline-none ${className}`}
       >
         <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-brand-border shrink-0">
           <h2
