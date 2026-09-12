@@ -4,7 +4,7 @@ import {
   Search, MapPin, ShieldCheck, Lock, Package,
   Users, CreditCard, ChevronLeft, ChevronRight,
   PhoneCall, Key, Car, Wallet, Luggage, Laptop,
-  Sparkles, ScanLine, Smartphone, CheckCircle, ArrowRight, Clock, Monitor
+  Gem, ScanLine, Smartphone, CheckCircle, ArrowRight, Clock, Monitor
 } from 'lucide-react';
 import Button from './ui/Button';
 import Badge from './ui/Badge';
@@ -235,7 +235,7 @@ export default function HomeView(props: HomeViewProps) {
         return Key;
       case 'jewellery':
       case 'watch':
-        return Sparkles;
+        return Gem;
       default:
         return Package;
     }
@@ -349,19 +349,18 @@ export default function HomeView(props: HomeViewProps) {
         </button>
 
         {/* Slide indicators */}
-        <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3">
+        <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2" role="tablist" aria-label="Slide indicator">
           {slides.map((s, i) => (
             <button
               key={s.img}
               type="button"
               onClick={() => goToSlide(i)}
+              role="tab"
+              aria-selected={i === current}
               aria-label={lang === 'en' ? `Go to slide ${i + 1}` : `Nenda kwenye slaidi ${i + 1}`}
               aria-current={i === current ? 'true' : undefined}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-all duration-300 motion-reduce:transition-none ${i === current ? 'bg-accent-orange text-white shadow-md shadow-accent-orange/30' : 'bg-white/20 hover:bg-white/30 text-white/70 hover:text-white'}`}
-            >
-              <span className={`w-1.5 h-1.5 rounded-full transition-all ${i === current ? 'bg-white scale-110' : 'bg-white/60'}`} />
-              <span className="text-xs font-bold uppercase tracking-wider">{i + 1}</span>
-            </button>
+              className={`rounded-full transition-all duration-300 motion-reduce:transition-none ${i === current ? 'w-8 h-2 bg-accent-orange' : 'w-2 h-2 bg-white/40 hover:bg-white/70'}`}
+            />
           ))}
         </div>
       </section>
@@ -401,45 +400,95 @@ export default function HomeView(props: HomeViewProps) {
             description={lang === 'en' ? 'From identification documents and cards to money and vehicle records.' : 'Kutoka kwa hati na kadi hadi pesa na rekodi za magari.'}
           />
           {categoriesLoading ? (
-            <div className="mt-8 grid grid-cols-2 lg:grid-cols-4 gap-4">
-              {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-32" />)}
-            </div>
-          ) : categoriesError ? (
             <div className="mt-8">
-              <EmptyState
-                icon={Package}
-                title={lang === 'en' ? 'Could not load categories' : 'Haikuweza kupakia kategoria'}
-                description={lang === 'en' ? 'Please refresh the page.' : 'Tafadhali onyesa upya ukurasa.'}
-              />
+              <Skeleton shape="text" className="h-64" />
             </div>
           ) : (
-            <div className="mt-8 grid grid-cols-2 lg:grid-cols-4 gap-4">
-              {categories.map((cat: any) => {
-                const Icon = getCategoryIcon(cat.id);
-                return (
-                  <button
-                    key={cat.id}
-                    onClick={() => setView('owner')}
-                    className="group bg-white rounded-2xl border border-brand-border p-5 text-left transition-all duration-200 hover:shadow-lg hover:-translate-y-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange focus-visible:ring-offset-2"
-                  >
-                    <div className="w-10 h-10 rounded-xl bg-primary-green/10 flex items-center justify-center mb-3 group-hover:bg-accent-orange/15 transition-colors">
-                      <Icon size={20} className="text-primary-green group-hover:text-accent-orange transition-colors" aria-hidden="true" />
-                    </div>
-                    <p className="text-sm font-extrabold text-brand-dark-text leading-snug">
-                      {lang === 'en' ? cat.name_en : cat.name_sw}
-                    </p>
-                    <p className="text-xs text-brand-muted-text mt-1">
-                      {lang === 'en' ? 'Lost or found' : 'Imepotea au imepatikana'}
-                    </p>
-                    <div className="mt-3 flex items-center gap-1 text-xs font-bold text-accent-orange opacity-0 group-hover:opacity-100 transition-opacity">
-                      <span>{lang === 'en' ? 'Report / Find' : 'Ripoti / Tafuta'}</span>
-                      <ArrowRight size={12} aria-hidden="true" />
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
+            <CategoryDirectory categories={categories} lang={lang} onReportLost={() => setView('owner')} onReportFound={() => setView('finder')} />
           )}
+        </div>
+      </section>
+
+      {/* ───────── EARN & RETURN MARKETING ───────── */}
+      <section className="bg-white py-14 sm:py-20 border-t border-brand-border">
+        <div className="mx-auto max-w-7xl px-5 sm:px-12">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-16 items-center">
+            {/* Image area */}
+            <div className="order-2 lg:order-1">
+              <div className="aspect-[4/3] bg-brand-light-gray rounded-xl overflow-hidden flex items-center justify-center">
+                <img
+                  src="/assets/return4me-earn-and-return.webp"
+                  alt={lang === 'en' ? 'A Return4me agent safely returning a found item to its owner' : 'Wakala wa Return4me anarejeshza kilichopatikana kwa mmiliki wake'}
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
+              </div>
+            </div>
+
+            {/* Content area */}
+            <div className="order-1 lg:order-2">
+              <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-primary-green">
+                {lang === 'en' ? 'Found something? Help it find its way home.' : 'Umepeleza saidi? Isaidie njia ya nyumbani.'}
+              </h2>
+              <p className="mt-4 text-sm sm:text-base text-brand-muted-text leading-relaxed">
+                {lang === 'en'
+                  ? "Every lost item has a story. Every person who finds something has an opportunity to make a difference — and be rewarded for doing the right thing."
+                  : "Kila kitu kilichopotea kina hadithi. Kila mtu anayepeleza kitu ana fursa kufanya tofauti — na kutunzwa kwa kufanya kitu sahihi."}
+              </p>
+
+              <div className="mt-8 space-y-6">
+                {/* If you find something */}
+                <div>
+                  <h3 className="text-sm font-semibold text-brand-dark-text uppercase tracking-wide">
+                    {lang === 'en' ? "If you find something" : "Ikiwa umepeleza kitu"}
+                  </h3>
+                  <p className="mt-2 text-sm text-brand-muted-text leading-relaxed">
+                    {lang === 'en'
+                      ? "Found someone's ID, phone, bag, certificate or other belonging? Don't leave it behind. Report it on Return4me and give its owner a chance to get it back."
+                      : "Umepeleza kitambulisho, simu, mkoba, cheti au kitu cha mtu? Usiache nyuma. Ripoti kwenye Return4me na umpatie mmiliki wake nia ya kukirejesha."}
+                  </p>
+                  <p className="mt-2 text-sm text-brand-muted-text">
+                    {lang === 'en'
+                      ? "Successful finders can earn when a reported item is safely returned."
+                      : "Watafutaji wanaofaulu wanaweza kutunzwa inapotangazwa kitu kilichorejeshwa salama."}
+                  </p>
+                  <div className="mt-4">
+                    <Button variant="accent" size="lg" onClick={() => setView('finder')} className="min-h-[48px]">
+                      <MapPin size={18} aria-hidden="true" />
+                      {lang === 'en' ? 'Report Something Found' : 'Ripoti Kitu Ulichopeleza'}
+                    </Button>
+                  </div>
+                </div>
+
+                {/* If you lose something */}
+                <div>
+                  <h3 className="text-sm font-semibold text-brand-dark-text uppercase tracking-wide">
+                    {lang === 'en' ? "If you lose something" : "Ikiwa umepoteza kitu"}
+                  </h3>
+                  <p className="mt-2 text-sm text-brand-muted-text leading-relaxed">
+                    {lang === 'en'
+                      ? "Lost something important? Report it. The sooner your loss is recorded, the sooner a matching found item can be identified."
+                      : "Umepoteza kitu muhimu? Ripoti. Mapema zaidi unaporipoti upotevu wako, mapema zaidi kitu kilichopeleza kitatambulika."}
+                  </p>
+                  <div className="mt-4">
+                    <Button variant="primary" size="lg" onClick={() => setView('owner')} className="min-h-[48px]">
+                      <Search size={18} aria-hidden="true" />
+                      {lang === 'en' ? 'Report a Lost Item' : 'Ripoti Kitu Kilichopotea'}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Closing brand message */}
+              <div className="mt-10 pt-6 border-t border-brand-border">
+                <p className="text-sm text-brand-dark-text leading-relaxed">
+                  {lang === 'en' ? 'Lost something? Report it.' : 'Umepoteza kitu? Ripoti.'}
+                  <br />
+                  {lang === 'en' ? 'Found something? Give it a chance to get home.' : 'Umepeleza kitu? Mpe nia ya kufika nyumbani.'}
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -538,7 +587,7 @@ export default function HomeView(props: HomeViewProps) {
                     
                     {/* Content */}
                     <div className="p-4 flex-1 flex flex-col">
-                      <h3 className="text-sm font-extrabold text-brand-dark-text truncate">
+                      <h3 className="text-sm font-semibold text-brand-dark-text truncate">
                         {getCategoryName(item.category_id)}
                       </h3>
                       <p className="text-xs text-brand-muted-text mt-1 line-clamp-2 flex-1">
@@ -595,7 +644,7 @@ export default function HomeView(props: HomeViewProps) {
                       {i + 1}
                     </span>
                     <div>
-                      <p className="text-sm font-extrabold text-brand-dark-text">{step.title}</p>
+                      <p className="text-sm font-semibold text-brand-dark-text">{step.title}</p>
                       <p className="text-xs text-brand-muted-text mt-1 leading-relaxed">{step.desc}</p>
                     </div>
                   </li>
@@ -677,7 +726,7 @@ export default function HomeView(props: HomeViewProps) {
               <div className="text-[11px] font-extrabold uppercase tracking-widest text-accent-orange mb-3">
                 {lang === 'en' ? 'Successful returns' : 'Urejeshaji uliofanikiwa'}
               </div>
-              <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-primary-green">
+              <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-primary-green">
                 {lang === 'en' ? 'Because getting something back matters.' : 'Kwa sababu kupata kitu kinarejeshwa ni muhimu.'}
               </h2>
               <p className="mt-4 text-sm sm:text-base text-brand-muted-text leading-relaxed max-w-xl">
@@ -695,41 +744,15 @@ export default function HomeView(props: HomeViewProps) {
         <div className="mx-auto max-w-7xl px-5 sm:px-12">
           <SectionHeading
             eyebrow={lang === 'en' ? 'Transparent fees' : 'Ada wazi'}
-            title={lang === 'en' ? 'Know what you pay' : 'Jua unalolipa'}
-            description={lang === 'en' ? 'Every fee is split transparently between you, the finder, and the agent.' : 'Kila ada inagawanywa wazi kati yako, mpataji, na wakala.'}
+            title={lang === 'en' ? 'Know exactly what you pay' : 'Jua kile unalolipa'}
+            description={lang === 'en' ? 'The recovery fee depends on the type of item. Every payment is allocated transparently between the finder, local agent and Return4me.' : 'Ada ya urejeshaji inategeneza aina ya bidhaa. Kila malipo inagawanywa wazi kati ya mpataji, wakala wa eneo na Return4me.'}
           />
           {categoriesLoading ? (
-            <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-48" />)}
+            <div className="mt-8">
+              <Skeleton shape="text" className="h-64" />
             </div>
           ) : (
-            <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {categories.map((cat: any) => (
-                <div key={cat.id} className="bg-brand-beige/50 rounded-2xl border border-brand-border p-5">
-                  <p className="text-sm font-extrabold text-brand-dark-text mb-3">
-                    {lang === 'en' ? cat.name_en : cat.name_sw}
-                  </p>
-                  <div className="space-y-2 text-xs">
-                    <div className="flex justify-between">
-                      <span className="text-brand-muted-text">{lang === 'en' ? 'Total fee' : 'Ada yote'}</span>
-                      <span className="font-bold text-brand-dark-text">KES {cat.total_fee}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-brand-muted-text">{lang === 'en' ? 'Finder gets' : 'Mpataji anapata'}</span>
-                      <span className="font-bold text-status-success">KES {cat.finder_share}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-brand-muted-text">{lang === 'en' ? 'Agent gets' : 'Wakala anapata'}</span>
-                      <span className="font-bold text-status-info">KES {cat.agent_share}</span>
-                    </div>
-                    <div className="flex justify-between border-t border-brand-border pt-2 mt-2">
-                      <span className="text-brand-muted-text">{lang === 'en' ? 'Platform' : 'Jukwaa'}</span>
-                      <span className="font-bold text-brand-dark-text">KES {cat.platform_share}</span>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <FeeDirectory categories={categories} lang={lang} />
           )}
         </div>
       </section>
@@ -737,7 +760,7 @@ export default function HomeView(props: HomeViewProps) {
       {/* ───────── FINAL CTA ───────── */}
       <section className="bg-primary-green py-14 sm:py-20">
         <div className="mx-auto max-w-3xl px-5 sm:px-12 text-center">
-          <h2 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white">
+          <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
             {lang === 'en' ? 'Ready to get started?' : 'Tayari kuanza?'}
           </h2>
           <p className="mt-3 text-sm sm:text-base text-white/80 max-w-xl mx-auto">
@@ -746,11 +769,11 @@ export default function HomeView(props: HomeViewProps) {
               : 'Iwe umepoteza kitu au umepata kitu, tuko hapa kukusaidia.'}
           </p>
           <div className="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
-            <Button variant="secondary" size="lg" onClick={() => setView('owner')} className="min-h-[48px]">
+            <Button variant="secondary" size="lg" onClick={() => setView('owner')} className="min-h-[48px] bg-white hover:bg-brand-light-gray text-primary-green border-white">
               <Search size={18} aria-hidden="true" />
               {t.ownerBtn}
             </Button>
-            <Button variant="outline" size="lg" onClick={() => setView('finder')} className="min-h-[48px] border-white text-white hover:bg-white/10 hover:text-white">
+            <Button variant="inverse" size="lg" onClick={() => setView('finder')} className="min-h-[48px]">
               <MapPin size={18} aria-hidden="true" />
               {t.finderBtn}
             </Button>
@@ -761,3 +784,301 @@ export default function HomeView(props: HomeViewProps) {
     </div>
   );
 }
+
+// ── CATEGORY DIRECTORY COMPONENT ──────────────────────────────────────────
+// Groups categories into human-friendly discovery groups for the homepage.
+// No pricing is displayed — this section is purely for service discovery.
+
+const CATEGORY_GROUPS: { key: string; labelEn: string; labelSw: string; icon: React.ComponentType<any>; ids: string[] }[] = [
+  {
+    key: 'documents',
+    labelEn: 'Documents & Identification',
+    labelSw: 'Hati na Vitambulisho',
+    icon: ShieldCheck,
+    ids: [
+      'national-id', 'passport', 'student-id', 'driving-licence', 'atm-credit-card',
+      'kra-nhif-nssf', 'birth-certificate', 'academic-certificate',
+      'title-deed', 'work-permit-visa', 'insurance-document',
+      'other-document', 'vehicle-logbook', 'number-plate',
+    ],
+  },
+  {
+    key: 'phones',
+    labelEn: 'Phones & Electronics',
+    labelSw: 'Simu na Vifaa vya Umeme',
+    icon: Smartphone,
+    ids: [
+      'smartphone', 'feature-phone', 'tablet', 'laptop',
+      'smartwatch', 'wireless-earphones', 'headphones',
+      'usb-cable', 'phone-charger', 'powerbank',
+      'flash-drive-hdd', 'camera', 'gaming-console',
+      'memory-card',
+    ],
+  },
+  {
+    key: 'personal',
+    labelEn: 'Personal Belongings',
+    labelSw: 'Vitu vya Kibinafsi',
+    icon: Wallet,
+    ids: [
+      'wallet-with-contents', 'empty-wallet', 'bag-with-documents',
+      'id-lanyard-badge', 'optical-sunglasses',
+      'umbrella', 'jewelry', 'bicycle',
+      'bag-no-docs', 'cash-money',
+    ],
+  },
+  {
+    key: 'keys',
+    labelEn: 'Keys & Everyday Items',
+    labelSw: 'Funguo na Vitu vya Kila Siku',
+    icon: Key,
+    ids: ['bunch-of-keys', 'single-key', 'padlock'],
+  },
+  {
+    key: 'books',
+    labelEn: 'Books & School Items',
+    labelSw: 'Vitabu na Vitu vya Shule',
+    icon: Package,
+    ids: ['bible', 'school-book', 'novel', 'notebook-diary'],
+  },
+  {
+    key: 'other',
+    labelEn: 'Other Items',
+    labelSw: 'Vitu Vingine',
+    icon: Package,
+    ids: ['other-item'],
+  },
+];
+
+function CategoryDirectory({ categories, lang, onReportLost, onReportFound }: { categories: any[]; lang: 'en' | 'sw'; onReportLost: () => void; onReportFound: () => void }) {
+  const catMap = new Map(categories.map((c: any) => [c.id, c]));
+
+  const getName = (cat: any) => lang === 'en' ? cat.name_en : cat.name_sw;
+
+  const groups = CATEGORY_GROUPS.map((g) => ({
+    ...g,
+    items: g.ids.map((id) => catMap.get(id)).filter(Boolean),
+  })).filter((g) => g.items.length > 0);
+
+  if (groups.length === 0) return null;
+
+  return (
+    <div className="mt-8 space-y-6">
+      {groups.map((group) => {
+        const Icon = group.icon;
+        return (
+          <div key={group.key} className="border border-brand-border rounded-xl bg-white p-5 sm:p-6">
+            <div className="flex items-start gap-4">
+              <div className="w-10 h-10 rounded-lg bg-primary-green/10 flex items-center justify-center shrink-0">
+                <Icon size={20} className="text-primary-green" aria-hidden="true" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-sm font-semibold text-brand-dark-text">
+                  {lang === 'en' ? group.labelEn : group.labelSw}
+                </h3>
+                <p className="mt-2 text-sm text-brand-muted-text leading-relaxed">
+                  {group.items.map((cat: any) => getName(cat)).join(' \u00B7 ')}
+                </p>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+
+// ── FEE DIRECTORY COMPONENT ───────────────────────────────────────────────
+// Groups all categories into customer-facing categories with a compact
+// table on desktop and an accordion on mobile.
+
+const FEE_GROUPS: { key: string; labelEn: string; labelSw: string; ids: string[] }[] = [
+  {
+    key: 'documents',
+    labelEn: 'Documents & identification',
+    labelSw: 'Hati na vitambulisho',
+    ids: [
+      'national-id', 'passport', 'student-id', 'driving-licence', 'atm-credit-card',
+      'kra-nhif-nssf', 'birth-certificate', 'academic-certificate',
+      'title-deed', 'work-permit-visa', 'insurance-document',
+      'other-document', 'vehicle-logbook', 'number-plate',
+    ],
+  },
+  {
+    key: 'phones',
+    labelEn: 'Phones & electronics',
+    labelSw: 'Simu na vifaa vya umeme',
+    ids: [
+      'smartphone', 'feature-phone', 'tablet', 'laptop',
+      'smartwatch', 'wireless-earphones', 'headphones',
+      'usb-cable', 'phone-charger', 'powerbank',
+      'flash-drive-hdd', 'camera', 'gaming-console',
+      'memory-card',
+    ],
+  },
+  {
+    key: 'personal',
+    labelEn: 'Personal belongings',
+    labelSw: 'Vitu vya kibinafsi',
+    ids: [
+      'wallet-with-contents', 'empty-wallet', 'bag-with-documents',
+      'id-lanyard-badge', 'optical-sunglasses',
+      'umbrella', 'jewelry', 'bicycle',
+      'bag-no-docs', 'cash-money',
+    ],
+  },
+  {
+    key: 'keys',
+    labelEn: 'Keys & accessories',
+    labelSw: 'Funguo na vifaa',
+    ids: ['bunch-of-keys', 'single-key', 'padlock'],
+  },
+  {
+    key: 'books',
+    labelEn: 'Books & school items',
+    labelSw: 'Vitabu na vituo vya shule',
+    ids: ['bible', 'school-book', 'novel', 'notebook-diary'],
+  },
+  {
+    key: 'other',
+    labelEn: 'Other items',
+    labelSw: 'Vitu vingine',
+    ids: ['other-item'],
+  },
+];
+
+function FeeDirectory({ categories, lang }: { categories: any[]; lang: 'en' | 'sw' }) {
+  const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
+  const [expandedItem, setExpandedItem] = useState<string | null>(null);
+
+  const catMap = new Map(categories.map((c: any) => [c.id, c]));
+  const getName = (cat: any) => lang === 'en' ? cat.name_en : cat.name_sw;
+  const getGroupCats = (ids: string[]) => ids.map((id) => catMap.get(id)).filter(Boolean);
+
+  const groups = FEE_GROUPS.map((g) => ({
+    ...g,
+    categories: getGroupCats(g.ids),
+  })).filter((g) => g.categories.length > 0);
+
+  if (groups.length === 0) return null;
+
+  return (
+    <div className="mt-8 space-y-3">
+      {groups.map((group) => {
+        const isGroupOpen = expandedGroup === group.key;
+        return (
+          <div key={group.key} className="border border-brand-border rounded-xl overflow-hidden">
+            <button
+              type="button"
+              onClick={() => {
+                setExpandedGroup(isGroupOpen ? null : group.key);
+                setExpandedItem(null);
+              }}
+              aria-expanded={isGroupOpen}
+              aria-controls={`fee-group-${group.key}`}
+              className="w-full flex items-center justify-between px-5 py-4 text-left bg-brand-beige/40 hover:bg-brand-beige/70 transition-colors duration-200 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange focus-visible:ring-inset"
+            >
+              <span className="text-sm font-semibold text-brand-dark-text">
+                {lang === 'en' ? group.labelEn : group.labelSw}
+              </span>
+              <span className="flex items-center gap-2">
+                <span className="text-xs text-brand-muted-text">
+                  {group.categories.length} {lang === 'en' ? 'items' : 'vitu'}
+                </span>
+                <ChevronRight
+                  size={16}
+                  className={`text-brand-muted-text transition-transform duration-200 motion-reduce:transition-none ${isGroupOpen ? 'rotate-90' : ''}`}
+                  aria-hidden="true"
+                />
+              </span>
+            </button>
+            {isGroupOpen && (
+              <div id={`fee-group-${group.key}`}>
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-t border-brand-border bg-brand-beige/30">
+                        <th className="text-left px-5 py-3 text-xs font-semibold text-brand-muted-text uppercase tracking-wide">
+                          {lang === 'en' ? 'Item' : 'Bidhaa'}
+                        </th>
+                        <th className="text-right px-5 py-3 text-xs font-semibold text-brand-muted-text uppercase tracking-wide">
+                          {lang === 'en' ? 'Total' : 'Jumla'}
+                        </th>
+                        <th className="text-right px-5 py-3 text-xs font-semibold text-brand-muted-text uppercase tracking-wide">
+                          {lang === 'en' ? 'Finder' : 'Mpataji'}
+                        </th>
+                        <th className="text-right px-5 py-3 text-xs font-semibold text-brand-muted-text uppercase tracking-wide">
+                          {lang === 'en' ? 'Agent' : 'Wakala'}
+                        </th>
+                        <th className="text-right px-5 py-3 text-xs font-semibold text-brand-muted-text uppercase tracking-wide">
+                          Return4me
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {group.categories.map((cat: any, idx: number) => (
+                        <tr key={cat.id} className={`border-t border-brand-border ${idx % 2 === 0 ? 'bg-white' : 'bg-brand-beige/20'}`}>
+                          <td className="px-5 py-3 font-medium text-brand-dark-text">{getName(cat)}</td>
+                          <td className="px-5 py-3 text-right font-bold text-brand-dark-text">KES {cat.total_fee}</td>
+                          <td className="px-5 py-3 text-right text-brand-muted-text text-xs">KES {cat.finder_share}</td>
+                          <td className="px-5 py-3 text-right text-brand-muted-text text-xs">KES {cat.agent_share}</td>
+                          <td className="px-5 py-3 text-right text-brand-muted-text text-xs">KES {cat.platform_share}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="md:hidden">
+                  {group.categories.map((cat: any) => {
+                    const isItemOpen = expandedItem === cat.id;
+                    return (
+                      <div key={cat.id} className="border-t border-brand-border">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedItem(isItemOpen ? null : cat.id)}
+                          aria-expanded={isItemOpen}
+                          aria-controls={`fee-item-${cat.id}`}
+                          className="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-brand-beige/30 transition-colors duration-200 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange focus-visible:ring-inset"
+                        >
+                          <span className="text-sm font-medium text-brand-dark-text">{getName(cat)}</span>
+                          <span className="flex items-center gap-2">
+                            <span className="text-sm font-bold text-brand-dark-text">KES {cat.total_fee}</span>
+                            <ChevronRight size={14} className={`text-brand-muted-text transition-transform duration-200 motion-reduce:transition-none ${isItemOpen ? 'rotate-90' : ''}`} aria-hidden="true" />
+                          </span>
+                        </button>
+                        {isItemOpen && (
+                          <div id={`fee-item-${cat.id}`} className="px-5 pb-4 bg-brand-beige/20">
+                            <div className="space-y-2 pt-2">
+                              <div className="flex justify-between text-sm">
+                                <span className="text-brand-muted-text">{lang === 'en' ? 'Total recovery fee' : 'Ada ya urejeshaji'}</span>
+                                <span className="font-bold text-brand-dark-text">KES {cat.total_fee}</span>
+                              </div>
+                              <div className="flex justify-between text-xs">
+                                <span className="text-brand-muted-text">{lang === 'en' ? 'Finder' : 'Mpataji'}</span>
+                                <span className="text-brand-dark-text">KES {cat.finder_share}</span>
+                              </div>
+                              <div className="flex justify-between text-xs">
+                                <span className="text-brand-muted-text">{lang === 'en' ? 'Agent' : 'Wakala'}</span>
+                                <span className="text-brand-dark-text">KES {cat.agent_share}</span>
+                              </div>
+                              <div className="flex justify-between text-xs border-t border-brand-border pt-2">
+                                <span className="text-brand-muted-text">Return4me</span>
+                                <span className="text-brand-dark-text">KES {cat.platform_share}</span>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+

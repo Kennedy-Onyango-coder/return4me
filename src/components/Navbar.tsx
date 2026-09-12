@@ -58,7 +58,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
           <nav className="hidden lg:flex items-center space-x-4">
             <button
               onClick={() => handleNavClick('home')}
-              className={`flex items-center space-x-1.5 px-4 py-2 rounded-full text-sm font-bold transition-all cursor-pointer ${
+              className={`flex items-center space-x-1.5 px-4 py-2 rounded-lg text-sm font-bold transition-all cursor-pointer ${
                 currentView === 'home' ? 'bg-primary-green text-white shadow-md shadow-primary-green/25' : 'text-brand-dark-text hover:text-primary-green hover:underline'
               }`}
             >
@@ -67,7 +67,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
             </button>
             <button
               onClick={() => handleNavClick('owner')}
-              className={`flex items-center space-x-1.5 px-4 py-2 rounded-full text-sm font-bold transition-all cursor-pointer ${
+              className={`flex items-center space-x-1.5 px-4 py-2 rounded-lg text-sm font-bold transition-all cursor-pointer ${
                 currentView === 'owner' ? 'bg-primary-green text-white shadow-md shadow-primary-green/25' : 'text-brand-dark-text hover:text-primary-green hover:underline'
               }`}
             >
@@ -76,7 +76,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
             </button>
             <button
               onClick={() => handleNavClick('finder')}
-              className={`flex items-center space-x-1.5 px-4 py-2 rounded-full text-sm font-bold transition-all cursor-pointer ${
+              className={`flex items-center space-x-1.5 px-4 py-2 rounded-lg text-sm font-bold transition-all cursor-pointer ${
                 currentView === 'finder' ? 'bg-primary-green text-white shadow-md shadow-primary-green/25' : 'text-brand-dark-text hover:text-primary-green hover:underline'
               }`}
             >
@@ -85,7 +85,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
             </button>
             <button
               onClick={() => handleNavClick('agent')}
-              className={`flex items-center space-x-1.5 px-4 py-2 rounded-full text-sm font-bold transition-all cursor-pointer ${
+              className={`flex items-center space-x-1.5 px-4 py-2 rounded-lg text-sm font-bold transition-all cursor-pointer ${
                 currentView === 'agent' ? 'bg-primary-green text-white shadow-md shadow-primary-green/25' : 'text-brand-dark-text hover:text-primary-green hover:underline'
               }`}
             >
@@ -121,7 +121,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
             {token ? (
               <button
                 onClick={logout}
-                className="bg-accent-orange hover:bg-accent-hover text-white text-xs font-bold px-4 py-2 rounded-full shadow-lg shadow-orange-500/20 transition cursor-pointer flex items-center space-x-1"
+                className="bg-accent-orange hover:bg-accent-hover text-white text-xs font-bold px-4 py-2 rounded-lg shadow-lg shadow-orange-500/20 transition cursor-pointer flex items-center space-x-1"
               >
                 <LogOut size={12} />
                 <span>{t.logout}</span>
@@ -142,7 +142,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
               </div>
             )}
             {token && (
-              <span className="text-xs bg-emerald-50 text-primary-green font-extrabold px-2 py-1 rounded uppercase tracking-wider">
+              <span className="text-xs bg-emerald-50 text-primary-green font-semibold px-2 py-1 rounded">
                 {lang === 'en' ? 'Active' : 'Hai'}
               </span>
             )}
@@ -358,7 +358,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
           }`}
         >
           <Home size={18} />
-          <span className="text-xs font-extrabold uppercase tracking-wider">{lang === 'sw' ? 'Mwanzo' : 'Home'}</span>
+          <span className="text-xs font-semibold">{lang === 'sw' ? 'Mwanzo' : 'Home'}</span>
         </button>
         <button
           onClick={() => handleNavClick('owner')}
@@ -367,7 +367,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
           }`}
         >
           <Search size={18} />
-          <span className="text-xs font-extrabold uppercase tracking-wider">{lang === 'sw' ? 'Tafuta' : 'Search'}</span>
+          <span className="text-xs font-semibold">{lang === 'sw' ? 'Tafuta' : 'Search'}</span>
         </button>
         <button
           onClick={() => handleNavClick('finder')}
@@ -376,7 +376,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
           }`}
         >
           <MapPin size={18} />
-          <span className="text-xs font-extrabold uppercase tracking-wider">{lang === 'sw' ? 'Ripoti' : 'Report'}</span>
+          <span className="text-xs font-semibold">{lang === 'sw' ? 'Ripoti' : 'Report'}</span>
         </button>
         <button
           onClick={() => handleNavClick('agent')}
@@ -385,7 +385,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
           }`}
         >
           <Globe size={18} />
-          <span className="text-xs font-extrabold uppercase tracking-wider">{lang === 'sw' ? 'Wakala' : 'Agent'}</span>
+          <span className="text-xs font-semibold">{lang === 'sw' ? 'Wakala' : 'Agent'}</span>
         </button>
         <button
           onClick={() => setIsOpen(true)}
@@ -394,7 +394,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
           }`}
         >
           <Menu size={18} />
-          <span className="text-xs font-extrabold uppercase tracking-wider">{lang === 'sw' ? 'Zaidi' : 'More'}</span>
+          <span className="text-xs font-semibold">{lang === 'sw' ? 'Zaidi' : 'More'}</span>
         </button>
       </div>
     </>
