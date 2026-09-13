@@ -471,3 +471,61 @@ export const item_verification_changes = pgTable("item_verification_changes", {
     idx_item_verification_changes_item: index("idx_item_verification_changes_item").on(table.item_id),
   };
 });
+
+// 7. CUSTOMER ACCOUNT FOUNDATION
+// A customer account establishes persistent identity/session, separate from
+// claim-level ownership evidence (owner_phone, owner_id_proof_url, etc.).
+// Registration is phone+name → OTP → verify → active customer. Login is
+// phone → OTP → verify → session. National ID is NOT stored here — it remains
+// claim-level evidence where the claim process requires it.
+export const customers = pgTable("customers", {
+  id: varchar("id", { length: 50 }).primaryKey(),
+  full_name: text("full_name").notNull(),
+  phone: varchar("phone", { length: 20 }).notNull(),
+  status: varchar("status", { length: 20 }).default("active").notNull(),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+}, (table) => {
+  return {
+    uq_customers_phone: uniqueIndex("uq_customers_phone").on(table.phone),
+    idx_customers_status: index("idx_customers_status").on(table.status),
+  };
+});
+
+// Customer OTP challenges — dedicated table, NOT shared with claim OTPs.
+// Stores only a SHA-256 hash of the code, never the plaintext. Purpose-bound
+// (registration|login), one-time use, max 5 attempts, 5-minute expiry.
+export const customer_otps = pgTable("customer_otps", {
+  id: varchar("id", { length: 50 }).primaryKey(),
+  customer_id: varchar("customer_id", { length: 50 }).references(() => customers.id, { onDelete: "cascade" }),
+  phone: varchar("phone", { length: 20 }).notNull(),
+  purpose: varchar("purpose", { length: 20 }).notNull(),
+  code_hash: varchar("code_hash", { length: 64 }).notNull(),
+  expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+  attempt_count: integer("attempt_count").default(0).notNull(),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  used_at: timestamp("used_at", { withTimezone: true }),
+}, (table) => {
+  return {
+    idx_customer_otps_phone_purpose: index("idx_customer_otps_phone_purpose").on(table.phone, table.purpose),
+    idx_customer_otps_expires: index("idx_customer_otps_expires").on(table.expires_at),
+  };
+});
+
+// Customer sessions — only the HASH of the session token is stored.
+// Raw token is returned once to the client and never persisted.
+export const customer_sessions = pgTable("customer_sessions", {
+  id: varchar("id", { length: 50 }).primaryKey(),
+  customer_id: varchar("customer_id", { length: 50 }).notNull().references(() => customers.id, { onDelete: "cascade" }),
+  token_hash: varchar("token_hash", { length: 64 }).notNull(),
+  expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  last_seen_at: timestamp("last_seen_at", { withTimezone: true }),
+  revoked_at: timestamp("revoked_at", { withTimezone: true }),
+}, (table) => {
+  return {
+    idx_customer_sessions_token: index("idx_customer_sessions_token").on(table.token_hash),
+    idx_customer_sessions_customer: index("idx_customer_sessions_customer").on(table.customer_id),
+    idx_customer_sessions_expires: index("idx_customer_sessions_expires").on(table.expires_at),
+  };
+});

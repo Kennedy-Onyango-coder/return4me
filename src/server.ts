@@ -468,6 +468,23 @@ const claimGuessLimiter = rateLimit({
   message: { error: 'Umejaribu maombi mengi mno ya claim hii hivi karibuni. Tafadhali subiri dakika chache. / Too many claim requests from this connection recently. Please wait a few minutes.' }
 });
 
+// Customer account auth (register/login) is fully unauthenticated and each
+// request can trigger a real, billable OTP SMS aimed at an arbitrary phone
+// number. customerAuthLimiter is the per-connection cap; otpGlobalLimiter
+// (applied on the two OTP-sending routes below) is the IP-independent
+// platform-wide ceiling — the same defense-in-depth pair the claim OTP route
+// (/api/claims/:id/request-otp) already uses, so a per-IP bypass cannot turn
+// this into an unbounded SMS-cost/abuse vector. The verify endpoints reuse
+// the existing tighter otpVerifyLimiter below.
+const customerAuthLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  max: process.env.NODE_ENV === 'production' ? 10 : 1000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: false,
+  message: { error: 'Majaribio mengi ya akaunti kwa sasa. Tafadhali subiri kidogo. / Too many account attempts. Please wait a few minutes.' }
+});
+
 // ACTIVE AGENT AUTHORIZATION: authenticateJWT only proves a token was
 // validly signed and hasn't expired — it says nothing about whether the
 // Agent it names is still allowed to act *right now*. Before this
@@ -600,6 +617,108 @@ async function seedAdminUser() {
     }
   } catch (error) {
     console.error('[ADMIN SEED ERROR] Failed to seed initial admin user:', error);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CUSTOMER ACCOUNT AUTHENTICATION
+// ---------------------------------------------------------------------------
+// A customer account is a persistent identity/session, deliberately SEPARATE
+// from claim ownership evidence (owner_phone, owner_id_proof_url, ...).
+// Nothing here reads or mutates claims, payments, escrow, refunds or strikes.
+// The raw session token exists only in the client's HttpOnly cookie; the
+// server stores only its hash, and every protected request resolves the
+// customer from that hash — a browser can never supply its own
+// customerId/phone/name and be trusted.
+
+const CUSTOMER_SESSION_COOKIE = 'r4m_customer_session';
+const CUSTOMER_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const CUSTOMER_OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CUSTOMER_OTP_MAX_ATTEMPTS = 5;
+const CUSTOMER_OTP_RESEND_MS = 30 * 1000; // 30s resend floor (SMS cost control)
+
+// Minimal cookie reader (no extra dependency) — used only for our own cookie.
+function readCookie(req: Request, name: string): string | undefined {
+  const header = req.headers?.cookie;
+  if (!header) return undefined;
+  for (const part of String(header).split(';')) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    if (part.slice(0, idx).trim() === name) {
+      return decodeURIComponent(part.slice(idx + 1).trim());
+    }
+  }
+  return undefined;
+}
+
+function customerCookieOptions() {
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax' as const,
+    path: '/',
+  };
+}
+
+function setCustomerSessionCookie(res: Response, token: string) {
+  res.cookie(CUSTOMER_SESSION_COOKIE, token, { ...customerCookieOptions(), maxAge: CUSTOMER_SESSION_TTL_MS });
+}
+
+function clearCustomerSessionCookie(res: Response) {
+  res.clearCookie(CUSTOMER_SESSION_COOKIE, customerCookieOptions());
+}
+
+// In-process resend throttle, keyed by normalized phone + purpose.
+const customerOtpLastSent = new Map<string, number>();
+
+// Whitelisted customer shape for API responses. Never includes OTP hashes,
+// session tokens/hashes, or other internal security fields.
+function toSafeCustomer(customer: any): any {
+  if (!customer) return null;
+  return {
+    id: customer.id,
+    full_name: customer.full_name,
+    phone: customer.phone,
+    status: customer.status,
+    created_at: customer.created_at ? new Date(customer.created_at).toISOString() : null,
+    updated_at: customer.updated_at ? new Date(customer.updated_at).toISOString() : null,
+  };
+}
+
+// 6-digit, crypto-random OTP as a zero-padded decimal string.
+function generateCustomerOtp(): string {
+  return String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+}
+
+function generateSecureId(prefix: string): string {
+  return prefix + '-' + crypto.randomBytes(10).toString('hex').toUpperCase();
+}
+
+// Customer auth middleware. Reads ONLY the cookie, hashes the presented token,
+// finds the session server-side, then checks revocation, expiry and the
+// account's LIVE status — a suspended/locked customer must not remain
+// authenticated merely because an old cookie is still valid.
+async function requireCustomerAuth(req: any, res: Response, next: NextFunction) {
+  try {
+    const raw = readCookie(req, CUSTOMER_SESSION_COOKIE);
+    if (!raw) return res.status(401).json({ error: 'Uthibitisho unahitajika. / Authentication required.' });
+    const session = await db.getCustomerSessionByTokenHash(hashCode(raw));
+    if (!session) return res.status(401).json({ error: 'Kipindi hiki si sahihi. / Invalid session.' });
+    if (session.revoked_at) return res.status(401).json({ error: 'Kipindi hiki kimefungwa. / Session has been revoked.' });
+    if (session.expires_at && new Date(session.expires_at).getTime() < Date.now()) {
+      return res.status(401).json({ error: 'Kipindi hiki kimeisha muda. / Session has expired.' });
+    }
+    const customer = await db.getCustomerById(session.customer_id);
+    if (!customer) return res.status(401).json({ error: 'Akaunti haipatikani. / Account not available.' });
+    if (customer.status !== 'active') {
+      return res.status(403).json({ error: 'Akaunti hii haitumiki kwa sasa. / This account is not active.', status: customer.status });
+    }
+    await db.touchCustomerSession(session.id);
+    req.customer = customer;
+    req.customerSession = session;
+    next();
+  } catch (e: any) {
+    return sendServerError(res, e, 'CUSTOMER_AUTH_ERROR');
   }
 }
 
@@ -773,6 +892,218 @@ async function startServer() {
     const safeUrl = req.url.replace(/ErrorBoundary/gi, 'ErrBoundary');
     console.log(`[HTTP] ${req.method} ${safeUrl}`);
     next();
+  });
+
+  // --- CUSTOMER ACCOUNT ROUTES ---
+  // Persistent customer identity/session, separate from claim ownership.
+  //   Registration: name + phone -> OTP -> verify -> customer + session
+  //   Login:        phone -> OTP -> verify -> session
+  // Responses are deliberately generic so an arbitrary phone cannot be probed
+  // to learn whether it is already registered.
+
+  app.post('/api/customer/register', customerAuthLimiter, otpGlobalLimiter, async (req, res) => {
+    try {
+      const fullName = typeof req.body?.fullName === 'string' ? req.body.fullName.trim() : '';
+      const rawPhone = typeof req.body?.phone === 'string' ? req.body.phone.trim() : '';
+      if (fullName.length < 2 || fullName.length > 120) {
+        return res.status(400).json({ error: 'Tafadhali weka jina lako kamili. / Please enter your full name.' });
+      }
+      const phone = toE164Kenyan(rawPhone);
+      if (!/^\+254\d{9}$/.test(phone)) {
+        return res.status(400).json({ error: 'Weka nambari sahihi ya simu ya Kenya. / Enter a valid Kenyan phone number.' });
+      }
+
+      const throttleKey = phone + ':registration';
+      if (Date.now() - (customerOtpLastSent.get(throttleKey) || 0) < CUSTOMER_OTP_RESEND_MS) {
+        return res.status(429).json({ error: 'Tafadhali subiri kidogo kabla ya kuomba msimbo mwingine. / Please wait before requesting another code.' });
+      }
+
+      const code = generateCustomerOtp();
+      await db.createCustomerOtp(
+        generateSecureId('COTP'),
+        phone,
+        'registration',
+        hashCode(code),
+        new Date(Date.now() + CUSTOMER_OTP_TTL_MS),
+        null
+      );
+      customerOtpLastSent.set(throttleKey, Date.now());
+      await sendCodeViaSms(phone, code, 'Return4me', `Your Return4me verification code is ${code}. It expires in 5 minutes. Do not share it with anyone.`);
+
+      // Generic on purpose — never reveals whether this phone already exists.
+      return res.json({
+        success: true,
+        message: 'Kama nambari hii inaweza kutumika, msimbo wa uthibitisho umetumwa. / If this number can be used, a verification code has been sent.'
+      });
+    } catch (e: any) {
+      return sendServerError(res, e, 'CUSTOMER_REGISTER_ERROR');
+    }
+  });
+
+  app.post('/api/customer/register/verify', customerAuthLimiter, otpVerifyLimiter, async (req, res) => {
+    try {
+      const fullName = typeof req.body?.fullName === 'string' ? req.body.fullName.trim() : '';
+      const rawPhone = typeof req.body?.phone === 'string' ? req.body.phone.trim() : '';
+      const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
+      const phone = toE164Kenyan(rawPhone);
+      if (!/^\+254\d{9}$/.test(phone) || !/^\d{6}$/.test(code) || fullName.length < 2 || fullName.length > 120) {
+        return res.status(400).json({ error: 'Taarifa si sahihi. / Invalid details.' });
+      }
+
+      const otp = await db.getActiveCustomerOtp(phone, 'registration');
+      if (!otp) {
+        return res.status(400).json({ error: 'Msimbo si sahihi au umeisha muda. / The code is invalid or has expired.' });
+      }
+      if (new Date(otp.expires_at).getTime() < Date.now()) {
+        await db.consumeCustomerOtp(otp.id);
+        return res.status(400).json({ error: 'Msimbo si sahihi au umeisha muda. / The code is invalid or has expired.' });
+      }
+      if ((otp.attempt_count || 0) >= CUSTOMER_OTP_MAX_ATTEMPTS) {
+        return res.status(429).json({ error: 'Majaribio mengi ya msimbo. Omba msimbo mpya. / Too many attempts. Request a new code.' });
+      }
+      if (!timingSafeEqualHex(otp.code_hash, hashCode(code))) {
+        await db.incrementCustomerOtpAttempts(otp.id, CUSTOMER_OTP_MAX_ATTEMPTS);
+        return res.status(400).json({ error: 'Msimbo si sahihi au umeisha muda. / The code is invalid or has expired.' });
+      }
+      // One-time consume (CAS) — a replayed code can never succeed twice.
+      const consumed = await db.consumeCustomerOtp(otp.id);
+      if (!consumed) {
+        return res.status(400).json({ error: 'Msimbo si sahihi au umeisha muda. / The code is invalid or has expired.' });
+      }
+
+      // Idempotent on normalized phone — a duplicate number never creates a
+      // second account, and no client-supplied id/status/timestamp is trusted.
+      let customer = await db.getCustomerByPhone(phone);
+      if (customer) {
+        if (customer.status !== 'active') {
+          return res.status(403).json({ error: 'Akaunti hii haitumiki kwa sasa. / This account is not active.' });
+        }
+      } else {
+        customer = await db.createCustomer(generateSecureId('CUS'), fullName, phone);
+      }
+
+      const rawToken = crypto.randomBytes(32).toString('hex');
+      await db.createCustomerSession(
+        generateSecureId('CSES'),
+        customer.id,
+        hashCode(rawToken),
+        new Date(Date.now() + CUSTOMER_SESSION_TTL_MS)
+      );
+      setCustomerSessionCookie(res, rawToken);
+      return res.json({ success: true, customer: toSafeCustomer(customer) });
+    } catch (e: any) {
+      return sendServerError(res, e, 'CUSTOMER_REGISTER_VERIFY_ERROR');
+    }
+  });
+
+  app.post('/api/customer/login', customerAuthLimiter, otpGlobalLimiter, async (req, res) => {
+    try {
+      const rawPhone = typeof req.body?.phone === 'string' ? req.body.phone.trim() : '';
+      const phone = toE164Kenyan(rawPhone);
+      if (!/^\+254\d{9}$/.test(phone)) {
+        return res.status(400).json({ error: 'Weka nambari sahihi ya simu ya Kenya. / Enter a valid Kenyan phone number.' });
+      }
+
+      const customer = await db.getCustomerByPhone(phone);
+      // Only a genuinely registered, active account gets a code — but the
+      // response is identical either way, so this cannot be used to discover
+      // whether an arbitrary number is registered. Login NEVER creates an
+      // account (an unknown phone cannot be turned into a takeover).
+      if (customer && customer.status === 'active') {
+        const throttleKey = phone + ':login';
+        if (Date.now() - (customerOtpLastSent.get(throttleKey) || 0) >= CUSTOMER_OTP_RESEND_MS) {
+          const code = generateCustomerOtp();
+          await db.createCustomerOtp(
+            generateSecureId('COTP'),
+            phone,
+            'login',
+            hashCode(code),
+            new Date(Date.now() + CUSTOMER_OTP_TTL_MS),
+            customer.id
+          );
+          customerOtpLastSent.set(throttleKey, Date.now());
+          await sendCodeViaSms(phone, code, 'Return4me', `Your Return4me login code is ${code}. It expires in 5 minutes. Do not share it with anyone.`);
+        }
+      }
+
+      return res.json({
+        success: true,
+        message: 'Kama nambari hii imesajiliwa, msimbo wa kuingia umetumwa. / If this number is registered, a login code has been sent.'
+      });
+    } catch (e: any) {
+      return sendServerError(res, e, 'CUSTOMER_LOGIN_ERROR');
+    }
+  });
+
+  app.post('/api/customer/login/verify', customerAuthLimiter, otpVerifyLimiter, async (req, res) => {
+    try {
+      const rawPhone = typeof req.body?.phone === 'string' ? req.body.phone.trim() : '';
+      const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
+      const phone = toE164Kenyan(rawPhone);
+      if (!/^\+254\d{9}$/.test(phone) || !/^\d{6}$/.test(code)) {
+        return res.status(400).json({ error: 'Msimbo si sahihi au umeisha muda. / The code is invalid or has expired.' });
+      }
+
+      const otp = await db.getActiveCustomerOtp(phone, 'login');
+      if (!otp) {
+        return res.status(400).json({ error: 'Msimbo si sahihi au umeisha muda. / The code is invalid or has expired.' });
+      }
+      if (new Date(otp.expires_at).getTime() < Date.now()) {
+        await db.consumeCustomerOtp(otp.id);
+        return res.status(400).json({ error: 'Msimbo si sahihi au umeisha muda. / The code is invalid or has expired.' });
+      }
+      if ((otp.attempt_count || 0) >= CUSTOMER_OTP_MAX_ATTEMPTS) {
+        return res.status(429).json({ error: 'Majaribio mengi ya msimbo. Omba msimbo mpya. / Too many attempts. Request a new code.' });
+      }
+      if (!timingSafeEqualHex(otp.code_hash, hashCode(code))) {
+        await db.incrementCustomerOtpAttempts(otp.id, CUSTOMER_OTP_MAX_ATTEMPTS);
+        return res.status(400).json({ error: 'Msimbo si sahihi au umeisha muda. / The code is invalid or has expired.' });
+      }
+      const consumed = await db.consumeCustomerOtp(otp.id);
+      if (!consumed) {
+        return res.status(400).json({ error: 'Msimbo si sahihi au umeisha muda. / The code is invalid or has expired.' });
+      }
+
+      // The server — never the browser — determines which customer owns this
+      // phone. A login code can never create an account.
+      const customer = await db.getCustomerByPhone(phone);
+      if (!customer) {
+        return res.status(400).json({ error: 'Msimbo si sahihi au umeisha muda. / The code is invalid or has expired.' });
+      }
+      if (customer.status !== 'active') {
+        return res.status(403).json({ error: 'Akaunti hii haitumiki kwa sasa. / This account is not active.', status: customer.status });
+      }
+
+      const rawToken = crypto.randomBytes(32).toString('hex');
+      await db.createCustomerSession(
+        generateSecureId('CSES'),
+        customer.id,
+        hashCode(rawToken),
+        new Date(Date.now() + CUSTOMER_SESSION_TTL_MS)
+      );
+      setCustomerSessionCookie(res, rawToken);
+      return res.json({ success: true, customer: toSafeCustomer(customer) });
+    } catch (e: any) {
+      return sendServerError(res, e, 'CUSTOMER_LOGIN_VERIFY_ERROR');
+    }
+  });
+
+  // Logout is server-side: the stored session is revoked so the cookie is
+  // unusable even if it was captured/retained.
+  app.post('/api/customer/logout', requireCustomerAuth, async (req: any, res) => {
+    try {
+      await db.revokeCustomerSession(req.customerSession.id);
+      clearCustomerSessionCookie(res);
+      return res.json({ success: true });
+    } catch (e: any) {
+      return sendServerError(res, e, 'CUSTOMER_LOGOUT_ERROR');
+    }
+  });
+
+  // Returns ONLY the authenticated customer's own safe fields. Identity comes
+  // exclusively from the session — never from anything the browser supplies.
+  app.get('/api/customer/me', requireCustomerAuth, async (req: any, res) => {
+    return res.json({ customer: toSafeCustomer(req.customer) });
   });
 
   // --- API ROUTES ---

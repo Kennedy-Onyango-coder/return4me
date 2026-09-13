@@ -25,7 +25,10 @@ const mockDatabaseState: Record<string, any[]> = {
   audit_log: [],
   phone_reputations: [],
   admin_users: [],
-  payment_sessions: []
+  payment_sessions: [],
+  customers: [],
+  customer_otps: [],
+  customer_sessions: []
 };
 
 // Evaluate logical WHERE conditions recursively
@@ -960,6 +963,44 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     // incremental path, not just schema.ts, for an already-running database
     // to pick it up.
     `CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_sessions_provider_invoice ON payment_sessions(provider_invoice_id) WHERE provider_invoice_id IS NOT NULL`,
+    // Customer account foundation — customers, customer_otps, customer_sessions.
+    // Mirrors the Drizzle definitions in schema.ts; idempotent DDL so an
+    // already-running database picks them up.
+    `CREATE TABLE IF NOT EXISTS customers (
+      id VARCHAR(50) PRIMARY KEY,
+      full_name TEXT NOT NULL,
+      phone VARCHAR(20) NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'active',
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_customers_phone ON customers(phone)`,
+    `CREATE INDEX IF NOT EXISTS idx_customers_status ON customers(status)`,
+    `CREATE TABLE IF NOT EXISTS customer_otps (
+      id VARCHAR(50) PRIMARY KEY,
+      customer_id VARCHAR(50) REFERENCES customers(id) ON DELETE CASCADE,
+      phone VARCHAR(20) NOT NULL,
+      purpose VARCHAR(20) NOT NULL,
+      code_hash VARCHAR(64) NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      used_at TIMESTAMPTZ
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_customer_otps_phone_purpose ON customer_otps(phone, purpose)`,
+    `CREATE INDEX IF NOT EXISTS idx_customer_otps_expires ON customer_otps(expires_at)`,
+    `CREATE TABLE IF NOT EXISTS customer_sessions (
+      id VARCHAR(50) PRIMARY KEY,
+      customer_id VARCHAR(50) NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      token_hash VARCHAR(64) NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      last_seen_at TIMESTAMPTZ,
+      revoked_at TIMESTAMPTZ
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_customer_sessions_token ON customer_sessions(token_hash)`,
+    `CREATE INDEX IF NOT EXISTS idx_customer_sessions_customer ON customer_sessions(customer_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_customer_sessions_expires ON customer_sessions(expires_at)`,
   ];
   let migrationFailureCount = 0;
   for (const sql of statements) {

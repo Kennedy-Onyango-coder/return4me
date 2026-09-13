@@ -24,6 +24,7 @@ const AdminView = lazy(() => import('./components/AdminView'));
 
 const PrivacyView = lazy(() => import('./components/PrivacyView'));
 const TermsView = lazy(() => import('./components/TermsView'));
+const CustomerAccountView = lazy(() => import('./components/CustomerAccountView'));
 
 // Shown for the brief moment a lazy view's chunk is being fetched — kept
 // minimal and framework-agnostic (no dependency on any single view's
@@ -47,6 +48,13 @@ export default function App() {
   const [recentItems, setRecentItems] = useState<any[]>([]);
   const [recentItemsLoading, setRecentItemsLoading] = useState<boolean>(true);
   const [recentItemsError, setRecentItemsError] = useState<boolean>(false);
+
+  // Minimal customer-account entry point, reachable at /account. Kept as a
+  // separate top-level mode so it needs no changes to the Navbar view union
+  // or any existing screen.
+  const [customerMode, setCustomerMode] = useState<boolean>(
+    () => typeof window !== 'undefined' && window.location.pathname === '/account'
+  );
 
   // Expose setView globally for components to route to terms/privacy
   useEffect(() => {
@@ -226,6 +234,24 @@ export default function App() {
   }, [currentView, fetchRecentItems]);
 
   const t = translations[lang];
+
+  if (customerMode) {
+    return (
+      <div className="min-h-screen bg-brand-beige flex flex-col antialiased">
+        <ErrorBoundary fallbackTitle="Account Page Crash">
+          <Suspense fallback={<ViewLoadingFallback />}>
+            <CustomerAccountView
+              lang={lang}
+              onExit={() => {
+                setCustomerMode(false);
+                window.history.replaceState({}, '', '/');
+              }}
+            />
+          </Suspense>
+        </ErrorBoundary>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-brand-beige flex flex-col antialiased">

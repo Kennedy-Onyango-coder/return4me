@@ -19,6 +19,9 @@ import {
   platform_settings as platformSettingsTable,
   social_publications as socialPublicationsTable,
   item_verification_changes as itemVerificationChangesTable,
+  customers as customersTable,
+  customer_otps as customerOtpsTable,
+  customer_sessions as customerSessionsTable,
 } from "./schema.ts";
 import { eq, and, or, isNull, isNotNull, inArray, lte, sql } from "drizzle-orm";
 import { getSignedPhotoUrl } from "../services/storage.ts";
@@ -3849,7 +3852,16 @@ class DatabaseEngine {
         })
         .where(eq(claimsTable.owner_phone, phone));
 
-      // 2. Scrub finder personal details on items reported by this phone
+      // 2. Scrub customer account for this phone
+      await drizzleDb
+        .update(customersTable)
+        .set({
+          full_name: "[REDACTED-DPA-2019]",
+          status: "suspended"
+        })
+        .where(eq(customersTable.phone, phone));
+
+      // 3. Scrub finder personal details on items reported by this phone
       await drizzleDb
         .update(itemsTable)
         .set({
@@ -3873,6 +3885,181 @@ class DatabaseEngine {
     } catch (error) {
       console.error("[DPA ERASURE ERROR] Failed to purge user data:", error);
       throw new Error("Failed to execute data erasure request on database.");
+    }
+  }
+
+  // --- CUSTOMER ACCOUNT FOUNDATION ---
+  // Customer identity is deliberately separate from claim ownership evidence.
+  // These methods back /api/customer/* only; they never read or mutate claims,
+  // payments, escrow, refunds or strikes.
+
+  public async getCustomerByPhone(phone: string): Promise<any | undefined> {
+    try {
+      const rows = await drizzleDb.select().from(customersTable).where(eq(customersTable.phone, phone));
+      return rows[0];
+    } catch (error) {
+      console.error("Failed to get customer by phone:", error);
+      return undefined;
+    }
+  }
+
+  public async getCustomerById(id: string): Promise<any | undefined> {
+    try {
+      const rows = await drizzleDb.select().from(customersTable).where(eq(customersTable.id, id));
+      return rows[0];
+    } catch (error) {
+      console.error("Failed to get customer by id:", error);
+      return undefined;
+    }
+  }
+
+  // Idempotent on the normalized phone: if an account already exists it is
+  // returned instead of creating a second one. The pre-check is backed by the
+  // DB-level uq_customers_phone unique index, so a concurrent insert loses the
+  // race and re-reads the winner rather than duplicating an account.
+  public async createCustomer(id: string, fullName: string, phone: string): Promise<any> {
+    try {
+      const existing = await this.getCustomerByPhone(phone);
+      if (existing) return existing;
+      const rows = await drizzleDb
+        .insert(customersTable)
+        .values({ id, full_name: fullName, phone, status: 'active' })
+        .returning();
+      return rows[0];
+    } catch (error) {
+      const raced = await this.getCustomerByPhone(phone);
+      if (raced) return raced;
+      console.error("Failed to create customer:", error);
+      throw new Error("Failed to create customer account.");
+    }
+  }
+
+  public async updateCustomerStatus(id: string, status: string): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(customersTable)
+        .set({ status, updated_at: new Date() })
+        .where(eq(customersTable.id, id))
+        .returning();
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Failed to update customer status:", error);
+      return false;
+    }
+  }
+
+  // --- CUSTOMER OTP CHALLENGES ---
+  // Only a hash is ever passed in or stored. Issuing a new challenge burns any
+  // prior unconsumed challenge for the same phone+purpose.
+
+  public async createCustomerOtp(id: string, phone: string, purpose: string, codeHash: string, expiresAt: Date, customerId: string | null = null): Promise<void> {
+    try {
+      await drizzleDb
+        .update(customerOtpsTable)
+        .set({ used_at: new Date() })
+        .where(and(eq(customerOtpsTable.phone, phone), eq(customerOtpsTable.purpose, purpose), isNull(customerOtpsTable.used_at)));
+      await drizzleDb
+        .insert(customerOtpsTable)
+        .values({ id, customer_id: customerId, phone, purpose, code_hash: codeHash, expires_at: expiresAt, attempt_count: 0 });
+    } catch (error) {
+      console.error("Failed to create customer OTP challenge:", error);
+      throw new Error("Failed to create verification challenge.");
+    }
+  }
+
+  public async getActiveCustomerOtp(phone: string, purpose: string): Promise<any | undefined> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(customerOtpsTable)
+        .where(and(eq(customerOtpsTable.phone, phone), eq(customerOtpsTable.purpose, purpose), isNull(customerOtpsTable.used_at)));
+      return rows[0];
+    } catch (error) {
+      console.error("Failed to get customer OTP:", error);
+      return undefined;
+    }
+  }
+
+  // Bounds brute force: each failed verification increments the counter, and
+  // the challenge is burned once the ceiling is reached.
+  public async incrementCustomerOtpAttempts(id: string, maxAttempts: number): Promise<number> {
+    try {
+      const rows = await drizzleDb.select().from(customerOtpsTable).where(eq(customerOtpsTable.id, id));
+      const next = ((rows[0]?.attempt_count) || 0) + 1;
+      await drizzleDb
+        .update(customerOtpsTable)
+        .set({ attempt_count: next, used_at: next >= maxAttempts ? new Date() : null })
+        .where(eq(customerOtpsTable.id, id));
+      return next;
+    } catch (error) {
+      console.error("Failed to increment customer OTP attempts:", error);
+      return maxAttempts;
+    }
+  }
+
+  // One-time consume — CAS on used_at IS NULL so only one concurrent verify
+  // can ever win (replay protection).
+  public async consumeCustomerOtp(id: string): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(customerOtpsTable)
+        .set({ used_at: new Date() })
+        .where(and(eq(customerOtpsTable.id, id), isNull(customerOtpsTable.used_at)))
+        .returning();
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Failed to consume customer OTP:", error);
+      return false;
+    }
+  }
+
+  // --- CUSTOMER SESSIONS ---
+  // The raw token is never persisted; only its hash reaches this method.
+
+  public async createCustomerSession(id: string, customerId: string, tokenHash: string, expiresAt: Date): Promise<any> {
+    try {
+      const rows = await drizzleDb
+        .insert(customerSessionsTable)
+        .values({ id, customer_id: customerId, token_hash: tokenHash, expires_at: expiresAt, last_seen_at: new Date() })
+        .returning();
+      return rows[0];
+    } catch (error) {
+      console.error("Failed to create customer session:", error);
+      throw new Error("Failed to create customer session.");
+    }
+  }
+
+  public async getCustomerSessionByTokenHash(tokenHash: string): Promise<any | undefined> {
+    try {
+      const rows = await drizzleDb.select().from(customerSessionsTable).where(eq(customerSessionsTable.token_hash, tokenHash));
+      return rows[0];
+    } catch (error) {
+      console.error("Failed to get customer session:", error);
+      return undefined;
+    }
+  }
+
+  public async touchCustomerSession(id: string): Promise<void> {
+    try {
+      await drizzleDb.update(customerSessionsTable).set({ last_seen_at: new Date() }).where(eq(customerSessionsTable.id, id));
+    } catch (error) {
+      console.error("Failed to touch customer session:", error);
+    }
+  }
+
+  // Server-side revocation: logout must make the stored session unusable, not
+  // merely clear the browser cookie.
+  public async revokeCustomerSession(id: string): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(customerSessionsTable)
+        .set({ revoked_at: new Date() })
+        .where(and(eq(customerSessionsTable.id, id), isNull(customerSessionsTable.revoked_at)))
+        .returning();
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Failed to revoke customer session:", error);
+      return false;
     }
   }
 }
