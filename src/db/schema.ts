@@ -529,3 +529,42 @@ export const customer_sessions = pgTable("customer_sessions", {
     idx_customer_sessions_expires: index("idx_customer_sessions_expires").on(table.expires_at),
   };
 });
+
+// 8. CUSTOMER ↔ CLAIM LINKS
+// An EXPLICIT, per-claim link between an authenticated customer account and a
+// claim. Deliberately a join table rather than `claims.customer_id`, so claim
+// ownership evidence (owner_phone, security_answers, owner_id_proof_url) stays
+// where it is and account identity stays separable from it — the two can be
+// created and revoked independently.
+//
+// A link is NEVER created automatically: not on registration, not on login,
+// not because customer.phone happens to equal claim.owner_phone, and never in
+// bulk for historical claims. It is created only by an authenticated customer
+// who separately proves control of the claim through the existing claim OTP
+// plus the claim's stored security answers (see
+// POST /api/customer/claims/link/* in server.ts).
+//
+// TWO database-level invariants, because the application check alone cannot
+// survive concurrent requests:
+//   uq_customer_claim_links_pair  — the same claim can never be linked to the
+//                                   same customer twice (idempotency).
+//   uq_customer_claim_links_claim — a claim can belong to AT MOST ONE customer
+//                                   account, ever. Without this, two racing
+//                                   link requests from two different customers
+//                                   (or one customer linking another's claim)
+//                                   could both commit.
+export const customer_claim_links = pgTable("customer_claim_links", {
+  id: varchar("id", { length: 50 }).primaryKey(),
+  customer_id: varchar("customer_id", { length: 50 }).notNull().references(() => customers.id, { onDelete: "cascade" }),
+  claim_id: varchar("claim_id", { length: 50 }).notNull().references(() => claims.id, { onDelete: "cascade" }),
+  linked_at: timestamp("linked_at", { withTimezone: true }).defaultNow(),
+  // How the link was proven, for audit/debugging. Currently always
+  // 'claim_otp+security_answers'.
+  linked_via: varchar("linked_via", { length: 40 }).default("claim_otp").notNull(),
+}, (table) => {
+  return {
+    uq_customer_claim_links_pair: uniqueIndex("uq_customer_claim_links_pair").on(table.customer_id, table.claim_id),
+    // The one-customer-per-claim invariant. Also serves reverse lookups.
+    uq_customer_claim_links_claim: uniqueIndex("uq_customer_claim_links_claim").on(table.claim_id),
+  };
+});

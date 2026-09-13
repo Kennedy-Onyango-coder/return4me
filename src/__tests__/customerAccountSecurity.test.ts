@@ -7,6 +7,12 @@ import path from 'path';
 // mechanics are covered by src/db/__tests__/customerAccount.test.ts; this file
 // pins the HTTP-layer guarantees that need the real express route bodies.
 const serverTs = fs.readFileSync(path.resolve(__dirname, '../server.ts'), 'utf8');
+// Phase 2 moved the cookie handling and the requireCustomerAuth middleware out
+// of server.ts into services/customerAuth.ts (so the customer claim routes and
+// the HTTP integration tests can use the real middleware without importing
+// server.ts, which boots the app at import time). These assertions are
+// unchanged — they just read the file the code now lives in.
+const customerAuthTs = fs.readFileSync(path.resolve(__dirname, '../services/customerAuth.ts'), 'utf8');
 
 function routeBody(marker: string, len = 4000): string {
   const idx = serverTs.indexOf(marker);
@@ -23,9 +29,9 @@ const login = routeBody("app.post('/api/customer/login'");
 const loginVerify = routeBody("app.post('/api/customer/login/verify'");
 const logout = routeBody("app.post('/api/customer/logout'");
 const me = routeBody("app.get('/api/customer/me'");
-const middleware = serverTs.slice(
-  serverTs.indexOf('async function requireCustomerAuth'),
-  serverTs.indexOf('async function startServer()')
+const middleware = customerAuthTs.slice(
+  customerAuthTs.indexOf('export async function requireCustomerAuth'),
+  customerAuthTs.length
 );
 
 describe('customer account: API surface', () => {
@@ -142,9 +148,9 @@ describe('customer login: no enumeration, no account creation', () => {
 
 describe('customer sessions: server-side, hash-only, revocable', () => {
   it('issues an HttpOnly, SameSite=Lax cookie that is Secure in production', () => {
-    expect(serverTs).toMatch(/httpOnly:\s*true/);
-    expect(serverTs).toMatch(/sameSite:\s*'lax'/);
-    expect(serverTs).toMatch(/secure:\s*process\.env\.NODE_ENV === 'production'/);
+    expect(customerAuthTs).toMatch(/httpOnly:\s*true/);
+    expect(customerAuthTs).toMatch(/sameSite:\s*'lax'/);
+    expect(customerAuthTs).toMatch(/secure:\s*process\.env\.NODE_ENV === 'production'/);
   });
 
   it('persists only the hash of the raw session token', () => {

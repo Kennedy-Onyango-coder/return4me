@@ -17,7 +17,24 @@ import { OcrService } from './services/ocr';
 import { uploadBase64Image } from './services/storage';
 import { SocialService } from './services/social';
 import { computeRecoveryFee } from './services/feeEngine';
-import { validateVerificationAnswers, toAgentVerificationEvidence, isAnswerValidationFailure } from './services/verificationValidation';
+import { validateVerificationAnswers, toAgentVerificationEvidence, isAnswerValidationFailure, compareVerificationAnswers } from './services/verificationValidation';
+import {
+  CUSTOMER_SESSION_COOKIE,
+  CUSTOMER_SESSION_TTL_MS,
+  CUSTOMER_OTP_TTL_MS,
+  CUSTOMER_OTP_MAX_ATTEMPTS,
+  CUSTOMER_OTP_RESEND_MS,
+  customerOtpLastSent,
+  toSafeCustomer,
+  generateCustomerOtp,
+  generateSecureId,
+  setCustomerSessionCookie,
+  clearCustomerSessionCookie,
+  requireCustomerAuth,
+} from './services/customerAuth';
+import { INACTIVE_CLAIM_STATUSES } from './config/claimStatuses';
+import { toOwnerSafeAgentView, toOwnerSafeClaimView, toOwnerSafeItemView } from './services/ownerSafeViews';
+import { registerCustomerClaimRoutes } from './routes/customerClaims';
 import bcrypt from 'bcryptjs';
 import * as Sentry from '@sentry/node';
 import * as OTPAuth from 'otpauth';
@@ -62,61 +79,10 @@ function scrubPii(obj: any): any {
   return result;
 }
 
-// Whitelists an Agent row down to what's actually safe to show an owner
-// looking up where to collect their item. The full Agent record also
-// carries mpesa_till_or_paybill, national_id_hash, refundable_deposit,
-// warning_count/last_warning_reason, and id_document_photo_url — none of
-// which an owner has any legitimate reason to see, and several of which
-// (till number, deposit amount, warning history) are the agent's own
-// operational/financial details. Used everywhere an `agent` object is
-// returned from an owner-facing, unauthenticated route.
-function toOwnerSafeAgentView(agent: any): any {
-  if (!agent) return null;
-  return {
-    id: agent.id,
-    business_name: agent.business_name,
-    contact_phone: agent.contact_phone,
-    location_address: agent.location_address,
-    latitude: agent.latitude,
-    longitude: agent.longitude,
-    rating: agent.rating,
-    rating_count: agent.rating_count,
-  };
-}
-
-// Public/claimant tracking DTO for a claim. Deliberately excludes
-// security_answers, owner_phone/email, owner_identifying_details,
-// owner_id_proof_url, payment_reference and all internal/operational fields.
-// These are the only fields the OwnerView tracking modal actually reads.
-function toOwnerSafeClaimView(claim: any): any {
-  if (!claim) return null;
-  return {
-    id: claim.id,
-    status: claim.status,
-    agent_confirmed_at: claim.agent_confirmed_at || null,
-  };
-}
-
-// Public/claimant tracking DTO for an item. Mirrors the masked public search
-// result shape: no finder contact data, no OCR-extracted identity fields, no
-// plaintext document number or hash, and no photo for sensitive documents.
-function toOwnerSafeItemView(item: any): any {
-  if (!item) return null;
-  const isSensitive = item.is_sensitive_document !== false;
-  return {
-    id: item.id,
-    category_id: item.category_id,
-    is_sensitive_document: isSensitive,
-    photo_url: isSensitive ? null : item.photo_url,
-    document_name_fuzzy: item.isDescriptionOnly
-      ? 'Bidhaa ya Maelezo'
-      : item.document_name_fuzzy || (isSensitive ? 'Mwenye ID' : 'Bidhaa Bila Hati'),
-    location_description: item.location_description,
-    description: item.isDescriptionOnly || !isSensitive ? item.description : null,
-    isDescriptionOnly: item.isDescriptionOnly,
-    created_at: item.created_at,
-  };
-}
+// toOwnerSafeAgentView / toOwnerSafeClaimView / toOwnerSafeItemView were moved
+// VERBATIM to services/ownerSafeViews.ts in Phase 2 so the customer dashboard
+// reuses the exact same masking rules rather than keeping a second copy of
+// security-relevant logic. They are imported above.
 
 // Hand-built (never `.spread`) DTO for a payment session returned to the owner
 // flow. Contains ONLY the fields the owner payment UI needs and safe-to-show
@@ -630,97 +596,19 @@ async function seedAdminUser() {
 // server stores only its hash, and every protected request resolves the
 // customer from that hash — a browser can never supply its own
 // customerId/phone/name and be trusted.
+//
+// The cookie handling, helpers and the requireCustomerAuth middleware were
+// moved VERBATIM to services/customerAuth.ts in Phase 2. Two reasons:
+//   1. The customer claim routes now live in routes/customerClaims.ts, and
+//      they need the exact same middleware — importing server.ts from another
+//      module is impossible because this file calls startServer() at import
+//      time.
+//   2. The HTTP integration tests must exercise the REAL middleware; they can
+//      import services/customerAuth.ts and mount a real Express app without
+//      booting the whole application (Vite middleware, sweeps, listeners).
+// Behaviour is unchanged: same cookie flags, same hash-only lookup, same
+// revocation/expiry/live-status checks.
 
-const CUSTOMER_SESSION_COOKIE = 'r4m_customer_session';
-const CUSTOMER_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-const CUSTOMER_OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
-const CUSTOMER_OTP_MAX_ATTEMPTS = 5;
-const CUSTOMER_OTP_RESEND_MS = 30 * 1000; // 30s resend floor (SMS cost control)
-
-// Minimal cookie reader (no extra dependency) — used only for our own cookie.
-function readCookie(req: Request, name: string): string | undefined {
-  const header = req.headers?.cookie;
-  if (!header) return undefined;
-  for (const part of String(header).split(';')) {
-    const idx = part.indexOf('=');
-    if (idx === -1) continue;
-    if (part.slice(0, idx).trim() === name) {
-      return decodeURIComponent(part.slice(idx + 1).trim());
-    }
-  }
-  return undefined;
-}
-
-function customerCookieOptions() {
-  return {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax' as const,
-    path: '/',
-  };
-}
-
-function setCustomerSessionCookie(res: Response, token: string) {
-  res.cookie(CUSTOMER_SESSION_COOKIE, token, { ...customerCookieOptions(), maxAge: CUSTOMER_SESSION_TTL_MS });
-}
-
-function clearCustomerSessionCookie(res: Response) {
-  res.clearCookie(CUSTOMER_SESSION_COOKIE, customerCookieOptions());
-}
-
-// In-process resend throttle, keyed by normalized phone + purpose.
-const customerOtpLastSent = new Map<string, number>();
-
-// Whitelisted customer shape for API responses. Never includes OTP hashes,
-// session tokens/hashes, or other internal security fields.
-function toSafeCustomer(customer: any): any {
-  if (!customer) return null;
-  return {
-    id: customer.id,
-    full_name: customer.full_name,
-    phone: customer.phone,
-    status: customer.status,
-    created_at: customer.created_at ? new Date(customer.created_at).toISOString() : null,
-    updated_at: customer.updated_at ? new Date(customer.updated_at).toISOString() : null,
-  };
-}
-
-// 6-digit, crypto-random OTP as a zero-padded decimal string.
-function generateCustomerOtp(): string {
-  return String(crypto.randomInt(0, 1000000)).padStart(6, '0');
-}
-
-function generateSecureId(prefix: string): string {
-  return prefix + '-' + crypto.randomBytes(10).toString('hex').toUpperCase();
-}
-
-// Customer auth middleware. Reads ONLY the cookie, hashes the presented token,
-// finds the session server-side, then checks revocation, expiry and the
-// account's LIVE status — a suspended/locked customer must not remain
-// authenticated merely because an old cookie is still valid.
-async function requireCustomerAuth(req: any, res: Response, next: NextFunction) {
-  try {
-    const raw = readCookie(req, CUSTOMER_SESSION_COOKIE);
-    if (!raw) return res.status(401).json({ error: 'Uthibitisho unahitajika. / Authentication required.' });
-    const session = await db.getCustomerSessionByTokenHash(hashCode(raw));
-    if (!session) return res.status(401).json({ error: 'Kipindi hiki si sahihi. / Invalid session.' });
-    if (session.revoked_at) return res.status(401).json({ error: 'Kipindi hiki kimefungwa. / Session has been revoked.' });
-    if (session.expires_at && new Date(session.expires_at).getTime() < Date.now()) {
-      return res.status(401).json({ error: 'Kipindi hiki kimeisha muda. / Session has expired.' });
-    }
-    const customer = await db.getCustomerById(session.customer_id);
-    if (!customer) return res.status(401).json({ error: 'Akaunti haipatikani. / Account not available.' });
-    if (customer.status !== 'active') {
-      return res.status(403).json({ error: 'Akaunti hii haitumiki kwa sasa. / This account is not active.', status: customer.status });
-    }
-    await db.touchCustomerSession(session.id);
-    req.customer = customer;
-    req.customerSession = session;
-    next();
-  } catch (e: any) {
-    return sendServerError(res, e, 'CUSTOMER_AUTH_ERROR');
-  }
-}
 
 async function startServer() {
   // Run schema synchronization checks to prevent DB drift crashes.
@@ -1105,6 +993,19 @@ async function startServer() {
   app.get('/api/customer/me', requireCustomerAuth, async (req: any, res) => {
     return res.json({ customer: toSafeCustomer(req.customer) });
   });
+
+  // ---------------------------------------------------------------------------
+  // PHASE 2 — customer dashboard: explicit claim linking + the scoped claims
+  // list/detail/unlink routes. Registered from routes/customerClaims.ts so the
+  // HTTP integration tests can mount the real handlers and the real
+  // requireCustomerAuth middleware without importing this file (which boots the
+  // application at import time).
+  //
+  // checkClaimExpiry is injected rather than moved: it drives the shared claim
+  // expiry + payment-strike lifecycle, which is deliberately left in this file
+  // untouched. Function declarations are hoisted, so passing it here is safe.
+  // ---------------------------------------------------------------------------
+  registerCustomerClaimRoutes(app, { checkClaimExpiry });
 
   // --- API ROUTES ---
 
@@ -4895,13 +4796,10 @@ async function releaseDueSettlements() {
   // Treating an expired payment attempt as a live rival claimant used to
   // file a bogus dispute the moment the legitimate owner (or anyone else)
   // tried again — payment expiry is not a dispute and not another claimant.
-  const INACTIVE_CLAIM_STATUSES = new Set<string>([
-    'payment_window_expired', // abandoned/unpaid within the 15-minute window
-    'disputed',               // already pulled into the dispute workflow
-    'rejected',               // failed owner verification
-    'refunded',               // money returned, claim finished
-    'released',               // item handed over and settled
-  ]);
+  //
+  // The set itself now lives in config/claimStatuses.ts (moved verbatim in
+  // Phase 2) so the customer dashboard's Active/History split groups claims by
+  // exactly this rule instead of keeping a second, drifting copy.
 
 async function canCreateClaim(item: FoundItem, preFetchedDisputes?: Dispute[]): Promise<{ allowed: boolean; reason: string }> {
   if (!item) return { allowed: false, reason: 'not_found' };

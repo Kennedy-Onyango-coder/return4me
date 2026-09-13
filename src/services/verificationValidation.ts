@@ -158,3 +158,75 @@ export function toAgentVerificationEvidence(
   }
   return evidence;
 }
+
+// Normalizes one answer for COMPARISON only, mirroring the per-field rules
+// already applied on submission: `lastDigits` is matched on its alphanumerics
+// (so "KX123A" == "kx123-a"), everything else on trimmed, whitespace-collapsed,
+// case-insensitive text.
+//
+// This is a matcher, not a second validator — validateVerificationAnswers
+// above stays the single source of truth for which fields exist, which are
+// required, and how each is shaped. This function only answers "do the
+// submitted answers match the ones already stored on the claim?".
+function normalizeAnswerForComparison(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  return value.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function normalizeLastDigitsForComparison(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  return value.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+}
+
+/**
+ * Compares freshly submitted verification answers against the answers already
+ * stored on a claim. Used only by the explicit customer claim-linking flow.
+ *
+ * FAIL-CLOSED by design:
+ *  - the submission is first run through validateVerificationAnswers, so an
+ *    unknown/forbidden/required-missing field is rejected before any compare;
+ *  - a claim whose stored answers are missing, not an object, or empty for a
+ *    required field can never be matched (absence is NOT treated as a match);
+ *  - every mismatch returns ONE generic message, so a caller can never learn
+ *    which field was wrong, how many fields exist, or what was expected;
+ *  - the expected answers are never returned, logged, or included in the error.
+ *
+ * On success the returned `sanitized` is the SUBMITTED answers — callers must
+ * not persist or log them; they exist only so the caller can confirm the
+ * submission was well formed.
+ */
+export function compareVerificationAnswers(
+  categoryId: string,
+  storedAnswers: unknown,
+  submittedAnswers: unknown
+): AnswerValidation {
+  const submitted = validateVerificationAnswers(categoryId, submittedAnswers);
+  if (isAnswerValidationFailure(submitted)) return submitted;
+
+  if (!storedAnswers || typeof storedAnswers !== 'object' || Array.isArray(storedAnswers)) {
+    return fail('The details provided do not match this claim.');
+  }
+  const stored = storedAnswers as Record<string, unknown>;
+
+  for (const field of getVerificationFields(categoryId)) {
+    if (!field.required) continue;
+
+    const storedValue = stored[field.key];
+    if (typeof storedValue !== 'string' || storedValue.trim() === '') {
+      return fail('The details provided do not match this claim.');
+    }
+
+    const expected = field.key === 'lastDigits'
+      ? normalizeLastDigitsForComparison(storedValue)
+      : normalizeAnswerForComparison(storedValue);
+    const actual = field.key === 'lastDigits'
+      ? normalizeLastDigitsForComparison(submitted.sanitized[field.key])
+      : normalizeAnswerForComparison(submitted.sanitized[field.key]);
+
+    if (!expected || expected !== actual) {
+      return fail('The details provided do not match this claim.');
+    }
+  }
+
+  return { ok: true, sanitized: submitted.sanitized };
+}

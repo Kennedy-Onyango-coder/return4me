@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
+import CustomerDashboard from './CustomerDashboard';
 
 interface Props {
   lang: 'en' | 'sw';
@@ -184,6 +185,20 @@ export default function CustomerAccountView({ lang, onExit }: Props) {
     );
   }
 
+  // Authenticated: hand over to the dashboard. It renders its own sections
+  // (identity, My claims, link/unlink) and owns the sign-out action, so it is
+  // returned here rather than nested inside the sign-in card.
+  if (customer) {
+    return (
+      <CustomerDashboard
+        lang={lang}
+        customer={customer}
+        onSignOut={logout}
+        signingOut={busy}
+      />
+    );
+  }
+
   const inputClass =
     'mt-1.5 w-full h-11 px-3 rounded-lg border border-brand-border bg-white text-sm text-brand-dark-text focus:outline-none focus:ring-2 focus:ring-primary-green/40 focus:border-primary-green';
   const primaryButtonClass =
@@ -208,38 +223,6 @@ export default function CustomerAccountView({ lang, onExit }: Props) {
         </div>
 
         <div className="bg-white border border-brand-border rounded-lg">
-          {customer ? (
-            <div className="p-5 sm:p-6">
-              <div className="flex items-center justify-between gap-3">
-                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-green-50 text-primary-green border border-green-200">
-                  {t('Signed in', 'Umeingia')}
-                </span>
-                <span className="text-xs text-brand-muted-text capitalize">{customer.status}</span>
-              </div>
-
-              <dl className="mt-5 space-y-3">
-                <div>
-                  <dt className="text-xs font-semibold uppercase tracking-wide text-brand-muted-text">
-                    {t('Full name', 'Jina kamili')}
-                  </dt>
-                  <dd className="mt-0.5 text-sm font-semibold text-brand-dark-text break-words">{customer.full_name}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs font-semibold uppercase tracking-wide text-brand-muted-text">
-                    {t('Registered phone', 'Nambari iliyosajiliwa')}
-                  </dt>
-                  <dd className="mt-0.5 text-sm font-semibold text-brand-dark-text">{formatPhoneForDisplay(customer.phone)}</dd>
-                </div>
-              </dl>
-
-              {error && <InlineMessage kind="error" text={error} />}
-
-              <button type="button" onClick={logout} disabled={busy}
-                className="mt-6 w-full h-11 rounded-lg bg-brand-dark-text text-white text-sm font-semibold disabled:opacity-60 disabled:cursor-not-allowed transition-colors hover:opacity-90">
-                {busy ? t('Signing out…', 'Inatoka…') : t('Sign out', 'Toka')}
-              </button>
-            </div>
-          ) : (
             <div className="p-5 sm:p-6">
               <div className="grid grid-cols-2 gap-1 p-1 bg-brand-light-gray rounded-lg" role="tablist">
                 <button type="button" role="tab" aria-selected={mode === 'register'} onClick={() => switchMode('register')} className={tabClass(mode === 'register')}>
@@ -316,7 +299,6 @@ export default function CustomerAccountView({ lang, onExit }: Props) {
                 </form>
               )}
             </div>
-          )}
         </div>
 
         <button type="button" onClick={onExit} className="mt-4 text-xs font-semibold text-primary-green hover:underline cursor-pointer">

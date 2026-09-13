@@ -17,6 +17,12 @@ import path from 'path';
 
 const serverTs = fs.readFileSync(path.resolve(__dirname, '../server.ts'), 'utf8');
 const ownerViewTsx = fs.readFileSync(path.resolve(__dirname, '../components/OwnerView.tsx'), 'utf8');
+// Phase 2 moved the three owner-safe view builders into
+// services/ownerSafeViews.ts (so the customer dashboard reuses the exact same
+// masking rules instead of keeping a second copy). The two assertions below
+// that inspect the function bodies are unchanged — they just read the file the
+// functions now live in.
+const ownerSafeViewsTs = fs.readFileSync(path.resolve(__dirname, '../services/ownerSafeViews.ts'), 'utf8');
 
 function routeBody(method: 'get' | 'post', route: string, len = 4000): string {
   const marker = `app.${method}('${route}'`;
@@ -37,9 +43,9 @@ const NEVER_IN_OWNER_RESPONSE = [
 
 describe('owner-safe claim/item DTOs exist and are hand-built (not spread)', () => {
   it('defines toOwnerSafeClaimView with an explicit field whitelist', () => {
-    const start = serverTs.indexOf('function toOwnerSafeClaimView');
+    const start = ownerSafeViewsTs.indexOf('export function toOwnerSafeClaimView');
     expect(start).toBeGreaterThan(-1);
-    const body = serverTs.slice(start, start + 400);
+    const body = ownerSafeViewsTs.slice(start, start + 400);
     expect(body).toMatch(/function toOwnerSafeClaimView/);
     // It must enumerate the allowed fields, never spread the whole row.
     expect(body).toMatch(/id: claim\.id/);
@@ -49,9 +55,9 @@ describe('owner-safe claim/item DTOs exist and are hand-built (not spread)', () 
   });
 
   it('defines toOwnerSafeItemView that hides photos/OCR details for sensitive documents', () => {
-    const start = serverTs.indexOf('function toOwnerSafeItemView');
+    const start = ownerSafeViewsTs.indexOf('export function toOwnerSafeItemView');
     expect(start).toBeGreaterThan(-1);
-    const body = serverTs.slice(start, start + 600);
+    const body = ownerSafeViewsTs.slice(start, start + 600);
     expect(body).toMatch(/function toOwnerSafeItemView/);
     expect(body).not.toMatch(/\.\.\.item/);
     // Sensitive-document rows never expose a photo or OCR-derived identity fields.

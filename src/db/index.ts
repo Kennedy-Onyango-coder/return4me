@@ -28,7 +28,25 @@ const mockDatabaseState: Record<string, any[]> = {
   payment_sessions: [],
   customers: [],
   customer_otps: [],
-  customer_sessions: []
+  customer_sessions: [],
+  customer_claim_links: []
+};
+
+// Uniqueness invariants the in-memory mock enforces on a PLAIN insert.
+//
+// Postgres enforces these through the real indexes declared in
+// ensureSchemaUpToDate(); this mock has no schema, so without an explicit list
+// a duplicate insert silently succeeded and any code or test that depends on
+// the constraint proved nothing.
+//
+// SECURITY-CRITICAL ONLY. Everything listed here causes a real defect when
+// violated; that is why `customer_claim_links` appears twice — once for the
+// per-claim invariant (a claim belongs to at most ONE customer account, the
+// rule that stops two racing customers from both linking the same claim) and
+// once for idempotency. Do not add entries merely for schema parity; fixtures
+// sometimes insert deliberately similar rows.
+const MOCK_UNIQUE_INDEXES: Record<string, string[][]> = {
+  customer_claim_links: [['claim_id'], ['customer_id', 'claim_id']],
 };
 
 // Evaluate logical WHERE conditions recursively
@@ -85,6 +103,30 @@ function evaluateWhere(row: any, whereClause: string, params: any[]): boolean {
     return row[col] !== null && row[col] !== undefined;
   }
   
+  // Match IN / NOT IN: "col in ($1, $2)" or "col in ('a','b')". Drizzle's
+  // inArray()/notInArray() compile to these. Before this branch existed, an IN
+  // clause fell through every case above to the unconditional `return true` at
+  // the end of this function — so an inArray() WHERE filtered nothing in the
+  // mock and silently matched EVERY row. That is not a production defect
+  // (production talks to real Postgres) but it made any test double relying on
+  // inArray() prove nothing: a scoped query's "returns only these rows"
+  // assertion would pass while the mock handed back the whole table. Added for
+  // exactly that reason, alongside the customer-claim-link scoping tests.
+  const inMatch = cleanExpr.match(/^([\w.]+)\s+(not\s+)?in\s*\((.+)\)$/i);
+  if (inMatch) {
+    const inCol = inMatch[1].replace(/^\w+\./, '').trim();
+    const negated = Boolean(inMatch[2]);
+    const values = inMatch[3].split(',').map((part) => {
+      const v = part.trim();
+      const paramMatch = v.match(/^\$(\d+)$/);
+      if (paramMatch) return params[parseInt(paramMatch[1]) - 1];
+      if (/^now\(\)$/i.test(v)) return new Date();
+      return v.replace(/^'|'$/g, '').trim();
+    });
+    const isMember = values.some((val) => String(row[inCol]) === String(val));
+    return negated ? !isMember : isMember;
+  }
+
   // Match equals: "col = $1" or "col = 'value'"
   const eqMatch = cleanExpr.match(/^([\w.]+)\s*=\s*(.+)$/);
   if (eqMatch) {
@@ -350,6 +392,40 @@ function executeMockQuery(sql: any, params: any[] = []): { rows: any[] } {
           // DO NOTHING: a real Postgres INSERT ... ON CONFLICT DO NOTHING
           // RETURNING returns zero rows when the conflict fires.
           return { rows: [] };
+        }
+      }
+
+      // Plain INSERT (no ON CONFLICT clause): enforce the SECURITY-CRITICAL
+      // unique indexes that the real Postgres schema declares, so a duplicate
+      // insert fails here the way it fails in production.
+      //
+      // Without this, the mock's plain insert always succeeded — which made
+      // every database-level uniqueness invariant untestable and, worse, let a
+      // "two customers race for the same claim" test pass while actually
+      // inserting two link rows. The real defence is the index in Postgres;
+      // this makes the test double capable of witnessing it.
+      //
+      // Deliberately minimal — only invariants whose violation is a SECURITY
+      // defect are listed. Extend it when a new uniqueness rule becomes
+      // security-critical, not merely for schema parity: over-enforcing here
+      // would break fixtures that intentionally insert near-duplicate rows.
+      const uniqueIndexes = MOCK_UNIQUE_INDEXES[tableName];
+      if (uniqueIndexes) {
+        for (const indexCols of uniqueIndexes) {
+          const clash = mockDatabaseState[tableName].some((row) =>
+            indexCols.every(
+              (col) => row[col] !== undefined && row[col] !== null && String(row[col]) === String(newRow[col])
+            )
+          );
+          if (clash) {
+            // Shaped like the real Postgres unique-violation (SQLSTATE 23505)
+            // so callers' catch-and-classify paths are exercised for real.
+            const violation: any = new Error(
+              `duplicate key value violates unique constraint on ${tableName} (${indexCols.join(', ')})`
+            );
+            violation.code = '23505';
+            throw violation;
+          }
         }
       }
 
@@ -1001,6 +1077,20 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     `CREATE INDEX IF NOT EXISTS idx_customer_sessions_token ON customer_sessions(token_hash)`,
     `CREATE INDEX IF NOT EXISTS idx_customer_sessions_customer ON customer_sessions(customer_id)`,
     `CREATE INDEX IF NOT EXISTS idx_customer_sessions_expires ON customer_sessions(expires_at)`,
+    // Customer ↔ claim links (explicit, per-claim). Mirrors the Drizzle
+    // definition in schema.ts. The two UNIQUE indexes are load-bearing, not
+    // cosmetic: uq_customer_claim_links_claim is what actually enforces
+    // "a claim belongs to at most one customer" under concurrent link
+    // requests — application-level checks alone cannot.
+    `CREATE TABLE IF NOT EXISTS customer_claim_links (
+      id VARCHAR(50) PRIMARY KEY,
+      customer_id VARCHAR(50) NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      claim_id VARCHAR(50) NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+      linked_at TIMESTAMPTZ DEFAULT now(),
+      linked_via VARCHAR(40) NOT NULL DEFAULT 'claim_otp'
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_customer_claim_links_pair ON customer_claim_links(customer_id, claim_id)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_customer_claim_links_claim ON customer_claim_links(claim_id)`,
   ];
   let migrationFailureCount = 0;
   for (const sql of statements) {

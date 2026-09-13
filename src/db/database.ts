@@ -22,6 +22,7 @@ import {
   customers as customersTable,
   customer_otps as customerOtpsTable,
   customer_sessions as customerSessionsTable,
+  customer_claim_links as customerClaimLinksTable,
 } from "./schema.ts";
 import { eq, and, or, isNull, isNotNull, inArray, lte, sql } from "drizzle-orm";
 import { getSignedPhotoUrl } from "../services/storage.ts";
@@ -3861,6 +3862,23 @@ class DatabaseEngine {
         })
         .where(eq(customersTable.phone, phone));
 
+      // 2b. Remove this account's explicit claim links.
+      //
+      // The LINKS are account-identity data, so they are erased with the
+      // account — otherwise an erased/suspended account would keep a residual
+      // pointer into claims. The CLAIMS themselves are deliberately NOT
+      // deleted: step 1 above only redacts the owner PII on them, and the
+      // claim's lifecycle + financial record is independently retained per
+      // docs/DATA_RETENTION_POLICY.md (payment records 7 years, audit log 7
+      // years never anonymised). Removing the relationship is what the erasure
+      // requires; destroying the claim would be a retention violation.
+      const erasedCustomerForLinks = await this.getCustomerByPhone(phone);
+      if (erasedCustomerForLinks) {
+        await drizzleDb
+          .delete(customerClaimLinksTable)
+          .where(eq(customerClaimLinksTable.customer_id, erasedCustomerForLinks.id));
+      }
+
       // 3. Scrub finder personal details on items reported by this phone
       await drizzleDb
         .update(itemsTable)
@@ -4060,6 +4078,196 @@ class DatabaseEngine {
     } catch (error) {
       console.error("Failed to revoke customer session:", error);
       return false;
+    }
+  }
+
+  // --- CUSTOMER ↔ CLAIM LINKS ---
+  // Explicit, per-claim links between an account and a claim. Nothing here is
+  // ever called automatically: every write is the direct result of an
+  // authenticated customer proving control of one specific claim (fresh claim
+  // OTP + the claim's own stored security answers). There is deliberately no
+  // "link everything whose owner_phone matches" method, and none should be
+  // added — see the comment on the customer_claim_links table in schema.ts.
+
+  public async getCustomerClaimLinkForClaim(claimId: string): Promise<any | undefined> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(customerClaimLinksTable)
+        .where(eq(customerClaimLinksTable.claim_id, claimId));
+      return rows[0];
+    } catch (error) {
+      console.error("Failed to read customer claim link:", error);
+      return undefined;
+    }
+  }
+
+  // Creates the link. Guarded twice, deliberately:
+  //
+  //  1. An explicit read-then-write check gives the common "already linked"
+  //     case a clear answer instead of a caught constraint violation, and it
+  //     keeps the invariant observable in the in-memory mock DB used by tests
+  //     (which does not enforce SQL constraints).
+  //  2. The two UNIQUE indexes on customer_claim_links remain the
+  //     AUTHORITATIVE guard: a concurrent second insert for the same claim
+  //     loses the constraint whichever customer sent it, so "a claim belongs
+  //     to at most one customer" holds even under a race. The pre-check above
+  //     cannot replace it — it is deliberately belt-and-braces, not the
+  //     defence.
+  public async linkClaimToCustomer(
+    id: string,
+    customerId: string,
+    claimId: string,
+    linkedVia: string
+  ): Promise<'linked' | 'already_linked_self' | 'already_linked_other'> {
+    try {
+      const existing = await this.getCustomerClaimLinkForClaim(claimId);
+      if (existing) {
+        return existing.customer_id === customerId ? 'already_linked_self' : 'already_linked_other';
+      }
+      await drizzleDb
+        .insert(customerClaimLinksTable)
+        .values({ id, customer_id: customerId, claim_id: claimId, linked_via: linkedVia });
+      return 'linked';
+    } catch (error) {
+      // Genuine race: another request inserted the same claim between the check
+      // above and this insert, and Postgres rejected it (unique violation).
+      const existing = await this.getCustomerClaimLinkForClaim(claimId);
+      if (existing && existing.customer_id === customerId) return 'already_linked_self';
+      console.error("Failed to link claim to customer:", error);
+      return 'already_linked_other';
+    }
+  }
+
+  // Removes ONLY the authenticated customer's own link: the ownership check is
+  // part of the WHERE, so a cross-customer delete is impossible by
+  // construction. Returns true only when this customer's link existed.
+  public async unlinkClaimFromCustomer(customerId: string, claimId: string): Promise<boolean> {
+    try {
+      const existing = await this.getCustomerClaimLinkForClaim(claimId);
+      if (!existing || existing.customer_id !== customerId) return false;
+      await drizzleDb
+        .delete(customerClaimLinksTable)
+        .where(and(
+          eq(customerClaimLinksTable.customer_id, customerId),
+          eq(customerClaimLinksTable.claim_id, claimId)
+        ));
+      return true;
+    } catch (error) {
+      console.error("Failed to unlink claim from customer:", error);
+      return false;
+    }
+  }
+
+  // Scoped, batched read backing the customer dashboard.
+  //
+  // Deliberately NOT built on getClaims() (which returns EVERY claim in the
+  // system with every column), and deliberately NOT filtered by
+  // `owner_phone = customer.phone`: the only rows returned are the ones this
+  // customer explicitly linked. Four bounded queries — links → claims → items
+  // → agents — with no per-row follow-up lookups (no N+1).
+  //
+  // Returns a NARROW internal shape containing only fields the customer-safe
+  // DTO is allowed to expose. Raw claim/item/agent rows never leave this
+  // method, so security_answers / owner_* / finder_* / agent financial and
+  // vetting fields cannot reach the customer layer by accident.
+  public async getClaimsForCustomer(customerId: string): Promise<Array<{
+    id: string;
+    status: string;
+    created_at: any;
+    updated_at: any;
+    agent_confirmed_at: any;
+    settle_at: any;
+    item: {
+      id: string;
+      category_id: string | null;
+      document_name_fuzzy: string | null;
+      is_sensitive_document: boolean;
+      isDescriptionOnly: boolean;
+      photo_url: string | null;
+      location_description: string | null;
+      description: string | null;
+      created_at: any;
+    } | null;
+    agent: {
+      id: string;
+      business_name: string;
+      contact_phone: string;
+      location_address: string;
+      latitude: any;
+      longitude: any;
+      rating: any;
+      rating_count: any;
+    } | null;
+  }>> {
+    try {
+      const links = await drizzleDb
+        .select()
+        .from(customerClaimLinksTable)
+        .where(eq(customerClaimLinksTable.customer_id, customerId));
+      if (links.length === 0) return [];
+
+      const claimIds = links.map((l: any) => l.claim_id).filter(Boolean);
+      if (claimIds.length === 0) return [];
+
+      const claims = await drizzleDb
+        .select()
+        .from(claimsTable)
+        .where(inArray(claimsTable.id, claimIds));
+
+      const itemIds = Array.from(new Set(claims.map((c: any) => c.item_id).filter(Boolean)));
+      const items = itemIds.length
+        ? await drizzleDb.select().from(itemsTable).where(inArray(itemsTable.id, itemIds))
+        : [];
+      const itemById = new Map<string, any>(items.map((i: any) => [i.id, i]));
+
+      const agentIds = Array.from(new Set(items.map((i: any) => i.assigned_agent_id).filter(Boolean)));
+      const agents = agentIds.length
+        ? await drizzleDb.select().from(agentsTable).where(inArray(agentsTable.id, agentIds))
+        : [];
+      const agentById = new Map<string, any>(agents.map((a: any) => [a.id, a]));
+
+      const results = claims.map((claim: any) => {
+        const item = claim.item_id ? itemById.get(claim.item_id) : null;
+        const agent = item && item.assigned_agent_id ? agentById.get(item.assigned_agent_id) : null;
+        return {
+          id: claim.id,
+          status: claim.status,
+          created_at: claim.created_at,
+          updated_at: claim.updated_at,
+          agent_confirmed_at: claim.agent_confirmed_at,
+          settle_at: claim.settle_at,
+          item: item ? {
+            id: item.id,
+            category_id: item.category_id,
+            document_name_fuzzy: item.document_name_fuzzy,
+            is_sensitive_document: item.is_sensitive_document,
+            isDescriptionOnly: item.isDescriptionOnly,
+            photo_url: item.photo_url,
+            location_description: item.location_description,
+            description: item.description,
+            created_at: item.created_at,
+          } : null,
+          agent: agent ? {
+            id: agent.id,
+            business_name: agent.business_name,
+            contact_phone: agent.contact_phone,
+            location_address: agent.location_address,
+            latitude: agent.latitude,
+            longitude: agent.longitude,
+            rating: agent.rating,
+            rating_count: agent.rating_count,
+          } : null,
+        };
+      });
+
+      results.sort((a, b) =>
+        new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+      );
+      return results;
+    } catch (error) {
+      console.error("Failed to list claims for customer:", error);
+      throw new Error("Failed to list claims for customer.");
     }
   }
 }

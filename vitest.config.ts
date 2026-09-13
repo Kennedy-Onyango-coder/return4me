@@ -42,6 +42,21 @@ export default defineConfig({
     // alternative (per-test timeout arguments) would mean annotating each
     // affected test and re-annotating every future one that hits the same
     // import cost, and would leave the underlying flakiness in place.
+    // Concurrency cap — a CORRECTNESS setting, not a speed one.
+    //
+    // Vitest's default (cpus - 1 = 7 workers on an 8-core host) over-subscribes:
+    // every worker cold-imports the full db/database.ts + db/index.ts graph, and
+    // under that contention the resetModules()+dynamic-import tests in
+    // services/auth.ts and services/social.ts inflate from ~3s to ~40s and blow
+    // the 30s testTimeout below. Measured over complete suite runs on the
+    // documented host (8 cores / 8GB): default -> 637/642 in 92s (5 failures at
+    // ~40s); maxWorkers 4 -> 642/642 in 48s; maxWorkers 3 -> 642/642 in 36-37s
+    // on two consecutive runs, slowest cold-import test 3.1s.
+    //
+    // Fewer workers is BOTH more reliable and faster, because the machine stops
+    // thrashing — so do not "optimise" this back to the default without
+    // re-running the full suite twice.
+    maxWorkers: 3,
     testTimeout: 30000,
     hookTimeout: 30000,
   },

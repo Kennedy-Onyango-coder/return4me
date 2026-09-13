@@ -10,9 +10,18 @@ interface NavbarProps {
   setView: (view: 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy') => void;
   token: string | null;
   logout: () => void;
+  /** True while the Account/dashboard surface is showing (Phase 2). Kept as a
+   *  separate flag rather than a member of the `currentView` union so the
+   *  account surface does not widen every view's prop types. */
+  isAccountView?: boolean;
+  /** Opens the Account/dashboard surface. */
+  onOpenAccount?: () => void;
+  /** Preferred handler for normal navigation when supplied; lets the app exit
+   *  the account surface on any nav click. Falls back to setView. */
+  onNavigate?: (view: 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy') => void;
 }
 
-export default function Navbar({ lang, setLang, currentView, setView, token, logout }: NavbarProps) {
+export default function Navbar({ lang, setLang, currentView, setView, token, logout, isAccountView = false, onOpenAccount, onNavigate }: NavbarProps) {
   const t = translations[lang];
   const [isOpen, setIsOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -24,9 +33,21 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
   }, [currentView, token]);
 
   const handleNavClick = (view: 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy') => {
-    setView(view);
+    if (onNavigate) onNavigate(view);
+    else setView(view);
     setIsOpen(false);
   };
+
+  const handleAccountClick = () => {
+    if (onOpenAccount) onOpenAccount();
+    setIsOpen(false);
+  };
+
+  const accountLinkClass =
+    'relative px-3 py-2 text-sm font-medium transition-colors cursor-pointer rounded-md ' +
+    (isAccountView
+      ? 'text-primary-green'
+      : 'text-brand-muted-text hover:text-brand-dark-text');
 
   const navLinkClass = (view) =>
     'relative px-3 py-2 text-sm font-medium transition-colors cursor-pointer rounded-md ' +
@@ -92,6 +113,16 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                 {navLinkUnderline('admin')}
               </button>
             )}
+            <button onClick={handleAccountClick} className={accountLinkClass}>
+              {lang === 'en' ? 'Account' : 'Akaunti'}
+              {isAccountView && (
+                <motion.span
+                  layoutId="nav-underline"
+                  className="absolute bottom-0 left-3 right-3 h-0.5 bg-primary-green rounded-full"
+                  transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+                />
+              )}
+            </button>
           </nav>
 
           <div className="hidden lg:flex items-center gap-3">
@@ -298,6 +329,22 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                     </button>
                   </div>
                 </div>
+
+                {/* Account (Phase 2) — opens the customer account / dashboard.
+                    A single restrained entry point rather than a new section:
+                    the account surface reuses this same site chrome and is not
+                    a separate application. */}
+                <button
+                  onClick={handleAccountClick}
+                  className={`w-full py-3 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center justify-center space-x-2 ${
+                    isAccountView
+                      ? 'bg-primary-green/10 border-primary-green/30 text-primary-green'
+                      : 'bg-white border-brand-border text-brand-dark-text hover:bg-brand-light-gray'
+                  }`}
+                >
+                  <User size={14} />
+                  <span>{lang === 'en' ? 'My Account' : 'Akaunti Yangu'}</span>
+                </button>
 
                 {/* Account Actions */}
                 {token ? (

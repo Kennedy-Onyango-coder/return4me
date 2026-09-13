@@ -13,6 +13,12 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const serverTs = readFileSync(resolve(__dirname, '../server.ts'), 'utf8');
 const databaseTs = readFileSync(resolve(__dirname, '../db/database.ts'), 'utf8');
+// Phase 2 moved the INACTIVE_CLAIM_STATUSES set into config/claimStatuses.ts so
+// the customer dashboard groups Active/History by exactly the same rule (rather
+// than keeping a second, drifting copy). The assertion below is unchanged in
+// substance — it now also pins the import, so server.ts cannot silently stop
+// using the shared definition.
+const claimStatusesTs = readFileSync(resolve(__dirname, '../config/claimStatuses.ts'), 'utf8');
 
 // Locate the claim-submission competing-claim detection block.
 function submissionBlock(): string {
@@ -23,13 +29,16 @@ function submissionBlock(): string {
 
 describe('claim expiry lifecycle: payment expiry != dispute', () => {
   it('defines INACTIVE_CLAIM_STATUSES with payment_window_expired (abandonment)', () => {
-    expect(serverTs).toMatch(/INACTIVE_CLAIM_STATUSES\s*=\s*new Set<string>\(/);
-    const setStart = serverTs.indexOf('const INACTIVE_CLAIM_STATUSES');
+    expect(claimStatusesTs).toMatch(/INACTIVE_CLAIM_STATUSES\s*[:=]\s*ReadonlySet<string>\s*=\s*new Set<string>\(/);
+    const setStart = claimStatusesTs.indexOf('export const INACTIVE_CLAIM_STATUSES');
     expect(setStart).toBeGreaterThan(-1);
-    const setBlock = serverTs.slice(setStart, setStart + 900);
+    const setBlock = claimStatusesTs.slice(setStart, setStart + 900);
     for (const status of ['payment_window_expired', 'disputed', 'rejected', 'refunded', 'released']) {
       expect(setBlock, `INACTIVE_CLAIM_STATUSES must include '${status}'`).toContain(`'${status}'`);
     }
+    // server.ts must consume the shared definition, not redefine or inline it.
+    expect(serverTs).toContain("import { INACTIVE_CLAIM_STATUSES } from './config/claimStatuses'");
+    expect(serverTs).not.toMatch(/const INACTIVE_CLAIM_STATUSES = new Set<string>\(/);
   });
 
   it('same-owner resume check ignores closed (inactive) claims — an owner can retry after expiry', () => {

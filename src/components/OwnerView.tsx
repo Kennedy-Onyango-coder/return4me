@@ -3,37 +3,21 @@ import { translations } from '../types';
 import VerificationForm from './VerificationForm';
 import { trapModalFocus } from '../utils/modalFocus';
 import { Search, AlertCircle, ShieldAlert, CheckCircle, Smartphone, ArrowRight, Loader2, Coins, MapPin, Lock, Eye, Clock, X, XCircle, AlertTriangle } from 'lucide-react';
+// The "Track My Claim" status badge previously always rendered in the same
+// green/success color and the same raw snake_case string for every status,
+// including 'disputed', 'rejected', 'refunding', and 'refunded' — an owner
+// whose claim was rejected or who lost a dispute (even one who'd already
+// been refunded) saw the exact same green "SUCCESS-LOOKING" badge as
+// someone whose item was ready for pickup. The mapping now lives in a shared
+// module so the customer dashboard renders status identically instead of
+// keeping a second copy in sync.
+import { getClaimStatusDisplay } from './claimStatus';
 
 interface OwnerViewProps {
   lang: 'en' | 'sw';
   categories: any[];
   categoriesLoading?: boolean;
   categoriesError?: boolean;
-}
-
-// The "Track My Claim" status badge previously always rendered in the same
-// green/success color and the same raw snake_case string for every status,
-// including 'disputed', 'rejected', 'refunding', and 'refunded' — an owner
-// whose claim was rejected or who lost a dispute (even one who'd already
-// been refunded) saw the exact same green "SUCCESS-LOOKING" badge as
-// someone whose item was ready for pickup. Maps each claim status to a
-// bilingual label and a color that actually matches the outcome.
-function getClaimStatusDisplay(status: string, lang: 'en' | 'sw'): { label: string; className: string } {
-  const map: Record<string, { en: string; sw: string; className: string }> = {
-    pending_verification: { en: 'Pending Verification', sw: 'Inasubiri Uthibitisho', className: 'bg-amber-100 text-amber-800' },
-    awaiting_agent_confirmation: { en: 'Awaiting Agent Confirmation', sw: 'Inasubiri Uthibitisho wa Wakala', className: 'bg-amber-100 text-amber-800' },
-    pending_payment: { en: 'Payment Pending', sw: 'Malipo Yanasubiri', className: 'bg-amber-100 text-amber-800' },
-    payment_window_expired: { en: 'Payment Window Expired', sw: 'Muda wa Malipo Umeisha', className: 'bg-red-100 text-red-800' },
-    escrow_held: { en: 'Payment Confirmed', sw: 'Malipo Yamethibitishwa', className: 'bg-emerald-100 text-emerald-800' },
-    released: { en: 'Item Collected', sw: 'Bidhaa Imechukuliwa', className: 'bg-emerald-100 text-emerald-800' },
-    disputed: { en: 'Under Dispute Review', sw: 'Inakaguliwa (Mzozo)', className: 'bg-orange-100 text-orange-800' },
-    rejected: { en: 'Claim Rejected', sw: 'Ombi Limekataliwa', className: 'bg-red-100 text-red-800' },
-    refunding: { en: 'Refund In Progress', sw: 'Urejeshaji Unaendelea', className: 'bg-amber-100 text-amber-800' },
-    refunded: { en: 'Refunded to M-Pesa', sw: 'Umerejeshewa kwa M-Pesa', className: 'bg-sky-100 text-sky-800' },
-  };
-  const entry = map[status];
-  if (!entry) return { label: status, className: 'bg-stone-100 text-stone-800' };
-  return { label: lang === 'sw' ? entry.sw : entry.en, className: entry.className };
 }
 
 // Mirrors the backend's canonical Kenyan phone normalization (toE164Kenyan in

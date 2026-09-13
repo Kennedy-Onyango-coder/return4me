@@ -235,23 +235,15 @@ export default function App() {
 
   const t = translations[lang];
 
-  if (customerMode) {
-    return (
-      <div className="min-h-screen bg-brand-beige flex flex-col antialiased">
-        <ErrorBoundary fallbackTitle="Account Page Crash">
-          <Suspense fallback={<ViewLoadingFallback />}>
-            <CustomerAccountView
-              lang={lang}
-              onExit={() => {
-                setCustomerMode(false);
-                window.history.replaceState({}, '', '/');
-              }}
-            />
-          </Suspense>
-        </ErrorBoundary>
-      </div>
-    );
-  }
+  // (Phase 2 moved the account surface into the standard shell below — see the
+  // customerMode branch inside <main>.)
+
+  // NOTE (Phase 2): the account/dashboard surface deliberately renders INSIDE
+  // the standard site shell (Navbar + main + footer) rather than as a separate
+  // full-page early return, so it keeps the same visual identity and navigation
+  // as the rest of Return4me. `customerMode` is still its own flag rather than
+  // a member of the `currentView` union — it does not need to widen every
+  // view's prop types.
 
   return (
     <div className="min-h-screen bg-brand-beige flex flex-col antialiased">
@@ -263,6 +255,19 @@ export default function App() {
         setView={setView}
         token={currentView === 'admin' ? adminToken : agentToken}
         logout={logout}
+        isAccountView={customerMode}
+        onOpenAccount={() => {
+          window.history.replaceState({}, '', '/account');
+          setCustomerMode(true);
+        }}
+        onNavigate={(view) => {
+          // Any normal navigation leaves the account surface.
+          if (customerMode) {
+            setCustomerMode(false);
+            window.history.replaceState({}, '', '/');
+          }
+          setView(view);
+        }}
       />
 
       {/* Main Content Area */}
@@ -274,6 +279,19 @@ export default function App() {
             them is sufficient — it only ever needs to cover whichever one
             chunk is currently being fetched. HomeView is statically imported
             (landing page — must paint instantly), the rest are lazy. */}
+        {customerMode ? (
+          <ErrorBoundary fallbackTitle="Account Page Crash">
+            <Suspense fallback={<ViewLoadingFallback />}>
+              <CustomerAccountView
+                lang={lang}
+                onExit={() => {
+                  setCustomerMode(false);
+                  window.history.replaceState({}, '', '/');
+                }}
+              />
+            </Suspense>
+          </ErrorBoundary>
+        ) : (
         <Suspense fallback={<ViewLoadingFallback />}>
           {currentView === 'home' && (
             <HomeView
@@ -338,6 +356,7 @@ export default function App() {
             </div>
           )}
         </Suspense>
+        )}
 
       </main>
 
