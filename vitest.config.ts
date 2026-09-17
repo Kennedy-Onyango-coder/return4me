@@ -56,7 +56,23 @@ export default defineConfig({
     // Fewer workers is BOTH more reliable and faster, because the machine stops
     // thrashing — so do not "optimise" this back to the default without
     // re-running the full suite twice.
-    maxWorkers: 3,
+    //
+    // PHASE 11B RE-MEASUREMENT — maxWorkers 3 is no longer sufficient.
+    // The 3-value tuning above was measured when this suite held 642 tests. It
+    // now holds 1,559, so three workers cold-import the full db/database.ts +
+    // db/index.ts graph three times over inside a much larger run. The result is
+    // no longer merely slow: on the documented 8-core / 8GB host, the three
+    // resetModules()+dynamic-import suites (services/__tests__/smsDelivery,
+    // services/__tests__/socialFailClosed, __tests__/errorDisclosure) each blew
+    // testTimeout and reported "Test timed out in 30000ms", even though every one
+    // of them PASSES in isolation in ~2s (measured: smsDelivery 7/7 in 2.48s,
+    // socialFailClosed + errorDisclosure 2/2 in 2.58s). A green/red result that
+    // depends on scheduling luck is worse than a slow one.
+    //
+    // 2 workers is the smallest change that removes the thrash. This does NOT
+    // weaken any assertion and does NOT skip anything — the same tests run, and a
+    // test that genuinely hangs still fails, just without the contention.
+    maxWorkers: 2,
     testTimeout: 30000,
     hookTimeout: 30000,
   },
