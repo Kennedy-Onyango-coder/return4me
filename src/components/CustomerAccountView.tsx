@@ -11,6 +11,14 @@ interface Props {
    *  /item/:id can finish the journey instead of dead-ending on the dashboard.
    *  Optional: the surface behaves identically without it. */
   onAuthenticated?: () => void;
+  /**
+   * PHASE 11B: fired whenever the session this surface was holding ends — an
+   * explicit sign-out, or a 401 from an authenticated read. App uses it to clear
+   * the customer session the site chrome is rendering, so the navbar cannot keep
+   * showing "My Account"/"Logout" after that session is actually gone. Optional:
+   * the surface behaves identically without it.
+   */
+  onSessionEnded?: () => void;
   /** Phase 9C: opens the public /item/:id page for a possible match, which is
    *  where the existing "It's Mine" ownership journey begins. */
   onOpenItem: (itemId: string) => void;
@@ -48,7 +56,7 @@ function formatPhoneForDisplay(phone: string): string {
   return phone;
 }
 
-export default function CustomerAccountView({ lang, onExit, onAuthenticated, onOpenItem }: Props) {
+export default function CustomerAccountView({ lang, onExit, onAuthenticated, onOpenItem, onSessionEnded }: Props) {
   const sw = lang === 'sw';
   const t = (en: string, swText: string) => (sw ? swText : en);
 
@@ -179,6 +187,9 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
    */
   const handleSessionExpired = () => {
     setCustomer(null);
+    // PHASE 11B: the session is gone server-side — tell App so the site chrome
+    // stops showing an authenticated state.
+    onSessionEnded?.();
     setMode('login');
     setStep('details');
     setCode('');
@@ -200,6 +211,8 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
       setFullName('');
       setPhone('');
       setCode('');
+      // PHASE 11B: the cookie session is revoked — clear it from the site chrome.
+      onSessionEnded?.();
     } catch {
       setError(t('Could not sign out. Please try again.', 'Imeshindwa kutoka. Tafadhali jaribu tena.'));
     } finally {

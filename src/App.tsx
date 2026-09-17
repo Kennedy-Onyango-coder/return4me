@@ -312,10 +312,71 @@ export default function App() {
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // PHASE 11B — THE CUSTOMER SESSION IS PART OF THE SITE CHROME TOO.
+  //
+  // A customer signs in through /account with an SMS OTP, and that session is
+  // held server-side and referenced by an httpOnly cookie
+  // (services/customerAuth.ts). Because it is NOT a localStorage token, App
+  // never knew about it: `token={agentToken}` therefore left a freshly signed-in
+  // customer looking at the PUBLIC bar ("Guest" + "Sign In"). This is the single
+  // place that resolves it, from the SAME endpoint the account and /report-lost
+  // surfaces already use. No second authentication mechanism is introduced.
+  // ---------------------------------------------------------------------------
+  const [customerSession, setCustomerSession] = useState<{ id: string; full_name?: string; phone?: string } | null>(null);
+
+  const refreshCustomerSession = useCallback(async () => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const res = await fetch('/api/customer/me', { credentials: 'same-origin' });
+      if (!res.ok) {
+        // 401 and 403 both mean "no live, active customer session" — fail to the
+        // signed-out state rather than displaying a session that does not exist.
+        setCustomerSession(null);
+        return null;
+      }
+      const data = await res.json().catch(() => null);
+      const next = data?.customer ?? null;
+      setCustomerSession(next);
+      return next;
+    } catch {
+      setCustomerSession(null);
+      return null;
+    }
+  }, []);
+
+  // Resolve once on load, and again whenever the tab regains focus, so a session
+  // that expired or was revoked server-side stops being reflected in the chrome.
+  // Focus is a single, user-initiated event — this is not a poll.
+  useEffect(() => {
+    refreshCustomerSession();
+    const onFocus = () => { refreshCustomerSession(); };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [refreshCustomerSession]);
+
+  /**
+   * Ends EVERY session the browser holds and returns to the public home page.
+   * Before this it cleared only the agent/admin localStorage tokens, so a
+   * "Logout" left a live customer cookie behind and the account surface stayed
+   * usable — the same confusion the bar already had about customer sessions.
+   */
   const logout = () => {
     handleSetAgentToken(null);
     handleSetAdminToken(null);
-    setView('home');
+    if (customerSession) {
+      // Server-side revocation: the cookie is httpOnly, so only the server can
+      // actually end the session. Best-effort — local state is cleared either
+      // way, so the UI never keeps showing a session we are ending.
+      fetch('/api/customer/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+    }
+    setCustomerSession(null);
+    if (typeof window !== 'undefined' && window.location.pathname !== '/') {
+      navigate('/', 'home');
+    } else {
+      setCustomerMode(false);
+      setView('home');
+    }
   };
 
   // Categories and the agent-count stat rarely change within a single
@@ -449,9 +510,17 @@ export default function App() {
         setLang={setLang}
         currentView={currentView}
         setView={setView}
-        token={currentView === 'admin' ? adminToken : agentToken}
+        /* PHASE 11B: an admin session no longer evaporates the moment the
+           console is left. `agentToken || adminToken` keeps whichever
+           token-backed session is genuinely live, on every surface — before
+           this, adminToken was only passed while currentView === 'admin', so
+           navigating away reverted the bar to the public "Guest" state. */
+        token={agentToken || adminToken}
         logout={logout}
         isAccountView={customerMode}
+        /* The customer session is a cookie, so App resolves it and reports the
+           answer here; `isAccountView` alone cannot express "signed in". */
+        accountSignedIn={Boolean(customerSession)}
         onOpenAccount={() => {
           // Existing entry point, now addressable. Pushed (not replaced) so
           // browser Back returns the visitor to where they were.
@@ -534,10 +603,19 @@ export default function App() {
                   //
                   // PHASE 11A: the same mechanism returns a lost reporter to
                   // /report-lost, where the reporting experience is waiting.
+                  //
+                  // PHASE 11B: the customer now holds a live cookie session, so
+                  // re-resolve it here and the site chrome switches out of its
+                  // public "Guest"/"Sign In" state immediately — no page reload.
+                  refreshCustomerSession();
                   if (route.kind === 'account' && route.next) {
                     navigate(route.next, route.next === reportLostPath() ? 'owner' : 'home');
                   }
                 }}
+                /* PHASE 11B: signing out — or being rejected with 401 inside the
+                   dashboard — must clear the bar's session state as well, or the
+                   chrome would keep advertising a session the server has ended. */
+                onSessionEnded={() => setCustomerSession(null)}
               />
             </Suspense>
           </ErrorBoundary>

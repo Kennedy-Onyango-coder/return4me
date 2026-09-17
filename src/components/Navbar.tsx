@@ -14,6 +14,15 @@ interface NavbarProps {
    *  separate flag rather than a member of the `currentView` union so the
    *  account surface does not widen every view's prop types. */
   isAccountView?: boolean;
+  /**
+   * True when a live CUSTOMER session exists. A customer session is a
+   * server-side cookie (services/customerAuth.ts), NOT a localStorage token, so
+   * App resolves it from GET /api/customer/me and passes the answer down. It is
+   * deliberately separate from `token` (agent/admin): the bar must reflect
+   * whichever session is actually live, and a signed-in customer must never be
+   * shown the public "Guest"/"Sign In" state again.
+   */
+  accountSignedIn?: boolean;
   /** Opens the Account/dashboard surface. */
   onOpenAccount?: () => void;
   /** Preferred handler for normal navigation when supplied; lets the app exit
@@ -30,10 +39,29 @@ interface NavbarProps {
 // Sign In → Agent. The internal label still exists in translations for
 // non-navigation use, but no public surface renders it as a destination.
 
-export default function Navbar({ lang, setLang, currentView, setView, token, logout, isAccountView = false, onOpenAccount, onNavigate }: NavbarProps) {
+export default function Navbar({ lang, setLang, currentView, setView, token, logout, isAccountView = false, accountSignedIn = false, onOpenAccount, onNavigate }: NavbarProps) {
   const t = translations[lang];
   const [isOpen, setIsOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+
+  // PHASE 11B — ONE SOURCE OF TRUTH FOR "IS SOMEONE SIGNED IN".
+  //
+  // Before this, the bar's entire idea of a session was `token` — the
+  // agent/admin localStorage token. A customer session is a server-side cookie,
+  // so a customer who had just completed OTP sign-in on /account still saw the
+  // PUBLIC bar ("Guest" plus a "Sign In" button), and an admin reverted to that
+  // same public state the moment they navigated away from /console (because App
+  // only passed adminToken while currentView === 'admin'). `signedIn` is the one
+  // derived flag every surface below reads, so all three roles agree. This adds
+  // no second authentication mechanism: it consumes the SAME session state App
+  // already owns.
+  const signedIn = Boolean(token) || accountSignedIn;
+
+  // The account control's label. `isAccountView` deliberately stays the FIRST
+  // test and keeps this exact contiguous shape: publicNavigation.test.ts pins
+  // `isAccountView ? (lang === 'en' ? 'My Account'` as the tripwire proving a
+  // signed-OUT visitor is never offered "My Account" as a destination.
+  const accountControlLabel = isAccountView ? (lang === 'en' ? 'My Account' : 'Akaunti Yangu') : accountSignedIn ? (lang === 'en' ? 'My Account' : 'Akaunti Yangu') : t.signInBtn;
 
   // Check if admin is logged in (to conditionally show admin console link)
   useEffect(() => {
@@ -135,9 +163,9 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                 {navLinkUnderline('admin')}
               </button>
             )}
-            <button onClick={() => (isAccountView ? handleAccountClick() : handleNavClick('signin'))} className={isAccountView ? accountLinkClass : signInButtonClass} aria-current={currentView === 'signin' ? 'page' : undefined}>
-              {isAccountView ? (lang === 'en' ? 'My Account' : 'Akaunti Yangu') : t.signInBtn}
-              {isAccountView && (
+            <button onClick={() => (isAccountView || accountSignedIn ? handleAccountClick() : handleNavClick('signin'))} className={isAccountView || accountSignedIn ? accountLinkClass : signInButtonClass} aria-current={currentView === 'signin' ? 'page' : undefined}>
+              {accountControlLabel}
+              {(isAccountView || accountSignedIn) && (
                 <motion.span
                   layoutId="nav-underline"
                   className="absolute bottom-0 left-3 right-3 h-0.5 bg-primary-green rounded-full"
@@ -157,7 +185,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
               <span>{lang === 'en' ? 'SW' : 'EN'}</span>
             </button>
             <div className="h-5 w-px bg-brand-border" />
-            {token ? (
+            {signedIn ? (
               <button
                 onClick={logout}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-brand-muted-text hover:text-accent-orange transition-colors cursor-pointer rounded-md"
@@ -359,19 +387,19 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                     the account surface reuses this same site chrome and is not
                     a separate application. */}
                 <button
-                  onClick={() => (isAccountView ? handleAccountClick() : handleNavClick('signin'))}
+                  onClick={() => (isAccountView || accountSignedIn ? handleAccountClick() : handleNavClick('signin'))}
                   className={`w-full min-h-[44px] py-3 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center justify-center space-x-2 ${
-                    isAccountView
+                    isAccountView || accountSignedIn
                       ? 'bg-primary-green/10 border-primary-green/30 text-primary-green'
                       : 'bg-white border-brand-border text-brand-dark-text hover:bg-brand-light-gray'
                   }`}
                 >
                   <User size={14} />
-                  <span>{isAccountView ? (lang === 'en' ? 'My Account' : 'Akaunti Yangu') : t.signInBtn}</span>
+                  <span>{accountControlLabel}</span>
                 </button>
 
                 {/* Account Actions */}
-                {token ? (
+                {signedIn ? (
                   <button
                     onClick={() => {
                       logout();
@@ -431,14 +459,14 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
           <span className="text-xs font-semibold">{lang === 'sw' ? 'Ripoti' : 'Report'}</span>
         </button>
         <button
-          onClick={() => (isAccountView ? handleAccountClick() : handleNavClick('signin'))}
+          onClick={() => (isAccountView || accountSignedIn ? handleAccountClick() : handleNavClick('signin'))}
           aria-current={(isAccountView || currentView === 'signin') ? 'page' : undefined}
           className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 min-h-[44px] py-1 transition-all ${
             (isAccountView || currentView === 'signin') ? 'text-primary-green' : 'text-brand-muted-text'
           }`}
         >
           <User size={18} aria-hidden="true" />
-          <span className="text-xs font-semibold">{isAccountView ? (lang === 'sw' ? 'Akaunti' : 'Account') : t.signInBtn}</span>
+          <span className="text-xs font-semibold">{(isAccountView || accountSignedIn) ? (lang === 'sw' ? 'Akaunti' : 'Account') : t.signInBtn}</span>
         </button>
         <button
           onClick={() => setIsOpen(true)}
