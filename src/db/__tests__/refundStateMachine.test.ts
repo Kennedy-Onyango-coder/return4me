@@ -36,30 +36,34 @@ async function makeDisputedClaimPair(loserAlreadyPaid: boolean) {
     description: 'x', is_sensitive_document: false, rejection_reason: null,
   } as any);
 
-  await db.createClaim({
-    id: winnerClaimId, item_id: itemId, owner_phone: '+254700000006',
-    security_answers: { lastDigits: '0000', color: 'black', lostDetails: 'winner fixture' },
-    verification_tier: 1, status: 'pending_verification', owner_id_proof_url: null,
-    payment_reference: null, owner_identifying_details: null,
-  });
+  // The LOSER (claimant_2) is created in 'pending_payment' so an "already paid"
+  // fixture can be taken through the REAL authoritative payment path below.
+  // `paid_at` is the payment truth and createClaim() deliberately forces it to
+  // NULL, so attemptClaimEscrowHold() — the one guarded CAS that sets it — is
+  // the only way to produce a genuinely-paid claim. (This fixture previously
+  // set `payment_reference` via updateClaimStatus, which is exactly the
+  // overload that made SC-4 a money-safety bug.)
   await db.createClaim({
     id: loserClaimId, item_id: itemId, owner_phone: '+254700000007',
     security_answers: { lastDigits: '1111', color: 'red', lostDetails: 'loser fixture' },
-    // The claims table enforces at most one "active" claim per item
-    // (uq_claims_one_active_per_item); the winner is already the active
-    // claim, so the second (loser) claim must start in the excluded
-    // 'disputed' status against real Postgres.
-    verification_tier: 1, status: 'disputed', owner_id_proof_url: null,
+    verification_tier: 1, status: 'pending_payment', owner_id_proof_url: null,
     payment_reference: null, owner_identifying_details: null,
   });
 
   if (loserAlreadyPaid) {
-    // payment_reference is the real signal resolveDispute checks (see its
-    // own BUGFIX comment) — status gets overwritten to 'disputed' by
-    // createDispute regardless, so payment_reference is what must be set
-    // to simulate "this claimant genuinely already paid".
-    await db.updateClaimStatus(loserClaimId, 'disputed', 'TEST-MPESA-REF-123');
+    const held = await db.attemptClaimEscrowHold(loserClaimId, 'TEST-MPESA-REF-123');
+    if (!held) throw new Error('fixture: expected the escrow CAS to confirm the loser payment');
   }
+
+  // The WINNER (claimant_1) starts directly in 'disputed' — the status
+  // server.ts creates a contesting claim in, and one the partial unique index
+  // deliberately excludes so both participants can coexist on one item.
+  await db.createClaim({
+    id: winnerClaimId, item_id: itemId, owner_phone: '+254700000006',
+    security_answers: { lastDigits: '0000', color: 'black', lostDetails: 'winner fixture' },
+    verification_tier: 1, status: 'disputed', owner_id_proof_url: null,
+    payment_reference: null, owner_identifying_details: null,
+  });
 
   const dispute = await db.createDispute({
     id: `TEST-DISPUTE-REFUND-${testRunId}-${counter++}`,

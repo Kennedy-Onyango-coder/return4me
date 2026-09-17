@@ -76,7 +76,17 @@ describe('isAdminSessionCurrent — the decision logic behind requireCurrentAdmi
   });
 });
 
-const serverTs = fs.readFileSync(path.resolve(__dirname, '../../server.ts'), 'utf8');
+const serverTs = [
+  fs.readFileSync(path.resolve(__dirname, '../../server.ts'), 'utf8'),
+  // The two admin dispute routes were extracted into their own module so they
+  // can be exercised over real HTTP (see routes/adminDisputes.ts). They remain
+  // /api/admin routes, so the "every admin route carries
+  // requireCurrentAdminSession" audit must still see them.
+  fs.readFileSync(path.resolve(__dirname, '../../routes/adminDisputes.ts'), 'utf8'),
+  // Phase 6E: the Claims Administration read routes live in their own module
+  // too, and must satisfy the same requireCurrentAdminSession requirement.
+  fs.readFileSync(path.resolve(__dirname, '../../routes/adminClaims.ts'), 'utf8'),
+].join('\n');
 
 function findAdminRoutes(source: string): Array<{ method: string; route: string; body: string }> {
   const routeRegex = /app\.(get|post|put|delete)\('(\/api\/admin[^']*)',\s*authenticateJWT,/g;

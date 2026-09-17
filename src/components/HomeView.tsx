@@ -4,16 +4,20 @@ import {
   Search, MapPin, ShieldCheck, Lock, Package,
   Users, CreditCard, ChevronLeft, ChevronRight,
   PhoneCall, Key, Car, Wallet, Luggage, Laptop,
-  Gem, ScanLine, Smartphone, CheckCircle, ArrowRight, Clock, Monitor
+  Gem, ScanLine, Smartphone, CheckCircle, ArrowRight, Clock, Monitor, Store
 } from 'lucide-react';
 import Button from './ui/Button';
 import Badge from './ui/Badge';
 import SectionHeading from './ui/SectionHeading';
+// REQUEST 06 — the homepage category explorer. It is a PRESENTATION layer over
+// the live /api/categories list (see src/config/categoryTaxonomy.ts); the old
+// inline, hand-typed group list it replaces lived at the bottom of this file.
+import CategoryExplorer from './home/CategoryExplorer';
 import EmptyState from './ui/EmptyState';
 import Skeleton from './ui/Skeleton';
 import { motion, AnimatePresence } from 'motion/react';
 
-type ViewName = 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy';
+type ViewName = 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy' | 'signin' | 'becomeAgent';
 
 interface HomeViewProps {
   lang: 'en' | 'sw';
@@ -26,12 +30,17 @@ interface HomeViewProps {
   recentItems: any[];
   recentItemsLoading: boolean;
   recentItemsError: boolean;
+  /** Phase 7B: opens the public item-detail route (/item/:id) for a found
+   *  item. Cards are real links, so middle-click / open-in-new-tab / keyboard
+   *  activation keep working. */
+  onOpenItem: (itemId: string) => void;
 }
 
 export default function HomeView(props: HomeViewProps) {
   const {
     lang, setView, categories, categoriesLoading, categoriesError,
     activeAgentsCount, recentItems, recentItemsLoading, recentItemsError,
+    onOpenItem,
   } = props;
   const t = translations[lang];
 
@@ -141,7 +150,11 @@ export default function HomeView(props: HomeViewProps) {
       copy: lang === 'en'
         ? 'A national network of vetted agents handles drop-offs and verified handovers close to home.'
         : 'Mtandao wa kitaifa wa mawakala waliothibitishwa hutunza uwasilishaji na urejeshaji uliothibitishwa karibu na nyumbani.',
-      primary: { label: lang === 'en' ? 'Find an Agent' : 'Tafuta Wakala', view: 'agent' },
+      // Phase 8.1 — this CTA used to open the internal agent PORTAL directly
+      // from a public hero. It now opens the public "Become an Agent" journey,
+      // which leads to /agent_portal. Agent access is unchanged; it is simply
+      // no longer a raw public portal link.
+      primary: { label: lang === 'en' ? 'Become an Agent' : 'Kuwa Wakala', view: 'becomeAgent' },
       secondary: { label: lang === 'en' ? 'How It Works' : 'Inavyofanya Kazi', scroll: true },
     },
     {
@@ -280,10 +293,17 @@ export default function HomeView(props: HomeViewProps) {
                   className="h-full w-full object-cover object-center"
                 />
               </picture>
-              {/* Directional gradient overlay — left-heavy so headline stays legible; photo stays visible */}
-              <div className="absolute inset-0 bg-gradient-to-r from-primary-green/20 via-primary-green/8 to-transparent" />
-              {/* Subtle top gradient for additional contrast */}
-              <div className="absolute inset-0 bg-gradient-to-t from-primary-green/15 via-transparent to-transparent" />
+              {/* REQUEST 01 — directional scrim (see .r4m-hero-scrim in index.css).
+                  Strongest exactly where the headline/copy column sits and fading
+                  to nothing across the rest of the frame, so the real Nairobi
+                  photograph stays visible while the text keeps a reliable
+                  contrast ratio. Deliberately NOT an opaque black rectangle. */}
+              <div className="r4m-hero-scrim absolute inset-0" aria-hidden="true" />
+              {/* The previous second gradient ("subtle top gradient") was removed:
+                  it darkened the TOP of every frame, which is where these
+                  photographs are brightest and where no text sits. The vertical
+                  stop inside .r4m-hero-scrim now handles the copy/controls
+                  contrast deliberately instead. */}
             </div>
           );
         })}
@@ -404,7 +424,7 @@ export default function HomeView(props: HomeViewProps) {
               <Skeleton shape="text" className="h-64" />
             </div>
           ) : (
-            <CategoryDirectory categories={categories} lang={lang} onReportLost={() => setView('owner')} onReportFound={() => setView('finder')} />
+            <CategoryExplorer categories={categories} lang={lang} onReportLost={() => setView('owner')} onReportFound={() => setView('finder')} />
           )}
         </div>
       </section>
@@ -421,6 +441,8 @@ export default function HomeView(props: HomeViewProps) {
                   alt={lang === 'en' ? 'A Return4me agent safely returning a found item to its owner' : 'Wakala wa Return4me anarejeshza kilichopatikana kwa mmiliki wake'}
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
+                  loading="lazy"
+                  decoding="async"
                 />
               </div>
             </div>
@@ -467,13 +489,13 @@ export default function HomeView(props: HomeViewProps) {
                   </h3>
                   <p className="mt-2 text-sm text-brand-muted-text leading-relaxed">
                     {lang === 'en'
-                      ? "Lost something important? Report it. The sooner your loss is recorded, the sooner a matching found item can be identified."
-                      : "Umepoteza kitu muhimu? Ripoti. Mapema zaidi unaporipoti upotevu wako, mapema zaidi kitu kilichopeleza kitatambulika."}
+                      ? "Lost something important? Search the items our agents are holding. If yours has been found, you can claim it and collect it in person."
+                      : "Umepoteza kitu muhimu? Tafuta vitu vinavyohifadhiwa na mawakala wetu. Kama chako kimepatikana, unaweza kukidai na kukichukua ana kwa ana."}
                   </p>
                   <div className="mt-4">
                     <Button variant="primary" size="lg" onClick={() => setView('owner')} className="min-h-[48px]">
                       <Search size={18} aria-hidden="true" />
-                      {lang === 'en' ? 'Report a Lost Item' : 'Ripoti Kitu Kilichopotea'}
+                      {lang === 'en' ? 'Search Found Items' : 'Tafuta Vitu Vilivyopatikana'}
                     </Button>
                   </div>
                 </div>
@@ -482,7 +504,7 @@ export default function HomeView(props: HomeViewProps) {
               {/* Closing brand message */}
               <div className="mt-10 pt-6 border-t border-brand-border">
                 <p className="text-sm text-brand-dark-text leading-relaxed">
-                  {lang === 'en' ? 'Lost something? Report it.' : 'Umepoteza kitu? Ripoti.'}
+                  {lang === 'en' ? 'Lost something? Search for it.' : 'Umepoteza kitu? Kitafute.'}
                   <br />
                   {lang === 'en' ? 'Found something? Give it a chance to get home.' : 'Umepeleza kitu? Mpe nia ya kufika nyumbani.'}
                 </p>
@@ -553,6 +575,23 @@ export default function HomeView(props: HomeViewProps) {
                     whileTap={{ scale: 0.98 }}
                     className="group relative bg-white rounded-2xl border border-brand-border overflow-hidden transition-all hover:shadow-lg focus-within:ring-2 focus-within:ring-accent-orange motion-reduce:transition-none"
                   >
+                    {/* The whole card is one real link to the public item page
+                        (/item/:id). The id — never a description or an array
+                        index — is what identifies it, and because it is an
+                        anchor, open-in-new-tab and keyboard activation behave
+                        the way a visitor expects. */}
+                    <a
+                      href={`/item/${encodeURIComponent(item.id)}`}
+                      onClick={(e) => {
+                        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+                        e.preventDefault();
+                        onOpenItem(item.id);
+                      }}
+                      className="block h-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange rounded-2xl"
+                      aria-label={lang === 'en'
+                        ? `Open found item details: ${getCategoryName(item.category_id)}`
+                        : `Fungua maelezo ya bidhaa iliyopatikana: ${getCategoryName(item.category_id)}`}
+                    >
                     {/* Thumbnail area */}
                     <div className="aspect-[4/3] bg-brand-light-gray relative overflow-hidden">
                       {hasPhoto ? (
@@ -604,6 +643,7 @@ export default function HomeView(props: HomeViewProps) {
                         </span>
                       </div>
                     </div>
+                    </a>
                   </motion.div>
                 );
               })}
@@ -670,7 +710,7 @@ export default function HomeView(props: HomeViewProps) {
               />
               <ul className="mt-6 space-y-3 text-sm font-semibold text-brand-dark-text">
           {[
-            lang === 'en' ? 'Report a lost item' : 'Ripoti kitu kilichopotea',
+            lang === 'en' ? 'Search items agents are holding' : 'Tafuta vitu vilivyo kwa mawakala',
             lang === 'en' ? 'Report a found item' : 'Ripoti kitu kilichopatikana',
             lang === 'en' ? 'Verify identity securely' : 'Thibitisha utambulisho kwa usalama',
             lang === 'en' ? 'Track a claim you have started' : 'Fuatilia daima uliyoianzisha',
@@ -723,7 +763,7 @@ export default function HomeView(props: HomeViewProps) {
             </div>
             {/* Message right */}
             <div>
-              <div className="text-[11px] font-extrabold uppercase tracking-widest text-accent-orange mb-3">
+              <div className="text-caption font-extrabold uppercase tracking-widest text-ink-muted mb-3">
                 {lang === 'en' ? 'Successful returns' : 'Urejeshaji uliofanikiwa'}
               </div>
               <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-primary-green">
@@ -734,6 +774,107 @@ export default function HomeView(props: HomeViewProps) {
                   ? 'Every lost item has a person behind it. Return4me exists to make the journey back possible — safely, transparently and with real people nearby.'
                   : 'Kila kitu kilichopotea kina mtu nyuma yake. Return4me ipo kurahisisha safari ya kurudi — kwa usalama, kwa uwazi na kwa watu halisi wa karibu.'}
               </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ───────── REQUEST 03 — WHAT RETURN4ME IS FOR ─────────
+          Marketing for the four audiences that make the ecosystem work: people
+          who lost something, people who found something, Agents, and the
+          venues/businesses that can host a handover. Every sentence describes a
+          capability the backend actually has, and NO figure is claimed that the
+          product does not define — there are no earnings averages, no agent
+          counts, no recovery totals and no guarantees. Agent economics are
+          described exactly as BecomeAgentView describes them ("a share of the
+          recovery fee"), never as an amount. */}
+      <section className="bg-brand-beige py-14 sm:py-20 border-t border-brand-border">
+        <div className="mx-auto max-w-7xl px-5 sm:px-12">
+          <SectionHeading
+            eyebrow={lang === 'en' ? 'How it fits together' : 'Jinsi inavyoshirikiana'}
+            title={lang === 'en' ? 'One network, four roles' : 'Mtandao mmoja, majukumu manne'}
+            description={lang === 'en'
+              ? 'Return4me only works when the person who lost something, the person who found it and the agent who handles the handover can all reach each other safely.'
+              : 'Return4me hufanya kazi wakati mwenye kupoteza, mwenye kupata na wakala anayeshughulikia urejeshaji wanaweza kuwasiliana kwa usalama.'}
+          />
+
+          <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div className="border border-line-subtle rounded-xl bg-white p-6">
+              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary-green/10">
+                <Search size={20} className="text-primary-green" aria-hidden="true" />
+              </span>
+              <h3 className="mt-4 text-base font-bold text-ink">
+                {lang === 'en' ? 'Lost something?' : 'Umepoteza kitu?'}
+              </h3>
+              <p className="mt-2 text-sm text-ink-muted leading-relaxed">
+                {lang === 'en'
+                  ? 'Describe what you lost, where you last had it and the details that make it identifiable. Found items reported to Return4me are searchable, so your description can help you recognise your own property.'
+                  : 'Eleza ulichopoteza, mahali ulipokuwa mwisho na maelezo yanayokifanya kitambulike. Vitu vilivyopatikana Return4me vinatafutwa, hivyo maelezo yako yanaweza kukusaidia kutambua mali yako.'}
+              </p>
+              <Button variant="outline" size="md" className="mt-5" onClick={() => setView('owner')}>
+                {t.ownerBtn}
+              </Button>
+            </div>
+
+            <div className="border border-line-subtle rounded-xl bg-white p-6">
+              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary-green/10">
+                <MapPin size={20} className="text-primary-green" aria-hidden="true" />
+              </span>
+              <h3 className="mt-4 text-base font-bold text-ink">
+                {lang === 'en' ? 'Found something?' : 'Umepata kitu?'}
+              </h3>
+              <p className="mt-2 text-sm text-ink-muted leading-relaxed">
+                {lang === 'en'
+                  ? 'Report what you found and where. The item is held with a vetted agent and the owner is verified before any handover. Where the platform rules provide for it, the finder receives a recovery appreciation share for a verified return.'
+                  : 'Ripoti ulichokipata na mahali. Kitu huhifadhiwa kwa wakala aliyethibitishwa na mmiliki huthibitishwa kabla ya urejeshaji. Pale kanuni za jukwaa zinavyoruhusu, mpata hupokea sehemu ya shukrani kwa urejeshaji uliothibitishwa.'}
+              </p>
+              <p className="mt-2 text-caption text-ink-muted leading-relaxed">
+                {lang === 'en'
+                  ? 'Payments and appreciation are handled through Return4me — never demanded privately from an owner.'
+                  : 'Malipo na shukrani hushughulikiwa kupitia Return4me — hazidaiwi kwa faragha kwa mmiliki.'}
+              </p>
+              <Button variant="outline" size="md" className="mt-5" onClick={() => setView('finder')}>
+                {t.finderBtn}
+              </Button>
+            </div>
+
+            <div className="border border-line-subtle rounded-xl bg-white p-6">
+              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary-green/10">
+                <Users size={20} className="text-primary-green" aria-hidden="true" />
+              </span>
+              <h3 className="mt-4 text-base font-bold text-ink">
+                {lang === 'en' ? 'Become an Agent' : 'Kuwa Wakala'}
+              </h3>
+              <p className="mt-2 text-sm text-ink-muted leading-relaxed">
+                {lang === 'en'
+                  ? 'Agents receive found items, confirm them, and complete verified physical handovers in their own area. Agents earn a share of the recovery fee on the recoveries they actually complete, under the platform rules.'
+                  : 'Mawakala hupokea vitu vilivyopatikana, huhakikisha, na hukamilisha urejeshaji uliothibitishwa katika eneo lao. Mawakala hupata sehemu ya ada ya urejeshaji kwa urejeshaji wanaokamilisha, kwa mujibu wa kanuni za jukwaa.'}
+              </p>
+              <p className="mt-2 text-caption text-ink-muted leading-relaxed">
+                {lang === 'en'
+                  ? 'Every agent is vetted and approved before taking custody of an item. No earnings figures are promised — what an agent receives depends on the recoveries they complete.'
+                  : 'Kila wakala huthibitishwa na kuidhinishwa kabla ya kupokea kitu. Hakuna kiasi cha mapato kinachoahidiwa — anachopata wakala hutegemea urejeshaji anaokamilisha.'}
+              </p>
+              <Button variant="outline" size="md" className="mt-5" onClick={() => setView('becomeAgent')}>
+                {t.becomeAgentBtn}
+              </Button>
+            </div>
+
+            <div className="border border-line-subtle rounded-xl bg-white p-6">
+              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary-green/10">
+                <Store size={20} className="text-primary-green" aria-hidden="true" />
+              </span>
+              <h3 className="mt-4 text-base font-bold text-ink">
+                {lang === 'en' ? 'Businesses, venues & communities' : 'Biashara, maeneo na jamii'}
+              </h3>
+              <p className="mt-2 text-sm text-ink-muted leading-relaxed">
+                {lang === 'en'
+                  ? 'Offices, malls, campuses, matatu SACCOs and places of worship are where lost property actually accumulates. Registering the venue as an Agent lets items be handed over through the same verified process instead of being held indefinitely.'
+                  : 'Ofisi, maduka makubwa, vyuo, SACCO za matatu na nyumba za ibada ndiko mali zilizopotea hukusanyika. Kusajili eneo kama Wakala huruhusu vitu kuwasilishwa kwa mchakato huo uliothibitishwa badala ya kuhifadhiwa bila kikomo.'}
+              </p>
+              <Button variant="outline" size="md" className="mt-5" onClick={() => setView('becomeAgent')}>
+                {lang === 'en' ? 'See the Agent process' : 'Ona mchakato wa Wakala'}
+              </Button>
             </div>
           </div>
         </div>
@@ -766,108 +907,4 @@ export default function HomeView(props: HomeViewProps) {
     </div>
   );
 }
-
-// ── CATEGORY DIRECTORY COMPONENT ──────────────────────────────────────────
-// Groups categories into human-friendly discovery groups for the homepage.
-// No pricing is displayed — this section is purely for service discovery.
-
-const CATEGORY_GROUPS: { key: string; labelEn: string; labelSw: string; icon: React.ComponentType<any>; ids: string[] }[] = [
-  {
-    key: 'documents',
-    labelEn: 'Documents & Identification',
-    labelSw: 'Hati na Vitambulisho',
-    icon: ShieldCheck,
-    ids: [
-      'national-id', 'passport', 'student-id', 'driving-licence', 'atm-credit-card',
-      'kra-nhif-nssf', 'birth-certificate', 'academic-certificate',
-      'title-deed', 'work-permit-visa', 'insurance-document',
-      'other-document', 'vehicle-logbook', 'number-plate',
-    ],
-  },
-  {
-    key: 'phones',
-    labelEn: 'Phones & Electronics',
-    labelSw: 'Simu na Vifaa vya Umeme',
-    icon: Smartphone,
-    ids: [
-      'smartphone', 'feature-phone', 'tablet', 'laptop',
-      'smartwatch', 'wireless-earphones', 'headphones',
-      'usb-cable', 'phone-charger', 'powerbank',
-      'flash-drive-hdd', 'camera', 'gaming-console',
-      'memory-card',
-    ],
-  },
-  {
-    key: 'personal',
-    labelEn: 'Personal Belongings',
-    labelSw: 'Vitu vya Kibinafsi',
-    icon: Wallet,
-    ids: [
-      'wallet-with-contents', 'empty-wallet', 'bag-with-documents',
-      'id-lanyard-badge', 'optical-sunglasses',
-      'umbrella', 'jewelry', 'bicycle',
-      'bag-no-docs', 'cash-money',
-    ],
-  },
-  {
-    key: 'keys',
-    labelEn: 'Keys & Everyday Items',
-    labelSw: 'Funguo na Vitu vya Kila Siku',
-    icon: Key,
-    ids: ['bunch-of-keys', 'single-key', 'padlock'],
-  },
-  {
-    key: 'books',
-    labelEn: 'Books & School Items',
-    labelSw: 'Vitabu na Vitu vya Shule',
-    icon: Package,
-    ids: ['bible', 'school-book', 'novel', 'notebook-diary'],
-  },
-  {
-    key: 'other',
-    labelEn: 'Other Items',
-    labelSw: 'Vitu Vingine',
-    icon: Package,
-    ids: ['other-item'],
-  },
-];
-
-function CategoryDirectory({ categories, lang, onReportLost, onReportFound }: { categories: any[]; lang: 'en' | 'sw'; onReportLost: () => void; onReportFound: () => void }) {
-  const catMap = new Map(categories.map((c: any) => [c.id, c]));
-
-  const getName = (cat: any) => lang === 'en' ? cat.name_en : cat.name_sw;
-
-  const groups = CATEGORY_GROUPS.map((g) => ({
-    ...g,
-    items: g.ids.map((id) => catMap.get(id)).filter(Boolean),
-  })).filter((g) => g.items.length > 0);
-
-  if (groups.length === 0) return null;
-
-  return (
-    <div className="mt-8 space-y-6">
-      {groups.map((group) => {
-        const Icon = group.icon;
-        return (
-          <div key={group.key} className="border border-brand-border rounded-xl bg-white p-5 sm:p-6">
-            <div className="flex items-start gap-4">
-              <div className="w-10 h-10 rounded-lg bg-primary-green/10 flex items-center justify-center shrink-0">
-                <Icon size={20} className="text-primary-green" aria-hidden="true" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h3 className="text-sm font-semibold text-brand-dark-text">
-                  {lang === 'en' ? group.labelEn : group.labelSw}
-                </h3>
-                <p className="mt-2 text-sm text-brand-muted-text leading-relaxed">
-                  {group.items.map((cat: any) => getName(cat)).join(' \u00B7 ')}
-                </p>
-              </div>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 

@@ -23,8 +23,10 @@ import {
   customer_otps as customerOtpsTable,
   customer_sessions as customerSessionsTable,
   customer_claim_links as customerClaimLinksTable,
+  lost_reports as lostReportsTable,
 } from "./schema.ts";
-import { eq, and, or, isNull, isNotNull, inArray, lte, sql } from "drizzle-orm";
+import { eq, and, or, isNull, isNotNull, inArray, notInArray, lte, gte, desc, sql } from "drizzle-orm";
+import { isAllowedClaimTransition, TERMINAL_CLAIM_STATUSES } from "../config/claimStatuses";
 import { getSignedPhotoUrl } from "../services/storage.ts";
 
 // Local copy of the phone-masking helper (also defined in services/auth.ts
@@ -184,7 +186,15 @@ export interface Claim {
   // override) is actively sending that disbursement.
   status: "pending_verification" | "pending_payment" | "escrow_held" | "pending_settlement" | "releasing" | "released" | "disputed" | "rejected" | "awaiting_agent_confirmation" | "payment_window_expired" | "refunding" | "refunded";
   owner_id_proof_url: string | null;
-  payment_reference: string | null; // Daraja M-Pesa receipt code
+  /**
+   * AUTHORITATIVE PAYMENT TRUTH (SC-4/SC-6). NULL = no confirmed payment;
+   * non-NULL = payment was confirmed by attemptClaimEscrowHold()'s guarded
+   * CAS. This — never `payment_reference` — is what "has this claimant
+   * actually paid?" must be answered with. See config/claimStatuses.ts.
+   */
+  paid_at?: string | null;
+  /** Provider reference (Daraja receipt / provider invoice id). NOT proof of payment. */
+  payment_reference: string | null;
   owner_identifying_details: string | null;
   owner_email?: string | null;
   agent_confirmed_at?: string | null;
@@ -211,7 +221,40 @@ export interface Dispute {
   resolved_claim_id: string | null;
   resolved_at: string | null;
   admin_notes: string | null;
+  // SC-3 snapshot: each participant's status and authoritative payment truth
+  // as they were immediately before the dispute was filed. Nullable for
+  // disputes created before the snapshot existed.
+  claimant_1_status_at_dispute?: string | null;
+  claimant_2_status_at_dispute?: string | null;
+  claimant_1_paid_at_dispute?: string | null;
+  claimant_2_paid_at_dispute?: string | null;
   created_at: string;
+}
+
+/**
+ * D-B2: a KNOWN state/concurrency conflict, as opposed to a genuine server
+ * failure. Thrown by resolveDispute() when the dispute was resolved by a
+ * concurrent request between this call's read and its compare-and-swap.
+ *
+ * Deliberately a distinct type so HTTP callers can map it to 409 Conflict
+ * instead of funnelling every branch through the generic 500 error handler —
+ * the two are not the same thing and must not be conflated.
+ */
+export class ClaimStateConflictError extends Error {
+  readonly conflictCode = 'STATE_CONFLICT';
+  constructor(message: string) {
+    super(message);
+    this.name = 'ClaimStateConflictError';
+  }
+}
+
+/** A transition that is not present in CLAIM_ALLOWED_TRANSITIONS. */
+export class ClaimInvalidTransitionError extends Error {
+  readonly conflictCode = 'INVALID_TRANSITION';
+  constructor(message: string) {
+    super(message);
+    this.name = 'ClaimInvalidTransitionError';
+  }
 }
 
 export interface DisputeEvidence {
@@ -222,6 +265,171 @@ export interface DisputeEvidence {
   evidence_text: string | null;
   evidence_photo_url: string | null;
   created_at: string;
+}
+
+// =============================================================================
+// PHASE 6D — CLAIMS ADMINISTRATION READ MODEL
+// =============================================================================
+// Narrow, purpose-built projections for the future Claims Administration
+// console. These are READ-ONLY shapes: nothing in this section mutates a claim
+// (no UPDATE/INSERT/DELETE, no lifecycle transition, no OTP consumption, no
+// payment or dispute side effect).
+//
+// Deliberately NOT a raw Claim row. The projections below never carry
+// `security_answers`, `owner_id_proof_url`, `owner_identifying_details`,
+// `owner_email`, `payment_reference` or any OTP/token/pickup-code hash — the
+// SELECT column lists simply do not include them, so there is nothing to leak.
+
+/** Server-side filters for the admin claims list. All optional. */
+export interface AdminClaimListFilters {
+  /** One or more of CLAIM_STATUS_VALUES (config/claimStatuses.ts). */
+  statuses?: string[];
+  /**
+   * Payment truth filter. Derived from `paid_at` ONLY — never from
+   * `payment_reference` (SC-4/SC-6).
+   */
+  hasPaid?: boolean;
+  itemId?: string;
+  claimId?: string;
+  /** Exact claimant phone (E.164-normalised by the caller). Masked in the DTO. */
+  claimantPhone?: string;
+  createdFrom?: Date;
+  createdTo?: Date;
+  /**
+   * `none`   = the claim's item has no dispute at all
+   * `open`   = an unresolved dispute exists on the item
+   * `resolved` = the item has at least one resolved dispute
+   */
+  disputeState?: 'none' | 'open' | 'resolved';
+}
+
+export interface AdminClaimListParams {
+  filters?: AdminClaimListFilters;
+  /** Server-side page size. Defaulted and capped by the data layer. */
+  limit?: number;
+  offset?: number;
+}
+
+/** Bounded page size for the admin claims list. */
+export const ADMIN_CLAIMS_DEFAULT_LIMIT = 25;
+export const ADMIN_CLAIMS_MAX_LIMIT = 100;
+
+/** ISO-8601 normaliser that preserves null/undefined instead of inventing a value. */
+function toIsoOrNull(value: any): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+/**
+ * Builds the dispute context for ONE claim from a narrow dispute projection.
+ * The claimant role is derived from the claim id (claimant_1 = original,
+ * claimant_2 = contesting — the ordering Phase 5B/6C established and pinned),
+ * never from array position.
+ *
+ * CURRENT vs HISTORICAL is kept strictly separate:
+ *  - `is_open` / `resolved_*` describe the dispute NOW.
+ *  - `*_at_dispute` describe the Phase 6C snapshot AT DISPUTE CREATION.
+ *
+ * R1 (`snapshot_incomplete`): an UNRESOLVED dispute whose snapshot columns are
+ * both null for this claimant predates the snapshot feature, so the claimant's
+ * payment state at dispute creation is UNKNOWN. This is derived from real
+ * columns, not invented, and must never be presented as "did not pay".
+ */
+function buildAdminDisputeContext(dispute: any, claimId: string): AdminClaimDisputeContext {
+  const isOriginal = String(dispute.claimant_1_claim_id) === claimId;
+  const role: 'original' | 'contesting' = isOriginal ? 'original' : 'contesting';
+  const statusAtDispute = (isOriginal ? dispute.claimant_1_status_at_dispute : dispute.claimant_2_status_at_dispute) ?? null;
+  const paidAtDispute = toIsoOrNull(isOriginal ? dispute.claimant_1_paid_at_dispute : dispute.claimant_2_paid_at_dispute);
+  const isOpen = dispute.resolved_at === null || dispute.resolved_at === undefined;
+  return {
+    id: String(dispute.id),
+    is_open: isOpen,
+    resolved_at: toIsoOrNull(dispute.resolved_at),
+    resolved_claim_id: dispute.resolved_claim_id ?? null,
+    resolved_by: dispute.resolved_by ?? null,
+    claimant_role: role,
+    claimant_1_claim_id: String(dispute.claimant_1_claim_id ?? ''),
+    claimant_2_claim_id: String(dispute.claimant_2_claim_id ?? ''),
+    claimant_1_status_at_dispute: dispute.claimant_1_status_at_dispute ?? null,
+    claimant_2_status_at_dispute: dispute.claimant_2_status_at_dispute ?? null,
+    claimant_1_paid_at_dispute: toIsoOrNull(dispute.claimant_1_paid_at_dispute),
+    claimant_2_paid_at_dispute: toIsoOrNull(dispute.claimant_2_paid_at_dispute),
+    snapshot_incomplete: isOpen && statusAtDispute === null && paidAtDispute === null,
+  };
+}
+
+/** Dispute context attached to a claim row (current + Phase 6C snapshot). */
+export interface AdminClaimDisputeContext {
+  id: string;
+  is_open: boolean;
+  resolved_at: string | null;
+  resolved_claim_id: string | null;
+  resolved_by: string | null;
+  /** This claim's role in the dispute — never inferred from array position. */
+  claimant_role: 'original' | 'contesting';
+  claimant_1_claim_id: string;
+  claimant_2_claim_id: string;
+  /** Phase 6C snapshot: status AT DISPUTE CREATION (null for pre-snapshot rows). */
+  claimant_1_status_at_dispute: string | null;
+  claimant_2_status_at_dispute: string | null;
+  claimant_1_paid_at_dispute: string | null;
+  claimant_2_paid_at_dispute: string | null;
+  /**
+   * R1: true only when this dispute is UNRESOLVED and BOTH snapshot columns for
+   * this claimant are null — i.e. the row was created before the Phase 6C
+   * snapshot existed. Payment state at dispute creation is then UNKNOWN, and
+   * must never be read as "unpaid". Not invented: derived from actual columns.
+   */
+  snapshot_incomplete: boolean;
+}
+
+/**
+ * One row of the admin claims list. Every field is selected explicitly and
+ * enriched via batched lookups (no N+1), never by spreading a claim row.
+ */
+export interface AdminClaimListRow {
+  id: string;
+  item_id: string | null;
+  status: string;
+  /** AUTHORITATIVE payment truth (ISO timestamp | null). */
+  paid_at: string | null;
+  verification_tier: number;
+  created_at: string;
+  updated_at: string;
+  agent_confirmed_at: string | null;
+  settle_at: string | null;
+  /** Raw claimant phone — the DTO masks it; never returned as-is to a client. */
+  owner_phone: string;
+  item: {
+    id: string;
+    category_id: string | null;
+    status: string;
+    is_sensitive_document: boolean;
+    flaggedForReview: boolean;
+    description: string | null;
+    location_description: string | null;
+    assigned_agent_id: string | null;
+  } | null;
+  category: { id: string; name_en: string; name_sw: string } | null;
+  agent: { id: string; business_name: string; contact_phone: string } | null;
+  dispute: AdminClaimDisputeContext | null;
+}
+
+/** Detail adds operational fields the list deliberately omits. */
+export interface AdminClaimDetailRow extends AdminClaimListRow {
+  /** Presence flags only — never the underlying values. */
+  identifying_detail_present: boolean;
+  id_proof_present: boolean;
+  handover_photo_present: boolean;
+  /** Other claims on the same item (dispute context for an admin). */
+  sibling_claims: Array<{
+    id: string;
+    status: string;
+    paid_at: string | null;
+    owner_phone: string;
+    created_at: string;
+  }>;
 }
 
 export interface LedgerEntry {
@@ -244,6 +452,23 @@ export interface AuditLog {
   action: string;
   details: string;
   created_at: string;
+}
+
+export interface LedgerEntrySummary {
+  id: string;
+  claim_id: string | null;
+  type: LedgerEntry["type"];
+  amount: LedgerEntry["amount"];
+  status: LedgerEntry["status"];
+  created_at: LedgerEntry["created_at"];
+}
+
+export interface AuditLogSummary {
+  id: string;
+  action: AuditLog["action"];
+  admin_user: AuditLog["admin_user"];
+  created_at: AuditLog["created_at"];
+  details: string;
 }
 
 export interface AdminUser {
@@ -391,6 +616,7 @@ function parseClaim(row: any): Claim {
     verification_tier: row.verification_tier as any,
     status: row.status as any,
     owner_id_proof_url: row.owner_id_proof_url,
+    paid_at: row.paid_at ? new Date(row.paid_at).toISOString() : null,
     payment_reference: row.payment_reference,
     owner_identifying_details: row.owner_identifying_details || null,
     owner_email: row.owner_email || null,
@@ -415,6 +641,10 @@ function parseDispute(row: any): Dispute {
     resolved_claim_id: row.resolved_claim_id,
     resolved_at: row.resolved_at ? new Date(row.resolved_at).toISOString() : null,
     admin_notes: row.admin_notes,
+    claimant_1_status_at_dispute: row.claimant_1_status_at_dispute ?? null,
+    claimant_2_status_at_dispute: row.claimant_2_status_at_dispute ?? null,
+    claimant_1_paid_at_dispute: row.claimant_1_paid_at_dispute ? new Date(row.claimant_1_paid_at_dispute).toISOString() : null,
+    claimant_2_paid_at_dispute: row.claimant_2_paid_at_dispute ? new Date(row.claimant_2_paid_at_dispute).toISOString() : null,
     created_at: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
   };
 }
@@ -483,6 +713,68 @@ async function signDispute(dispute: Dispute): Promise<Dispute> {
     updated.claimant_2_id_proof_url = await getSignedPhotoUrl(dispute.claimant_2_id_proof_url);
   }
   return updated;
+}
+
+// ---------------------------------------------------------------------------
+// LOST-ITEM REPORT (Phase 9A)
+// ---------------------------------------------------------------------------
+// The persisted shape of a lost report. See the `lost_reports` comment in
+// schema.ts for the field-by-field rationale. NOTE: `document_number_hash` is
+// the PROTECTED identifier — it must never be handed to a client DTO; use
+// services/lostReportView.ts, which omits it.
+export interface LostReport {
+  id: string;
+  customer_id: string;
+  category_id: string;
+  status: string;
+  county: string;
+  location_area: string;
+  location_landmark: string | null;
+  lost_at_from: string;
+  lost_at_to: string | null;
+  brand: string | null;
+  model: string | null;
+  colour: string | null;
+  material: string | null;
+  description: string | null;
+  distinctive_marks: string | null;
+  document_type: string | null;
+  document_number_hash: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Normalizes a raw row (real Postgres returns Date objects for timestamptz;
+// the in-memory mock returns whatever it was given) into ISO strings, mirroring
+// parseFoundItem. Column order/whitespace is never trusted — every field is
+// read by name.
+function parseLostReport(row: any): LostReport {
+  const iso = (value: any): string | null => {
+    if (!value) return null;
+    const d = new Date(value);
+    return isNaN(d.getTime()) ? null : d.toISOString();
+  };
+  return {
+    id: row.id,
+    customer_id: row.customer_id,
+    category_id: row.category_id,
+    status: row.status,
+    county: row.county,
+    location_area: row.location_area,
+    location_landmark: row.location_landmark ?? null,
+    lost_at_from: iso(row.lost_at_from) || "",
+    lost_at_to: iso(row.lost_at_to),
+    brand: row.brand ?? null,
+    model: row.model ?? null,
+    colour: row.colour ?? null,
+    material: row.material ?? null,
+    description: row.description ?? null,
+    distinctive_marks: row.distinctive_marks ?? null,
+    document_type: row.document_type ?? null,
+    document_number_hash: row.document_number_hash ?? null,
+    created_at: iso(row.created_at) || new Date().toISOString(),
+    updated_at: iso(row.updated_at) || new Date().toISOString(),
+  };
 }
 
 class DatabaseEngine {
@@ -1322,6 +1614,34 @@ class DatabaseEngine {
     }
   }
 
+  /**
+   * Returns a bounded (newest-first), deterministic recent window of ledger
+   * entries for the admin dashboard bulk payload.
+   *
+   * The dashboard is fetched on every console page-load, so we must never ship
+   * the full historical ledger in the bulk response. A bounded window of the
+   * most recent entries is enough for at-a-glance operational awareness, and
+   * the settlement/refund paths continue to use getLedgerEntriesForClaim() for
+   * claim-specific full history.
+   *
+   * The Settlement Reconciliation Tests (SETTLEMENT_WINDOW_* / finalSettlement)
+   * rely on deterministic ordering: when two entries share the same created_at,
+   * we order by id DESC so the "newest" entry is deterministic and repeatable.
+   */
+  public async getRecentLedgerEntries(limit: number = 100): Promise<LedgerEntry[]> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(ledgerTable)
+        .orderBy(desc(ledgerTable.created_at), desc(ledgerTable.id))
+        .limit(limit);
+      return rows.map(parseLedgerEntry);
+    } catch (error) {
+      console.error("Database query failed:", error);
+      throw new Error("Failed to query recent ledger entries.", { cause: error });
+    }
+  }
+
   // Records the outcome of one payout attempt against a specific ledger
   // row. 'success' marks it 'completed' (money genuinely confirmed sent —
   // never set this from a bare HTTP 200, only from an actual provider
@@ -1384,6 +1704,31 @@ class DatabaseEngine {
     }
   }
 
+  /**
+   * Returns a bounded (newest-first) window of recent audit log entries for the
+   * admin dashboard bulk payload.
+   *
+   * The dashboard is fetched on every console page-load, so we must never ship the
+   * full historical audit trail in the bulk response. A bounded window of the most
+   * recent entries is enough for at-a-glance operational awareness, and the audit
+   * attribution tests rely on deterministic ordering: when two entries share the same
+   * created_at, we order by id DESC so the "newest" entry is deterministic and
+   * repeatable.
+   */
+  public async getRecentAuditLogs(limit: number = 100): Promise<AuditLog[]> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(auditLogTable)
+        .orderBy(desc(auditLogTable.created_at), desc(auditLogTable.id))
+        .limit(limit);
+      return rows.map(parseAuditLog);
+    } catch (error) {
+      console.error("Database query failed:", error);
+      throw new Error("Failed to query recent audit logs.", { cause: error });
+    }
+  }
+
   // Save new found item
   public async createItem(item: Omit<FoundItem, "created_at">): Promise<FoundItem> {
     try {
@@ -1434,25 +1779,45 @@ class DatabaseEngine {
     }
   }
 
-  // Update item status
+  // Update item status.
+  //
+  // ATOMIC-AUDIT (Phase 6G): the status mutation and its audit row commit in
+  // ONE transaction, mirroring the central transition contract. Before this
+  // change the two writes were independent — a failure between them either
+  // lost the audit record for a mutation that committed, or (never) recorded
+  // an audit row for a mutation that rolled back.
   public async updateItemStatus(id: string, status: FoundItem["status"]): Promise<void> {
     try {
-      await drizzleDb.update(itemsTable).set({ status }).where(eq(itemsTable.id, id));
-      await this.logAudit("SYSTEM", "UPDATE_ITEM_STATUS", `Item ${id} status changed to ${status}`);
+      await drizzleDb.transaction(async (tx) => {
+        await tx.update(itemsTable).set({ status }).where(eq(itemsTable.id, id));
+        await this.logAuditInTx(tx, "SYSTEM", "UPDATE_ITEM_STATUS", `Item ${id} status changed to ${status}`);
+      });
     } catch (error) {
       console.error("Database update failed:", error);
       throw new Error("Failed to update item status.", { cause: error });
     }
   }
 
-  // Update item status with rejection reason
-  public async rejectItem(id: string, reason: string): Promise<void> {
+  // Update item status with rejection reason.
+  //
+  // `actor` is the identity recorded in the audit trail. It is an explicit
+  // parameter rather than a hard-coded string because two genuinely different
+  // callers exist: an authenticated agent rejecting a drop-off at their hub,
+  // and an authenticated administrator rejecting an item from the console.
+  // Attributing both to "SYSTEM" made a manual admin rejection
+  // indistinguishable from an internal process action. The default preserves
+  // the previous behaviour for any future system-level caller that does not
+  // supply an identity.
+  public async rejectItem(id: string, reason: string, actor: string = "SYSTEM"): Promise<void> {
     try {
-      await drizzleDb
-        .update(itemsTable)
-        .set({ status: "rejected", rejection_reason: reason })
-        .where(eq(itemsTable.id, id));
-      await this.logAudit("SYSTEM", "REJECT_ITEM", `Item ${id} was rejected. Reason: ${reason}`);
+      // ATOMIC-AUDIT (Phase 6G): rejection and its audit row commit together.
+      await drizzleDb.transaction(async (tx) => {
+        await tx
+          .update(itemsTable)
+          .set({ status: "rejected", rejection_reason: reason })
+          .where(eq(itemsTable.id, id));
+        await this.logAuditInTx(tx, actor, "REJECT_ITEM", `Item ${id} was rejected. Reason: ${reason}`);
+      });
     } catch (error) {
       console.error("Database reject failed:", error);
       throw new Error("Failed to reject item.", { cause: error });
@@ -1466,8 +1831,12 @@ class DatabaseEngine {
   // why for later audit.
   public async setItemReviewStatus(id: string, status: "suspected_stolen" | "legal_hold" | "at_agent", reason: string, adminUser: string): Promise<void> {
     try {
-      await drizzleDb.update(itemsTable).set({ status }).where(eq(itemsTable.id, id));
-      await this.logAudit(adminUser, `ITEM_REVIEW_STATUS_${status.toUpperCase()}`, `Item ${id}: ${reason}`);
+      // ATOMIC-AUDIT (Phase 6G): the review-state change and its audit row
+      // commit in ONE transaction — same rationale as updateItemStatus above.
+      await drizzleDb.transaction(async (tx) => {
+        await tx.update(itemsTable).set({ status }).where(eq(itemsTable.id, id));
+        await this.logAuditInTx(tx, adminUser, "ITEM_REVIEW_STATUS_" + status.toUpperCase(), `Item ${id}: ${reason}`);
+      });
     } catch (error) {
       console.error("Database update failed:", error);
       throw new Error("Failed to update item review status.", { cause: error });
@@ -1488,8 +1857,14 @@ class DatabaseEngine {
     }
   }
 
-  // Manually clear/reset a phone number's reputation block
-  public async clearPhoneReputation(phoneNumber: string): Promise<void> {
+  // Manually clear/reset a phone number's reputation block.
+  //
+  // `actor` is the identity recorded in the audit trail. It was previously the
+  // hard-coded literal "ADMIN", which meant the audit entry could never answer
+  // "which administrator cleared this fraud/reputation flag?". The default
+  // keeps an explicit, honest system identity for any non-admin internal
+  // caller rather than silently attributing its work to an administrator.
+  public async clearPhoneReputation(phoneNumber: string, actor: string = "SYSTEM"): Promise<void> {
     try {
       const rows = await drizzleDb
         .select()
@@ -1509,7 +1884,7 @@ class DatabaseEngine {
             is_cleared: true,
           });
       }
-      await this.logAudit("ADMIN", "CLEAR_PHONE_REPUTATION", `Reputation flag manually cleared for phone ${phoneNumber}`);
+      await this.logAudit(actor, "CLEAR_PHONE_REPUTATION", `Reputation flag manually cleared for phone ${phoneNumber}`);
     } catch (error) {
       console.error("Failed to clear phone reputation:", error);
       throw new Error("Failed to clear phone reputation.", { cause: error });
@@ -1607,6 +1982,11 @@ class DatabaseEngine {
   }
 
   // Create new claim
+  // `paid_at` is deliberately NOT taken from the caller: a claim can never be
+  // CREATED already-paid. Payment truth can only be established by
+  // attemptClaimEscrowHold()'s guarded CAS, which is the single authoritative
+  // confirmation point (SC-4/SC-6). This makes "paid_at is only written by
+  // the CAS" a mechanical, auditable invariant rather than a convention.
   public async createClaim(claim: Omit<Claim, "created_at" | "updated_at">): Promise<Claim> {
     try {
       const rows = await drizzleDb
@@ -1619,6 +1999,7 @@ class DatabaseEngine {
           verification_tier: claim.verification_tier,
           status: claim.status,
           owner_id_proof_url: claim.owner_id_proof_url,
+          paid_at: null,
           payment_reference: claim.payment_reference,
           owner_identifying_details: claim.owner_identifying_details,
           owner_email: claim.owner_email || null,
@@ -1639,7 +2020,24 @@ class DatabaseEngine {
     }
   }
 
-  // Update claim status
+  // Update claim status.
+  //
+  // LOW-LEVEL PRIMITIVE — NOT the sanctioned lifecycle entry point.
+  // -----------------------------------------------------------------------
+  // This writes ANY status unconditionally (no expected-state guard, no
+  // allowed-edge check, no terminal protection). It predates the central
+  // transition contract and is retained only for (a) test fixtures that need
+  // to place a claim in an arbitrary state and (b) the two callers that were
+  // deliberately left on it because their semantics do not fit a single
+  // expected source state. Production lifecycle moves MUST go through
+  // transitionClaimStatus() below.
+  //
+  // The callers migrated to transitionClaimStatus are: /verify-otp,
+  // /confirm-viewing and the non-sensitive "first to pay wins" auto-reject.
+  //
+  // `paymentRef` writes claims.payment_reference. That field is a PROVIDER
+  // REFERENCE, never proof of payment (SC-4/SC-6) — do not pass anything here
+  // that a payment-truth reader could mistake for confirmation.
   public async updateClaimStatus(id: string, status: Claim["status"], paymentRef?: string, agentConfirmedAt?: Date | null): Promise<void> {
     try {
       const updateData: any = {
@@ -1669,6 +2067,115 @@ class DatabaseEngine {
     }
   }
 
+  // =========================================================================
+  // CENTRAL CLAIM TRANSITION CONTRACT (SC-2 / SC-7 / SC-8)
+  // =========================================================================
+  // The ONE sanctioned way to move a claim between lifecycle states.
+  //
+  // Guarantees, in order:
+  //   1. ALLOWED EDGE   — the (from -> to) pair must exist in
+  //                       CLAIM_ALLOWED_TRANSITIONS (config/claimStatuses.ts).
+  //                       Anything else, including EVERY backward move out of a
+  //                       terminal status, is refused with INVALID_TRANSITION.
+  //   2. EXPECTED STATE — the caller must declare which source state(s) it
+  //                       believes the claim is in. Enforced by the CAS below,
+  //                       not by a read-then-write.
+  //   3. ATOMIC CAS     — UPDATE ... WHERE id = ? AND status IN (expected).
+  //                       Zero rows updated means somebody else moved the claim
+  //                       first: STATE_CONFLICT, never a silent success.
+  //   4. TERMINAL GUARD — terminal statuses have no outgoing edges at all.
+  //   5. ATOMIC AUDIT   — the status change and its audit row commit in ONE
+  //                       transaction, so an audit record can never claim a
+  //                       mutation that rolled back, nor be lost after one
+  //                       that committed.
+  //   6. ATTRIBUTION    — the actor is a required parameter; "SYSTEM" is only
+  //                       ever passed by genuinely system-driven callers.
+  //
+  // Returns a typed result instead of throwing, so HTTP callers can map
+  // STATE_CONFLICT to 409 and INVALID_TRANSITION to 422 without swallowing
+  // genuine database failures into a 4xx.
+  public async transitionClaimStatus(params: {
+    claimId: string;
+    expected: Claim["status"] | Claim["status"][];
+    to: Claim["status"];
+    actor: string;
+    action: string;
+    details: string;
+    /**
+     * Additional columns to write in the SAME guarded statement, e.g.
+     * `{ agent_confirmed_at: new Date() }`. Deliberately restricted to
+     * non-lifecycle bookkeeping: `status`, `paid_at` and `payment_reference`
+     * must never be passed here (paid_at has exactly one writer — the escrow
+     * CAS — and payment_reference is a provider reference, not truth).
+     */
+    extraSet?: Record<string, unknown>;
+  }): Promise<
+    | { ok: true; from: string; to: string; alreadyInState: boolean; code?: undefined }
+    | { ok: false; code: 'NOT_FOUND' | 'INVALID_TRANSITION' | 'STATE_CONFLICT'; from?: string }
+  > {
+    const { claimId, to, actor, action, details, extraSet } = params;
+    const expected = Array.isArray(params.expected) ? params.expected : [params.expected];
+
+    try {
+      return await drizzleDb.transaction(async (tx) => {
+        const rows = await tx.select().from(claimsTable).where(eq(claimsTable.id, claimId));
+        if (rows.length === 0) return { ok: false as const, code: 'NOT_FOUND' as const };
+        const from = String(rows[0].status);
+
+        // A transition must declare a plausible source state.
+        if (!expected.includes(from as Claim["status"])) {
+          return { ok: false as const, code: 'STATE_CONFLICT' as const, from };
+        }
+        if (from === to) {
+          // Explicit, idempotent no-op: the caller wanted the state the claim is
+          // already in. No write, no second audit row.
+          return { ok: true as const, from, to, alreadyInState: true };
+        }
+        if (TERMINAL_CLAIM_STATUSES.has(from) || !isAllowedClaimTransition(from, to)) {
+          return { ok: false as const, code: 'INVALID_TRANSITION' as const, from };
+        }
+
+        const updated = await tx
+          .update(claimsTable)
+          .set({ ...(extraSet || {}), status: to, updated_at: new Date() } as any)
+          .where(and(eq(claimsTable.id, claimId), inArray(claimsTable.status, expected as any)))
+          .returning({ id: claimsTable.id });
+
+        if (updated.length === 0) {
+          return { ok: false as const, code: 'STATE_CONFLICT' as const, from };
+        }
+
+        await tx.insert(auditLogTable).values({
+          id: "AUD-" + Math.random().toString(36).substr(2, 9).toUpperCase(),
+          admin_user: actor,
+          action,
+          details,
+        });
+
+        return { ok: true as const, from, to, alreadyInState: false };
+      });
+    } catch (error) {
+      console.error("Failed to transition claim status:", error);
+      throw new Error("Failed to transition claim status.", { cause: error });
+    }
+  }
+
+  // Assert-only guard for the existing CAS/transactional writers that own
+  // their own atomic statement (attemptClaimEscrowHold, attemptSettlementRelease,
+  // revertSettlementRelease, finalizeSettlement, enterPendingSettlement,
+  // finalizeClaimRefund, revertClaimRefundLock, expirePendingPaymentClaim).
+  // Those already provide guarantees (1)-(3) above individually; this adds the
+  // allowed-edge check so an illegal edge cannot be executed even by a direct
+  // caller. It deliberately does NOT replace their CAS.
+  public assertClaimTransitionAllowed(from: string, to: string): void {
+    if (from === to) return;
+    if (TERMINAL_CLAIM_STATUSES.has(from) || !isAllowedClaimTransition(from, to)) {
+      throw new Error(
+        `Illegal claim transition ${from} -> ${to}: not present in CLAIM_ALLOWED_TRANSITIONS (config/claimStatuses.ts).`,
+      );
+    }
+  }
+
   // Atomic, race-safe expiry of a payment window (closes audit finding C1).
   // The expiry sweep and the inline claim-expiry check must never overwrite a
   // claim that a webhook has since confirmed paid. Sequence:
@@ -1684,6 +2191,7 @@ class DatabaseEngine {
   // won the race, or it was already expired), no change is made and false is
   // returned, so the caller can never record a strike or clobber a payment.
   public async expirePendingPaymentClaim(claimId: string): Promise<boolean> {
+    this.assertClaimTransitionAllowed('pending_payment', 'payment_window_expired');
     try {
       const rows = await drizzleDb
         .update(claimsTable)
@@ -1853,6 +2361,18 @@ class DatabaseEngine {
   public async createDispute(dispute: Omit<Dispute, "created_at">): Promise<Dispute> {
     try {
       return await drizzleDb.transaction(async (tx) => {
+        // SC-3 SNAPSHOT — capture each participant's state BEFORE the status
+        // overwrite below destroys it. Without this, resolveDispute() has to
+        // reconstruct "had this claimant actually paid?" from a row whose
+        // status has already been forced to 'disputed', which is exactly how
+        // the payment_reference overload became a money-safety bug.
+        const participants = await tx
+          .select()
+          .from(claimsTable)
+          .where(inArray(claimsTable.id, [dispute.claimant_1_claim_id, dispute.claimant_2_claim_id]));
+        const byId = new Map(participants.map((c: any) => [c.id, c]));
+        const snap = (id: string) => byId.get(id) as any;
+
         const rows = await tx
           .insert(disputesTable)
           .values({
@@ -1862,6 +2382,10 @@ class DatabaseEngine {
             claimant_2_claim_id: dispute.claimant_2_claim_id,
             claimant_1_id_proof_url: dispute.claimant_1_id_proof_url,
             claimant_2_id_proof_url: dispute.claimant_2_id_proof_url,
+            claimant_1_status_at_dispute: snap(dispute.claimant_1_claim_id)?.status ?? null,
+            claimant_2_status_at_dispute: snap(dispute.claimant_2_claim_id)?.status ?? null,
+            claimant_1_paid_at_dispute: snap(dispute.claimant_1_claim_id)?.paid_at ?? null,
+            claimant_2_paid_at_dispute: snap(dispute.claimant_2_claim_id)?.paid_at ?? null,
           })
           .returning();
 
@@ -1879,6 +2403,16 @@ class DatabaseEngine {
         // after canCreateClaim() has already confirmed the item is
         // 'at_agent', so removing this was a pure correctness fix, not a
         // behavior change for any code path that exists today.
+        // Edge-validated status capture. `from -> disputed` is permitted from
+        // any NON-TERMINAL state (the '*' wildcard source) and is a no-op when a
+        // participant is already 'disputed' (server.ts creates the contesting
+        // claim directly in that status). A terminal participant — e.g. a
+        // released or refunded claim — is REFUSED rather than silently
+        // corrupted into a live dispute.
+        for (const claimId of [dispute.claimant_1_claim_id, dispute.claimant_2_claim_id]) {
+          const prior = String(snap(claimId)?.status ?? 'pending_verification');
+          this.assertClaimTransitionAllowed(prior, 'disputed');
+        }
         await tx.update(claimsTable).set({ status: "disputed" }).where(eq(claimsTable.id, dispute.claimant_1_claim_id));
         await tx.update(claimsTable).set({ status: "disputed" }).where(eq(claimsTable.id, dispute.claimant_2_claim_id));
 
@@ -1997,7 +2531,9 @@ class DatabaseEngine {
           .where(and(eq(disputesTable.id, disputeId), isNull(disputesTable.resolved_at)))
           .returning();
         if (resolvedRows.length === 0) {
-          throw new Error("This dispute was just resolved by another admin — refresh and try again.");
+          // D-B2: a KNOWN concurrency conflict, not a server failure. Typed so
+          // the route can answer 409 Conflict rather than 500.
+          throw new ClaimStateConflictError("This dispute was just resolved by another admin — refresh and try again.");
         }
 
         // BUGFIX: this used to unconditionally set the winning claim to
@@ -2015,9 +2551,24 @@ class DatabaseEngine {
         // the losing claim below: only promote to escrow_held if the
         // winner genuinely already paid; otherwise send it back through
         // normal verification like any other claim.
+        // PAYMENT TRUTH (SC-4/SC-6): the winner's state is decided from
+        // `paid_at` — the authoritative confirmation marker written only by
+        // attemptClaimEscrowHold()'s guarded CAS. `payment_reference` is a
+        // PROVIDER REFERENCE and is written on payment INITIATION by the legacy
+        // /pay route, so testing it here used to be able to treat an unpaid
+        // claim as paid.
+        //
+        // The SC-3 snapshot is consulted as a secondary, historical source for
+        // disputes filed before paid_at existed — the live column is preferred,
+        // because attemptClaimEscrowHold() only ever sets it (it is never
+        // cleared by a later transition, including the 'disputed' overwrite).
         const winningClaimRows = await tx.select().from(claimsTable).where(eq(claimsTable.id, winningClaimId));
         const winningClaim = winningClaimRows[0];
-        const winnerAlreadyPaid = !!(winningClaim && winningClaim.payment_reference);
+        const winnerPaidSnapshot = dispute.claimant_1_claim_id === winningClaimId
+          ? dispute.claimant_1_paid_at_dispute
+          : dispute.claimant_2_paid_at_dispute;
+        const winnerAlreadyPaid = !!(winningClaim && (winningClaim.paid_at || winnerPaidSnapshot));
+        this.assertClaimTransitionAllowed(String(winningClaim?.status ?? 'disputed'), winnerAlreadyPaid ? 'escrow_held' : 'pending_verification');
         await tx
           .update(claimsTable)
           .set({ status: winnerAlreadyPaid ? "escrow_held" : "pending_verification", updated_at: new Date() })
@@ -2043,16 +2594,27 @@ class DatabaseEngine {
           // (a second claimant can file against an item whose first claim
           // is anywhere in its lifecycle, paid or not). That means by the
           // time a dispute reaches resolution, the losing claim's `status`
-          // column has ALWAYS already been overwritten to 'disputed' —
-          // checking `status === 'escrow_held'` here can never be true,
-          // making the refund path below permanently unreachable dead code
-          // despite looking correct. `payment_reference` is the right
-          // signal instead: it's set once, exactly when a real M-Pesa
-          // payment is confirmed (attemptClaimEscrowHold), and is never
-          // cleared by any later status transition — confirmed by tracing
-          // every updateClaimStatus call site in server.ts. It survives
-          // being overwritten to 'disputed' where `status` does not.
-          const actuallyPaid = !!(losingClaim && losingClaim.payment_reference);
+          // column has ALWAYS already been overwritten to 'disputed', so
+          // `status === 'escrow_held'` here can never be true.
+          //
+          // SC-4/SC-6 FIX: the prior signal here was `payment_reference`,
+          // which is WRONG — /pay wrote the provider's checkout-request id into
+          // that column the moment an STK push was INITIATED, and the
+          // first-to-pay auto-reject wrote a rejection MESSAGE into it. Either
+          // would have made an unpaid loser look paid and created a real
+          // refund obligation for money that was never received.
+          //
+          // `paid_at` is the authoritative marker (written only by
+          // attemptClaimEscrowHold()'s guarded CAS); the SC-3 snapshot is the
+          // historical fallback for pre-existing disputes.
+          const loserPaidSnapshot = dispute.claimant_1_claim_id === losingClaimId
+            ? dispute.claimant_1_paid_at_dispute
+            : dispute.claimant_2_paid_at_dispute;
+          const actuallyPaid = !!(losingClaim && (losingClaim.paid_at || loserPaidSnapshot));
+          this.assertClaimTransitionAllowed(
+            String(losingClaim?.status ?? 'disputed'),
+            actuallyPaid ? 'refunding' : 'rejected',
+          );
 
           if (losingClaim && actuallyPaid) {
             // Lock the claim into 'refunding' inside this same transaction —
@@ -2091,6 +2653,13 @@ class DatabaseEngine {
         return { refundNeededForClaimId, refundAmount, refundPhone };
       });
     } catch (error) {
+      // D-B2: preserve KNOWN state/concurrency conflicts through the wrapper so
+      // the HTTP layer can answer 409. Everything else is genuinely unexpected
+      // and keeps the original wrapping (which also keeps the internal cause
+      // out of any client-visible message).
+      if (error instanceof ClaimStateConflictError || error instanceof ClaimInvalidTransitionError) {
+        throw error;
+      }
       console.error("Dispute resolution transaction failed:", error);
       throw new Error("Failed to resolve dispute.", { cause: error });
     }
@@ -2127,6 +2696,7 @@ class DatabaseEngine {
         // second ledger/audit row). All of this is inside one transaction, so
         // the claim state, the item status, the refund ledger row and the audit
         // entry commit together or not at all.
+        this.assertClaimTransitionAllowed('refunding', 'refunded');
         const updatedRows = await tx
           .update(claimsTable)
           .set({ status: "refunded", updated_at: new Date() })
@@ -2134,8 +2704,40 @@ class DatabaseEngine {
           .returning();
         if (updatedRows.length === 0) return false;
         const claim = updatedRows[0];
+
+        // -----------------------------------------------------------------
+        // SC-5 — REFUND / ITEM INVARIANT
+        // -----------------------------------------------------------------
+        // The previous behaviour unconditionally forced the item back to
+        // 'at_agent'. That is wrong whenever another claim still genuinely
+        // controls the item: a refunded loser's money going back must not make
+        // the item claimable again while the WINNING claim is sitting in
+        // pending_verification or escrow_held (the normal dispute outcome), nor
+        // while a further dispute is open, nor while the item is frozen
+        // (suspected_stolen / legal_hold).
+        //
+        // Invariant: the item may return to 'at_agent' after a refund ONLY when
+        //   (a) no OTHER claim on the item is in a non-terminal state, AND
+        //   (b) the item is not on hold and has not already been physically
+        //       handed over ('claimed').
+        // Condition (b) makes this a no-op in the common case anyway (a dispute
+        // does not change item custody), which is exactly the point: the item
+        // status is left alone unless there is positive evidence it is safe to
+        // make the item claimable again.
         if (claim?.item_id) {
-          await tx.update(itemsTable).set({ status: "at_agent" }).where(eq(itemsTable.id, claim.item_id));
+          const siblingClaims = await tx
+            .select()
+            .from(claimsTable)
+            .where(eq(claimsTable.item_id, claim.item_id));
+          const otherLiveClaim = siblingClaims.some(
+            (c: any) => c.id !== claimId && !TERMINAL_CLAIM_STATUSES.has(String(c.status)),
+          );
+          const itemRows = await tx.select().from(itemsTable).where(eq(itemsTable.id, claim.item_id));
+          const currentItemStatus = String(itemRows[0]?.status ?? '');
+          const itemIsFrozenOrHandedOver = ['suspected_stolen', 'legal_hold', 'claimed'].includes(currentItemStatus);
+          if (!otherLiveClaim && !itemIsFrozenOrHandedOver) {
+            await tx.update(itemsTable).set({ status: "at_agent" }).where(eq(itemsTable.id, claim.item_id));
+          }
         }
         const refundId = "TXN-" + Math.random().toString(36).substr(2, 9).toUpperCase();
         await tx.insert(ledgerTable).values({
@@ -2178,6 +2780,7 @@ class DatabaseEngine {
   // claim's still-set payment_reference — it is a financial reconciliation
   // concern, not a claim-status concern.
   public async revertClaimRefundLock(claimId: string, reason: string, adminUser = "SYSTEM"): Promise<boolean> {
+    this.assertClaimTransitionAllowed('refunding', 'rejected');
     try {
       const rows = await drizzleDb
         .update(claimsTable)
@@ -2309,6 +2912,34 @@ class DatabaseEngine {
       console.error("Database write failed:", error);
       throw new Error("Failed to write audit log.", { cause: error });
     }
+  }
+
+  // Transaction-scoped audit write (6G/legacy-hardening): the SAME audit row
+  // logAudit() would write, but into a caller-supplied transaction handle so a
+  // state mutation and its audit record commit (or roll back) TOGETHER.
+  //
+  // Before this existed, several legacy writers did:
+  //     await drizzleDb.update(...);   // mutation commits on its own
+  //     await this.logAudit(...);      // separate statement — can be lost after
+  //                                    // a committed mutation or, worse, record
+  //                                    // a mutation that then failed
+  // The central transition contract (transitionClaimStatus) already wrote its
+  // audit inside tx; this helper lets the legacy writers meet the same
+  // ATOMIC-AUDIT guarantee without changing their external signatures.
+  // Throws propagate so the surrounding transaction rolls back.
+  private async logAuditInTx(
+    tx: { insert: Function },
+    adminUser: string,
+    action: string,
+    details: string
+  ): Promise<void> {
+    const newId = "AUD-" + Math.random().toString(36).substr(2, 9).toUpperCase();
+    await tx.insert(auditLogTable).values({
+      id: newId,
+      admin_user: adminUser,
+      action,
+      details,
+    });
   }
 
   // --- AGENT VERIFICATION / CORRECTION WORKFLOW ---
@@ -2676,10 +3307,26 @@ class DatabaseEngine {
   // SMS code silently stops working) and duplicate emails/SMS go out. This
   // mirrors the attemptSettlementRelease() CAS pattern used for payout release.
   public async attemptClaimEscrowHold(claimId: string, paymentRef: string): Promise<boolean> {
+    // Defence in depth (SC-2/§18): refuse to execute an edge that is not in the
+    // canonical transition table. pending_payment -> escrow_held is the ONLY
+    // legal entry into escrow_held, and this CAS is its only producer.
+    if (!isAllowedClaimTransition('pending_payment', 'escrow_held')) {
+      throw new Error('Illegal transition pending_payment -> escrow_held rejected by the claim transition table.');
+    }
     try {
       const rows = await drizzleDb
         .update(claimsTable)
-        .set({ status: 'escrow_held', payment_reference: paymentRef || null, updated_at: new Date() })
+        .set({
+          status: 'escrow_held',
+          // THE authoritative payment confirmation (SC-4/SC-6). Set here and
+          // nowhere else: this statement only matches a claim still in
+          // 'pending_payment', so a duplicate webhook, a wrong claim/invoice,
+          // a failed or abandoned STK attempt can never reach it.
+          paid_at: new Date(),
+          // Provider reference only — never to be read as proof of payment.
+          payment_reference: paymentRef || null,
+          updated_at: new Date(),
+        })
         .where(and(eq(claimsTable.id, claimId), eq(claimsTable.status, 'pending_payment')))
         .returning();
       return rows.length > 0;
@@ -2729,6 +3376,7 @@ class DatabaseEngine {
    * window has passed and no dispute has frozen the claim in the meantime.
    */
   public async enterPendingSettlement(claimId: string, disputeWindowMs: number): Promise<{ success: boolean; message: string; settleAt?: Date }> {
+    this.assertClaimTransitionAllowed('escrow_held', 'pending_settlement');
     try {
       return await drizzleDb.transaction(async (tx) => {
         const claimRows = await tx.select().from(claimsTable).where(eq(claimsTable.id, claimId));
@@ -2836,6 +3484,7 @@ class DatabaseEngine {
    * released, or never reached handover.
    */
   public async attemptSettlementRelease(claimId: string, force: boolean = false): Promise<boolean> {
+    this.assertClaimTransitionAllowed('pending_settlement', 'releasing');
     try {
       const claimRows = await drizzleDb.select().from(claimsTable).where(eq(claimsTable.id, claimId));
       if (claimRows.length === 0) return false;
@@ -2861,6 +3510,7 @@ class DatabaseEngine {
   // retried admin override) can safely try again with the same booked
   // pending ledger rows.
   public async revertSettlementRelease(claimId: string): Promise<void> {
+    this.assertClaimTransitionAllowed('releasing', 'pending_settlement');
     try {
       await drizzleDb
         .update(claimsTable)
@@ -2878,6 +3528,7 @@ class DatabaseEngine {
    * rows, since those were already booked back in enterPendingSettlement.
    */
   public async finalizeSettlement(claimId: string): Promise<{ success: boolean; message: string }> {
+    this.assertClaimTransitionAllowed('releasing', 'released');
     try {
       return await drizzleDb.transaction(async (tx) => {
         const claimRows = await tx.select().from(claimsTable).where(eq(claimsTable.id, claimId));
@@ -4171,6 +4822,366 @@ class DatabaseEngine {
   // DTO is allowed to expose. Raw claim/item/agent rows never leave this
   // method, so security_answers / owner_* / finder_* / agent financial and
   // vetting fields cannot reach the customer layer by accident.
+  // =======================================================================
+  // PHASE 6D — CLAIMS ADMINISTRATION READ LAYER
+  // =======================================================================
+  // READ-ONLY. Every method in this block performs SELECTs only: no
+  // UPDATE/INSERT/DELETE, no transitionClaimStatus call, no OTP consumption,
+  // no payment/dispute/refund side effect. A read must never be able to change
+  // lifecycle state.
+  //
+  // Properties held deliberately:
+  //  * explicit column projections (never `SELECT *`, never `{ ...claim }`)
+  //  * batched `inArray` enrichment + Maps — no per-row query (N+1)
+  //  * bounded page size, deterministic ordering
+  //  * `getClaims()` (the unbounded full-table read) is NOT used anywhere here
+  //  * payment truth comes from `paid_at` ONLY
+  //
+  // NOTE ON THE DISPUTE HELPER BELOW: getDisputesByItemIds() is deliberately
+  // NOT reused. It runs signDispute(), which calls getSignedPhotoUrl() on each
+  // claimant's ID-proof key — a storage I/O call per dispute AND a materialised
+  // Tier-4 signed URL. A read model must do neither, so this block uses its own
+  // narrow dispute projection of non-sensitive columns only.
+
+  /**
+   * Bounded projection of item_ids that currently have an OPEN dispute, and
+   * those that have at least one RESOLVED dispute. Used only to push the
+   * `disputeState` filter into SQL.
+   *
+   * BOUNDED BY DISPUTE COUNT, not claim count — the disputes table holds at
+   * most one unresolved row per item (uq_disputes_one_unresolved_per_item).
+   * Column projection only; no join, no claim rows, no signed URLs.
+   */
+  public async getDisputedItemIdSets(): Promise<{ open: string[]; resolved: string[] }> {
+    try {
+      const rows = await drizzleDb
+        .select({ item_id: disputesTable.item_id, resolved_at: disputesTable.resolved_at })
+        .from(disputesTable);
+      const open = new Set<string>();
+      const resolved = new Set<string>();
+      for (const r of rows as any[]) {
+        if (!r.item_id) continue;
+        if (r.resolved_at === null || r.resolved_at === undefined) open.add(String(r.item_id));
+        else resolved.add(String(r.item_id));
+      }
+      return { open: Array.from(open), resolved: Array.from(resolved) };
+    } catch (error) {
+      // Established convention: log + rethrow. Never swallow a database failure
+      // into an empty result — "the query failed" and "nothing is disputed"
+      // must remain distinguishable.
+      console.error("Database query failed:", error);
+      throw new Error("Failed to query dispute item ids.", { cause: error });
+    }
+  }
+
+  /** Narrow, non-sensitive dispute projection for a batch of item ids. */
+  private async getAdminDisputeContextsByItemIds(itemIds: string[]): Promise<Map<string, any[]>> {
+    const byItem = new Map<string, any[]>();
+    if (itemIds.length === 0) return byItem;
+    const rows = await drizzleDb
+      .select({
+        id: disputesTable.id,
+        item_id: disputesTable.item_id,
+        claimant_1_claim_id: disputesTable.claimant_1_claim_id,
+        claimant_2_claim_id: disputesTable.claimant_2_claim_id,
+        resolved_claim_id: disputesTable.resolved_claim_id,
+        resolved_by: disputesTable.resolved_by,
+        resolved_at: disputesTable.resolved_at,
+        claimant_1_status_at_dispute: disputesTable.claimant_1_status_at_dispute,
+        claimant_2_status_at_dispute: disputesTable.claimant_2_status_at_dispute,
+        claimant_1_paid_at_dispute: disputesTable.claimant_1_paid_at_dispute,
+        claimant_2_paid_at_dispute: disputesTable.claimant_2_paid_at_dispute,
+      })
+      .from(disputesTable)
+      .where(inArray(disputesTable.item_id, itemIds));
+    for (const r of rows as any[]) {
+      const key = String(r.item_id);
+      const list = byItem.get(key);
+      if (list) list.push(r);
+      else byItem.set(key, [r]);
+    }
+    return byItem;
+  }
+
+  /**
+   * Server-side filtered, deterministic, bounded page of claims for Claims
+   * Administration. Returns domain rows; the DTO that reaches a client lives in
+   * services/adminSafeViews.ts. Never loads the whole claims table.
+   */
+  public async listAdminClaims(
+    params: AdminClaimListParams = {},
+  ): Promise<{ rows: AdminClaimListRow[]; hasMore: boolean }> {
+    const filters = params.filters ?? {};
+    const limit = Math.min(
+      Math.max(1, Math.floor(params.limit ?? ADMIN_CLAIMS_DEFAULT_LIMIT)),
+      ADMIN_CLAIMS_MAX_LIMIT,
+    );
+    const offset = Math.max(0, Math.floor(params.offset ?? 0));
+
+    try {
+      const where: any[] = [];
+      if (filters.statuses && filters.statuses.length > 0) {
+        where.push(inArray(claimsTable.status, filters.statuses as any));
+      }
+      // Payment truth — `paid_at` ONLY (never payment_reference).
+      if (filters.hasPaid === true) where.push(isNotNull(claimsTable.paid_at));
+      if (filters.hasPaid === false) where.push(isNull(claimsTable.paid_at));
+      if (filters.itemId) where.push(eq(claimsTable.item_id, filters.itemId));
+      if (filters.claimId) where.push(eq(claimsTable.id, filters.claimId));
+      if (filters.claimantPhone) where.push(eq(claimsTable.owner_phone, filters.claimantPhone));
+      if (filters.createdFrom) where.push(gte(claimsTable.created_at, filters.createdFrom));
+      if (filters.createdTo) where.push(lte(claimsTable.created_at, filters.createdTo));
+
+      if (filters.disputeState) {
+        const { open, resolved } = await this.getDisputedItemIdSets();
+        if (filters.disputeState === 'open') {
+          if (open.length === 0) return { rows: [], hasMore: false };
+          where.push(inArray(claimsTable.item_id, open));
+        } else if (filters.disputeState === 'resolved') {
+          if (resolved.length === 0) return { rows: [], hasMore: false };
+          where.push(inArray(claimsTable.item_id, resolved));
+        } else {
+          const anyDispute = Array.from(new Set([...open, ...resolved]));
+          if (anyDispute.length === 0) return { rows: [], hasMore: false };
+          where.push(notInArray(claimsTable.item_id, anyDispute));
+        }
+      }
+
+      const claimRows = await drizzleDb
+        .select({
+          id: claimsTable.id,
+          item_id: claimsTable.item_id,
+          status: claimsTable.status,
+          paid_at: claimsTable.paid_at,
+          verification_tier: claimsTable.verification_tier,
+          created_at: claimsTable.created_at,
+          updated_at: claimsTable.updated_at,
+          agent_confirmed_at: claimsTable.agent_confirmed_at,
+          settle_at: claimsTable.settle_at,
+          owner_phone: claimsTable.owner_phone,
+        })
+        .from(claimsTable)
+        .where(where.length > 0 ? and(...where) : undefined)
+        .orderBy(desc(claimsTable.created_at), desc(claimsTable.id))
+        // Read one window's worth, not the table.
+        .limit(offset + limit + 1);
+
+      // DEFENSIVE NORMALISATION. The statement above carries ORDER BY + LIMIT,
+      // which is what production PostgreSQL uses. The in-memory test sandbox
+      // does not implement ORDER BY or LIMIT, so without this the identical code
+      // would return the whole filtered set under test and any pagination
+      // assertion would pass while proving nothing about bounding. Re-applying
+      // the SAME deterministic ordering and window makes both environments
+      // behave identically; on PostgreSQL it is a no-op over an already-ordered,
+      // already-truncated set. Offset is applied HERE and not in SQL precisely so
+      // that it cannot be double-applied.
+      const ordered = (claimRows as any[])
+        .map((r) => ({
+          ...r,
+          id: String(r.id),
+          created_at: toIsoOrNull(r.created_at) ?? '',
+        }))
+        .sort((a, b) =>
+          a.created_at === b.created_at
+            ? (a.id < b.id ? 1 : a.id > b.id ? -1 : 0)
+            : (a.created_at < b.created_at ? 1 : -1),
+        );
+
+      const hasMore = ordered.length > offset + limit;
+      const page = ordered.slice(offset, offset + limit);
+      const rows = await this.hydrateAdminClaimRows(page);
+      return { rows, hasMore };
+    } catch (error) {
+      console.error("Database query failed:", error);
+      throw new Error("Failed to list admin claims.", { cause: error });
+    }
+  }
+
+  /** Batched enrichment for claim rows. Constant number of queries per page. */
+  private async hydrateAdminClaimRows(claimRows: any[]): Promise<AdminClaimListRow[]> {
+    if (claimRows.length === 0) return [];
+
+    const itemIds = Array.from(new Set(claimRows.map((r) => r.item_id).filter(Boolean))) as string[];
+    const items = itemIds.length
+      ? await drizzleDb
+          .select({
+            id: itemsTable.id,
+            category_id: itemsTable.category_id,
+            status: itemsTable.status,
+            is_sensitive_document: itemsTable.is_sensitive_document,
+            flaggedForReview: itemsTable.flaggedForReview,
+            description: itemsTable.description,
+            location_description: itemsTable.location_description,
+            assigned_agent_id: itemsTable.assigned_agent_id,
+          })
+          .from(itemsTable)
+          .where(inArray(itemsTable.id, itemIds))
+      : [];
+    const itemById = new Map<string, any>((items as any[]).map((i) => [String(i.id), i]));
+
+    const categoryIds = Array.from(new Set((items as any[]).map((i) => i.category_id).filter(Boolean)));
+    const categories = categoryIds.length
+      ? await drizzleDb
+          .select({
+            id: categoriesTable.id,
+            name_en: categoriesTable.name_en,
+            name_sw: categoriesTable.name_sw,
+          })
+          .from(categoriesTable)
+          .where(inArray(categoriesTable.id, categoryIds as string[]))
+      : [];
+    const categoryById = new Map<string, any>((categories as any[]).map((c) => [String(c.id), c]));
+
+    const agentIds = Array.from(new Set((items as any[]).map((i) => i.assigned_agent_id).filter(Boolean)));
+    const agents = agentIds.length
+      ? await drizzleDb
+          .select({
+            id: agentsTable.id,
+            business_name: agentsTable.business_name,
+            contact_phone: agentsTable.contact_phone,
+          })
+          .from(agentsTable)
+          .where(inArray(agentsTable.id, agentIds as string[]))
+      : [];
+    const agentById = new Map<string, any>((agents as any[]).map((a) => [String(a.id), a]));
+
+    const disputesByItem = await this.getAdminDisputeContextsByItemIds(itemIds);
+
+    return claimRows.map((r) => {
+      const item = r.item_id ? itemById.get(String(r.item_id)) ?? null : null;
+      const disputeRows = r.item_id ? disputesByItem.get(String(r.item_id)) ?? [] : [];
+      // Prefer the OPEN dispute; otherwise the most recent resolved one.
+      const disputeRow =
+        disputeRows.find((d: any) => d.resolved_at === null || d.resolved_at === undefined) ??
+        disputeRows[0] ??
+        null;
+      const category = item && item.category_id ? categoryById.get(String(item.category_id)) ?? null : null;
+      const agent = item && item.assigned_agent_id ? agentById.get(String(item.assigned_agent_id)) ?? null : null;
+
+      return {
+        id: String(r.id),
+        item_id: r.item_id ?? null,
+        status: String(r.status),
+        // AUTHORITATIVE payment truth.
+        paid_at: toIsoOrNull(r.paid_at),
+        verification_tier: Number(r.verification_tier ?? 1),
+        created_at: toIsoOrNull(r.created_at) ?? '',
+        updated_at: toIsoOrNull(r.updated_at) ?? '',
+        agent_confirmed_at: toIsoOrNull(r.agent_confirmed_at),
+        settle_at: toIsoOrNull(r.settle_at),
+        owner_phone: String(r.owner_phone ?? ''),
+        item: item
+          ? {
+              id: String(item.id),
+              category_id: item.category_id ?? null,
+              status: String(item.status),
+              is_sensitive_document: item.is_sensitive_document !== false,
+              flaggedForReview: item.flaggedForReview === true,
+              description: item.description ?? null,
+              location_description: item.location_description ?? null,
+              assigned_agent_id: item.assigned_agent_id ?? null,
+            }
+          : null,
+        category: category
+          ? {
+              id: String(category.id),
+              name_en: String(category.name_en ?? ''),
+              name_sw: String(category.name_sw ?? ''),
+            }
+          : null,
+        agent: agent
+          ? {
+              id: String(agent.id),
+              business_name: String(agent.business_name ?? ''),
+              contact_phone: String(agent.contact_phone ?? ''),
+            }
+          : null,
+        dispute: disputeRow ? buildAdminDisputeContext(disputeRow, String(r.id)) : null,
+      };
+    });
+  }
+
+  /**
+   * Single-claim read model for Claims Administration. READ-ONLY: selects only,
+   * no lifecycle/payment/dispute mutation, no signed URLs, no secrets.
+   *
+   * Presence flags (`identifying_detail_present`, `id_proof_present`,
+   * `handover_photo_present`) are computed by comparing the underlying column to
+   * NULL — the VALUES themselves never enter the row, so they cannot leak into
+   * any response that re-uses this shape.
+   */
+  public async getAdminClaimDetail(claimId: string): Promise<AdminClaimDetailRow | null> {
+    try {
+      const rows = await drizzleDb
+        .select({
+          id: claimsTable.id,
+          item_id: claimsTable.item_id,
+          status: claimsTable.status,
+          paid_at: claimsTable.paid_at,
+          verification_tier: claimsTable.verification_tier,
+          created_at: claimsTable.created_at,
+          updated_at: claimsTable.updated_at,
+          agent_confirmed_at: claimsTable.agent_confirmed_at,
+          settle_at: claimsTable.settle_at,
+          owner_phone: claimsTable.owner_phone,
+          // Presence-only: used to derive booleans, never returned as values.
+          owner_identifying_details: claimsTable.owner_identifying_details,
+          owner_id_proof_url: claimsTable.owner_id_proof_url,
+          handover_photo_url: claimsTable.handover_photo_url,
+        })
+        .from(claimsTable)
+        .where(eq(claimsTable.id, claimId))
+        .limit(1);
+
+      if (rows.length === 0) return null;
+      const r = rows[0] as any;
+
+      const hydrated = await this.hydrateAdminClaimRows([
+        { ...r, created_at: toIsoOrNull(r.created_at) ?? '' },
+      ]);
+      const base = hydrated[0];
+      if (!base) return null;
+
+      // Other claims on the same item — the informational context an admin needs
+      // to understand a dispute. Projection only; no signed URLs, no secrets.
+      const itemId = base.item_id;
+      const siblingRowsRaw = itemId
+        ? await drizzleDb
+            .select({
+              id: claimsTable.id,
+              status: claimsTable.status,
+              paid_at: claimsTable.paid_at,
+              owner_phone: claimsTable.owner_phone,
+              created_at: claimsTable.created_at,
+            })
+            .from(claimsTable)
+            .where(eq(claimsTable.item_id, itemId))
+        : [];
+
+      const sibling_claims = (siblingRowsRaw as any[])
+        .filter((s) => String(s.id) !== base.id)
+        .map((s) => ({
+          id: String(s.id),
+          status: String(s.status),
+          paid_at: toIsoOrNull(s.paid_at),
+          owner_phone: String(s.owner_phone ?? ''),
+          created_at: toIsoOrNull(s.created_at) ?? '',
+        }))
+        .sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0));
+
+      return {
+        ...base,
+        identifying_detail_present: r.owner_identifying_details !== null && r.owner_identifying_details !== undefined && String(r.owner_identifying_details).trim() !== '',
+        id_proof_present: r.owner_id_proof_url !== null && r.owner_id_proof_url !== undefined && String(r.owner_id_proof_url) !== '',
+        handover_photo_present: r.handover_photo_url !== null && r.handover_photo_url !== undefined && String(r.handover_photo_url) !== '',
+        sibling_claims,
+      };
+    } catch (error) {
+      console.error("Database query failed:", error);
+      throw new Error("Failed to load admin claim detail.", { cause: error });
+    }
+  }
+
   public async getClaimsForCustomer(customerId: string): Promise<Array<{
     id: string;
     status: string;
@@ -4268,6 +5279,106 @@ class DatabaseEngine {
     } catch (error) {
       console.error("Failed to list claims for customer:", error);
       throw new Error("Failed to list claims for customer.");
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // LOST-ITEM REPORTS (Phase 9A)
+  // ---------------------------------------------------------------------------
+  // Three primitives only. Deliberately NO listing by category/status for a
+  // future matcher yet — that is Phase 9B's job, and adding a half-built query
+  // here would invite a caller to treat this phase's data model as a matcher.
+  //
+  // `customer_id` is ALWAYS supplied by the caller from the authenticated
+  // session (routes/lostReports.ts) and is never read from request input.
+
+  /**
+   * Persists a lost report. `created_at`/`updated_at` are written explicitly
+   * (not left to the DB default) so the returned record carries real
+   * timestamps identically against Postgres and the in-memory mock.
+   *
+   * The caller passes an already-hashed `document_number_hash` — this layer
+   * never sees a plaintext identifier.
+   */
+  public async createLostReport(report: Omit<LostReport, "created_at" | "updated_at">): Promise<LostReport> {
+    try {
+      const now = new Date();
+      const rows = await drizzleDb
+        .insert(lostReportsTable)
+        .values({
+          id: report.id,
+          customer_id: report.customer_id,
+          category_id: report.category_id,
+          status: report.status,
+          county: report.county,
+          location_area: report.location_area,
+          location_landmark: report.location_landmark ?? null,
+          lost_at_from: new Date(report.lost_at_from),
+          lost_at_to: report.lost_at_to ? new Date(report.lost_at_to) : null,
+          brand: report.brand ?? null,
+          model: report.model ?? null,
+          colour: report.colour ?? null,
+          material: report.material ?? null,
+          description: report.description ?? null,
+          distinctive_marks: report.distinctive_marks ?? null,
+          document_type: report.document_type ?? null,
+          document_number_hash: report.document_number_hash ?? null,
+          created_at: now,
+          updated_at: now,
+        })
+        .returning();
+
+      // Audit entry deliberately records only the public reference and the
+      // category — never the reporter's contact data, free text description,
+      // or the protected identifier hash.
+      await this.logAudit(
+        "CUSTOMER",
+        "CREATE_LOST_REPORT",
+        `Lost report ${report.id} created for category ${report.category_id}.`
+      );
+
+      return parseLostReport(rows[0]);
+    } catch (error) {
+      console.error("Database write failed:", error);
+      throw new Error("Failed to save lost report.", { cause: error });
+    }
+  }
+
+  /**
+   * Every lost report owned by ONE authenticated customer. This is the only
+   * list path in the phase, and it is scoped by the account id — there is no
+   * "all lost reports" query anywhere.
+   */
+  public async getLostReportsByCustomer(customerId: string): Promise<LostReport[]> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(lostReportsTable)
+        .where(eq(lostReportsTable.customer_id, customerId));
+      return rows.map(parseLostReport);
+    } catch (error) {
+      console.error("Failed to list lost reports for customer:", error);
+      throw new Error("Failed to list lost reports for customer.");
+    }
+  }
+
+  /**
+   * A single lost report, ONLY if it belongs to this customer. The ownership
+   * predicate is part of the QUERY (not a post-fetch comparison a future
+   * caller could forget), so a cross-customer read is impossible by
+   * construction. Returns undefined for both "no such reference" and "belongs
+   * to someone else" — callers surface the same 404 either way.
+   */
+  public async getLostReportByIdForCustomer(id: string, customerId: string): Promise<LostReport | undefined> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(lostReportsTable)
+        .where(and(eq(lostReportsTable.id, id), eq(lostReportsTable.customer_id, customerId)));
+      return rows[0] ? parseLostReport(rows[0]) : undefined;
+    } catch (error) {
+      console.error("Failed to read lost report for customer:", error);
+      throw new Error("Failed to read lost report for customer.");
     }
   }
 }

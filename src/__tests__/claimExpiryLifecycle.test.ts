@@ -37,7 +37,9 @@ describe('claim expiry lifecycle: payment expiry != dispute', () => {
       expect(setBlock, `INACTIVE_CLAIM_STATUSES must include '${status}'`).toContain(`'${status}'`);
     }
     // server.ts must consume the shared definition, not redefine or inline it.
-    expect(serverTs).toContain("import { INACTIVE_CLAIM_STATUSES } from './config/claimStatuses'");
+    // The import may also carry other canonical exports from the same module
+    // (Phase 7C.7 added isPickupEligibleClaimStatus to this statement).
+    expect(serverTs).toMatch(/import \{[^}]*\bINACTIVE_CLAIM_STATUSES\b[^}]*\} from '\.\/config\/claimStatuses'/);
     expect(serverTs).not.toMatch(/const INACTIVE_CLAIM_STATUSES = new Set<string>\(/);
   });
 

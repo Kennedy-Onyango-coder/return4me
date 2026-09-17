@@ -33,7 +33,11 @@ describe('P1-1: every state-changing agent route scopes to the assigned agent', 
   const mutationRoutes: Array<{ route: string; mutation: string }> = [
     { route: '/api/agents/verify-item', mutation: 'recordItemVerification' },
     { route: '/api/agents/confirm-dropoff', mutation: 'updateItemStatus' },
-    { route: '/api/agents/claims/:claimId/confirm-viewing', mutation: 'updateClaimStatus' },
+    // Phase 6C: confirm-viewing now moves the claim through the central
+    // transition contract (transitionClaimStatus) instead of the unguarded
+    // updateClaimStatus. The property this test defends is unchanged — the
+    // ownership gate must still run BEFORE the state change.
+    { route: '/api/agents/claims/:claimId/confirm-viewing', mutation: 'transitionClaimStatus' },
     { route: '/api/agents/confirm-handover', mutation: 'enterPendingSettlement' },
   ];
 

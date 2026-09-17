@@ -37,6 +37,13 @@ export const CLAIM_STATUS_VALUES = [
  * dispute). That definition previously lived inline inside startServer(); it
  * was moved here verbatim so the dashboard groups claims by exactly the same
  * rule instead of a second, drifting copy.
+ *
+ * NOTE ON `disputed`: a disputed claim is still a LIVE attempt (it is being
+ * adjudicated), but it is deliberately treated as "not a live reservation"
+ * here because the dispute workflow itself — not this predicate — prevents a
+ * third claimant (see canCreateClaim()'s unresolved-dispute rule). Kept
+ * unchanged from the original definition so the customer dashboard's
+ * Active/History grouping does not shift.
  */
 export const INACTIVE_CLAIM_STATUSES: ReadonlySet<string> = new Set<string>([
   'payment_window_expired', // abandoned/unpaid within the 15-minute window
@@ -48,4 +55,149 @@ export const INACTIVE_CLAIM_STATUSES: ReadonlySet<string> = new Set<string>([
 
 export function isInactiveClaimStatus(status: string): boolean {
   return INACTIVE_CLAIM_STATUSES.has(status);
+}
+
+/**
+ * Statuses in which a claim may still legitimately coordinate a PHYSICAL
+ * PICKUP, i.e. where handing the claimant the assigned hub's operational
+ * contact details, exact address and GPS coordinates is the fulfilment of the
+ * product promise rather than an over-disclosure.
+ *
+ * This is a THIRD question, distinct from the two predicates above:
+ *   INACTIVE_CLAIM_STATUSES      — "is this claim still a live ATTEMPT?"
+ *   CLAIM_SLOT_EXCLUDED_STATUSES — "may these two claims coexist on one item?"
+ *   this set                     — "is this claim still entitled to active
+ *                                   pickup instructions?"
+ *
+ * It is DERIVED from CLAIM_STATUS_VALUES by subtracting the explicitly
+ * ineligible statuses, so a status added to the CHECK constraint cannot
+ * silently default into the eligible set: it lands here only if it is not on
+ * the ineligible list, and a test pins the two sets as a partition of the
+ * vocabulary.
+ *
+ * NOT eligible, and why:
+ *   pending_verification     — OTP is not yet satisfied; the claimant has not
+ *                              proven control of the registered phone.
+ *   payment_window_expired   — abandoned attempt; the item is claimable again
+ *                              and this claimant is no longer the live one.
+ *   disputed                 — ownership is being adjudicated; a competing or
+ *                              losing claimant must not receive the hub's live
+ *                              coordinates.
+ *   rejected                 — failed verification / lost dispute.
+ *   refunding / refunded     — money is on its way back; the claim is closed.
+ *
+ * `released`/`pending_settlement`/`releasing` remain eligible: they are the
+ * post-handover statuses of a claim that legitimately completed pickup, and
+ * withholding the hub's own coordinates from the person who collected the item
+ * would be a behaviour regression rather than a privacy gain.
+ */
+export const PICKUP_INELIGIBLE_CLAIM_STATUSES = [
+  'pending_verification',
+  'payment_window_expired',
+  'disputed',
+  'rejected',
+  'refunding',
+  'refunded',
+] as const;
+
+export const PICKUP_ELIGIBLE_CLAIM_STATUSES: ReadonlySet<string> = new Set<string>(
+  CLAIM_STATUS_VALUES.filter(
+    (status) => !(PICKUP_INELIGIBLE_CLAIM_STATUSES as readonly string[]).includes(status)
+  )
+);
+
+export function isPickupEligibleClaimStatus(status: string): boolean {
+  return PICKUP_ELIGIBLE_CLAIM_STATUSES.has(status);
+}
+
+/**
+ * Statuses EXEMPT from the "at most one active claim per item" database rule
+ * (`uq_claims_one_active_per_item`).
+ *
+ * WHY THIS IS A DIFFERENT SET FROM INACTIVE_CLAIM_STATUSES
+ * --------------------------------------------------------
+ * The two predicates answer genuinely different questions and MUST NOT be
+ * forced to be equal:
+ *
+ *   INACTIVE_CLAIM_STATUSES  — "is this claim still a live ATTEMPT?" (a closed
+ *                              historical attempt must not block or dispute)
+ *
+ *   this set                 — "which statuses must be able to COEXIST on the
+ *                              same item?" (so the partial unique index must
+ *                              exclude them)
+ *
+ * `disputed` and `refunding` are the reason the sets differ:
+ *   - A dispute legitimately puts TWO claims on one item, both `disputed`.
+ *     If `disputed` occupied the single slot, filing a dispute would violate
+ *     the index outright.
+ *   - A refunding loser legitimately coexists with the winning claim while the
+ *     real M-Pesa refund is in flight.
+ * Neither is "inactive" in the dashboard sense, and neither may occupy the
+ * slot. Conversely `released` is inactive for the dashboard but still occupies
+ * the slot — a completed handover is an achieved outcome, and the item itself
+ * is `claimed` at that point so no new claim can be filed regardless.
+ *
+ * THE ACTUAL DEFECT THIS CONSTANT FIXES (SC-7): the predicate was hand-copied
+ * into three places (sql/schema.sql, src/db/schema.ts, src/db/index.ts) with
+ * no single source of truth, so any future status addition could silently
+ * drift them apart. This export is now that single source; a test asserts all
+ * three declarations agree with it.
+ */
+export const CLAIM_SLOT_EXCLUDED_STATUSES = [
+  'disputed',
+  'rejected',
+  'refunding',
+  'refunded',
+  'payment_window_expired',
+] as const;
+
+/** The exact SQL predicate fragment used by uq_claims_one_active_per_item. */
+export const CLAIM_SLOT_EXCLUDED_SQL_LIST = CLAIM_SLOT_EXCLUDED_STATUSES
+  .map((s) => `'${s}'`)
+  .join(', ');
+
+/** Statuses from which no ordinary transition is permitted. */
+export const TERMINAL_CLAIM_STATUSES: ReadonlySet<string> = new Set<string>([
+  'payment_window_expired',
+  'released',
+  'rejected',
+  'refunded',
+]);
+
+/**
+ * The ONLY legal claim-status edges. Anything not listed here is rejected by
+ * transitionClaimStatus() — including every backward move out of a terminal
+ * status. `'*'` as a source means "any status that is not terminal".
+ *
+ * Derived from the Phase 6A/6B transition audit of the real repository, not
+ * invented: each edge below has exactly one real producer.
+ */
+export const CLAIM_ALLOWED_TRANSITIONS: Readonly<Record<string, readonly string[]>> = {
+  '*': ['disputed'],                          // createDispute() — a second claimant arrives
+  pending_verification: ['awaiting_agent_confirmation', 'rejected'],
+  awaiting_agent_confirmation: ['pending_payment', 'rejected'],
+  pending_payment: ['escrow_held', 'payment_window_expired', 'rejected'],
+  escrow_held: ['pending_settlement', 'disputed'],
+  pending_settlement: ['releasing', 'disputed'],
+  releasing: ['released', 'pending_settlement'],
+  disputed: ['pending_verification', 'escrow_held', 'refunding', 'rejected'],
+  refunding: ['refunded', 'rejected'],
+  // terminal: no outgoing edges
+  released: [],
+  refunded: [],
+  rejected: [],
+  payment_window_expired: [],
+};
+
+/**
+ * Is `from -> to` a legal claim-status edge? A terminal `from` never is.
+ * `'*'` is honoured ONLY as a source (never as a destination).
+ */
+export function isAllowedClaimTransition(from: string, to: string): boolean {
+  if (TERMINAL_CLAIM_STATUSES.has(from)) return false;
+  if (from === to) return true; // explicit no-op (idempotent re-assert)
+  const explicit = CLAIM_ALLOWED_TRANSITIONS[from];
+  if (explicit && explicit.includes(to)) return true;
+  const wildcard = CLAIM_ALLOWED_TRANSITIONS['*'];
+  return Boolean(wildcard && wildcard.includes(to));
 }

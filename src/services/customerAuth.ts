@@ -12,7 +12,7 @@
 import crypto from 'crypto';
 import type { Request, Response, NextFunction } from 'express';
 import { db } from '../db/database.ts';
-import { hashCode } from './auth.ts';
+import { hashCode, toE164Kenyan } from './auth.ts';
 
 export const CUSTOMER_SESSION_COOKIE = 'r4m_customer_session';
 export const CUSTOMER_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -103,5 +103,150 @@ export async function requireCustomerAuth(req: any, res: Response, next: NextFun
   } catch (e: any) {
     console.error('[CUSTOMER_AUTH_ERROR]', e);
     return res.status(500).json({ error: 'Hitilafu imetokea upande wa seva. Tafadhali jaribu tena baadaye.' });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// OPTIONAL (non-terminating) customer session resolution — Phase 7C.3 / F11.
+//
+// Performs exactly the same validation as requireCustomerAuth above
+// (cookie -> token hash -> server-side session -> revoked -> expired ->
+// account exists -> account active) but instead of rejecting the request it
+// returns `null` for EVERY case that is not a live, active customer account:
+// no cookie, malformed/invalid cookie, revoked session, expired session,
+// deleted account, or a suspended/locked account.
+//
+// It NEVER writes a response, never throws and never ends the request, so a
+// failed lookup can only degrade the caller to "anonymous". It also does not
+// touch `req.customer` — an optional lookup must not leave an authenticated
+// identity on the request for downstream handlers to trust by accident.
+//
+// SCOPE — this helper must NOT be used to gate arbitrary state changes or to
+// replace requireCustomerAuth. It exists for one additive purpose only: the
+// post-verification customer-claim link in POST /api/claims/:id/verify-otp,
+// where the request must keep succeeding for anonymous visitors (the claim
+// OTP journey has never required a customer account) while a signed-in
+// customer's claim is additionally linked to their account. Anything that
+// REQUIRES authentication must keep using requireCustomerAuth.
+//
+// Identity is read EXCLUSIVELY from the session cookie. The request payload,
+// the query string and the route parameters are never consulted, so a caller
+// cannot select which account an operation is attributed to.
+// ---------------------------------------------------------------------------
+export async function resolveOptionalCustomer(req: any): Promise<any | null> {
+  try {
+    const raw = readCookie(req, CUSTOMER_SESSION_COOKIE);
+    if (!raw) return null;
+    const session = await db.getCustomerSessionByTokenHash(hashCode(raw));
+    if (!session) return null;
+    if (session.revoked_at) return null;
+    if (session.expires_at && new Date(session.expires_at).getTime() < Date.now()) return null;
+    const customer = await db.getCustomerById(session.customer_id);
+    if (!customer) return null;
+    if (customer.status !== 'active') return null;
+    await db.touchCustomerSession(session.id);
+    return customer;
+  } catch (e: any) {
+    // Deliberately swallowed: an optional lookup must never be able to fail a
+    // request that would otherwise have succeeded.
+    console.error('[CUSTOMER_OPTIONAL_AUTH_ERROR]', e);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// AUTOMATIC JOURNEY LINK (F11) — the linked_via value written for the
+// automatic link created after a successful claim-OTP verification.
+// ---------------------------------------------------------------------------
+export const JOURNEY_CLAIM_LINK_VIA = 'journey_verify_otp';
+
+export interface ClaimJourneyLinkResult {
+  /** Only this is exposed to the client (as `linked`). */
+  linked: boolean;
+  /**
+   * Internal reason, for auditing and tests. 'linked' is the only outcome that
+   * wrote a row; 'already_linked_self' means the legitimate link already
+   * existed (idempotent: no duplicate row and no duplicate audit entry).
+   */
+  outcome: 'linked' | 'already_linked_self' | 'already_linked_other' | 'phone_mismatch' | 'error';
+}
+
+// Links a freshly OTP-verified claim to the authenticated customer who
+// performed the verification.
+//
+// PRE-CONDITION (enforced by the caller and re-checked here): the claim's OTP
+// has JUST been verified in this request, and the caller's identity came from
+// a validated customer session — never from request input.
+//
+// The phone-equality rule mirrors the explicit linking route exactly
+// (routes/customerClaims.ts), including the shared toE164Kenyan normalisation
+// so '+2547XXXXXXXX' and '07XXXXXXXX' are recognised as the same number. A
+// claim whose owner phone differs from the account's phone is left UNLINKED —
+// the existing explicit link flow refuses that case too, and the anonymous /
+// other-phone claim journey must keep working.
+//
+// Deliberately additive and NON-FATAL: it never throws and never rolls
+// anything back. The claim transition that precedes it is the authoritative
+// operation; a linkage failure can only mean "verified but not yet visible in
+// the dashboard", which the existing explicit link flow can repair. Only the
+// existing db.linkClaimToCustomer primitive is used — no new link mechanism,
+// no bulk/phone-based matching (see the customer_claim_links comment in
+// db/database.ts).
+export async function linkVerifiedClaimToCustomer(
+  customer: any,
+  claim: any
+): Promise<ClaimJourneyLinkResult> {
+  try {
+    if (!customer || !claim || !customer.id || !claim.id) {
+      return { linked: false, outcome: 'phone_mismatch' };
+    }
+
+    const customerPhone = toE164Kenyan(String(customer.phone || '').replace(/\s+/g, ''));
+    const claimPhone = toE164Kenyan(String(claim.owner_phone || '').replace(/\s+/g, ''));
+    if (!customerPhone || !claimPhone || customerPhone !== claimPhone) {
+      return { linked: false, outcome: 'phone_mismatch' };
+    }
+
+    const outcome = await db.linkClaimToCustomer(
+      generateSecureId('CCL'),
+      customer.id,
+      claim.id,
+      JOURNEY_CLAIM_LINK_VIA
+    );
+
+    if (outcome === 'already_linked_other') {
+      // The claim is already owned by a different account. Nothing is
+      // re-pointed and nothing is overwritten; the verified claim is untouched
+      // and the manual flow remains the only reconciliation path.
+      await db.logAudit(
+        'SYSTEM',
+        'CUSTOMER_CLAIM_LINK_FAILED',
+        `Automatic journey link skipped for claim ${claim.id}: the claim is already linked to a different customer account.`
+      );
+      return { linked: false, outcome: 'already_linked_other' };
+    }
+
+    if (outcome === 'already_linked_self') {
+      return { linked: true, outcome: 'already_linked_self' };
+    }
+
+    await db.logAudit(
+      'CUSTOMER',
+      'CUSTOMER_CLAIM_LINK',
+      `Customer ${customer.id} linked claim ${claim.id} via ${JOURNEY_CLAIM_LINK_VIA}.`
+    );
+    return { linked: true, outcome: 'linked' };
+  } catch (e: any) {
+    console.error('[CUSTOMER_CLAIM_JOURNEY_LINK_ERROR]', e);
+    try {
+      await db.logAudit(
+        'SYSTEM',
+        'CUSTOMER_CLAIM_LINK_FAILED',
+        `Automatic journey link failed for claim ${claim && claim.id ? claim.id : 'unknown'}; the claim verification itself is unaffected.`
+      );
+    } catch (auditError: any) {
+      console.error('[CUSTOMER_CLAIM_JOURNEY_LINK_AUDIT_ERROR]', auditError);
+    }
+    return { linked: false, outcome: 'error' };
   }
 }

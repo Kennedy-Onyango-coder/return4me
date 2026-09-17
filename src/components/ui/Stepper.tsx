@@ -82,14 +82,14 @@ export default function Stepper({ steps, currentStep, label = 'Progress', classN
                   )}
                 </span>
                 <span
-                  className={`text-[11px] font-bold leading-tight ${
+                  className={`text-caption font-bold leading-tight ${
                     isCurrent ? 'text-primary-green' : isCompleted ? 'text-brand-dark-text' : 'text-brand-muted-text'
                   }`}
                 >
                   {step.label}
                 </span>
                 {step.description && (
-                  <span className="hidden lg:block text-[10px] text-brand-muted-text leading-tight">
+                  <span className="hidden lg:block text-caption text-brand-muted-text leading-tight">
                     {step.description}
                   </span>
                 )}

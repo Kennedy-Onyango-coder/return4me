@@ -4,12 +4,26 @@ import { Badge, Button, EmptyState, Input, OTPInput, Banner } from './ui';
 import { getClaimStatusDisplay } from './claimStatus';
 import { getVerificationFields } from '../config/verificationProfiles';
 import { verificationTranslation } from '../config/verificationTranslations';
+// Phase 9C: the customer's lost-report experience (report, list, matches).
+import LostReportsSection from './customer/LostReportsSection';
 
 interface Props {
   lang: 'en' | 'sw';
   customer: { id: string; full_name: string; phone: string; status: string };
   onSignOut: () => void;
   signingOut?: boolean;
+  /**
+   * Phase 9C: opens the public /item/:id page, which is where the existing
+   * "It's Mine" ownership journey begins. Required (not optional) so a future
+   * caller cannot silently render a match card whose CTA does nothing.
+   */
+  onOpenItem: (itemId: string) => void;
+  /**
+   * Phase 9C: an authenticated read was rejected with 401. The account surface
+   * uses this to fall back to the sign-in card — no private data is shown in
+   * the meantime.
+   */
+  onSessionExpired: () => void;
 }
 
 // +254712345678 -> 0712 *** 678. The dashboard shows the account's own number,
@@ -40,8 +54,15 @@ function formatDateTime(value: string | null | undefined, lang: 'en' | 'sw'): st
   });
 }
 
-export default function CustomerDashboard({ lang, customer, onSignOut, signingOut = false }: Props) {
+export default function CustomerDashboard({
+  lang, customer, onSignOut, signingOut = false, onOpenItem, onSessionExpired,
+}: Props) {
   const t = (en: string, sw: string) => (lang === 'sw' ? sw : en);
+
+  // Which account section is open. 'lost' is the default because reporting and
+  // tracking a lost item is the journey this surface is now the only entry to;
+  // claims are one labelled click away and their content is unchanged.
+  const [tab, setTab] = useState<'lost' | 'claims'>('lost');
 
   const [claims, setClaims] = useState<any[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -258,8 +279,57 @@ export default function CustomerDashboard({ lang, customer, onSignOut, signingOu
         </div>
       </section>
 
+      {/*
+        SECTION SWITCH — plain toggle buttons, not role="tablist".
+        A real ARIA tab pattern requires roving tabindex plus Arrow-key
+        handling; shipping `role="tab"` without that is an incomplete pattern
+        that reads worse to assistive tech than an honest button group. These
+        two buttons expose their selected state via aria-pressed and each panel
+        is labelled by its button.
+      */}
+      <div
+        className="flex items-center gap-1 border-b border-brand-border"
+        role="group"
+        aria-label={t('Account sections', 'Sehemu za akaunti')}
+      >
+        {([
+          { key: 'lost' as const, label: t('My lost reports', 'Ripoti zangu') },
+          { key: 'claims' as const, label: t('My claims', 'Claims zangu') },
+        ]).map((entry) => (
+          <button
+            key={entry.key}
+            type="button"
+            id={`account-section-${entry.key}`}
+            aria-pressed={tab === entry.key}
+            onClick={() => setTab(entry.key)}
+            className={`px-3 sm:px-4 h-11 text-xs sm:text-sm font-bold border-b-2 -mb-px transition-colors cursor-pointer ${
+              tab === entry.key
+                ? 'border-primary-green text-primary-green'
+                : 'border-transparent text-brand-muted-text hover:text-brand-dark-text'
+            }`}
+          >
+            {entry.label}
+          </button>
+        ))}
+      </div>
+
+      {/* MY LOST REPORTS — reporting, the report list, and possible matches. */}
+      {tab === 'lost' && (
+        <section
+          className="bg-white border border-brand-border rounded-2xl p-5"
+          aria-labelledby="account-section-lost"
+        >
+          <LostReportsSection
+            lang={lang}
+            onOpenItem={onOpenItem}
+            onSessionExpired={onSessionExpired}
+          />
+        </section>
+      )}
+
       {/* My claims */}
-      <section className="bg-white border border-brand-border rounded-2xl p-5">
+      {tab === 'claims' && (
+      <section className="bg-white border border-brand-border rounded-2xl p-5" aria-labelledby="account-section-claims">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <h2 className="text-base font-extrabold text-brand-dark-text">{t('My claims', 'Claims zangu')}</h2>
           <div className="flex items-center gap-2">
@@ -394,6 +464,7 @@ export default function CustomerDashboard({ lang, customer, onSignOut, signingOu
           </div>
         )}
       </section>
+      )}
     </div>
   );
 }

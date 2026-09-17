@@ -4,6 +4,19 @@ import HomeView from './components/HomeView';
 import ErrorBoundary from './components/ErrorBoundary';
 import { translations } from './types';
 import { Loader2 } from 'lucide-react';
+// Phase 7B public routing foundation. Pure helpers only — every history/DOM
+// interaction stays in this file. No routing dependency is introduced.
+import {
+  parsePublicRoute,
+  itemPath,
+  accountPath,
+  legacyClaimItemId,
+  viewForRoute,
+  pathForView,
+  isRestorableView,
+  type PublicRoute,
+  type PublicViewName,
+} from './utils/publicRoutes';
 
 // FinderView/OwnerView/AgentView/AdminView/PrivacyView/TermsView were all
 // statically imported here, which meant every single visitor — including
@@ -25,6 +38,15 @@ const AdminView = lazy(() => import('./components/AdminView'));
 const PrivacyView = lazy(() => import('./components/PrivacyView'));
 const TermsView = lazy(() => import('./components/TermsView'));
 const CustomerAccountView = lazy(() => import('./components/CustomerAccountView'));
+// Phase 7B: the public /item/:id detail page. Lazy like the other non-home
+// screens — a visitor landing on the homepage never downloads it.
+const PublicItemView = lazy(() => import('./components/PublicItemView'));
+// Phase 8.1 public navigation: the single Sign In chooser (Owner/Claimant vs
+// Agent) and the public agent journey. Both are lazy like every other
+// non-home screen, and both are presentation-only — they hold no credentials
+// and delegate to the authentication surfaces that already exist.
+const SignInView = lazy(() => import('./components/SignInView'));
+const BecomeAgentView = lazy(() => import('./components/BecomeAgentView'));
 
 // Shown for the brief moment a lazy view's chunk is being fetched — kept
 // minimal and framework-agnostic (no dependency on any single view's
@@ -40,7 +62,7 @@ function ViewLoadingFallback() {
 
 export default function App() {
   const [lang, setLang] = useState<'en' | 'sw'>('en');
-  const [currentView, setView] = useState<'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'privacy' | 'terms'>('home');
+  const [currentView, setView] = useState<'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'privacy' | 'terms' | 'signin' | 'becomeAgent'>('home');
   const [categories, setCategories] = useState<any[]>([]);
   const [categoriesLoading, setCategoriesLoading] = useState<boolean>(true);
   const [categoriesError, setCategoriesError] = useState<boolean>(false);
@@ -53,23 +75,176 @@ export default function App() {
   // separate top-level mode so it needs no changes to the Navbar view union
   // or any existing screen.
   const [customerMode, setCustomerMode] = useState<boolean>(
-    () => typeof window !== 'undefined' && window.location.pathname === '/account'
+    () => typeof window !== 'undefined' && parsePublicRoute(window.location.pathname, window.location.search).kind === 'account'
+  );
+
+  // ---------------------------------------------------------------------------
+  // PHASE 7B — PUBLIC ROUTE STATE
+  //
+  // The single source of truth for "which public URL are we on". `currentView`
+  // (below) keeps driving the existing screens exactly as before; `route` only
+  // adds the addressable public surfaces (/item/:id, /account, /console,
+  // /agent_portal) on top of them. There is deliberately no second navigation
+  // system: Navbar clicks, found-item links, the account surface and browser
+  // back/forward all funnel through applyRoute/navigate.
+  // ---------------------------------------------------------------------------
+  const [route, setRoute] = useState<PublicRoute>(() =>
+    typeof window === 'undefined'
+      ? { kind: 'home' }
+      : parsePublicRoute(window.location.pathname, window.location.search)
+  );
+
+  // The item handed from /item/:id's "It's Mine" into the existing claim
+  // journey. Null whenever the owner view was entered the old way (Navbar).
+  const [claimItem, setClaimItem] = useState<any | null>(null);
+
+  /**
+   * Applies a location to the app's state. Does not touch history except for
+   * the two cases that are themselves redirects (the legacy ?claim= link and
+   * /console, both explained below) — callers decide whether to push or replace.
+   *
+   * `historyState` is the entry's own state (from popstate), used to restore
+   * whichever state-driven screen that entry was showing when it was left.
+   * `preferredView` lets a caller that is deliberately navigating to a screen
+   * override that restoration (e.g. Navbar "Report an item").
+   */
+  const applyRoute = useCallback(
+    (fullPath: string, historyState?: any, preferredView?: PublicViewName) => {
+      const qIndex = fullPath.indexOf('?');
+      const pathname = qIndex === -1 ? fullPath : fullPath.slice(0, qIndex);
+      const search = qIndex === -1 ? '' : fullPath.slice(qIndex);
+
+      // LEGACY COMPATIBILITY: social.ts has already published
+      // https://return4me.co.ke/?claim=<itemId> links. Those must keep working,
+      // and they must land on the same safe public page as /item/<itemId> —
+      // never on an implicit claim or authentication action.
+      const legacyItemId = legacyClaimItemId(pathname, search);
+      if (legacyItemId) {
+        window.history.replaceState(null, '', itemPath(legacyItemId));
+        setRoute({ kind: 'item', itemId: legacyItemId });
+        setCustomerMode(false);
+        return;
+      }
+
+      const next = parsePublicRoute(pathname, search);
+      setRoute(next);
+
+      if (next.kind === 'console') {
+        // REQUEST 04 — /console IS the admin route, and it stays in the URL.
+        //
+        // This branch used to rewrite the location to '/' the instant the panel
+        // opened ("existing behaviour, preserved verbatim"). That was the bug:
+        //   (a) it destroyed the bookmark/refresh target, so a reload always
+        //       landed on the homepage; and
+        //   (b) under React StrictMode the effect below runs twice in
+        //       development — pass 1 rewrote the URL to '/', pass 2 re-read
+        //       window.location (now '/'), resolved it to `home`, and replaced
+        //       the admin view with the homepage. That is exactly the reported
+        //       "/console redirects to the homepage".
+        //
+        // Nothing about admin authentication or authorization changes here.
+        // AdminView still renders its own passcode + 2FA gate when there is no
+        // token, and every /api/admin route still enforces its own explicit
+        // role check server-side (see adminRouteAudit.test.ts).
+        setView('admin');
+        setCustomerMode(false);
+        return;
+      }
+
+      if (next.kind === 'account') {
+        setCustomerMode(true);
+        return;
+      }
+
+      setCustomerMode(false);
+
+      const forcedView = viewForRoute(next);
+      if (forcedView) {
+        setView(forcedView);
+        return;
+      }
+
+      // The item surface renders from `route` itself; leave the underlying
+      // state-driven view alone so Back returns to what the visitor was doing.
+      if (next.kind === 'item') return;
+
+      const remembered = historyState?.r4mView;
+      if (isRestorableView(preferredView)) setView(preferredView);
+      else if (isRestorableView(remembered)) setView(remembered);
+      else setView('home');
+    },
+    []
+  );
+
+  /**
+   * Navigates to a public path. The screen being LEFT is recorded on the
+   * current history entry, so browser Back restores it (Home → /item/:id →
+   * Back lands on Home rather than a bare URL).
+   */
+  const navigate = useCallback(
+    (path: string, view?: PublicViewName) => {
+      if (typeof window === 'undefined') return;
+      window.history.replaceState(
+        { r4mView: view ?? currentView },
+        '',
+        window.location.pathname + window.location.search
+      );
+      window.history.pushState({}, '', path);
+      applyRoute(path, null, view);
+    },
+    [applyRoute, currentView]
+  );
+
+  // REQUEST 08 — the single "go to a screen" entry point used by every
+  // in-content CTA (hero buttons, category explorer, footer links). It keeps
+  // the browser URL in step with the screen, so /lost, /found,
+  // /become-an-agent and /sign-in are real pages rather than hidden React
+  // state. Screens with no dedicated path yet (home, privacy, terms) stay on
+  // '/' and are switched in place when we are already there, so no redundant
+  // history entry is created.
+  const goToView = useCallback(
+    (view: PublicViewName) => {
+      if (typeof window === 'undefined') return;
+      if (view === 'agent') {
+        navigate('/agent_portal', 'agent');
+        return;
+      }
+      if (view === 'admin') {
+        navigate('/console', 'admin');
+        return;
+      }
+      const target = pathForView(view);
+      if (target === '/' && route.kind === 'home') {
+        setView(view);
+        return;
+      }
+      navigate(target, view);
+    },
+    [navigate, route.kind]
   );
 
   // Expose setView globally for components to route to terms/privacy
+  // (scripts/audit-browser.mjs depends on this handle).
   useEffect(() => {
     (window as any).setView = setView;
-    
-    // Secret path check for admin portal access
-    if (window.location.pathname === '/console') {
-      setView('admin');
-      window.history.replaceState({}, '', '/');
-    }
-
     return () => {
       delete (window as any).setView;
     };
   }, []);
+
+  // Browser back/forward + the one-time application of the initial location.
+  // Applying the initial location here (rather than in a useState initializer)
+  // keeps redirect handling — ?claim= → /item/:id — in a single place that every
+  // entry point shares. /console is deliberately NOT a redirect any more: it
+  // resolves to the console at its own URL (see applyRoute).
+  useEffect(() => {
+    const onPopState = (event: PopStateEvent) => {
+      applyRoute(window.location.pathname + window.location.search, event.state);
+    };
+    window.addEventListener('popstate', onPopState);
+    applyRoute(window.location.pathname + window.location.search, null);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [applyRoute]);
 
   // This is a single-page client-routed app — currentView switches which
   // screen renders, but the URL never changes and nothing ever touched
@@ -89,6 +264,9 @@ export default function App() {
       admin: { en: 'Admin Panel | Return4me', sw: 'Paneli ya Msimamizi | Return4me' },
       privacy: { en: 'Privacy Policy | Return4me', sw: 'Sera ya Faragha | Return4me' },
       terms: { en: 'Terms of Service | Return4me', sw: 'Vigezo vya Huduma | Return4me' },
+      // Phase 8.1 public navigation screens.
+      signin: { en: 'Sign In | Return4me', sw: 'Ingia | Return4me' },
+      becomeAgent: { en: 'Become an Agent | Return4me', sw: 'Kuwa Wakala | Return4me' },
     };
     document.title = titles[currentView][lang];
   }, [currentView, lang]);
@@ -257,17 +435,11 @@ export default function App() {
         logout={logout}
         isAccountView={customerMode}
         onOpenAccount={() => {
-          window.history.replaceState({}, '', '/account');
-          setCustomerMode(true);
+          // Existing entry point, now addressable. Pushed (not replaced) so
+          // browser Back returns the visitor to where they were.
+          navigate('/account', 'home');
         }}
-        onNavigate={(view) => {
-          // Any normal navigation leaves the account surface.
-          if (customerMode) {
-            setCustomerMode(false);
-            window.history.replaceState({}, '', '/');
-          }
-          setView(view);
-        }}
+        onNavigate={(view) => goToView(view)}
       />
 
       {/* Main Content Area */}
@@ -279,14 +451,51 @@ export default function App() {
             them is sufficient — it only ever needs to cover whichever one
             chunk is currently being fetched. HomeView is statically imported
             (landing page — must paint instantly), the rest are lazy. */}
-        {customerMode ? (
+        {route.kind === 'item' ? (
+          /* PHASE 7B — PUBLIC ITEM DETAIL. Rendered from the URL alone, so
+             direct navigation, refresh, bookmarking, sharing and the legacy
+             ?claim= link all work. */
+          <ErrorBoundary fallbackTitle="Item Page Crash">
+            <Suspense fallback={<ViewLoadingFallback />}>
+              <PublicItemView
+                lang={lang}
+                itemId={route.itemId}
+                categories={categories}
+                onBack={() => navigate('/', 'home')}
+                onContinueClaim={(item) => {
+                  // Authenticated visitor: carry the SAME masked public item
+                  // into the existing claim journey (the item id is preserved
+                  // through the URL all the way to here).
+                  setClaimItem(item);
+                  navigate('/', 'owner');
+                }}
+                onRequireAuth={() => {
+                  // NOT authenticated: stop at the existing customer
+                  // authentication boundary, remembering where to come back to.
+                  // No claim, payment or private data is reachable before it.
+                  navigate(accountPath(itemPath(route.itemId)), 'home');
+                }}
+              />
+            </Suspense>
+          </ErrorBoundary>
+        ) : customerMode ? (
           <ErrorBoundary fallbackTitle="Account Page Crash">
             <Suspense fallback={<ViewLoadingFallback />}>
               <CustomerAccountView
                 lang={lang}
                 onExit={() => {
-                  setCustomerMode(false);
-                  window.history.replaceState({}, '', '/');
+                  navigate('/', 'home');
+                }}
+                /* Phase 9C: a possible match opens the public /item/:id page,
+                   which is where the EXISTING "It's Mine" ownership journey
+                   begins. The matcher never becomes a second claim path. */
+                onOpenItem={(itemId) => navigate(itemPath(itemId), 'home')}
+                onAuthenticated={() => {
+                  // Return the visitor to the item they pressed "It's Mine" on,
+                  // so the journey continues instead of dead-ending on the
+                  // dashboard. The destination is validated in publicRoutes.ts
+                  // (internal /item/... paths only — never an open redirect).
+                  if (route.kind === 'account' && route.next) navigate(route.next, 'home');
                 }}
               />
             </Suspense>
@@ -297,7 +506,10 @@ export default function App() {
             <HomeView
               lang={lang}
               setLang={setLang}
-              setView={setView}
+              /* REQUEST 08: the homepage CTA prop is the URL-aware navigator, so
+                 every hero/category button leaves the browser on the matching
+                 public path (/lost, /found, /become-an-agent). */
+              setView={goToView}
               categories={categories}
               categoriesLoading={categoriesLoading}
               categoriesError={categoriesError}
@@ -305,6 +517,7 @@ export default function App() {
               recentItems={recentItems}
               recentItemsLoading={recentItemsLoading}
               recentItemsError={recentItemsError}
+              onOpenItem={(itemId: string) => navigate(itemPath(itemId), 'home')}
             />
           )}
 
@@ -326,6 +539,11 @@ export default function App() {
                 categories={categories}
                 categoriesLoading={categoriesLoading}
                 categoriesError={categoriesError}
+                /* Phase 7B: opens the public /item/:id page from a search
+                   result, and lets /item/:id hand an item into this same claim
+                   journey without rebuilding the claim flow. */
+                onOpenItem={(itemId: string) => navigate(itemPath(itemId), 'owner')}
+                initialClaimItem={claimItem}
               />
             </div>
           )}
@@ -341,6 +559,34 @@ export default function App() {
               <ErrorBoundary fallbackTitle="Admin Panel Crash">
                 <AdminView lang={lang} token={adminToken} setToken={handleSetAdminToken} />
               </ErrorBoundary>
+            </div>
+          )}
+
+          {/* Phase 8.1 — the public Sign In chooser. Presentation only: each
+              path hands off to the authentication surface that already exists
+              (/account for Owner/Claimant, /agent_portal for Agent), so no
+              authentication mechanism is duplicated or replaced. */}
+          {currentView === 'signin' && (
+            <div className="w-full p-4 sm:p-8">
+              <SignInView
+                lang={lang}
+                onOwnerSignIn={() => navigate('/account', 'home')}
+                onAgentSignIn={() => navigate('/agent_portal', 'agent')}
+                onBecomeAgent={() => goToView('becomeAgent')}
+              />
+            </div>
+          )}
+
+          {/* Phase 8.1 — the public agent journey. It explains the role and
+              leads to the EXISTING agent sign-in/registration inside
+              /agent_portal: no second registration flow, no invented figures. */}
+          {currentView === 'becomeAgent' && (
+            <div className="w-full p-4 sm:p-8">
+              <BecomeAgentView
+                lang={lang}
+                onContinueToAgentPortal={() => navigate('/agent_portal', 'agent')}
+                onSignIn={() => goToView('signin')}
+              />
             </div>
           )}
 

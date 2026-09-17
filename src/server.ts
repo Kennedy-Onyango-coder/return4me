@@ -31,10 +31,34 @@ import {
   setCustomerSessionCookie,
   clearCustomerSessionCookie,
   requireCustomerAuth,
+  // Phase 7C.3 / F11 — optional (non-terminating) session resolution and the
+  // additive post-verification journey link. See services/customerAuth.ts.
+  resolveOptionalCustomer,
+  linkVerifiedClaimToCustomer,
 } from './services/customerAuth';
-import { INACTIVE_CLAIM_STATUSES } from './config/claimStatuses';
+// Phase 7C.7 (R1): isPickupEligibleClaimStatus is the canonical pickup-eligibility
+// predicate introduced by Phase 7C.5. /api/claims/lookup now gates its agent
+// disclosure with it so that route cannot drift from routes/publicItems.ts.
+import { INACTIVE_CLAIM_STATUSES, isPickupEligibleClaimStatus } from './config/claimStatuses';
 import { toOwnerSafeAgentView, toOwnerSafeClaimView, toOwnerSafeItemView } from './services/ownerSafeViews';
+// Phase 7B: the shared public (unauthenticated) item read model. getRoughArea
+// moved here from this file so the public search route and the new public
+// item-detail route cannot drift apart in how they coarsen an agent address.
+import { toPublicItemView, getRoughArea } from './services/publicItemView';
+import { toAdminSafeAgentView, toAdminSafeItemView, toAdminSafeDisputeView, toAdminSafeAgentDocumentsView, toAdminSafeLedgerEntry, toAdminSafeAuditLog } from './services/adminSafeViews';
 import { registerCustomerClaimRoutes } from './routes/customerClaims';
+import { registerAdminDisputeRoutes } from './routes/adminDisputes';
+import { registerAdminClaimRoutes } from './routes/adminClaims';
+import { registerPublicItemRoutes } from './routes/publicItems';
+// Phase 9A: the customer lost-item reporting routes. Registered the same way as
+// the customer-claim routes below so an HTTP test can mount the real handlers.
+import { registerLostReportRoutes } from './routes/lostReports';
+// The canonical document-number hasher. Moved out of this file verbatim in
+// Phase 9A so the found-item report route (which also hashes identifiers) and
+// the new lost-item report route share ONE implementation instead of drifting
+// copies. Behaviour is unchanged — see services/documentHash.ts.
+import { hashDocument } from './services/documentHash';
+import { claimStatusPollLimiter } from './config/claimStatusPollLimiter';
 import bcrypt from 'bcryptjs';
 import * as Sentry from '@sentry/node';
 import * as OTPAuth from 'otpauth';
@@ -90,6 +114,25 @@ function scrubPii(obj: any): any {
 // payer_phone is returned (it is the user's own number, entered this session,
 // and the UI must show which number received the prompt); it is NOT the claim's
 // owner_phone unless the user chose the same number.
+// SC-9: single source of truth for "may the fake-payment endpoint run here?".
+//
+// Deliberately stricter than the general dev-convenience gate. This endpoint
+// writes an AUTHORITATIVE payment confirmation (claims.status -> escrow_held and
+// claims.paid_at), so it must not be reachable merely because NODE_ENV is not
+// 'production' (an unset NODE_ENV is the classic configuration mistake), and it
+// must not share a flag with a non-money feature like OTP bypass. All three
+// conditions are required, and boot() refuses to start in production if the
+// money-specific flag is set at all.
+function isDevPaymentSimulationEnabled(): boolean {
+  const env = process.env.NODE_ENV;
+  const isExplicitNonProductionEnv = env === 'development' || env === 'test';
+  return (
+    isExplicitNonProductionEnv &&
+    process.env.ALLOW_MOCK_OTP_BYPASS === 'true' &&
+    process.env.ENABLE_DEV_PAYMENT_SIMULATION === 'true'
+  );
+}
+
 function toSafePaymentSession(session: any): any {
   if (!session) return null;
   return {
@@ -145,6 +188,13 @@ if (process.env.NODE_ENV === 'production') {
   }
   if (process.env.ALLOW_MOCK_OTP_BYPASS === 'true') {
     throw new Error('FATAL: ALLOW_MOCK_OTP_BYPASS is set to true in production mode. This is extremely insecure and is strictly forbidden.');
+  }
+  // SC-9: the dev payment simulator moves a claim to escrow_held with NO real
+  // money. It must never be reachable in a production configuration, and a
+  // deployment that sets its flag by mistake must fail loudly at boot rather
+  // than serve a fake payment endpoint.
+  if (process.env.ENABLE_DEV_PAYMENT_SIMULATION === 'true') {
+    throw new Error('FATAL: ENABLE_DEV_PAYMENT_SIMULATION is set to true in production mode. This endpoint fabricates payment confirmation without any real transfer and is strictly forbidden in production.');
   }
   // Without these checks, a production deployment with forgotten/placeholder
   // IntaSend keys would boot successfully and then silently simulate every
@@ -1007,6 +1057,41 @@ async function startServer() {
   // ---------------------------------------------------------------------------
   registerCustomerClaimRoutes(app, { checkClaimExpiry });
 
+  // ---------------------------------------------------------------------------
+  // PHASE 9A — customer lost-item reports.
+  //
+  //   POST /api/lost-reports             (authenticated; creates a lost report)
+  //   GET  /api/lost-reports             (authenticated; the caller's OWN reports)
+  //   GET  /api/lost-reports/:id         (authenticated; one OWN report)
+  //   GET  /api/lost-reports/:id/matches (Phase 9B; possible found-item matches)
+  //
+  // Registered from routes/lostReports.ts for the same reason as the customer
+  // claim routes above: an HTTP integration test can mount the real handlers
+  // around the real requireCustomerAuth middleware. sendServerError is passed
+  // through so error disclosure behaviour is identical to every inline route,
+  // and canCreateClaim is injected (never re-implemented) so the matching
+  // engine can only ever surface an item that the public search, the public
+  // item page and the claim endpoint would each already accept.
+  // ---------------------------------------------------------------------------
+  registerLostReportRoutes(app, { sendServerError, canCreateClaim });
+
+  // ---------------------------------------------------------------------------
+  // PHASE 7B — public item journey.
+  //
+  // GET  /api/items/:id/public          (the /item/:id detail read model)
+  // POST /api/claims/:id/pickup-details (ownership-gated agent pickup info)
+  //
+  // Registered from routes/publicItems.ts for the same reason as the customer
+  // claim routes above: an HTTP integration test can mount the real handlers.
+  //
+  // canCreateClaim is injected rather than duplicated — it is the single
+  // central claimability rule, and the public detail route must agree with it
+  // exactly or it would advertise an item the claim endpoint would refuse.
+  // sendServerError is passed through so error disclosure behaviour (generic in
+  // production, detailed in dev) is identical to every inline route.
+  // ---------------------------------------------------------------------------
+  registerPublicItemRoutes(app, { canCreateClaim, sendServerError });
+
   // --- API ROUTES ---
 
   // 1. CONFIGURATION & PUBLIC METADATA
@@ -1759,23 +1844,10 @@ async function startServer() {
 
       const maskedResults = items.map(item => {
         const rawAgent = item.assigned_agent_id ? agentByIdForSearch.get(item.assigned_agent_id) : null;
-        const isSensitive = item.is_sensitive_document !== false;
-        return {
-          id: item.id,
-          category_id: item.category_id,
-          photo_url: isSensitive ? null : item.photo_url,
-          is_sensitive_document: isSensitive,
-          document_name_fuzzy: item.isDescriptionOnly ? 'Bidhaa ya Maelezo' : (item.document_name_fuzzy || (isSensitive ? 'Mwenye ID' : 'Bidhaa Bila Hati')),
-          location_description: item.location_description,
-          description: (item.isDescriptionOnly || !isSensitive) ? item.description : null,
-          isDescriptionOnly: item.isDescriptionOnly,
-          created_at: item.created_at,
-          status: item.status,
-          agent: rawAgent ? {
-            business_name: rawAgent.business_name,
-            rough_area: getRoughArea(rawAgent.location_address),
-          } : null,
-        };
+        // Phase 7B: the masking itself now lives in services/publicItemView.ts
+        // (toPublicItemView) so this route and GET /api/items/:id/public return
+        // byte-for-byte the same shape. Behaviour is unchanged here.
+        return toPublicItemView(item, rawAgent);
       });
 
       res.json(maskedResults);
@@ -2081,6 +2153,17 @@ async function startServer() {
         });
       }
 
+      // SC-1 (companion guard): an OTP is only meaningful for a claim still
+      // awaiting its first verification. Without this, the route would happily
+      // send a real SMS to the owner of an already-paid/handed-over/refunded
+      // claim and set up exactly the backward transition the verify-otp guard
+      // above now refuses. Returns 409 (a state conflict, not a bad request).
+      if (claim.status !== 'pending_verification') {
+        return res.status(409).json({
+          error: 'Claim hii imeshapitia uthibitisho. Hakuna OTP mpya inayohitajika. / This claim has already passed verification. No new OTP is required.',
+        });
+      }
+
       // Generate secure 4-digit code using Node crypto
       const code = crypto.randomInt(1000, 10000).toString();
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // valid for 5 mins
@@ -2151,12 +2234,72 @@ async function startServer() {
         return res.status(400).json({ error: `Msimbo wa OTP si sahihi. Una fursa ${5 - attempts} zilizobaki. / Incorrect OTP code. You have ${5 - attempts} attempts remaining.` });
       }
 
+      // SC-1 — LIFECYCLE GUARD. This route used to write
+      // 'awaiting_agent_confirmation' from ANY source state, which meant a
+      // claim that had already progressed (escrow_held, pending_settlement,
+      // releasing, released, refunding, refunded, rejected) could be pushed
+      // BACKWARD by a fresh OTP verification. Only 'pending_verification' is a
+      // legal source, and the check runs BEFORE the OTP is consumed so a
+      // refused attempt does not destroy the caller's still-valid code.
+      if (claim.status !== 'pending_verification') {
+        return res.status(409).json({
+          error: 'Claim hii haiwezi kuthibitishwa kwa OTP katika hali yake ya sasa. / This claim cannot be OTP-verified from its current state.',
+        });
+      }
+
+      // The transition is expressed through the central contract so the
+      // allowed-edge table, the expected-state CAS and the audit write are all
+      // enforced in one place.
+      const otpTransition = await db.transitionClaimStatus({
+        claimId,
+        expected: ['pending_verification'],
+        to: 'awaiting_agent_confirmation',
+        actor: claim.owner_phone || 'CLAIMANT',
+        action: 'CLAIM_OTP_VERIFIED',
+        details: `Claim ${claimId} OTP verified; awaiting in-person agent confirmation.`,
+      });
+      if (!otpTransition.ok) {
+        // NOT_FOUND cannot happen (the claim was read above) but is mapped for
+        // completeness; STATE_CONFLICT means another request moved the claim
+        // first — a 409, never a 500. The OTP is still NOT consumed here.
+        return res.status(otpTransition.code === 'NOT_FOUND' ? 404 : 409).json({
+          error: 'Claim hii imeshabadilika hivi punde. Tafadhali pakia upya. / This claim changed moments ago. Please reload.',
+        });
+      }
+
+      // Single-use: consume the challenge only AFTER the transition committed.
       await db.deleteClaimOtp(claimId);
-      await db.updateClaimStatus(claimId, 'awaiting_agent_confirmation');
+
+      // F11 (Phase 7C.3) — IDENTITY CONTINUITY. Everything above is the
+      // authoritative, already-committed verification and must NOT depend on
+      // anything below. The claim journey has always been valid for anonymous
+      // visitors (the claim OTP is sent to the claim's own registered phone),
+      // so the customer-account link is strictly ADDITIVE and is attempted
+      // only once the OTP is spent:
+      //
+      //   * no / invalid / expired / revoked session  -> anonymous, linked:false
+      //   * customer's normalised phone != claim phone -> no link, linked:false
+      //   * matching phone -> the EXISTING link primitive is used, linked:true
+      //
+      // It runs AFTER the transition + OTP consumption by design, so it can
+      // never weaken the claim's own proof standard, and it is wrapped so that
+      // a linkage failure cannot turn a successful verification into a 500.
+      let journeyLinked = false;
+      try {
+        const journeyCustomer = await resolveOptionalCustomer(req);
+        if (journeyCustomer) {
+          const journeyLink = await linkVerifiedClaimToCustomer(journeyCustomer, claim);
+          journeyLinked = journeyLink.linked;
+        }
+      } catch (e: any) {
+        console.error('[CUSTOMER_CLAIM_JOURNEY_LINK_ERROR]', e);
+        journeyLinked = false;
+      }
 
       res.json({
         success: true,
         message: 'Msimbo umethibitishwa kikamilifu! Tafadhali nenda kwa wakala physically ili athibitishe kuwa bidhaa hii ni yako kabla ya kulipa. / Verification code approved! Please visit the agent physically to verify the item belongs to you before initiating payment.',
+        linked: journeyLinked,
       });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
@@ -2552,7 +2695,21 @@ async function startServer() {
 
       // STK push initiated — claim remains in 'pending_payment' while we wait for
       // the IntaSend/M-Pesa webhook to confirm success and move it to 'escrow_held'.
-      await db.updateClaimStatus(claimId, 'pending_payment', paymentResult.checkoutRequestId);
+      //
+      // SC-4/SC-6 FIX: this call used to pass paymentResult.checkoutRequestId as
+      // the `paymentRef` argument, which wrote the provider's CHECKOUT REQUEST
+      // ID into claims.payment_reference at INITIATION — i.e. before any money
+      // existed. Because resolveDispute() used `!!payment_reference` as "this
+      // claimant actually paid", merely STARTING an STK push was enough to
+      // create a refund obligation for money that was never received.
+      //
+      // The checkout request id is transient STK metadata with no claim-level
+      // use (the authoritative receipt arrives on the webhook, and the
+      // payment-session path already persists provider_reference on the
+      // session), so it is deliberately not persisted here at all. The status
+      // write is retained only to refresh updated_at; `paid_at` is untouched —
+      // only attemptClaimEscrowHold()'s guarded CAS may ever set it.
+      await db.updateClaimStatus(claimId, 'pending_payment');
 
       const updatedClaim = await db.getClaim(claimId);
       let agent = null;
@@ -2584,6 +2741,18 @@ async function startServer() {
   });
 
   // 7a. Look up existing claim by Claim ID and Owner Phone
+  //
+  // Phase 7C.7 (R2): the two ownership failures — "no such claim" and "the phone
+  // does not match this claim" — now return ONE status and ONE body. Previously
+  // a caller who knew nothing but a candidate claim ID could learn whether that
+  // claim existed at all, and, for a claim they knew existed, confirm whether a
+  // guessed phone number was the registered owner phone. The missing-field guard
+  // stays a 400 and still runs BEFORE any database read, so it cannot be used as
+  // a probe either. The wording mirrors the ownership-gated pickup-details route
+  // (routes/publicItems.ts MESSAGES.claimUnavailable) so both surfaces speak with
+  // the same vocabulary. NOTE: ownership proof is unchanged — a matching
+  // registered phone is still required, and the claim's real owner phone remains
+  // the only credential this route accepts.
   app.post('/api/claims/lookup', claimGuessLimiter, async (req, res) => {
     const { claimId, phone } = req.body;
     if (!claimId || !phone) {
@@ -2595,14 +2764,21 @@ async function startServer() {
       const cleanPhone = String(phone).replace(/\s+/g, '');
       const e164Phone = toE164Kenyan(cleanPhone);
 
+      // ONE response object for both ownership failures below — a single shared
+      // constant so the two branches can never drift apart again.
+      const claimUnavailable = {
+        error: 'Claim haikupatikana au nambari ya simu hailingani. / Claim not found, or the phone number does not match.'
+      };
+
       const claim = await db.getClaim(cleanClaimId);
       if (!claim) {
-        return res.status(404).json({ error: 'Hakuna claim iliyopatikana yenye msimbo huo. Tafadhali hakikisha msimbo ni sahihi.' });
+        return res.status(404).json(claimUnavailable);
       }
 
       const claimPhoneClean = claim.owner_phone ? claim.owner_phone.replace(/\s+/g, '') : '';
       if (claimPhoneClean !== cleanPhone && claimPhoneClean !== e164Phone && toE164Kenyan(claimPhoneClean) !== e164Phone) {
-        return res.status(403).json({ error: 'Nambari ya simu uliyoweka hailingani na iliyotumiwa kutengeneza claim hii.' });
+        // Same status AND same body as the unknown-claim branch above.
+        return res.status(404).json(claimUnavailable);
       }
 
       const item = await db.getItem(claim.item_id);
@@ -2615,7 +2791,18 @@ async function startServer() {
         success: true,
         claim: toOwnerSafeClaimView(claim),
         item: toOwnerSafeItemView(item),
-        agent: toOwnerSafeAgentView(agent),
+        // Phase 7C.7 (R1): the hub's operational contact phone, exact address and
+        // GPS coordinates are only disclosed while the claim is still entitled to
+        // active pickup instructions — the SAME canonical policy the
+        // ownership-gated pickup-details route applies (config/claimStatuses.ts,
+        // Phase 7C.5). Without this gate, a claim that /pickup-details refuses
+        // (terminal, rejected, expired, refunded, disputed, or still
+        // OTP-unverified) could obtain the identical agent DTO from here instead.
+        //
+        // The `agent` KEY is deliberately preserved (null, never removed) and the
+        // claim status + masked item are untouched, so the Track/resume surface
+        // keeps working and still shows claim/item/status information.
+        agent: isPickupEligibleClaimStatus(claim.status) ? toOwnerSafeAgentView(agent) : null,
       });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
@@ -2678,20 +2865,48 @@ async function startServer() {
   });
 
   // GET lightweight claim status for frontend polling
-  // SECURITY: this endpoint is deliberately unauthenticated — it's polled
-  // every 3 seconds by the owner's browser during claim submission and
-  // payment, before any login exists for owners. It used to return the
-  // ENTIRE raw claim row, including `security_answers` (the exact
-  // last-4-digits/color/lost-details answers used to verify someone is the
-  // real owner), `owner_phone`, `owner_email`, `owner_identifying_details`,
-  // and `owner_id_proof_url`. Anyone who obtained a claim ID — from a URL,
-  // an SMS, a shared screenshot, or simple enumeration — could read the
-  // correct security answers for that claim and use them to impersonate
-  // the real owner on a future claim, plus pull their phone/email/ID-proof
-  // link. The frontend polling loops (OwnerView.tsx) only ever read
-  // `id`, `status`, and `agent_confirmed_at` from the response, so that's
-  // now the entire whitelist returned here.
-  app.get('/api/claims/:id/status', async (req, res) => {
+  // SECURITY (P0, Phase 7B): this endpoint is deliberately unauthenticated —
+  // it's polled every 3 seconds by the owner's browser during claim submission,
+  // agent confirmation and payment, before any login exists for owners. Two
+  // separate exposures were fixed here:
+  //
+  //  1. It used to return the ENTIRE raw claim row, including
+  //     `security_answers` (the exact last-4-digits/color/lost-details answers
+  //     used to verify someone is the real owner), `owner_phone`, `owner_email`,
+  //     `owner_identifying_details`, and `owner_id_proof_url`. Anyone who
+  //     obtained a claim ID — from a URL, an SMS, a shared screenshot, or
+  //     simple enumeration of the ~900k-combination claim-ID space — could read
+  //     the correct security answers for that claim and use them to impersonate
+  //     the real owner. That was already narrowed to the hand-built whitelist
+  //     below ({ id, status, agent_confirmed_at }), which is the ONLY thing the
+  //     OwnerView polling loops read off `data.claim`.
+  //
+  //  2. PRIVACY FIX: it then STILL returned `agent: toOwnerSafeAgentView(agent)`
+  //     — the assigned agent's full contact phone number, exact pickup address
+  //     and GPS latitude/longitude — to any anonymous caller who simply knew or
+  //     guessed a claim ID. That is operational contact/location data for a
+  //     real business and a real person, and a guessable ID must never be
+  //     sufficient to obtain it. `agent` is now GONE from this response
+  //     entirely; the owner gets it from the separately ownership-gated
+  //     POST /api/claims/:id/pickup-details (routes/publicItems.ts), which
+  //     requires the claim's registered owner phone. The response object below
+  //     is the complete public contract — it is a deliberately minimal public
+  //     DTO, not a filtered row.
+  //
+  // Also rate-limited, but DELIBERATELY NOT with claimGuessLimiter.
+  //
+  // F1 REGRESSION (fixed in Phase 7B.2): attaching claimGuessLimiter here —
+  // a 20-requests/15-minutes bucket SHARED with /lookup, /pay,
+  // /payment-auth, /payment-session and /:id/rate — starved the legitimate
+  // owner's own flow. OwnerView polls this route every 3 seconds (20 requests
+  // per minute, up to 300 per window), so the shared budget was gone ~60
+  // seconds into waiting for the agent; the poller then received 429s it
+  // ignored, and the owner's subsequent /payment-auth and /pay calls were
+  // rejected too. This route is the only POLLED claim route, so it now has a
+  // dedicated policy (600/15 min per IP — see config/claimStatusPollLimiter.ts
+  // for the arithmetic and the keying rationale) that cannot consume, or be
+  // consumed by, the discrete-route enumeration bucket.
+  app.get('/api/claims/:id/status', claimStatusPollLimiter, async (req, res) => {
     const claimId = req.params.id;
     try {
       let claim = await db.getClaim(claimId);
@@ -2702,11 +2917,6 @@ async function startServer() {
       if (!claim) {
         return res.status(404).json({ error: 'Claim haikupatikana.' });
       }
-      const item = await db.getItem(claim.item_id);
-      let agent = null;
-      if (item) {
-        agent = await db.getAgent(item.assigned_agent_id);
-      }
       res.json({
         status: claim.status,
         claim: {
@@ -2714,7 +2924,6 @@ async function startServer() {
           status: claim.status,
           agent_confirmed_at: claim.agent_confirmed_at,
         },
-        agent: toOwnerSafeAgentView(agent),
       });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
@@ -2821,11 +3030,40 @@ async function startServer() {
 
     await db.updateItemStatus(item.id, 'at_agent');
 
-    // Resolve as first-successfully-paid for non-sensitive items: Auto-reject other claims
+    // Resolve as first-successfully-paid for non-sensitive items: auto-reject
+    // other claims that are still competing for the same item.
+    //
+    // SC-6 FIX: this loop used to call
+    //   updateClaimStatus(oc.id, 'rejected', 'System Auto-Rejected: ...')
+    // which wrote a HUMAN-READABLE MESSAGE into claims.payment_reference. That
+    // column is a provider reference and is read by payment-truth logic, so a
+    // rejection message could masquerade as a payment.
+    //
+    // It also unconditionally overwrote EVERY other claim's status — including
+    // terminal ones (released / refunded / rejected / expired) and claims
+    // already pulled into an open dispute — silently regressing them. The
+    // transition contract now refuses those, so this only ever rejects a claim
+    // that was genuinely still competing, the reason is preserved in the audit
+    // trail (where it belongs), and anything skipped is logged rather than
+    // silently corrupted.
     if (item.is_sensitive_document === false) {
       const otherClaims = (await db.getClaims()).filter(c => c.item_id === item.id && c.id !== claimId);
       for (const oc of otherClaims) {
-        await db.updateClaimStatus(oc.id, 'rejected', 'System Auto-Rejected: Another claimant successfully paid first.');
+        const autoReject = await db.transitionClaimStatus({
+          claimId: oc.id,
+          expected: ['pending_verification', 'awaiting_agent_confirmation', 'pending_payment'],
+          to: 'rejected',
+          actor: 'SYSTEM',
+          action: 'CLAIM_AUTO_REJECTED_FIRST_PAYMENT',
+          details: `Claim ${oc.id} auto-rejected: another claimant on item ${item.id} successfully paid first.`,
+        });
+        if (!autoReject.ok) {
+          // Legitimately skipped: the claim is terminal, escrowed, or part of a
+          // dispute — in every case NOT ours to reject from this path.
+          console.log(
+            `[AUTO-REJECT] Skipped claim ${oc.id} (status=${autoReject.from ?? 'unknown'}, reason=${autoReject.code}).`,
+          );
+        }
       }
     }
 
@@ -2990,10 +3228,17 @@ async function startServer() {
   // every single time — there was no way to actually finish testing the
   // flow through the browser. This runs the identical confirmation logic
   // the real webhook uses, so it exercises the real code path, just without
-  // requiring an actual M-Pesa transaction. Hard-gated off in production and
-  // behind the same flag that enables OTP bypass, so it can never be live.
+  // requiring an actual M-Pesa transaction.
+  //
+  // SC-9 HARD BOUNDARY. This endpoint fabricates an authoritative payment
+  // confirmation, so its gate must not depend on a flag that is also used for
+  // something else, nor on NODE_ENV being unset. It requires ALL THREE of:
+  //   1. NODE_ENV explicitly 'development' or 'test' (NOT unset, NOT production)
+  //   2. ALLOW_MOCK_OTP_BYPASS === 'true'   (the existing dev-convenience flag)
+  //   3. ENABLE_DEV_PAYMENT_SIMULATION === 'true'  (dedicated, money-specific)
+  // and boot() additionally refuses to start in production if (3) is set.
   app.post('/api/dev/simulate-payment/:claimId', async (req, res) => {
-    if (process.env.NODE_ENV === 'production' || process.env.ALLOW_MOCK_OTP_BYPASS !== 'true') {
+    if (!isDevPaymentSimulationEnabled()) {
       return res.status(404).json({ error: 'Not found' });
     }
     try {
@@ -3016,12 +3261,14 @@ async function startServer() {
     }
   });
 
-  // Lets the frontend know whether dev/test conveniences (OTP bypass, the
-  // simulate-payment button) are active, without hardcoding that assumption
-  // client-side or exposing it in production.
+  // Lets the frontend know whether dev/test conveniences are active, without
+  // hardcoding that assumption client-side or exposing it in production.
   app.get('/api/dev/test-mode', (req, res) => {
     res.json({
       testModeEnabled: process.env.NODE_ENV !== 'production' && process.env.ALLOW_MOCK_OTP_BYPASS === 'true',
+      // Reported separately from the OTP bypass: this one fabricates payment
+      // confirmation, so it has its own, stricter flag (SC-9).
+      paymentSimulationEnabled: isDevPaymentSimulationEnabled(),
     });
   });
 
@@ -3227,7 +3474,10 @@ async function startServer() {
         return res.status(403).json({ error: 'Bidhaa hii haijapangiwa physical hub yako.' });
       }
 
-      await db.rejectItem(dropoffCode, reason);
+      // The rejecting actor is recorded explicitly: this route is an
+      // authenticated AGENT action, so it must not be attributed to an
+      // administrator nor silently collapsed into "SYSTEM" (see rejectItem).
+      await db.rejectItem(dropoffCode, reason, 'AGENT');
       res.json({ success: true, message: 'Bidhaa imekataliwa na kuondolewa kwenye mfumo.' });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
@@ -3252,15 +3502,24 @@ async function startServer() {
         return res.status(400).json({ error: 'Claim lazima iwe kwenye hali ya kusubiri uthibitisho wa wakala kabla ya kuthibitisha.' });
       }
 
-      // Update status and agent_confirmed_at
-      await db.updateClaimStatus(claimId, 'pending_payment', undefined, new Date());
-
-      // Log an audit entry
-      await db.logAudit(
-        `AGENT_${req.user.agentId}`,
-        'AGENT_CONFIRMED_VIEWING',
-        `Agent ${req.user.agentId} confirmed in-person viewing for claim ${claimId} and item ${item.id}`
-      );
+      // SC-2/SC-8: status change and its audit row now commit together through
+      // the central transition contract, with the expected state enforced by an
+      // atomic CAS. A concurrent second confirmation loses the race and gets a
+      // 409 instead of silently double-writing.
+      const viewingTransition = await db.transitionClaimStatus({
+        claimId,
+        expected: ['awaiting_agent_confirmation'],
+        to: 'pending_payment',
+        actor: `AGENT_${req.user.agentId}`,
+        action: 'AGENT_CONFIRMED_VIEWING',
+        details: `Agent ${req.user.agentId} confirmed in-person viewing for claim ${claimId} and item ${item.id}`,
+        extraSet: { agent_confirmed_at: new Date() },
+      });
+      if (!viewingTransition.ok) {
+        return res.status(viewingTransition.code === 'NOT_FOUND' ? 404 : 409).json({
+          error: 'Claim hii imeshashughulikiwa hivi punde. Tafadhali pakia upya. / This claim was handled moments ago. Please reload.',
+        });
+      }
 
       // Get updated claim to return
       const updatedClaim = await db.getClaim(claimId);
@@ -3469,6 +3728,20 @@ async function startServer() {
       const claims = await db.getClaims();
       const disputes = await db.getDisputes();
       const ledger = await db.getLedger();
+      // Bounded ledger/audit for the dashboard payload. The raw
+      // getLedger()/getAuditLogs() calls above return the full historical
+      // tables, which we use for in-memory stats computation (totalRevenue,
+      // completedAgentPayouts). The dashboard payload itself must never ship the
+      // full tables — we use bounded recent windows mapped through explicit
+      // admin whitelists so raw DB columns (provider refs, failure reasons,
+      // unsanitized audit detail text, recipient phone/till) never reach the
+      // browser even if the frontend is bypassed.
+      const dbLedger = await db.getRecentLedgerEntries(100);
+      const dbAuditLogs = await db.getRecentAuditLogs(100);
+
+      // Claim lookup for the dispute DTO's per-claimant summaries. Built from
+      // the claims already loaded above — no extra query per dispute.
+      const claimsById = new Map<string, any>(claims.map((c: any) => [c.id, c]));
 
       // Fetch reputation for each item's finder_phone
       //
@@ -3494,6 +3767,11 @@ async function startServer() {
       const clearedByPhone = new Map<string, boolean>(
         await Promise.all(uniquePhones.map(async (p): Promise<[string, boolean]> => [p, await db.isPhoneCleared(p)]))
       );
+      // Build the bulk item payload through an explicit admin whitelist rather
+      // than spreading the raw row. The previous `{ ...item }` shipped every
+      // item column to the browser on every console load — including
+      // document_number_hash, finder_email and the per-item locked-fee
+      // internals, none of which any admin screen reads.
       const itemsWithReputation = items.map(item => {
         const counts = itemCountsByPhone.get(item.finder_phone) || { total: 0, rejected: 0 };
         const isCleared = clearedByPhone.get(item.finder_phone) || false;
@@ -3504,10 +3782,11 @@ async function startServer() {
             autoFlag = !isCleared;
           }
         }
-        return {
-          ...item,
-          reputation: { total_reports: counts.total, rejected_reports: counts.rejected, autoFlag },
-        };
+        return toAdminSafeItemView(item, {
+          total_reports: counts.total,
+          rejected_reports: counts.rejected,
+          autoFlag,
+        });
       });
 
       // Computations
@@ -3523,15 +3802,20 @@ async function startServer() {
       // Attach each agent's total earnings (their share of completed
       // escrow releases) so admin can see who's earning what without a
       // separate request per agent — built from data already loaded above.
+      //
+      // The payload is built through the explicit admin whitelist rather than
+      // `{ ...agent }`: the raw row carries national_id_hash, the agent's
+      // national-ID photo URL and shop photo URL, none of which belong in a
+      // bulk refresh (vetting documents are served on demand by
+      // GET /api/admin/agents/:id/documents).
       const completedAgentPayouts = ledger.filter(l => l.type === 'agent_payout' && l.status === 'completed');
       const agentsWithEarnings = agents.map(agent => {
         const agentItemIds = new Set(items.filter(i => i.assigned_agent_id === agent.id).map(i => i.id));
         const payouts = completedAgentPayouts.filter(l => l.item_id && agentItemIds.has(l.item_id));
-        return {
-          ...agent,
+        return toAdminSafeAgentView(agent, {
           total_earned: payouts.reduce((sum, l) => sum + l.amount, 0),
           completed_payouts_count: payouts.length,
-        };
+        });
       });
 
       const currentAdmin = req.user?.username ? await db.getAdminByUsername(req.user.username) : null;
@@ -3553,14 +3837,20 @@ async function startServer() {
           };
         });
 
+      // `disputes` is mapped through the explicit admin whitelist: the raw
+      // rows carry each claimant's government-ID proof URL plus free-text
+      // admin_notes, which are not needed to list disputes. Evidence stays
+      // available on demand via GET /api/admin/disputes/:disputeId/evidence.
+      // The claims map supplies each claimant's live status/phone so the
+      // console can name the two claimants without guessing.
       res.json({
         stats,
         agents: agentsWithEarnings,
-        disputes,
+        disputes: disputes.map(d => toAdminSafeDisputeView(d, claimsById)),
         items: itemsWithReputation,
-        ledger,
+        ledger: dbLedger.map(toAdminSafeLedgerEntry),
         pendingSettlements,
-        auditLogs: await db.getAuditLogs(),
+        auditLogs: dbAuditLogs.map(toAdminSafeAuditLog),
         currentAdminTotpEnabled: !!currentAdmin?.totp_enabled,
         socialPublishingPaused: await isSocialPublishingPaused(),
       });
@@ -3610,6 +3900,29 @@ async function startServer() {
         `Admin manually set coordinates for agent ${agent.business_name} (${agentId}) to ${lat}, ${lon}`
       );
       res.json({ success: true, agent: updated, message: 'Mahali pa Agent pamesasishwa. / Agent location updated.' });
+    } catch (e: any) {
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
+    }
+  });
+
+  // On-demand agent vetting evidence.
+  //
+  // Deliberately NOT part of the bulk /api/admin/dashboard payload: an agent's
+  // national-ID document and shop photo are sensitive identity evidence, and
+  // are only needed while an administrator is reviewing one specific agent
+  // application. The console calls this when an agent row is expanded, instead
+  // of every console page-load carrying those URLs for every agent.
+  // Same authorization stack as every other admin route.
+  app.get('/api/admin/agents/:id/documents', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
+    try {
+      if (req.user?.role !== 'admin') {
+        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
+      }
+      const agent = await db.getAgent(req.params.id);
+      if (!agent) {
+        return res.status(404).json({ error: 'Agent haikupatikana.' });
+      }
+      return res.json({ success: true, documents: toAdminSafeAgentDocumentsView(agent) });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
@@ -3715,88 +4028,32 @@ async function startServer() {
     }
   });
 
-  // Admin-only, on-demand (not bundled into the main dashboard payload,
-  // which every admin page-load fetches — evidence can include photos and
-  // is only actually needed when an admin opens a specific dispute).
-  app.get('/api/admin/disputes/:disputeId/evidence', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
-    try {
-      if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
-      }
-      const evidence = await db.getDisputeEvidenceForDispute(req.params.disputeId);
-      res.json({ success: true, evidence });
-    } catch (e: any) {
-      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
-    }
-  });
+  // ============================================================
+  // ADMIN DISPUTE ADJUDICATION
+  // ============================================================
+  // The on-demand evidence reader and the dispute-resolution action live in
+  // routes/adminDisputes.ts so an HTTP integration test can mount the REAL
+  // handlers behind the REAL middleware. Registered here, at the same point in
+  // the middleware chain the inline routes previously occupied.
+  registerAdminDisputeRoutes(app, { requireCurrentAdminSession, sendServerError });
 
-  app.post('/api/admin/disputes/resolve', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
-    const { disputeId, winningClaimId, adminNotes } = req.body;
-    try {
-      if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
-      }
-      const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
-      const result = await db.resolveDispute(disputeId, winningClaimId, adminIdentifier, adminNotes);
+  // (admin dispute resolution is served by registerAdminDisputeRoutes above)
 
-      // If the losing claimant had already paid into escrow, they were
-      // locked into 'refunding' by resolveDispute above. Trigger the real
-      // M-Pesa refund now — outside the DB transaction, since it's a
-      // network call to IntaSend — and only mark the refund complete once
-      // the transfer actually succeeds. A definite provider rejection does
-      // NOT roll back the dispute decision (the winner has already been
-      // decided); it reverts just the loser's claim to 'rejected' and flags
-      // it in the audit log for manual admin reconciliation, exactly like a
-      // failed payout during normal escrow release.
-      if (result.refundNeededForClaimId && result.refundAmount && result.refundPhone) {
-        const refundResult = await PaymentService.triggerIntasendRefund(
-          result.refundPhone,
-          parseFloat(result.refundAmount),
-          result.refundNeededForClaimId
-        );
-        if (refundResult.outcome === 'completed') {
-          await db.finalizeClaimRefund(result.refundNeededForClaimId, result.refundAmount, result.refundPhone, adminIdentifier);
-        } else if (refundResult.outcome === 'unknown') {
-          // FIX #4 (audit finding A1): a network timeout/exception means we
-          // do NOT know whether IntaSend executed the refund. Treating that
-          // as a definite failure (the previous behavior) moved the claim to
-          // terminal 'rejected' even though the owner's money may have been
-          // sent — and any retry could double-refund. Instead: leave the
-          // claim locked in 'refunding' (excluded from
-          // uq_claims_one_active_per_item, so the winner remains the sole
-          // active claim), record an audit entry for reconciliation, and
-          // take NO automatic action. finalizeClaimRefund's
-          // WHERE status='refunding' guard means an admin can later safely
-          // finalize (provider confirmed executed) or
-          // revertClaimRefundLock (provider confirmed NOT executed).
-          await db.logAudit(
-            adminIdentifier,
-            'REFUND_UNKNOWN_OUTCOME',
-            `Claim ${result.refundNeededForClaimId}: refund request to IntaSend ended in an ambiguous outcome (timeout/network error). The claim remains locked in 'refunding'. No automatic retry has been issued. Manual provider reconciliation is required: confirm with IntaSend whether the refund executed, then finalizeClaimRefund (executed) or revertClaimRefundLock (not executed).`
-          );
-          return res.status(207).json({
-            success: true,
-            message: 'Mzozo umetatuliwa, lakini hali ya urejeshaji wa fedha wa mdai aliyeshindwa haijathibitishwa (hitilafu ya mtandao). Msimamizi anahitaji kuthibitisha na IntaSend kabla ya hatua nyingine. / Dispute resolved, but the losing claimant\'s refund outcome is unverified (network error). The claim remains in refunding — confirm with IntaSend before any further action.',
-            refundUnknown: true,
-          });
-        } else {
-          // Definite provider rejection (IntaSend received the request and
-          // refused it) — the refund was NOT executed, so reverting the
-          // claim's refund lock is safe.
-          await db.revertClaimRefundLock(result.refundNeededForClaimId, 'IntaSend refund disbursement rejected by provider', adminIdentifier);
-          return res.status(207).json({
-            success: true,
-            message: 'Mzozo umetatuliwa, lakini urejeshaji wa fedha wa mdai aliyeshindwa umeshindwa kufaulu. Msimamizi anahitaji kufuatilia kwa mkono. / Dispute resolved, but the losing claimant\'s refund failed to go through. Manual admin follow-up is required.',
-            refundFailed: true,
-          });
-        }
-      }
+  // ============================================================
+  // CLAIMS ADMINISTRATION (READ-ONLY, PHASE 6E)
+  // ============================================================
+  // The bounded claims list and the single-claim detail record live in
+  // routes/adminClaims.ts so an HTTP integration test can mount the REAL
+  // handlers behind the REAL middleware. Registered here, immediately after the
+  // admin dispute routes, so the middleware chain is identical to every other
+  // /api/admin route: authenticateJWT -> requireCurrentAdminSession ->
+  // permission guard -> inline role check.
+  //
+  // READ-ONLY: this module exposes GET handlers only. No claim mutation
+  // endpoint is registered here — lifecycle changes remain the exclusive
+  // province of transitionClaimStatus() and the existing admin actions.
+  registerAdminClaimRoutes(app, { requireCurrentAdminSession, sendServerError });
 
-      res.json({ success: true, message: 'Mzozo umetatuliwa kikamilifu kulingana na ushahidi uliowasilishwa.' });
-    } catch (e: any) {
-      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
-    }
-  });
 
   // ============================================================
   // REFUND RECONCILIATION (A1 unknown-outcome operational workflow)
@@ -4156,7 +4413,10 @@ async function startServer() {
         return res.status(404).json({ error: 'Bidhaa haikupatikana.' });
       }
 
-      await db.rejectItem(itemId, reason || 'Admin manual review rejection');
+      // The rejecting administrator is recorded explicitly, so the audit trail
+      // answers "which admin rejected this item?" instead of "SYSTEM".
+      const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
+      await db.rejectItem(itemId, reason || 'Admin manual review rejection', adminIdentifier);
       res.json({ success: true, message: 'Item rejected successfully.' });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
@@ -4171,7 +4431,9 @@ async function startServer() {
         return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
       }
 
-      await db.clearPhoneReputation(phone);
+      // Record the acting administrator rather than the old hard-coded "ADMIN".
+      const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
+      await db.clearPhoneReputation(phone, adminIdentifier);
       res.json({ success: true, message: `Reputation flag manually cleared for ${phone}.` });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
@@ -4914,14 +5176,9 @@ const PAUSED_MESSAGES: Record<PausableScope, string> = {
 };
 
 
-function hashDocument(value: string): string {
-  const normalizedValue = value.trim().toUpperCase();
-  const salt = process.env.DOC_HASH_SALT || process.env.JWT_SECRET || 'RETURN4ME_DEFAULT_SALT_VALUE_FOR_DOCUMENT_HASHING';
-  return crypto
-    .createHmac('sha256', salt)
-    .update(normalizedValue)
-    .digest('hex');
-}
+// (Phase 9A: hashDocument moved to services/documentHash.ts so the found-item
+// and lost-item report routes share ONE hashing implementation. It is imported
+// at the top of this file.)
 
 function isValidImageSignature(base64Str: string): boolean {
   try {
@@ -4965,15 +5222,8 @@ function maskName(name: string): string {
   return maskedParts.join(' ');
 }
 
-function getRoughArea(address: string): string {
-  if (!address) return 'Nairobi';
-  const parts = address.split(',');
-  if (parts.length > 0 && parts[0].trim().length > 3) {
-    return parts[0].trim();
-  }
-  const words = address.split(/\s+/).slice(0, 3).join(' ');
-  return words || 'Nairobi';
-}
+// (Phase 7B: getRoughArea moved to services/publicItemView.ts so the public
+// search route and the public item-detail route share one implementation.)
 
 // Fire up full-stack server
 startServer().catch(err => {

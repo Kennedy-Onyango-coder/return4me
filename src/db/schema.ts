@@ -1,5 +1,6 @@
 import { pgTable, varchar, text, numeric, integer, timestamp, jsonb, boolean, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import { CLAIM_SLOT_EXCLUDED_SQL_LIST } from "../config/claimStatuses";
 
 // 1. CATEGORIES TABLE
 export const categories = pgTable("categories", {
@@ -156,6 +157,27 @@ export const claims = pgTable("claims", {
   verification_tier: integer("verification_tier").default(1).notNull(),
   status: varchar("status", { length: 30 }).default("pending_verification").notNull(),
   owner_id_proof_url: text("owner_id_proof_url"),
+  // ---------------------------------------------------------------------
+  // PAYMENT TRUTH (SC-4 / SC-6 remediation)
+  // ---------------------------------------------------------------------
+  // `payment_reference` carries the PROVIDER's reference for a transfer
+  // (Daraja/M-Pesa receipt, or the provider invoice id). It is NOT, and must
+  // never be treated as, proof that money was received: it is written on
+  // payment INITIATION by the legacy /pay route and was previously also
+  // written with a non-payment rejection MESSAGE by the auto-reject loop.
+  //
+  // `paid_at` is the authoritative "money was actually received" marker:
+  //   NULL     = no authoritative confirmation (never attempted, abandoned,
+  //              still in flight, failed, or ambiguous provider outcome)
+  //   non-NULL = the claim's payment was confirmed by the SINGLE guarded
+  //              confirmation point — attemptClaimEscrowHold()'s
+  //              UPDATE ... WHERE status = 'pending_payment' CAS
+  //
+  // Set ONLY inside that CAS. Never set on initiation, on failure, on
+  // abandonment, on an unknown/ambiguous outcome, or from any client input.
+  // See resolveDispute()/adminSafeViews.ts, which read this (never
+  // payment_reference) to decide refund obligations.
+  paid_at: timestamp("paid_at", { withTimezone: true }),
   payment_reference: varchar("payment_reference", { length: 50 }),
   owner_identifying_details: text("owner_identifying_details"),
   owner_email: varchar("owner_email", { length: 255 }),
@@ -185,14 +207,20 @@ export const claims = pgTable("claims", {
     // submission route: two nearly-simultaneous requests could both read
     // "no active claim exists yet" before either commits. The application
     // check (src/server.ts /api/claims/submit) is the primary UX path — this
-    // partial unique index is the actual guarantee. It allows at most one
-    // "active" (not disputed/rejected/refunded/expired) claim per item at
-    // the database level; a racing second insert fails the constraint and
-    // is caught server-side and converted into the same disputed-claim
-    // response the application-level check already produces.
+    // partial unique index is the actual guarantee.
+    //
+    // SC-7: the predicate is now GENERATED from the single canonical export
+    // (CLAIM_SLOT_EXCLUDED_STATUSES in config/claimStatuses.ts) instead of
+    // being hand-copied here, in sql/schema.sql and in db/index.ts. Those three
+    // copies had no source of truth, so adding a status could silently drift
+    // them apart. `disputed` and `refunding` are excluded because a dispute
+    // legitimately puts TWO claims on one item and a refunding loser coexists
+    // with the winner; forcing this set to equal INACTIVE_CLAIM_STATUSES would
+    // break filing a dispute outright. A test pins all three declarations to
+    // the config export.
     uq_claims_one_active_per_item: uniqueIndex("uq_claims_one_active_per_item")
       .on(table.item_id)
-      .where(sql`${table.status} NOT IN ('disputed', 'rejected', 'refunding', 'refunded', 'payment_window_expired')`),
+      .where(sql`${table.status} NOT IN (${sql.raw(CLAIM_SLOT_EXCLUDED_SQL_LIST)})`),
   };
 });
 
@@ -208,6 +236,25 @@ export const disputes = pgTable("disputes", {
   resolved_claim_id: varchar("resolved_claim_id", { length: 50 }).references(() => claims.id),
   resolved_at: timestamp("resolved_at", { withTimezone: true }),
   admin_notes: text("admin_notes"),
+  // ---------------------------------------------------------------------
+  // DISPUTE SNAPSHOT (SC-3 remediation)
+  // ---------------------------------------------------------------------
+  // createDispute() unconditionally overwrites BOTH participants' status to
+  // 'disputed'. That erased their prior lifecycle position, forcing
+  // resolveDispute() to reconstruct "had this claimant actually paid?" from
+  // the claim row AFTER it had been overwritten — which is exactly how the
+  // SC-4 payment_reference overload became a money-safety bug.
+  //
+  // These columns capture each participant's state as it was immediately
+  // BEFORE the dispute was filed, so resolution can decide the winner's
+  // target state and the loser's refund obligation from the historical truth
+  // rather than by inference. Semantics are unchanged and deliberate:
+  //   claimant_1 = the original/pre-existing claim
+  //   claimant_2 = the contesting/new claim
+  claimant_1_status_at_dispute: varchar("claimant_1_status_at_dispute", { length: 30 }),
+  claimant_2_status_at_dispute: varchar("claimant_2_status_at_dispute", { length: 30 }),
+  claimant_1_paid_at_dispute: timestamp("claimant_1_paid_at_dispute", { withTimezone: true }),
+  claimant_2_paid_at_dispute: timestamp("claimant_2_paid_at_dispute", { withTimezone: true }),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
 }, (table) => {
   return {
@@ -566,5 +613,93 @@ export const customer_claim_links = pgTable("customer_claim_links", {
     uq_customer_claim_links_pair: uniqueIndex("uq_customer_claim_links_pair").on(table.customer_id, table.claim_id),
     // The one-customer-per-claim invariant. Also serves reverse lookups.
     uq_customer_claim_links_claim: uniqueIndex("uq_customer_claim_links_claim").on(table.claim_id),
+  };
+});
+
+// 9A. LOST-ITEM REPORTS (Phase 9A)
+// ================================
+// The complement of a found item: a person reports something THEY lost. This is
+// its OWN domain object — it is NOT a claim (a claim proves ownership of a
+// specific found item and drives the payment/handover lifecycle) and it does
+// NOT make any found item visible to the reporter or expose the reporter to a
+// finder. It exists so a future matcher (Phase 9B) has a real, safe data set to
+// compare found items against.
+//
+// Defined AFTER `customers` because it references that table.
+//
+// WHY EACH FIELD EXISTS (nothing speculative is stored here):
+//   id                      public reference AND primary key (see
+//                           services/lostReportReference.ts — crypto-random,
+//                           non-sequential, 'LR-XXXXXX').
+//   customer_id             the authenticated reporter. NOT NULL: anonymous
+//                           reporting is deliberately NOT supported in Phase 9A,
+//                           so there is always a verified account to contact.
+//   category_id             references the EXISTING priced category taxonomy —
+//                           no duplicate category name is stored.
+//   status                  the lost-report lifecycle (config/lostReportStatuses.ts),
+//                           a vocabulary provably disjoint from claim AND item
+//                           statuses.
+//   county / location_area /
+//   location_landmark       generalised lost location. `county` is constrained
+//                           to the canonical 47 Kenyan counties at the API
+//                           boundary (config/kenyaCounties.ts) and stored as
+//                           the canonical name; `location_area` is the
+//                           town/estate free text; `location_landmark` is an
+//                           optional free-text landmark. NO GPS coordinates —
+//                           the existing product does not require them for a
+//                           lost report, and precise location would be
+//                           over-collection.
+//   lost_at_from /
+//   lost_at_to              a TIME WINDOW, not a false-precision timestamp:
+//                           "I lost it sometime between 2pm and 5pm" is
+//                           lost_at_from=14:00, lost_at_to=17:00.
+//   brand / model / colour /
+//   material                optional structured identifying attributes. Short,
+//                           bounded, non-sensitive; deliberately NOT a generic
+//                           JSON blob that could become an uncontrolled bucket.
+//   description /
+//   distinctive_marks       PRIVATE free text. Returned only to the
+//                           authenticated owner; never in any public/finder DTO.
+//   document_type           optional non-sensitive classification of a document
+//                           or identifier held in the item (e.g. 'national-id',
+//                           'passport', 'imei'). A short label only.
+//   document_number_hash    the PROTECTED identifier. Hashed with the SAME
+//                           services/documentHash.ts primitive (and the same
+//                           DOC_HASH_SALT) that found items use, so a future
+//                           matcher can compare by exact hash. The plaintext is
+//                           NEVER stored and the hash never leaves the server.
+export const lost_reports = pgTable("lost_reports", {
+  id: varchar("id", { length: 50 }).primaryKey(),
+  customer_id: varchar("customer_id", { length: 50 }).notNull().references(() => customers.id, { onDelete: "cascade" }),
+  category_id: varchar("category_id", { length: 50 }).notNull().references(() => categories.id),
+  status: varchar("status", { length: 30 }).default("active").notNull(),
+  county: varchar("county", { length: 50 }).notNull(),
+  location_area: varchar("location_area", { length: 120 }).notNull(),
+  location_landmark: varchar("location_landmark", { length: 160 }),
+  lost_at_from: timestamp("lost_at_from", { withTimezone: true }).notNull(),
+  lost_at_to: timestamp("lost_at_to", { withTimezone: true }),
+  brand: varchar("brand", { length: 100 }),
+  model: varchar("model", { length: 100 }),
+  colour: varchar("colour", { length: 60 }),
+  material: varchar("material", { length: 60 }),
+  description: text("description"),
+  distinctive_marks: text("distinctive_marks"),
+  document_type: varchar("document_type", { length: 50 }),
+  document_number_hash: varchar("document_number_hash", { length: 64 }),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => {
+  return {
+    // Every owner-scoped read (the only read path that exists) filters on this.
+    idx_lost_reports_customer: index("idx_lost_reports_customer").on(table.customer_id),
+    // Phase 9B will filter candidates by category first.
+    idx_lost_reports_category: index("idx_lost_reports_category").on(table.category_id),
+    // Phase 9B will restrict matching to reports still `active`.
+    idx_lost_reports_status: index("idx_lost_reports_status").on(table.status),
+    // Exact protected-identifier comparison in Phase 9B (mirrors
+    // idx_items_doc_hash on found items).
+    idx_lost_reports_document_hash: index("idx_lost_reports_document_hash").on(table.document_number_hash),
+    // Generalised-location matching in a later phase.
+    idx_lost_reports_county: index("idx_lost_reports_county").on(table.county),
   };
 });

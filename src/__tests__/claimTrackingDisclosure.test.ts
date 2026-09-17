@@ -68,18 +68,32 @@ describe('owner-safe claim/item DTOs exist and are hand-built (not spread)', () 
 describe('owner-facing claim routes return the safe DTOs, never raw rows', () => {
   const lookup = routeBody('post', '/api/claims/lookup');
 
-  it('POST /api/claims/lookup wraps claim, item, and agent in safe views', () => {
+  it('POST /api/claims/lookup wraps claim, item, and the status-gated agent in safe views', () => {
     expect(lookup).toMatch(/claim: toOwnerSafeClaimView\(claim\)/);
     expect(lookup).toMatch(/item: toOwnerSafeItemView\(item\)/);
-    expect(lookup).toMatch(/agent: toOwnerSafeAgentView\(agent\)/);
+    // Phase 7C.7 (R1): the agent view is gated by the canonical pickup
+    // eligibility policy. The owner-safe whitelist itself is unchanged.
+    expect(lookup).toMatch(/agent: isPickupEligibleClaimStatus\(claim\.status\) \? toOwnerSafeAgentView\(agent\) : null/);
     for (const secret of NEVER_IN_OWNER_RESPONSE) {
       expect(lookup).not.toMatch(new RegExp(`${secret}:`, 'i'));
     }
   });
 
-  it('POST /api/claims/lookup still enforces the phone-match before returning anything', () => {
+  it('POST /api/claims/lookup enforces the phone-match with ONE uniform ownership failure (Phase 7C.7 R2)', () => {
+    // The phone is still the credential, and the comparison is still enforced...
     expect(lookup).toMatch(/toE164Kenyan\(cleanPhone\)/);
-    expect(lookup).toMatch(/403/);
+    expect(lookup).toMatch(/claimPhoneClean !== cleanPhone/);
+    // ...but "no such claim" and "wrong phone" are now externally identical.
+    expect(lookup).not.toMatch(/res\.status\(403\)/);
+    expect((lookup.match(/res\.status\(404\)\.json\(claimUnavailable\)/g) || []).length).toBe(2);
+    // Both branches share ONE response constant, so they cannot drift apart.
+    const constantIdx = lookup.indexOf('const claimUnavailable = {');
+    expect(constantIdx).toBeGreaterThan(-1);
+    expect(lookup.slice(constantIdx, constantIdx + 260)).toContain('Claim not found, or the phone number does not match');
+    // ...and the missing-field guard still runs BEFORE any database read.
+    expect(lookup).toMatch(/if \(!claimId \|\| !phone\)/);
+    expect(lookup).toMatch(/res\.status\(400\)/);
+    expect(lookup.indexOf('nambari ya simu zinahitajika')).toBeLessThan(lookup.indexOf('db.getClaim('));
   });
 
   it('POST /api/claims/submit returns toOwnerSafeClaimView, not the raw row', () => {
@@ -145,8 +159,16 @@ describe('server rejects the old sandbox default and requires a real phone', () 
 
     // The real collected phone is sent in the request body, never a hardcoded
     // sandbox default.
-    const bodyStart = ownerViewTsx.indexOf('body: JSON.stringify({');
-    expect(bodyStart).toBeGreaterThan(-1);
+    //
+    // Phase 7B anchors this on the claim-SUBMISSION fetch specifically: the
+    // public item journey added another JSON request earlier in this file (the
+    // ownership-gated pickup-details call), so "the first `body: JSON.stringify({`
+    // in OwnerView.tsx" is no longer necessarily the submit body. Every
+    // assertion below is unchanged — this only makes the locator unambiguous.
+    const submitStart = ownerViewTsx.indexOf("fetch('/api/claims/submit'");
+    expect(submitStart).toBeGreaterThan(-1);
+    const bodyStart = ownerViewTsx.indexOf('body: JSON.stringify({', submitStart);
+    expect(bodyStart).toBeGreaterThan(submitStart);
     const body = ownerViewTsx.slice(bodyStart, bodyStart + 500);
     expect(body).toMatch(/ownerPhone,\s*\n/);
     expect(body).not.toMatch(/ownerPhone: ownerPhone \|\|/);

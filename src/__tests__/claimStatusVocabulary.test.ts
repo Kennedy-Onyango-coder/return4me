@@ -2,7 +2,13 @@ import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import { getClaimStatusDisplay } from '../components/claimStatus';
-import { CLAIM_STATUS_VALUES, INACTIVE_CLAIM_STATUSES } from '../config/claimStatuses';
+import {
+  CLAIM_STATUS_VALUES,
+  INACTIVE_CLAIM_STATUSES,
+  PICKUP_ELIGIBLE_CLAIM_STATUSES,
+  PICKUP_INELIGIBLE_CLAIM_STATUSES,
+  isPickupEligibleClaimStatus,
+} from '../config/claimStatuses';
 
 // ---------------------------------------------------------------------------
 // Phase 2 — shared claim-status vocabulary.
@@ -114,7 +120,10 @@ describe('claim status vocabulary', () => {
     // server.ts no longer keeps a private copy of the set.
     const serverTs = fs.readFileSync(path.resolve(__dirname, '../server.ts'), 'utf8');
     expect(serverTs).not.toMatch(/const INACTIVE_CLAIM_STATUSES = new Set<string>\(/);
-    expect(serverTs).toContain("import { INACTIVE_CLAIM_STATUSES } from './config/claimStatuses'");
+    // The import may carry additional canonical exports on the same statement
+    // (Phase 7C.7 added isPickupEligibleClaimStatus to it), so this asserts the
+    // shared module is the source rather than pinning the exact name list.
+    expect(serverTs).toMatch(/import \{[^}]*\bINACTIVE_CLAIM_STATUSES\b[^}]*\} from '\.\/config\/claimStatuses'/);
   });
 
   it('the Claim status union in database.ts declares every status in the constraint', () => {
@@ -130,5 +139,51 @@ describe('claim status vocabulary', () => {
     for (const status of dbStatuses) {
       expect(unionLine!).toContain(`"${status}"`);
     }
+  });
+
+  // -------------------------------------------------------------------------
+  // Phase 7C.5 (F9) — pickup eligibility vocabulary.
+  //
+  // The endpoint's gate must be driven by exactly this canonical vocabulary, so
+  // the two sets are pinned as an explicit, disjoint PARTITION of the status
+  // CHECK constraint: every status is in exactly one of them, and a status
+  // added to the database can never silently default to "eligible".
+  // -------------------------------------------------------------------------
+  it('F9 — the pickup-eligible and pickup-ineligible sets partition the claim vocabulary', () => {
+    const eligible = [...PICKUP_ELIGIBLE_CLAIM_STATUSES].sort();
+    const ineligible = [...PICKUP_INELIGIBLE_CLAIM_STATUSES].sort();
+
+    expect(eligible).toEqual(
+      ['awaiting_agent_confirmation', 'escrow_held', 'pending_payment', 'pending_settlement', 'released', 'releasing'].sort()
+    );
+    expect(ineligible).toEqual(
+      ['disputed', 'payment_window_expired', 'pending_verification', 'refunded', 'refunding', 'rejected'].sort()
+    );
+
+    // Disjoint...
+    for (const status of ineligible) {
+      expect(PICKUP_ELIGIBLE_CLAIM_STATUSES.has(status), `${status} must not be both`).toBe(false);
+    }
+    // ...and together they cover every status the database can store.
+    expect([...eligible, ...ineligible].sort()).toEqual([...dbStatuses].sort());
+    expect(eligible.length + ineligible.length).toBe(CLAIM_STATUS_VALUES.length);
+  });
+
+  it('F9 — the predicate answers for every real status, and refuses the ineligible ones', () => {
+    for (const status of dbStatuses) {
+      expect(isPickupEligibleClaimStatus(status)).toBe(PICKUP_ELIGIBLE_CLAIM_STATUSES.has(status));
+    }
+    for (const status of [
+      'pending_verification',   // OTP not yet satisfied
+      'payment_window_expired', // abandoned attempt
+      'disputed',               // under adjudication
+      'rejected',               // verification failed / dispute lost
+      'refunding',              // refund in flight
+      'refunded',               // refunded
+    ]) {
+      expect(isPickupEligibleClaimStatus(status), `${status} must NOT be pickup-eligible`).toBe(false);
+    }
+    // An unknown status is refused by default (fail closed).
+    expect(isPickupEligibleClaimStatus('some_future_status')).toBe(false);
   });
 });

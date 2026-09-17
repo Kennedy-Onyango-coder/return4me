@@ -141,7 +141,12 @@ CREATE TABLE claims (
     -- brief in-flight window while a disbursement is actively being sent.
     status VARCHAR(30) NOT NULL DEFAULT 'pending_verification' CHECK (status IN ('pending_verification', 'awaiting_agent_confirmation', 'pending_payment', 'payment_window_expired', 'escrow_held', 'pending_settlement', 'releasing', 'released', 'disputed', 'rejected', 'refunding', 'refunded')),
     owner_id_proof_url TEXT, -- Secure storage path
-    payment_reference VARCHAR(50), -- Daraja M-Pesa Receipt Code (e.g. QJK817XHS2)
+    -- AUTHORITATIVE PAYMENT TRUTH. NULL = no confirmed payment; non-NULL = the
+    -- payment was confirmed by attemptClaimEscrowHold()'s guarded CAS. Never
+    -- set on initiation/failure/abandonment/unknown outcome. Never inferred
+    -- from payment_reference. See config/claimStatuses.ts + database.ts.
+    paid_at TIMESTAMP WITH TIME ZONE,
+    payment_reference VARCHAR(50), -- Provider reference (Daraja receipt / invoice id). NOT proof of payment.
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     owner_identifying_details TEXT,
@@ -162,7 +167,12 @@ CREATE TABLE claims (
 CREATE INDEX idx_claims_item ON claims(item_id);
 -- At most one "active" claim per item at the DB level — see the matching
 -- comment in src/db/schema.ts for why this exists alongside the
--- application-level duplicate-claim check.
+-- application-level duplicate-claim check, and why `disputed`/`refunding`
+-- MUST be excluded (a dispute puts two claims on one item, and a refunding
+-- loser coexists with the winner).
+-- SC-7: the predicate below MUST match CLAIM_SLOT_EXCLUDED_STATUSES in
+-- src/config/claimStatuses.ts — a test asserts this file, src/db/schema.ts and
+-- src/db/index.ts all declare the identical set.
 CREATE UNIQUE INDEX uq_claims_one_active_per_item ON claims(item_id)
     WHERE status NOT IN ('disputed', 'rejected', 'refunding', 'refunded', 'payment_window_expired');
 
@@ -178,6 +188,16 @@ CREATE TABLE disputes (
     resolved_claim_id VARCHAR(50) REFERENCES claims(id),
     resolved_at TIMESTAMP WITH TIME ZONE,
     admin_notes TEXT,
+    -- DISPUTE SNAPSHOT (SC-3): each participant's status and authoritative
+    -- payment truth as they were IMMEDIATELY BEFORE this dispute was filed.
+    -- createDispute() overwrites both claims' status to 'disputed', which
+    -- otherwise destroys the historical truth resolveDispute() needs to decide
+    -- the winner's target state and the loser's refund obligation.
+    -- claimant_1 = original/pre-existing claim; claimant_2 = contesting claim.
+    claimant_1_status_at_dispute VARCHAR(30),
+    claimant_2_status_at_dispute VARCHAR(30),
+    claimant_1_paid_at_dispute TIMESTAMP WITH TIME ZONE,
+    claimant_2_paid_at_dispute TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 -- At most one unresolved dispute per item — see matching comment in schema.ts.
@@ -259,3 +279,85 @@ CREATE TABLE social_publications (
     completed_at TIMESTAMP WITH TIME ZONE,
     CONSTRAINT uq_social_pub_item_platform_type UNIQUE (item_id, platform, publication_type)
 );
+
+-- 13. CUSTOMER ACCOUNT FOUNDATION (see schema.ts comment)
+CREATE TABLE customers (
+    id VARCHAR(50) PRIMARY KEY,
+    full_name TEXT NOT NULL,
+    phone VARCHAR(20) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'active',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX uq_customers_phone ON customers(phone);
+CREATE INDEX idx_customers_status ON customers(status);
+
+CREATE TABLE customer_otps (
+    id VARCHAR(50) PRIMARY KEY,
+    customer_id VARCHAR(50) REFERENCES customers(id) ON DELETE CASCADE,
+    phone VARCHAR(20) NOT NULL,
+    purpose VARCHAR(20) NOT NULL,
+    code_hash VARCHAR(64) NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    used_at TIMESTAMP WITH TIME ZONE
+);
+CREATE INDEX idx_customer_otps_phone_purpose ON customer_otps(phone, purpose);
+CREATE INDEX idx_customer_otps_expires ON customer_otps(expires_at);
+
+CREATE TABLE customer_sessions (
+    id VARCHAR(50) PRIMARY KEY,
+    customer_id VARCHAR(50) NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    token_hash VARCHAR(64) NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at TIMESTAMP WITH TIME ZONE,
+    revoked_at TIMESTAMP WITH TIME ZONE
+);
+CREATE INDEX idx_customer_sessions_token ON customer_sessions(token_hash);
+CREATE INDEX idx_customer_sessions_customer ON customer_sessions(customer_id);
+CREATE INDEX idx_customer_sessions_expires ON customer_sessions(expires_at);
+
+CREATE TABLE customer_claim_links (
+    id VARCHAR(50) PRIMARY KEY,
+    customer_id VARCHAR(50) NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    claim_id VARCHAR(50) NOT NULL REFERENCES claims(id) ON DELETE CASCADE,
+    linked_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    linked_via VARCHAR(40) NOT NULL DEFAULT 'claim_otp'
+);
+CREATE UNIQUE INDEX uq_customer_claim_links_pair ON customer_claim_links(customer_id, claim_id);
+CREATE UNIQUE INDEX uq_customer_claim_links_claim ON customer_claim_links(claim_id);
+
+-- 14. LOST-ITEM REPORTS (Phase 9A — see schema.ts comment)
+-- A lost report is its OWN domain object: not a claim, and it never exposes the
+-- reporter to a finder. `status` vocabulary lives in src/config/lostReportStatuses.ts
+-- and is deliberately DISJOINT from both the claim-status and item-status
+-- vocabularies, so a lost-report state can never be confused with either.
+CREATE TABLE lost_reports (
+    id VARCHAR(50) PRIMARY KEY, -- public reference, e.g. 'LR-7QF2KM'
+    customer_id VARCHAR(50) NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+    category_id VARCHAR(50) NOT NULL REFERENCES categories(id),
+    status VARCHAR(30) NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active', 'match_review', 'resolved', 'cancelled', 'lapsed')),
+    county VARCHAR(50) NOT NULL,
+    location_area VARCHAR(120) NOT NULL,
+    location_landmark VARCHAR(160),
+    lost_at_from TIMESTAMP WITH TIME ZONE NOT NULL,
+    lost_at_to TIMESTAMP WITH TIME ZONE,
+    brand VARCHAR(100),
+    model VARCHAR(100),
+    colour VARCHAR(60),
+    material VARCHAR(60),
+    description TEXT,
+    distinctive_marks TEXT,
+    document_type VARCHAR(50),
+    document_number_hash VARCHAR(64),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_lost_reports_customer ON lost_reports(customer_id);
+CREATE INDEX idx_lost_reports_category ON lost_reports(category_id);
+CREATE INDEX idx_lost_reports_status ON lost_reports(status);
+CREATE INDEX idx_lost_reports_document_hash ON lost_reports(document_number_hash);
+CREATE INDEX idx_lost_reports_county ON lost_reports(county);

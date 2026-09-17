@@ -16,6 +16,26 @@
   --color-primary-hover: #002414;
   --color-accent-orange: #EC7E0D;
   --color-accent-hover: #D26C08;
+
+  /* RETURN4ME TEXT-SAFE ACCENT (contrast remediation)
+     Big finding from the Phase 9 contrast audit: the brand orange is a
+     decorative / brand-identity colour, NOT a text background. Measured with
+     the WCAG relative-luminance formula:
+       white text on #EC7E0D  = 2.78:1  (fails AA 4.5:1 — for large text too)
+       white text on #D26C08  = 3.57:1  (fails AA — and that was the HOVER state)
+     A white-on-orange button is therefore unreadable-by-standard in BOTH its
+     normal and its hover state, which is exactly the reported defect class
+     ("background changes, text becomes unreadable"). The brand orange itself
+     is unchanged and keeps every decorative use (eyebrow rules, indicator
+     dots, borders, active states) — only orange-as-a-BUTTON-SURFACE moves to
+     these darkened steps, which preserve the hue and the visual identity:
+       white on #B35A00 = 4.80:1   (AA for normal text)
+       white on #8F4800 = 6.52:1   (AA — hover step, also AA for the 3:1
+                                    non-text / focus-indicator requirement)
+     See src/utils/__tests__/contrastTokens.test.ts — that test recomputes
+     these ratios from THIS file and fails if either step ever regresses. */
+  --color-accent-strong: #B35A00;
+  --color-accent-strong-hover: #8F4800;
   --color-brand-beige: #FDF8EE;
   --color-brand-light-gray: #F4EFE6;
   --color-brand-border: #E8E1D3;
@@ -49,6 +69,45 @@
   --color-status-info: #0369A1;         /* sky-700 */
   --color-status-info-surface: #F0F9FF;
   --color-status-info-border: #E0F2FE;
+
+  /* RETURN4ME TYPOGRAPHY SCALE (Phase 8.1)
+     The UI audit measured 216 arbitrary `text-[Npx]` declarations across the
+     views (7px–13px) with no shared scale, so type hierarchy was improvised
+     per screen. These five named steps are the approved UI sizes; the floor is
+     12px (caption) because nothing smaller is reliably legible — especially on
+     the low-cost Android devices this product targets. Tailwind's default
+     scale (text-sm/base/lg/xl) remains available and is unchanged.
+       caption 12px — labels, eyebrows, metadata, badges
+       small   13px — dense secondary text, helper copy
+       body    14px — default UI text (same size as text-sm)
+       heading 18px — card and section titles (same size as text-lg)
+       display 28px — page/section hero titles */
+  --text-caption: 0.75rem;
+  --text-caption--line-height: 1rem;
+  --text-small: 0.8125rem;
+  --text-small--line-height: 1.125rem;
+  --text-body: 0.875rem;
+  --text-body--line-height: 1.3125rem;
+  --text-heading: 1.125rem;
+  --text-heading--line-height: 1.625rem;
+  --text-display: 1.75rem;
+  --text-display--line-height: 2.125rem;
+
+  /* SEMANTIC SURFACE / TEXT / BORDER ALIASES (Phase 8.1)
+     One obvious name for each surface the product already uses, so new code
+     stops reaching for Tailwind's neutral `stone-*` palette (the audit measured
+     731 stone-* references). Every value below is the EXISTING brand token —
+     this is a naming layer, not a palette change, and no new colour was added:
+       text-ink          = primary green / brand-dark-text
+       text-ink-muted    = brand-muted-text
+       bg-canvas-muted   = brand-light-gray
+       bg-canvas-sunken  = brand-beige
+       border-line-subtle = brand-border */
+  --color-ink: #003820;
+  --color-ink-muted: #605B50;
+  --color-canvas-muted: #F4EFE6;
+  --color-canvas-sunken: #FDF8EE;
+  --color-line-subtle: #E8E1D3;
 }
 
 body {
@@ -91,6 +150,107 @@ body {
 .bg-primary-hover :focus-visible,
 .bg-stone-900 :focus-visible {
   outline-color: white;
+}
+
+/* HERO PHOTOGRAPH SCRIM (Phase 9 — hero text legibility)
+   The hero is real Nairobi photography with the headline/copy column sitting
+   on the LEFT of a max-w-7xl container. The previous treatment was two token
+   8–20% gradients, which measured well under 4.5:1 against the bright parts of
+   these photographs (concrete, sky, pavement) — hence the reported "text is
+   hard to read" complaint.
+
+   This is a DIRECTIONAL scrim, not a black panel: it is strongest where the
+   text actually sits and fades to nothing across the rest of the frame, so the
+   photograph keeps its detail and the right-hand side of every slide is left
+   almost untouched. Layers, in paint order:
+     1. a vertical stop (denser at the bottom, where the slide controls and the
+        secondary CTA sit) — keeps contrast independent of which slide shows;
+     2. a horizontal stop, left-heavy, reaching full strength only behind the
+        copy column and dissolving by ~70% of the width.
+   On phones and small tablets the copy column spans the whole frame, so a
+   directional scrim cannot help — there the horizontal layer is replaced by a
+   flatter, still-partly-transparent veil (the photo remains visible through
+   it; it is deliberately NOT an opaque black rectangle). */
+.r4m-hero-scrim {
+  background-image:
+    linear-gradient(
+      to bottom,
+      rgba(0, 20, 12, 0.62) 0%,
+      rgba(0, 20, 12, 0.30) 34%,
+      rgba(0, 20, 12, 0.42) 72%,
+      rgba(0, 20, 12, 0.66) 100%
+    );
+}
+
+@media (min-width: 640px) {
+  .r4m-hero-scrim {
+    background-image:
+      linear-gradient(
+        to bottom,
+        rgba(0, 20, 12, 0.58) 0%,
+        rgba(0, 20, 12, 0.26) 38%,
+        rgba(0, 20, 12, 0.38) 74%,
+        rgba(0, 20, 12, 0.60) 100%
+      ),
+      linear-gradient(
+        to right,
+        rgba(0, 20, 12, 0.72) 0%,
+        rgba(0, 20, 12, 0.58) 34%,
+        rgba(0, 20, 12, 0.26) 56%,
+        rgba(0, 20, 12, 0.00) 78%
+      );
+  }
+}
+
+/* ADMIN CONSOLE SIDEBAR (Phase 9 — Request 05 / §11)
+   The console's nine sections were a horizontal tab strip whose buttons each
+   carried a bottom border in the active colour. On a desktop that meant the
+   navigation scrolled horizontally away from the content it belonged to, and
+   the strip sat above a very long page.
+
+   Desktop (lg+, ≥1024px): the same nine items become a persistent, sticky left
+   sidebar — one column, full-width targets, a left accent bar and a tint for the
+   active section, and a divider where the content column begins. Nothing about
+   the sections themselves, their data or their permissions changes; this is a
+   layout rule over the markup that was already there.
+
+   Below lg the rules do not apply at all, so the existing horizontally
+   scrollable strip remains — a phone never gets a cramped fixed sidebar, and no
+   drawer/toggle state has to be invented for it. */
+@media (min-width: 1024px) {
+  .r4m-admin-nav {
+    flex-direction: column;
+    align-items: stretch;
+    width: 236px;
+    position: sticky;
+    top: 5.5rem;
+    border-bottom: 0;
+    border-right: 1px solid var(--color-line-subtle);
+    padding-right: 0.5rem;
+    gap: 0.125rem;
+    overflow: visible;
+  }
+
+  .r4m-admin-nav > button {
+    width: 100%;
+    justify-content: flex-start;
+    border-bottom: 0;
+    border-left: 3px solid transparent;
+    border-radius: 0.5rem;
+    padding: 0.625rem 0.75rem;
+    margin-bottom: 0;
+    font-size: 0.75rem;
+  }
+
+  .r4m-admin-nav > button:hover {
+    background-color: var(--color-canvas-muted);
+  }
+
+  /* The active section: a left accent bar AND a tint. Never colour alone. */
+  .r4m-admin-nav > button[aria-current='page'] {
+    border-left-color: var(--color-primary-green);
+    background-color: rgba(0, 56, 32, 0.06);
+  }
 }
 
 /* SUBTLE MOTION POLICY (Phase 2A)

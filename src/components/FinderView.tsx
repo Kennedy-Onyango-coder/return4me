@@ -1,5 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { translations } from '../types';
+// REQUEST 09 — the canonical Kenyan county list (all 47, ISO 3166-2:KE
+// spellings) lives in one place: src/config/kenyaCounties.ts. It is used here as
+// free-text SUGGESTIONS only — the stored value is still location_description,
+// so no schema, matching or privacy behaviour changes.
+import { KENYA_COUNTY_NAMES } from '../config/kenyaCounties';
 import { Camera, Upload, AlertCircle, AlertTriangle, MapPin, CheckCircle, Shield, ArrowRight, Loader2, RefreshCw, X } from 'lucide-react';
 
 interface FinderViewProps {
@@ -31,7 +36,15 @@ export default function FinderView({ lang, categories, categoriesLoading = false
   const [gpsLoading, setGpsLoading] = useState(false);
   const [finderPhone, setFinderPhone] = useState('');
   const [finderEmail, setFinderEmail] = useState('');
-  const [declaredValue, setDeclaredValue] = useState('');
+  // REQUEST 10 — the "Estimated Replacement Value, KES (Optional)" field was
+  // REMOVED from this form. It fed declared_value, which the fee engine used
+  // only as an optional CEILING on the recovery fee. With it gone the server
+  // receives no declaredValue, which is an explicitly supported input
+  // (server.ts: `if (declaredValue !== undefined && ...)`), and the locked fee
+  // becomes the category's admin-configured raw fee (base + complexity + delay).
+  // That is a bounded, per-category amount — so removing the field cannot
+  // produce an unbounded or inflated fee. See the Phase 9 report for the full
+  // consumer trace (feeEngine.ts, schema.sql, items.declared_value, tests).
   const [createAccount, setCreateAccount] = useState(false);
   const [agreedTerms, setAgreedTerms] = useState(false);
 
@@ -203,6 +216,11 @@ export default function FinderView({ lang, categories, categoriesLoading = false
   // Submit complete found item report
   const submitFoundReport = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Defence in depth against a duplicate POST: the submit button is already
+    // disabled while a submission is in flight, but the form itself is not
+    // disabled, so an implicit submission (Enter inside a text field) must not
+    // be able to fire a second report.
+    if (isSubmitting) return;
     const selectedCat = categories.find(c => c.id === categoryId);
     const isSensitive = selectedCat ? (selectedCat.is_sensitive_document !== false) : (categoryId !== 'other');
 
@@ -234,6 +252,16 @@ export default function FinderView({ lang, categories, categoriesLoading = false
     setIsSubmitting(true);
     setErrorMsg('');
 
+    // PHASE 8.4 — a failed submit must never render raw exception text.
+    // The API's own `error` string is a user-facing message by contract (see
+    // the errorDisclosure suite); a browser/network failure is not — its raw
+    // text ("Failed to fetch", "Unexpected token < in JSON…") is
+    // implementation detail and must not reach a public user.
+    const submitErrorMessage =
+      lang === 'en'
+        ? 'We could not submit your report. Please check your connection and try again.'
+        : 'Hatukuweza kuwasilisha ripoti yako. Tafadhali angalia muunganisho wako na ujaribu tena.';
+
     try {
       const response = await fetch('/api/items/report', {
         method: 'POST',
@@ -251,49 +279,56 @@ export default function FinderView({ lang, categories, categoriesLoading = false
           createAccount,
           termsAccepted: agreedTerms,
           description: (categoryId === 'other' || !isSensitive) ? description : undefined,
-          declaredValue: declaredValue ? declaredValue : undefined,
         }),
       });
 
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to submit report');
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data) {
+        const apiMessage = typeof data?.error === 'string' ? data.error.trim() : '';
+        setErrorMsg(apiMessage || submitErrorMessage);
+        return;
       }
 
       setDropoffResult(data.item);
     } catch (e: any) {
       console.error(e);
-      setErrorMsg(e.message);
+      setErrorMsg(submitErrorMessage);
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Pre-loaded realistic sample document images for easy AI-assist playground testing
   return (
     <div className="max-w-3xl mx-auto px-4 py-8 fade-in">
       {/* Title */}
       <div className="text-center mb-8">
         <h1 className="text-3xl font-extrabold text-primary-green mb-2">{t.finderTitle}</h1>
-        <p className="text-stone-600 text-sm max-w-xl mx-auto">{t.finderSubtitle}</p>
+        <p className="text-ink-muted text-sm max-w-xl mx-auto">{t.finderSubtitle}</p>
       </div>
 
+      {/* Validation and submission failures are announced assertively, and the
+          form points at this id via aria-describedby (Phase 8.5). */}
       {errorMsg && (
-        <div ref={errorBannerRef} className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-2xl flex items-center space-x-2.5 mb-6 text-sm">
-          <AlertCircle size={18} className="shrink-0" />
+        <div
+          id="finder-error"
+          ref={errorBannerRef}
+          role="alert"
+          className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-2xl flex items-center space-x-2.5 mb-6 text-sm"
+        >
+          <AlertCircle size={18} className="shrink-0" aria-hidden="true" />
           <span>{errorMsg}</span>
         </div>
       )}
 
       {/* Success View / Handover instructions */}
       {dropoffResult ? (
-        <div className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm text-center space-y-6">
+        <div className="bg-white rounded-2xl border border-line-subtle p-6 md:p-8 shadow-sm text-center space-y-6">
           <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto text-emerald-600">
             <CheckCircle size={36} />
           </div>
-          <div>
+          <div role="status" aria-live="polite">
             <h2 className="text-2xl font-extrabold text-primary-green mb-1">{t.successReport}</h2>
-            <p className="text-stone-500 text-sm">{t.dropoffInstructions}</p>
+            <p className="text-ink-muted text-sm">{t.dropoffInstructions}</p>
           </div>
 
           {/* Assigned Agent Details — or, if manual assignment is still
@@ -303,12 +338,12 @@ export default function FinderView({ lang, categories, categoriesLoading = false
               assignNearestAgent — so this must never assume it's always
               present. */}
           {dropoffResult.assignedAgent ? (
-            <div className="bg-brand-beige p-5 rounded-2xl text-left border border-stone-200 space-y-3">
-              <h3 className="text-xs font-extrabold text-stone-400 uppercase tracking-widest">{t.agentDetails}</h3>
+            <div className="bg-brand-beige p-5 rounded-2xl text-left border border-line-subtle space-y-3">
+              <h3 className="text-xs font-extrabold text-ink-muted uppercase tracking-widest">{t.agentDetails}</h3>
               <div>
                 <h4 className="text-lg font-bold text-primary-green">{dropoffResult.assignedAgent.business_name}</h4>
-                <p className="text-stone-600 text-sm font-medium">{dropoffResult.assignedAgent.location_address}</p>
-                <p className="text-stone-500 text-xs mt-1">Phone: {dropoffResult.assignedAgent.contact_phone}</p>
+                <p className="text-ink-muted text-sm font-medium">{dropoffResult.assignedAgent.location_address}</p>
+                <p className="text-ink-muted text-xs mt-1">{lang === 'en' ? 'Phone' : 'Simu'}: {dropoffResult.assignedAgent.contact_phone}</p>
               </div>
             </div>
           ) : (
@@ -330,7 +365,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
             <div className="text-3xl font-mono font-extrabold tracking-wider text-accent-orange">
               {dropoffResult.id}
             </div>
-            <p className="text-[11px] text-stone-300">
+            <p className="text-caption text-stone-300">
               {dropoffResult.assignedAgent
                 ? t.directionNote
                 : (lang === 'en' ? 'Keep this code — you\'ll need it once an agent is assigned.' : 'Hifadhi msimbo huu — utahitajika mara Agent atakapopangwa.')}
@@ -366,19 +401,27 @@ export default function FinderView({ lang, categories, categoriesLoading = false
               setCreateAccount(false);
               setAgreedTerms(false);
             }}
-            className="w-full bg-accent-orange hover:bg-accent-hover text-white py-3.5 rounded-2xl font-bold transition flex items-center justify-center space-x-2 shadow-lg shadow-orange-500/10"
+            className="w-full bg-accent-strong hover:bg-accent-strong-hover text-white py-3.5 rounded-2xl font-bold transition flex items-center justify-center space-x-2 shadow-lg shadow-orange-500/10"
           >
-            <span>Report Another Item</span>
+            <span>{lang === 'en' ? 'Report Another Item' : 'Ripoti Kitu Kingine'}</span>
             <ArrowRight size={18} />
           </button>
         </div>
       ) : (
         /* Form View */
-        <form onSubmit={submitFoundReport} className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm space-y-6">
+        <form
+          onSubmit={submitFoundReport}
+          aria-describedby={errorMsg ? 'finder-error' : undefined}
+          className="bg-white rounded-2xl border border-line-subtle p-6 md:p-8 shadow-sm space-y-6"
+        >
           
           {/* Photo Capture Section */}
           <div className="space-y-3">
-            <label className="block text-sm font-extrabold text-primary-green">{t.capturePhoto} *</label>
+            {/* A group heading, not a form label: it names the photo step for
+                the whole control group (camera, upload, retake, remove) rather
+                than one input, so a <label> without a control was misleading
+                to assistive tech. */}
+            <p className="block text-sm font-extrabold text-primary-green">{t.capturePhoto} *</p>
             
             {useCamera ? (
               <div className="relative bg-black rounded-2xl overflow-hidden aspect-video">
@@ -389,20 +432,28 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                     onClick={captureFrame}
                     className="bg-accent-orange text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-lg transition hover:bg-accent-hover"
                   >
-                    Capture
+                    {lang === 'en' ? 'Capture' : 'Piga Picha'}
                   </button>
                   <button
                     type="button"
                     onClick={stopCamera}
                     className="bg-stone-800 text-white px-5 py-2.5 rounded-xl font-bold text-sm transition hover:bg-stone-700"
                   >
-                    Cancel
+                    {lang === 'en' ? 'Cancel' : 'Ghairi'}
                   </button>
                 </div>
               </div>
             ) : photoBase64 ? (
-              <div className="relative rounded-2xl overflow-hidden border border-stone-200 bg-brand-beige aspect-video">
-                <img src={photoBase64} alt="Found item document" className="w-full h-full object-contain" />
+              <div className="relative rounded-2xl overflow-hidden border border-line-subtle bg-brand-beige aspect-video">
+                <img
+                  src={photoBase64}
+                  alt={
+                    lang === 'en'
+                      ? `Photo of the ${categories.find(c => c.id === categoryId)?.name_en || 'found item'} you are reporting`
+                      : `Picha ya ${categories.find(c => c.id === categoryId)?.name_sw || 'bidhaa iliyopatikana'} unayoripoti`
+                  }
+                  className="w-full h-full object-contain"
+                />
                 {/* Controls */}
               <div className="flex items-center justify-center gap-2 pb-3">
                 <button
@@ -416,7 +467,13 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                   </button>
                   <label className="bg-white text-primary-green p-2.5 rounded-full hover:bg-stone-100 shadow-md transition cursor-pointer" aria-label={lang === 'sw' ? 'Pakia picha' : 'Upload a photo'}>
                     <Upload size={18} />
-                    <input type="file" accept="image/*" onChange={handleFileUpload} className="hidden" />
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleFileUpload}
+                      className="hidden"
+                      aria-label={lang === 'sw' ? 'Pakia picha' : 'Upload a photo'}
+                    />
                   </label>
                   <button
                     type="button"
@@ -431,13 +488,13 @@ export default function FinderView({ lang, categories, categoriesLoading = false
               </div>
             ) : (
               /* Capture placeholder state */
-              <div className="border-2 border-dashed border-stone-200 rounded-2xl p-8 text-center bg-brand-beige hover:border-accent-orange transition space-y-4">
+              <div className="border-2 border-dashed border-line-subtle rounded-2xl p-8 text-center bg-brand-beige hover:border-accent-orange transition space-y-4">
                 <div className="w-12 h-12 bg-emerald-50 rounded-full flex items-center justify-center mx-auto text-primary-green">
                   <Camera size={24} />
                 </div>
                 <div className="space-y-1">
-                  <p className="text-sm font-bold text-stone-700">Take a photo or upload file</p>
-                  <p className="text-xs text-stone-400">{lang === 'sw' ? 'Picha itasaidia kulinganisha ripoti yako na bidhaa zilizopotezwa na wamiliki.' : 'A clear photo helps match your report with lost items owned by others.'}</p>
+                  <p className="text-sm font-bold text-ink-muted">{lang === 'en' ? 'Take a photo or upload file' : 'Piga picha au weka faili ya picha'}</p>
+                  <p className="text-xs text-ink-muted">{lang === 'sw' ? 'Picha itasaidia kulinganisha ripoti yako na bidhaa zilizopotezwa na wamiliki.' : 'A clear photo helps match your report with lost items owned by others.'}</p>
                 </div>
                 <div className="flex items-center justify-center space-x-3">
                   <button
@@ -448,7 +505,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                     <Camera size={14} />
                     <span>{t.takeSnap}</span>
                   </button>
-                  <label className="bg-white border border-stone-300 hover:bg-stone-50 text-stone-700 px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 cursor-pointer">
+                  <label className="bg-white border border-stone-300 hover:bg-stone-50 text-ink-muted px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 cursor-pointer">
                     <Upload size={14} />
                     <span>{t.uploadFile}</span>
                     <input type="file" accept="image/*" onChange={handleFileUpload} className="hidden" />
@@ -460,13 +517,18 @@ export default function FinderView({ lang, categories, categoriesLoading = false
             <canvas ref={canvasRef} className="hidden" />
           </div>
 
-          {/* OCR Loading Overlay */}
+          {/* OCR Loading Overlay — a live region so the multi-phase scan status
+              reaches screen readers as it changes (Phase 8.5). */}
           {isAnalyzing && (
-            <div className="bg-brand-beige p-6 rounded-2xl text-center border border-emerald-100 flex flex-col items-center justify-center space-y-3">
+            <div
+              className="bg-brand-beige p-6 rounded-2xl text-center border border-emerald-100 flex flex-col items-center justify-center space-y-3"
+              role="status"
+              aria-live="polite"
+            >
               <Loader2 className="animate-spin text-accent-orange" size={28} />
               <div>
                 <p className="text-sm font-bold text-primary-green">{t.analyzing}</p>
-                <p className="text-xs text-stone-400 font-medium">{analysisStatus}</p>
+                <p className="text-xs text-ink-muted font-medium">{analysisStatus}</p>
               </div>
             </div>
           )}
@@ -486,7 +548,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                     setExtractedName('');
                   }
                 }}
-                className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none disabled:bg-stone-50 disabled:text-stone-400"
+                className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none disabled:bg-stone-50 disabled:text-stone-400"
                 required
                 disabled={categoriesLoading || categoriesError}
               >
@@ -527,8 +589,8 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                         type="text"
                         value={extractedNumber}
                         onChange={(e) => setExtractedNumber(e.target.value)}
-                        className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-white font-mono focus:border-accent-orange focus:outline-none"
-                        placeholder="e.g. 32904812"
+                        className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white font-mono focus:border-accent-orange focus:outline-none"
+                        placeholder={lang === 'en' ? 'e.g. 32904812' : 'Mfano: 32904812'}
                       />
                     </div>
                   );
@@ -543,7 +605,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                         type="text"
                         value={description}
                         onChange={(e) => setDescription(e.target.value)}
-                        className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none"
+                        className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none"
                         placeholder={lang === 'en' ? 'What it is, distinguishing features' : 'Ni nini, sifa zake maalum'}
                         required
                       />
@@ -561,7 +623,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                       type="text"
                       value={description}
                       onChange={(e) => setDescription(e.target.value)}
-                      className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none"
+                      className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none"
                       placeholder={lang === 'en' ? 'e.g. Black leather with silver ring' : 'Mfano: Ngozi nyeusi yenye pete ya fedha'}
                       required
                     />
@@ -585,7 +647,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                     type="text"
                     value={extractedName}
                     onChange={(e) => setExtractedName(e.target.value)}
-                    className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none"
+                    className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none"
                     placeholder={lang === 'en' ? 'e.g. Black Keychain' : 'Mfano: Mnyororo mweusi wa funguo'}
                     required
                   />
@@ -600,8 +662,8 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                     type="text"
                     value={extractedName}
                     onChange={(e) => setExtractedName(e.target.value)}
-                    className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-white uppercase focus:border-accent-orange focus:outline-none"
-                    placeholder="e.g. MWANGI KAMAU"
+                    className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white uppercase focus:border-accent-orange focus:outline-none"
+                    placeholder={lang === 'en' ? 'e.g. MWANGI KAMAU' : 'Mfano: MWANGI KAMAU'}
                   />
                 </div>
               );
@@ -609,9 +671,31 @@ export default function FinderView({ lang, categories, categoriesLoading = false
             return null;
           })()}
 
+          {/* Analysis results are pre-fill suggestions the finder can correct.
+              The scan reads the image; it does not verify ownership, identity
+              or authenticity — so the person reporting must review it. */}
+          {photoBase64 && !isAnalyzing && (extractedNumber || extractedName) && (
+            <p className="text-caption text-ink-muted leading-normal">
+              {lang === 'en'
+                ? 'Please check the details above and correct anything the scan got wrong.'
+                : 'Tafadhali angalia maelezo hapo juu na urekebishe yoyote ambayo uchanganuzi ulikosea.'}
+            </p>
+          )}
+
           {/* Location Details & Precise GPS Matching Prompt */}
           <div className="space-y-3">
             <label htmlFor="finder-location" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">{t.locLabel} *</label>
+            {/* County suggestions from the canonical Kenyan county list (all 47,
+                ISO 3166-2:KE spellings). A datalist is used deliberately: the
+                field stays FREE TEXT, so nothing about the stored value, the
+                schema or the agent matching changes — it only prevents the real
+                county names being misspelled. No coordinates and no sub-county
+                data are offered, because neither exists in the backend. */}
+            <datalist id="r4m-county-suggestions">
+              {KENYA_COUNTY_NAMES.map((county) => (
+                <option key={county} value={county} />
+              ))}
+            </datalist>
             
             {/* GPS Precise Match Card Prompt */}
             {!latitude || !longitude ? (
@@ -619,10 +703,10 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                 <div className="flex gap-2.5">
                   <MapPin className="text-accent-orange shrink-0 mt-0.5" size={18} />
                   <div className="space-y-1">
-                    <h4 className="text-xs font-bold text-stone-900 leading-none">
+                    <h4 className="text-xs font-bold text-ink leading-none">
                       {lang === 'en' ? 'Enable Location for Nearest Agent Link' : 'Ruhusu Mahali Ulipo ili Kupata Wakala wa Karibu'}
                     </h4>
-                    <p className="text-[11px] text-stone-600 leading-normal">
+                    <p className="text-caption text-ink-muted leading-normal">
                       {lang === 'en' 
                         ? 'Please turn on your GPS location. This automatically matches you to the closest Return4me Agent hub for your physical drop-off, securing your payout faster.' 
                         : 'Tafadhali washa huduma ya GPS. Hii inakuunganisha moja kwa moja na Wakala wa karibu zaidi wa Return4me ili kuwasilisha hati na kupata malipo yako haraka.'}
@@ -633,7 +717,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                   type="button"
                   onClick={getCoordinates}
                   disabled={gpsLoading}
-                  className="w-full bg-accent-orange hover:bg-accent-hover text-white text-xs font-bold py-2.5 px-4 rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  className="w-full bg-accent-strong hover:bg-accent-strong-hover text-white text-xs font-bold py-2.5 px-4 rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
                 >
                   {gpsLoading ? (
                     <>
@@ -657,7 +741,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                   <h4 className="text-xs font-bold text-emerald-900">
                     {lang === 'en' ? 'Precise Agent Match Enabled!' : 'Unganisho Sahihi wa Wakala Umewashwa!'}
                   </h4>
-                  <p className="text-[10px] text-emerald-700 mt-0.5">
+                  <p className="text-caption text-emerald-700 mt-0.5">
                     {lang === 'en'
                       ? 'Location captured to help match your report with the nearest Return4me Agent.'
                       : 'Mahali yamehifadhiwa ili kusaidia kulinganisha ripoti yako na Wakala wa Return4me aliye karibu.'}
@@ -666,7 +750,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                 <button
                   type="button"
                   onClick={getCoordinates}
-                  className="text-[10px] font-bold text-emerald-800 hover:underline shrink-0"
+                  className="text-caption font-bold text-emerald-800 hover:underline shrink-0"
                 >
                   {lang === 'en' ? 'Update' : 'Sasisha'}
                 </button>
@@ -675,16 +759,31 @@ export default function FinderView({ lang, categories, categoriesLoading = false
 
             <div className="flex gap-2">
               <input
-                id="finder-location"
+                id="finder-location" list="r4m-county-suggestions"
                 type="text"
                 value={locationDescription}
                 onChange={(e) => setLocationDescription(e.target.value)}
-                className="flex-1 border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none"
+                className="flex-1 border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none"
                 placeholder={lang === 'en' ? "e.g. Near Yaya Centre, Kilimani" : "Mfano: Karibu na Yaya Centre, Kilimani"}
                 required
               />
             </div>
           </div>
+
+          {/* REQUEST 12/26 — truthful statement of what the location is actually
+              used for. The browser supplies coordinates only; there is no
+              reverse geocoding in this backend, so the app never claims to know
+              the neighbourhood ("You are around Westlands") and never shows the
+              raw coordinates back to the user. What it can honestly say is what
+              the server does: it attempts to match a real, active, vetted agent
+              by distance, and when no agent can be confidently matched the
+              report is still accepted for manual assignment rather than failing
+              or inventing a nearby agent. */}
+          <p className="text-caption text-ink-muted leading-normal">
+            {lang === 'en'
+              ? 'Your area description is what owners and agents search. If you also share your device location, Return4me uses the coordinates to look for a real active Agent near you; if none can be matched confidently, your report is still accepted and assigned by our team.'
+              : 'Maelezo ya eneo lako ndiyo yanayotafutwa na wamiliki na mawakala. Ukishiriki pia mahali ulipo kwenye kifaa, Return4me hutumia viwianishi kutafuta Wakala halisi aliye karibu nawe; ikiwa hakuna anayeweza kulinganishwa kwa uhakika, ripoti yako bado inakubaliwa na kupangwa na timu yetu.'}
+          </p>
 
           {/* Phone Details */}
           <div className="space-y-2">
@@ -692,14 +791,24 @@ export default function FinderView({ lang, categories, categoriesLoading = false
             <input
               id="finder-phone"
               type="tel"
+              inputMode="tel"
+              autoComplete="tel"
               value={finderPhone}
               onChange={(e) => setFinderPhone(e.target.value)}
-              className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-white font-mono focus:border-accent-orange focus:outline-none"
-              placeholder="e.g. 0712345678"
+              className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white font-mono focus:border-accent-orange focus:outline-none"
+              placeholder={lang === 'en' ? 'e.g. 0712345678' : 'Mfano: 0712345678'}
               required
             />
-            <span className="text-[10px] text-stone-400 block leading-tight">
-              Privacy Assurance: Your phone number is encrypted in the ledger, used strictly for B2C payouts, and is NEVER displayed to claimants.
+            {/* Phase 8.5 — TRUTHFULNESS: this note used to state that the number
+                is "encrypted in the ledger" and "used strictly for B2C payouts".
+                Neither is supported by the implementation: `finder_phone` is a
+                plain indexed varchar with no cipher code anywhere in the repo,
+                and it is also the finder's operational contact (admin-safe view).
+                The copy now claims only what the code can substantiate. */}
+            <span className="text-caption text-ink-muted block leading-tight">
+              {lang === 'en'
+                ? 'Your phone number is used for your M-Pesa payout and is never shown to claimants.'
+                : 'Nambari yako ya simu inatumika kwa malipo yako ya M-Pesa na haionyeshwi kwa wadai.'}
             </span>
           </div>
 
@@ -711,37 +820,17 @@ export default function FinderView({ lang, categories, categoriesLoading = false
             <input
               id="finder-email"
               type="email"
+              inputMode="email"
+              autoComplete="email"
               value={finderEmail}
               onChange={(e) => setFinderEmail(e.target.value)}
-              className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-white font-sans focus:border-accent-orange focus:outline-none"
-              placeholder="e.g. finder@gmail.com"
+              className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white font-sans focus:border-accent-orange focus:outline-none"
+              placeholder={lang === 'en' ? 'e.g. finder@gmail.com' : 'Mfano: finder@gmail.com'}
             />
-            <span className="text-[10px] text-stone-400 block leading-tight">
+            <span className="text-caption text-ink-muted block leading-tight">
               {lang === 'en' 
                 ? 'Optional email to receive status alerts about your drop-off and payout.' 
                 : 'Barua pepe ya hiari ili kupokea arifa za hali ya uwasilishaji na malipo yako.'}
-            </span>
-          </div>
-
-          {/* Optional declared value — used only to cap the recovery fee in the owner's favour */}
-          <div className="space-y-2">
-            <label htmlFor="declared-value" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">
-              {lang === 'en' ? 'Estimated Replacement Value, KES (Optional)' : 'Thamani ya Kubadilisha, KES (Sio Lazima)'}
-            </label>
-            <input
-              id="declared-value"
-              type="number"
-              min="0"
-              step="1"
-              value={declaredValue}
-              onChange={(e) => setDeclaredValue(e.target.value)}
-              className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-white font-mono focus:border-accent-orange focus:outline-none"
-              placeholder="e.g. 30000"
-            />
-            <span className="text-[10px] text-stone-400 block leading-tight">
-              {lang === 'en'
-                ? "Your best guess at what this item would cost to replace. It's never verified or shown to the owner — it's only used to make sure the recovery fee never exceeds a small percentage of that value."
-                : 'Makadirio yako ya gharama ya kubadilisha kitu hiki. Haitathibitishwa wala kuonyeshwa kwa mmiliki — inatumika tu kuhakikisha ada ya urejeshaji haizidi asilimia ndogo ya thamani hiyo.'}
             </span>
           </div>
 
@@ -758,13 +847,15 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                 }}
                 className="h-4 w-4 rounded border-stone-300 text-primary-green focus:ring-primary-green accent-primary-green cursor-pointer"
               />
-              <label htmlFor="create-finder-account" className="text-xs text-stone-700 font-bold select-none cursor-pointer">
-                Create a Return4me Finder Account with this phone number (to track history & payouts)
+              <label htmlFor="create-finder-account" className="text-xs text-ink-muted font-bold select-none cursor-pointer">
+                {lang === 'en'
+                  ? 'Create a Return4me Finder Account with this phone number (to track history & payouts)'
+                  : 'Fungua Akaunti ya Msingi wa Return4me kwa nambari hii ya simu (kufuatilia historia na malipo)'}
               </label>
             </div>
 
             {createAccount && (
-              <div className="flex items-start space-x-2 bg-brand-beige p-3 rounded-xl border border-stone-100 fade-in">
+              <div className="flex items-start space-x-2 bg-brand-beige p-3 rounded-xl border border-line-subtle fade-in">
                 <input
                   id="finder-agreed-terms"
                   type="checkbox"
@@ -773,22 +864,22 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                   className="mt-1 h-4 w-4 rounded border-stone-300 text-primary-green focus:ring-primary-green accent-primary-green cursor-pointer"
                   required={createAccount}
                 />
-                <label htmlFor="finder-agreed-terms" className="text-xs text-stone-600 leading-tight select-none cursor-pointer">
-                  I have read and agree to the Return4me{' '}
+                <label htmlFor="finder-agreed-terms" className="text-xs text-ink-muted leading-tight select-none cursor-pointer">
+                  {lang === 'en' ? 'I have read and agree to the Return4me' : 'Nimesoma na nakubali'}{' '}
                   <button
                     type="button"
                     onClick={() => (window as any).setView?.('terms')}
                     className="text-primary-green hover:underline font-bold inline focus:outline-none"
                   >
-                    Terms of Service
+                    {lang === 'en' ? 'Terms of Service' : 'Vigezo na Masharti'}
                   </button>{' '}
-                  and{' '}
+                  {lang === 'en' ? 'and' : 'na'}{' '}
                   <button
                     type="button"
                     onClick={() => (window as any).setView?.('privacy')}
                     className="text-primary-green hover:underline font-bold inline focus:outline-none"
                   >
-                    Privacy Policy
+                    {lang === 'en' ? 'Privacy Policy' : 'Sera ya Faragha'}
                   </button>
                   . *
                 </label>
@@ -796,15 +887,23 @@ export default function FinderView({ lang, categories, categoriesLoading = false
             )}
           </div>
 
+          {/* Announces the in-flight submission; the visible label already
+              changes, but a focused button's name change is not reliably
+              announced (Phase 8.5). */}
+          <p className="sr-only" role="status" aria-live="polite">
+            {isSubmitting ? (lang === 'en' ? 'Submitting your report…' : 'Inawasilisha ripoti yako…') : ''}
+          </p>
+
           <button
             type="submit"
+            aria-busy={isSubmitting || undefined}
             disabled={isSubmitting || !photoBase64}
-            className="w-full bg-accent-orange hover:bg-accent-hover text-white py-3.5 rounded-2xl font-bold transition flex items-center justify-center space-x-2 shadow-lg shadow-orange-500/10 disabled:opacity-50 cursor-pointer"
+            className="w-full bg-accent-strong hover:bg-accent-strong-hover text-white py-3.5 rounded-2xl font-bold transition flex items-center justify-center space-x-2 shadow-lg shadow-orange-500/10 disabled:opacity-50 cursor-pointer"
           >
             {isSubmitting ? (
               <>
                 <Loader2 className="animate-spin" size={18} />
-                <span>Processing your submission...</span>
+                <span>{lang === 'en' ? 'Processing your submission…' : 'Inashughulikia uwasilishaji wako…'}</span>
               </>
             ) : (
               <>
@@ -817,7 +916,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
           {/* Disabled state previously gave no explanation — a filled-out form
               with a grayed-out button and no photo yet looked broken. */}
           {!isSubmitting && !photoBase64 && (
-            <p className="text-center text-xs text-stone-400 -mt-2">
+            <p className="text-center text-xs text-ink-muted -mt-2">
               {lang === 'sw'
                 ? 'Weka picha ya bidhaa hapo juu ili uweze kuwasilisha.'
                 : 'Add a photo of the item above before you can submit.'}

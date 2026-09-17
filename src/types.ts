@@ -82,6 +82,13 @@ export const translations = {
     ownerBtn: 'I Lost Something',
     agentBtn: 'Agent Portal',
     adminBtn: 'Admin Console',
+    // Phase 8.1 — public navigation labels. "Become an Agent" is the public
+    // entry to the agent journey (it leads to the marketing surface, which in
+    // turn opens /agent_portal); "Sign In" is the single public authentication
+    // entry that offers the Owner/Claimant and Agent paths. The internal label
+    // above ('Agent Portal') is retained for non-navigation use only.
+    becomeAgentBtn: 'Become an Agent',
+    signInBtn: 'Sign In',
     langToggle: 'Swahili (Kiswahili)',
     logout: 'Logout',
     
@@ -214,6 +221,8 @@ export const translations = {
     ownerBtn: 'Nimepoteza Kitu',
     agentBtn: 'Kituo cha Mawakala',
     adminBtn: 'Usimamizi',
+    becomeAgentBtn: 'Kuwa Wakala',
+    signInBtn: 'Ingia',
     langToggle: 'English',
     logout: 'Toka',
 

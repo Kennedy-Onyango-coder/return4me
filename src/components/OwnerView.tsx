@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { translations } from '../types';
 import VerificationForm from './VerificationForm';
 import { trapModalFocus } from '../utils/modalFocus';
-import { Search, AlertCircle, ShieldAlert, CheckCircle, Smartphone, ArrowRight, Loader2, Coins, MapPin, Lock, Eye, Clock, X, XCircle, AlertTriangle } from 'lucide-react';
+import { Search, AlertCircle, ShieldAlert, CheckCircle, Smartphone, ArrowRight, Loader2, Coins, MapPin, Lock, Eye, Clock, X, XCircle, AlertTriangle, RefreshCw } from 'lucide-react';
 // The "Track My Claim" status badge previously always rendered in the same
 // green/success color and the same raw snake_case string for every status,
 // including 'disputed', 'rejected', 'refunding', and 'refunded' — an owner
@@ -12,12 +12,50 @@ import { Search, AlertCircle, ShieldAlert, CheckCircle, Smartphone, ArrowRight, 
 // module so the customer dashboard renders status identically instead of
 // keeping a second copy in sync.
 import { getClaimStatusDisplay } from './claimStatus';
+import Stepper from './ui/Stepper';
+import Button from './ui/Button';
+
+// PHASE 8.2 — CLAIM PROGRESS MODEL (presentation only)
+// ====================================================
+// The claim journey previously gave the claimant no indication of where they
+// were or what happened next: each step was its own isolated screen. This maps
+// the EXISTING `verificationStep` state onto five user-facing stages and feeds
+// the shared Stepper primitive (which already existed but was unused).
+//
+// It is pure presentation: no lifecycle value, status vocabulary, API contract,
+// verification rule or payment behaviour is involved, and an unknown state
+// simply renders as the first stage.
+const CLAIM_STEPS: { en: string; sw: string }[] = [
+  { en: 'Confirm', sw: 'Thibitisha' },
+  { en: 'Verify', sw: 'Thibitisha utambulisho' },
+  { en: 'Visit hub', sw: 'Tembelea kituo' },
+  { en: 'Pay', sw: 'Lipa' },
+  { en: 'Collect', sw: 'Chukua' },
+];
+
+const CLAIM_STEP_INDEX: Record<string, number> = {
+  confidence_gate: 0,
+  tier1_security: 1,
+  tier2_otp: 1,
+  tier3_id: 1,
+  awaiting_agent_confirmation: 2,
+  payment: 3,
+  payment_polling: 3,
+  handover_success: 4,
+};
 
 interface OwnerViewProps {
   lang: 'en' | 'sw';
   categories: any[];
   categoriesLoading?: boolean;
   categoriesError?: boolean;
+  /** Phase 7B: opens the public item-detail route (/item/:id) from a search
+   *  result. Search, filters and the existing claim button are unchanged. */
+  onOpenItem?: (itemId: string) => void;
+  /** Phase 7B: an item handed in from the public /item/:id page via "It's
+   *  Mine" (after authentication). When present, this view opens directly on
+   *  the ownership-confidence step for that item instead of the search list. */
+  initialClaimItem?: any | null;
 }
 
 // Mirrors the backend's canonical Kenyan phone normalization (toE164Kenyan in
@@ -41,7 +79,165 @@ function isValidKenyanPhoneForPayer(raw: string): boolean {
   return /^\+254\d{9}$/.test(normalizeKenyanPhoneForPayer(clean));
 }
 
-export default function OwnerView({ lang, categories, categoriesLoading = false, categoriesError = false }: OwnerViewProps) {
+// Shown when the polled status endpoint answers 429 (too many status checks).
+// Phase 7B.2: the poller used to ignore every non-OK response, so a throttled
+// client kept hammering the endpoint every 3 seconds forever and the UI simply
+// never advanced — silently misleading. Stopping the interval and saying so is
+// the honest minimal behaviour; nothing about the claim itself is affected, and
+// a page refresh resumes polling.
+function statusPollThrottledMessage(lang: 'en' | 'sw'): string {
+  return lang === 'en'
+    ? 'Status checks are paused for a moment to avoid overloading the server. Please refresh this page in a minute — your claim is safe and still progressing.'
+    : 'Ukaguzi wa hali umesimamishwa kwa muda ili kuepuka kuzidisha seva. Tafadhali pakia upya ukurasa huu baada ya dakika moja — dai lako liko salama na linaendelea.';
+}
+
+// ---------------------------------------------------------------------------
+// PICKUP-DETAILS STATE MACHINE (Phase 7C.5 — F8)
+//
+// The pickup-details request used to return `agent | null`, which silently
+// collapsed FOUR different outcomes into one value:
+//   * the hub genuinely has no agent assigned yet,
+//   * the claim is no longer eligible for pickup instructions,
+//   * the request failed (429 / 500 / network),
+//   * the request has not happened at all.
+// The UI then rendered the same static placeholder for all of them — including
+// when no request was in flight, so a permanent failure looked identical to a
+// slow success.
+//
+// The result and the rendered state are now explicit and disjoint, so every
+// outcome is represented honestly and a failed refresh is visibly retryable.
+// ---------------------------------------------------------------------------
+type PickupDetailsResult =
+  | { kind: 'ok'; itemId: string | null; agent: any | null }
+  | { kind: 'ineligible' }
+  | { kind: 'error'; retryable: boolean; status?: number };
+
+type PickupDetailsState =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'ready'; agent: any | null }
+  | { status: 'ineligible' }
+  | { status: 'error'; retryable: boolean };
+
+// Product copy for each pickup-details state, kept in one place so the
+// awaiting-agent and handover screens cannot drift apart, and bilingual to
+// match the rest of this view.
+function pickupLoadingMessage(lang: 'en' | 'sw'): string {
+  return lang === 'en'
+    ? 'Retrieving the pickup location…'
+    : 'Inapata mahali pa kuchukua bidhaa…';
+}
+function pickupNoHubMessage(lang: 'en' | 'sw'): string {
+  return lang === 'en'
+    ? 'No hub has been assigned yet. The pickup location will appear here as soon as one is available.'
+    : 'Hakuna kituo kilichopangwa bado. Mahali pa kuchukua bidhaa kutadhihirika hapa mara tu kitakapopatikana.';
+}
+function pickupIneligibleMessage(lang: 'en' | 'sw'): string {
+  return lang === 'en'
+    ? 'Pickup details are no longer available for this claim.'
+    : 'Maelezo ya kuchukua bidhaa hayapatikani tena kwa dai hili.';
+}
+function pickupErrorMessage(lang: 'en' | 'sw'): string {
+  return lang === 'en'
+    ? 'We could not retrieve the pickup details right now.'
+    : 'Imeshindikana kupata maelezo ya kuchukua bidhaa kwa sasa.';
+}
+
+/**
+ * The verifiable hub details an owner sees once ownership is proven: business
+ * name, address, contact phone and (where the agent has coordinates) a
+ * directions link. Renders only what it was given, so a coarse or stale hub
+ * object can never masquerade as freshly retrieved pickup information.
+ */
+function HubDetails({ agent, lang, showDirections = false }: { agent: any; lang: 'en' | 'sw'; showDirections?: boolean }) {
+  const hasCoordinates = agent?.latitude !== undefined && agent?.latitude !== null
+    && agent?.longitude !== undefined && agent?.longitude !== null;
+  return (
+    <div>
+      <h4 className="text-base font-bold text-primary-green">{agent?.business_name}</h4>
+      {agent?.location_address && (
+        <p className="text-ink-muted text-xs font-medium">{agent.location_address}</p>
+      )}
+      {agent?.contact_phone && (
+        <p className="text-ink-muted text-xs font-semibold mt-1">
+          {lang === 'en' ? 'Phone' : 'Simu'}: <span className="font-mono">{agent.contact_phone}</span>
+        </p>
+      )}
+      {showDirections && hasCoordinates && (
+        <a
+          href={`https://www.google.com/maps/dir/?api=1&destination=${agent.latitude},${agent.longitude}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-primary-green text-xs font-bold mt-2 underline underline-offset-2 hover:text-accent-orange transition"
+        >
+          <MapPin size={13} />
+          {lang === 'sw' ? 'Fungua Maelekezo kwenye Google Maps' : 'Open Directions in Google Maps'}
+        </a>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Renders the pickup-details card body from the explicit state. `idle` renders
+ * as loading because both screens that use this panel start the request in an
+ * effect on entry, so an idle state there is the pre-request frame of a real
+ * in-flight sequence — never a placeholder standing in for a request that does
+ * not exist.
+ */
+function PickupDetailsPanel({
+  state,
+  lang,
+  showDirections = false,
+  onRetry,
+}: {
+  state: PickupDetailsState;
+  lang: 'en' | 'sw';
+  showDirections?: boolean;
+  onRetry: () => void;
+}) {
+  if (state.status === 'idle' || state.status === 'loading') {
+    return (
+      <div className="flex items-center gap-2 text-ink-muted text-xs py-1">
+        <Loader2 className="animate-spin text-primary-green shrink-0" size={14} />
+        <span>{pickupLoadingMessage(lang)}</span>
+      </div>
+    );
+  }
+
+  if (state.status === 'ineligible') {
+    return <p className="text-ink-muted text-xs">{pickupIneligibleMessage(lang)}</p>;
+  }
+
+  if (state.status === 'error') {
+    return (
+      <div className="space-y-2">
+        <p className="text-ink-muted text-xs">{pickupErrorMessage(lang)}</p>
+        {state.retryable && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onRetry}
+          >
+            <RefreshCw size={12} aria-hidden="true" />
+            {lang === 'en' ? 'Try again' : 'Jaribu tena'}
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  // Ready: a null agent is a deliberate "no hub assigned yet" answer from the
+  // server, not a failure — and never a cue to keep showing older details.
+  if (!state.agent) {
+    return <p className="text-ink-muted text-xs">{pickupNoHubMessage(lang)}</p>;
+  }
+
+  return <HubDetails agent={state.agent} lang={lang} showDirections={showDirections} />;
+}
+
+export default function OwnerView({ lang, categories, categoriesLoading = false, categoriesError = false, onOpenItem, initialClaimItem = null }: OwnerViewProps) {
   const t = translations[lang];
 
   // Search States
@@ -132,6 +328,153 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
       }
     };
   }, []);
+
+  // PHASE 7B — "It's Mine" hand-off: when the public item page passes an item
+  // in (after the visitor passed the authentication boundary), open the claim
+  // journey directly on that item's ownership-confidence step. Runs once: the
+  // claim flow itself then owns the step transitions (including Back).
+  const initialClaimAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!initialClaimItem || initialClaimAppliedRef.current) return;
+    initialClaimAppliedRef.current = true;
+    setSelectedItem(initialClaimItem);
+    setVerificationStep('confidence_gate');
+  }, [initialClaimItem]);
+
+  // The phone the claimant typed is read by the 3-second polling loops below.
+  // Those loops are created inside event handlers, so a plain state read would
+  // capture whatever the value was at the moment the interval was created; a
+  // ref keeps them reading the CURRENT value (a stale empty value would make
+  // the pickup-details call below fail its ownership check).
+  const ownerPhoneRef = useRef('');
+  useEffect(() => {
+    ownerPhoneRef.current = ownerPhone;
+  }, [ownerPhone]);
+
+  // PHASE 7B — agent pickup contact/location, fetched ONLY after the claimant
+  // has proven ownership. This used to arrive on the polling response itself
+  // (GET /api/claims/:id/status returned the agent's full phone number, exact
+  // address and GPS coordinates to anyone who knew or guessed a claim ID). That
+  // was a P0 exposure: claim IDs are 6-digit numeric codes. The status endpoint
+  // now returns status only, and this ownership-gated call supplies the pickup
+  // details using the same claim ID + registered-phone proof the rest of the
+  // claim flow already uses.
+  //
+  // PHASE 7C.5 (F8): the helper returns an explicit discriminated result instead
+  // of `agent | null`, and it drives `pickupDetails` — the single source of
+  // truth the hub cards render from. Nothing here ever displays a returned agent
+  // for a claim whose item is not the item currently on screen.
+  const [pickupDetails, setPickupDetails] = useState<PickupDetailsState>({ status: 'idle' });
+  // Monotonic request token: a response may only update the UI if it is still
+  // the newest request (stale-response protection).
+  const pickupRequestSeqRef = useRef(0);
+  const pickupAbortRef = useRef<AbortController | null>(null);
+  // The claim whose pickup details have already been requested, so entering the
+  // awaiting/handover steps requests them once per claim and never re-requests
+  // on an unrelated re-render.
+  const pickupRequestedForClaimRef = useRef<string | null>(null);
+  // Mirror of the on-screen item, readable from async callbacks that must
+  // assert identity before merging private hub details (F7).
+  const selectedItemRef = useRef<any | null>(null);
+  useEffect(() => {
+    selectedItemRef.current = selectedItem;
+  }, [selectedItem]);
+
+  useEffect(() => {
+    return () => {
+      if (pickupAbortRef.current) pickupAbortRef.current.abort();
+    };
+  }, []);
+
+  // Low-level request. Maps the server contract to the explicit result:
+  //   200 -> ok (agent may legitimately be null = "no hub assigned yet")
+  //   409 -> ineligible (claim exists, phone matched, status no longer entitled)
+  //   429 -> retryable error (the pickup-details limiter, never swallowed)
+  //   5xx -> retryable error
+  //   other 4xx -> non-retryable error
+  const requestPickupDetails = async (claimId: string, signal: AbortSignal): Promise<PickupDetailsResult> => {
+    const res = await fetch(`/api/claims/${claimId}/pickup-details`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: ownerPhoneRef.current }),
+      signal,
+    });
+    if (res.status === 409) return { kind: 'ineligible' };
+    if (res.status === 429) return { kind: 'error', retryable: true, status: 429 };
+    if (!res.ok) return { kind: 'error', retryable: res.status >= 500, status: res.status };
+    const payload = await res.json();
+    return { kind: 'ok', itemId: payload?.item_id ?? null, agent: payload?.agent ?? null };
+  };
+
+  const fetchAgentPickupDetails = async (claimId: string): Promise<PickupDetailsResult> => {
+    // Supersede any in-flight pickup request: a stale response must never
+    // overwrite a newer one.
+    pickupRequestSeqRef.current += 1;
+    const seq = pickupRequestSeqRef.current;
+    if (pickupAbortRef.current) pickupAbortRef.current.abort();
+    const controller = new AbortController();
+    pickupAbortRef.current = controller;
+    pickupRequestedForClaimRef.current = claimId;
+    setPickupDetails({ status: 'loading' });
+
+    let result: PickupDetailsResult;
+    try {
+      result = await requestPickupDetails(claimId, controller.signal);
+    } catch (e: any) {
+      if (e?.name === 'AbortError') {
+        // Superseded by a newer request, which owns the UI state from here.
+        return { kind: 'error', retryable: true };
+      }
+      // Log the failure only — no provider/server detail, and nothing that
+      // could surface private operational data in the browser.
+      console.error('Failed to load pickup agent details.');
+      result = { kind: 'error', retryable: true };
+    }
+
+    if (seq !== pickupRequestSeqRef.current) {
+      // A newer request has superseded this one; do not touch the UI at all.
+      return result;
+    }
+
+    if (result.kind === 'ok') {
+      // F7 (defence-in-depth): only accept private hub details for the item the
+      // server says the claim belongs to. A missing or mismatched item id is
+      // treated as stale, and NOTHING is displayed or merged.
+      const onScreenItemId = selectedItemRef.current?.id ?? null;
+      if (!result.itemId || !onScreenItemId || result.itemId !== onScreenItemId) {
+        setPickupDetails({ status: 'error', retryable: true });
+        return { kind: 'error', retryable: true, status: 200 };
+      }
+      setPickupDetails({ status: 'ready', agent: result.agent });
+      setSelectedItem(prev => (prev && prev.id === result.itemId ? { ...prev, agent: result.agent } : prev));
+    } else if (result.kind === 'ineligible') {
+      setPickupDetails({ status: 'ineligible' });
+    } else {
+      setPickupDetails({ status: 'error', retryable: result.retryable });
+    }
+    return result;
+  };
+
+  // F8: the awaiting-agent and handover screens both need the hub's real
+  // contact/location, and both previously rendered a "Fetching..." placeholder
+  // without ever making a request. Request it once per claim, on entry.
+  useEffect(() => {
+    if (verificationStep !== 'awaiting_agent_confirmation' && verificationStep !== 'handover_success') return;
+    const claimId = paidClaim?.id;
+    if (!claimId) {
+      // Nothing to fetch for — say so rather than spinning forever.
+      setPickupDetails({ status: 'error', retryable: false });
+      return;
+    }
+    if (pickupRequestedForClaimRef.current === claimId) return;
+    void fetchAgentPickupDetails(claimId);
+  }, [verificationStep, paidClaim?.id]);
+
+  const retryPickupDetails = () => {
+    const claimId = paidClaim?.id;
+    if (!claimId) return;
+    void fetchAgentPickupDetails(claimId);
+  };
 
   useEffect(() => {
     if (verificationStep === 'payment' && paidClaim?.agent_confirmed_at) {
@@ -353,9 +696,11 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           if (data.status === 'pending_payment') {
             clearInterval(interval);
             setPaidClaim(data.claim);
-            if (data.agent) {
-              setSelectedItem(prev => prev ? { ...prev, agent: data.agent } : null);
-            }
+            // Phase 7B: the status response no longer carries agent
+            // contact/location (it was publicly readable by claim ID alone).
+            // Phase 7C.5: the payment/handover screens own the pickup-details
+            // request (see the step effect above), so this loop only advances
+            // the step — it never reads private agent data off a status poll.
             setVerificationStep('payment');
           } else if (data.status === 'payment_window_expired') {
             clearInterval(interval);
@@ -366,6 +711,12 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             setPaidClaim(data.claim);
             setVerificationStep('handover_success');
           }
+        } else if (response.status === 429) {
+          // Phase 7B.2: stop polling and tell the user, instead of continuing to
+          // hammer a throttled endpoint every 3 seconds in silence.
+          clearInterval(interval);
+          setPollingStatus('timeout');
+          setErrorMsg(statusPollThrottledMessage(lang));
         }
       } catch (e) {
         console.error('Polling status error:', e);
@@ -400,12 +751,17 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           if (data.status === 'escrow_held' || data.status === 'released') {
             clearInterval(interval);
             setPaidClaim(data.claim);
-            if (data.agent) {
-              setSelectedItem(prev => prev ? { ...prev, agent: data.agent } : null);
-            }
+            // Phase 7C.5: the handover screen owns the pickup-details request
+            // (step effect), so a status poll can never supply agent data.
             setPollingStatus('success');
             setVerificationStep('handover_success');
           }
+        } else if (response.status === 429) {
+          // Phase 7B.2: same throttle handling as the awaiting-agent poller —
+          // stop the loop and surface it rather than retrying every 3 seconds.
+          clearInterval(interval);
+          setPollingStatus('timeout');
+          setErrorMsg(statusPollThrottledMessage(lang));
         }
       } catch (e) {
         console.error('Polling payment status error:', e);
@@ -559,7 +915,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           {/* Headline & Track Claim Action */}
           <div className="text-center space-y-3">
             <h1 className="text-3xl font-extrabold text-primary-green mb-2">{t.ownerTitle}</h1>
-            <p className="text-stone-600 text-sm max-w-xl mx-auto">{t.ownerSubtitle}</p>
+            <p className="text-ink-muted text-sm max-w-xl mx-auto">{t.ownerSubtitle}</p>
             <button
               ref={trackModalTriggerRef}
               type="button"
@@ -583,7 +939,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           )}
 
           {/* Search Box / Filters */}
-          <form onSubmit={handleSearch} className="bg-white rounded-2xl border border-stone-100 p-6 shadow-sm space-y-4">
+          <form onSubmit={handleSearch} className="bg-white rounded-2xl border border-line-subtle p-6 shadow-sm space-y-4">
             <div className="flex flex-col md:flex-row gap-3">
               <div className="flex-1 relative">
                 <input
@@ -592,16 +948,16 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder={t.searchPlaceholder}
                   aria-label={t.searchPlaceholder}
-                  className="w-full border border-stone-200 rounded-2xl pl-10 pr-4 py-3 text-sm focus:border-accent-orange focus:outline-none bg-brand-beige"
+                  className="w-full border border-line-subtle rounded-2xl pl-10 pr-4 py-3 text-sm focus:border-accent-orange focus:outline-none bg-brand-beige"
                 />
-                <Search className="absolute left-3.5 top-3.5 text-stone-400" size={18} />
+                <Search className="absolute left-3.5 top-3.5 text-ink-muted" size={18} />
               </div>
 
               {/* Category Filter */}
               <select
                 value={selectedCat}
                 onChange={(e) => setSelectedCat(e.target.value)}
-                className="border border-stone-200 rounded-2xl px-3 py-3 text-sm bg-white focus:outline-none focus:border-accent-orange disabled:bg-stone-50 disabled:text-stone-400"
+                className="border border-line-subtle rounded-2xl px-3 py-3 text-sm bg-white focus:outline-none focus:border-accent-orange disabled:bg-stone-50 disabled:text-stone-400"
                 disabled={categoriesLoading || categoriesError}
               >
                 {categoriesLoading ? (
@@ -631,7 +987,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               <select
                 value={selectedArea}
                 onChange={(e) => setSelectedArea(e.target.value)}
-                className="border border-stone-200 rounded-2xl px-3 py-3 text-sm bg-white focus:outline-none focus:border-accent-orange disabled:bg-stone-50 disabled:text-stone-400"
+                className="border border-line-subtle rounded-2xl px-3 py-3 text-sm bg-white focus:outline-none focus:border-accent-orange disabled:bg-stone-50 disabled:text-stone-400"
                 disabled={regionsLoading || regionsError}
               >
                 {regionsLoading ? (
@@ -651,7 +1007,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               <button
                 type="submit"
                 disabled={searchLoading}
-                className="bg-accent-orange hover:bg-accent-hover text-white px-8 py-3 rounded-2xl font-bold transition flex items-center justify-center space-x-2 shadow-lg shadow-orange-500/10 cursor-pointer disabled:opacity-50"
+                className="bg-accent-strong hover:bg-accent-strong-hover text-white px-8 py-3 rounded-2xl font-bold transition flex items-center justify-center space-x-2 shadow-lg shadow-orange-500/10 cursor-pointer disabled:opacity-50"
               >
                 {searchLoading ? (
                   <Loader2 className="animate-spin" size={18} />
@@ -684,7 +1040,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             </h2>
 
             {searchLoading ? (
-              <div className="bg-white border border-stone-100 rounded-2xl p-12 text-center text-stone-500 flex flex-col items-center justify-center space-y-3 shadow-sm">
+              <div className="bg-white border border-line-subtle rounded-2xl p-12 text-center text-ink-muted flex flex-col items-center justify-center space-y-3 shadow-sm">
                 <Loader2 className="animate-spin text-accent-orange" size={32} />
                 <span className="text-sm font-medium">{lang === 'en' ? 'Searching the secure registry...' : 'Kutafuta kwenye rejesta salama...'}</span>
               </div>
@@ -695,9 +1051,9 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 <p className="text-xs text-red-600">{errorMsg}</p>
               </div>
             ) : searchResults.length === 0 ? (
-              <div className="bg-white border border-stone-100 rounded-2xl p-12 text-center text-stone-500 text-sm space-y-3">
+              <div className="bg-white border border-line-subtle rounded-2xl p-12 text-center text-ink-muted text-sm space-y-3">
                 <p className="font-bold text-base text-primary-green">{lang === 'en' ? 'No Items Found' : 'Hakuna Bidhaa Zilizopatikana'}</p>
-                <p className="max-w-md mx-auto text-stone-500 leading-relaxed">{t.noResults}</p>
+                <p className="max-w-md mx-auto text-ink-muted leading-relaxed">{t.noResults}</p>
                 <div className="pt-2">
                   <button
                     type="button"
@@ -709,7 +1065,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                         handleSearch();
                       }
                     }}
-                    className="text-xs font-black text-accent-orange hover:underline cursor-pointer"
+                    className="text-caption font-black text-primary-green hover:underline cursor-pointer"
                   >
                     {lang === 'en' ? 'Clear Filters & Show All' : 'Futa Vichungi & Onyesha Zote'}
                   </button>
@@ -720,13 +1076,13 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 {searchResults.map(item => {
                   const cat = categories.find(c => c.id === item.category_id);
                   return (
-                    <div key={item.id} className="bg-white rounded-2xl border border-stone-100 p-5 shadow-md flex items-start space-x-4">
+                    <div key={item.id} className="bg-white rounded-2xl border border-line-subtle p-5 shadow-md flex items-start space-x-4">
                       {/* Document photo */}
-                      <div className="w-20 h-20 bg-brand-beige rounded-2xl overflow-hidden shrink-0 border border-stone-200 flex items-center justify-center">
+                      <div className="w-20 h-20 bg-brand-beige rounded-2xl overflow-hidden shrink-0 border border-line-subtle flex items-center justify-center">
                         {item.is_sensitive_document ? (
-                          <div className="flex flex-col items-center justify-center p-2 text-center h-full w-full bg-stone-100 text-stone-500">
-                            <Lock size={18} className="text-stone-400 mb-1 shrink-0" />
-                            <span className="text-[10px] font-bold leading-tight text-stone-500">Photo hidden for privacy</span>
+                          <div className="flex flex-col items-center justify-center p-2 text-center h-full w-full bg-stone-100 text-ink-muted">
+                            <Lock size={18} className="text-ink-muted mb-1 shrink-0" />
+                            <span className="text-caption font-bold leading-tight text-ink-muted">Photo hidden for privacy</span>
                           </div>
                         ) : (
                           <img src={item.photo_url} alt="Found item" className="w-full h-full object-cover" />
@@ -736,25 +1092,45 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                       {/* Info block */}
                       <div className="flex-1 space-y-1.5 min-w-0">
                         <div className="flex items-center justify-between">
-                          <span className="bg-emerald-50 text-emerald-800 text-[10px] font-extrabold px-2.5 py-1 rounded-full uppercase">
+                          <span className="bg-emerald-50 text-emerald-800 text-caption font-extrabold px-2.5 py-1 rounded-full uppercase">
                             {lang === 'en' ? cat?.name_en : cat?.name_sw}
                           </span>
-                          <span className="text-[10px] text-stone-400 font-mono font-medium">
+                          <span className="text-caption text-ink-muted font-mono font-medium">
                             {new Date(item.created_at).toLocaleDateString()}
                           </span>
                         </div>
 
                         <h3 className="font-extrabold text-primary-green truncate">
-                          {item.document_name_fuzzy}
+                          {/* Phase 7B: a public found item is openable at its own
+                              addressable page. The existing claim button below is
+                              untouched, so the current claim flow still works. */}
+                          {onOpenItem ? (
+                            <a
+                              href={`/item/${encodeURIComponent(item.id)}`}
+                              onClick={(e) => {
+                                if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+                                e.preventDefault();
+                                onOpenItem(item.id);
+                              }}
+                              className="hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange rounded"
+                              aria-label={lang === 'en'
+                                ? `Open details for found item: ${item.document_name_fuzzy}`
+                                : `Fungua maelezo ya bidhaa: ${item.document_name_fuzzy}`}
+                            >
+                              {item.document_name_fuzzy}
+                            </a>
+                          ) : (
+                            item.document_name_fuzzy
+                          )}
                         </h3>
 
-                        <p className="text-stone-500 text-xs line-clamp-2">
+                        <p className="text-ink-muted text-xs line-clamp-2">
                           <MapPin size={10} className="inline mr-1 text-accent-orange" />
                           {item.location_description}
                         </p>
 
-                        <div className="pt-2 border-t border-stone-100 flex items-center justify-between">
-                          <span className="text-[10px] font-extrabold text-stone-400 uppercase tracking-widest">
+                        <div className="pt-2 border-t border-line-subtle flex items-center justify-between">
+                          <span className="text-caption font-extrabold text-ink-muted uppercase tracking-widest">
                             Hub: {item.agent?.business_name.split(' ')[0]}
                           </span>
                           <button
@@ -762,7 +1138,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                               setSelectedItem(item);
                               setVerificationStep('confidence_gate');
                             }}
-                            className="bg-accent-orange hover:bg-accent-hover text-white text-xs font-bold px-4 py-1.5 rounded-xl transition"
+                            className="bg-accent-strong hover:bg-accent-strong-hover text-white text-xs font-bold px-4 py-1.5 rounded-xl transition"
                           >
                             {t.claimBtn}
                           </button>
@@ -777,22 +1153,36 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
         </div>
       )}
 
+      {/* Claim progress (Phase 8.2). Renders for every claim stage except the
+          search screen and the terminal expired state, so the claimant can see
+          which stage they are on and what comes next. Presentation only: it
+          reads the existing step state and changes nothing. */}
+      {verificationStep !== 'search' && verificationStep !== 'payment_window_expired' && (
+        <div className="max-w-xl mx-auto mb-6">
+          <Stepper
+            steps={CLAIM_STEPS.map((s) => ({ label: lang === 'en' ? s.en : s.sw }))}
+            currentStep={CLAIM_STEP_INDEX[verificationStep] ?? 0}
+            label={lang === 'en' ? 'Claim progress' : 'Maendeleo ya dai'}
+          />
+        </div>
+      )}
+
       {/* Confidence Gate Step */}
       {verificationStep === 'confidence_gate' && selectedItem && (
-        <div className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm max-w-xl mx-auto space-y-6 fade-in">
+        <div className="bg-white rounded-2xl border border-line-subtle p-6 md:p-8 shadow-sm max-w-xl mx-auto space-y-6 fade-in">
           <div className="text-center space-y-2">
-            <h2 className="text-2xl font-extrabold text-primary-green">Thibitisha Umiliki (Confirm Confidence)</h2>
-            <p className="text-stone-500 text-xs">Please review the item details and confirm you are the rightful owner before proceeding to the verification step.</p>
+            <h2 className="text-2xl font-extrabold text-primary-green">{lang === 'en' ? 'Confirm Your Ownership' : 'Thibitisha Umiliki Wako'}</h2>
+            <p className="text-ink-muted text-body">{lang === 'en' ? 'Please review the item details and confirm you are the rightful owner before continuing.' : 'Tafadhali angalia maelezo ya kitu hiki na uthibitishe kuwa wewe ni mmiliki halali kabla ya kuendelea.'}</p>
           </div>
 
-          <div className="border border-stone-100 rounded-2xl p-4 bg-brand-beige space-y-3">
-            <h3 className="font-extrabold text-sm text-stone-900 border-b border-stone-200/50 pb-2">Item Information</h3>
+          <div className="border border-line-subtle rounded-2xl p-4 bg-brand-beige space-y-3">
+            <h3 className="font-extrabold text-sm text-ink border-b border-line-subtle pb-2">{lang === 'en' ? 'Item Information' : 'Maelezo ya Kitu'}</h3>
             <div className="flex gap-4">
-              <div className="w-16 h-16 rounded-xl bg-stone-50 border border-stone-200 overflow-hidden shrink-0 flex items-center justify-center">
+              <div className="w-16 h-16 rounded-xl bg-stone-50 border border-line-subtle overflow-hidden shrink-0 flex items-center justify-center">
                 {selectedItem.is_sensitive_document ? (
-                  <div className="flex flex-col items-center justify-center p-1 text-center h-full w-full bg-stone-100 text-stone-500">
-                    <Lock size={14} className="text-stone-400 mb-0.5 shrink-0" />
-                    <span className="text-[7px] font-bold leading-tight text-stone-500">Photo hidden for privacy</span>
+                  <div className="flex flex-col items-center justify-center p-1 text-center h-full w-full bg-stone-100 text-ink-muted">
+                    <Lock size={14} className="text-ink-muted mb-0.5 shrink-0" />
+                    <span className="text-caption font-bold leading-tight text-ink-muted">{lang === 'en' ? 'Photo hidden for privacy' : 'Picha imefichwa kwa faragha'}</span>
                   </div>
                 ) : (
                   <img
@@ -804,29 +1194,31 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 )}
               </div>
               <div className="space-y-1">
-                <p className="text-xs font-extrabold text-stone-800">{selectedItem.document_name_fuzzy}</p>
-                <p className="text-[11px] text-stone-500">{selectedItem.location_description}</p>
-                <p className="text-[10px] text-stone-400 font-mono">Found Hub: {selectedItem.agent?.business_name}</p>
+                <p className="text-xs font-extrabold text-ink">{selectedItem.document_name_fuzzy}</p>
+                <p className="text-small text-ink-muted">{selectedItem.location_description}</p>
+                <p className="text-caption text-ink-muted font-mono">{lang === 'en' ? 'Found Hub' : 'Kituo cha Wakala'}: {selectedItem.agent?.business_name}</p>
               </div>
             </div>
           </div>
 
           <div className="space-y-4">
-            <p className="text-[11px] text-stone-500 bg-sky-50/50 border border-sky-100 rounded-xl p-3">
+            <p className="text-caption text-ink-muted bg-status-info-surface border border-status-info-border rounded-xl p-3">
               {lang === 'sw'
-                ? 'Hatua ya mwacha: Kuendelea kuthibitisha usalama ulikwenda katika VerificationForm (maswali zikitumia bidhaa).'
+                ? 'Kisha utajibu maswali ya usalama kuhusu kitu hiki ili kuthibitisha kuwa ni chako. Majibu yako yanabaki kuwa ya faragha na hutumika kuthibitisha wewe pekee.'
                 : 'Next you will answer category-specific security questions about this item to prove ownership. Your answers stay private and are only used to verify you.'}
             </p>
 
             {/* Contact Phone for OTP */}
             <div className="space-y-1">
-              <label htmlFor="owner-phone" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">Your Phone Number (For SMS OTP) *</label>
+              <label htmlFor="owner-phone" className="block text-caption font-bold text-ink uppercase tracking-wider">{lang === 'en' ? 'Your Phone Number (For SMS OTP)' : 'Nambari Yako ya Simu (Kwa OTP ya SMS)'} *</label>
               <input
                 id="owner-phone"
                 type="tel"
+                inputMode="tel"
+                autoComplete="tel"
                 value={ownerPhone}
                 onChange={(e) => setOwnerPhone(e.target.value)}
-                className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-brand-beige font-mono focus:outline-none focus:border-accent-orange"
+                className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-brand-beige font-mono focus:outline-none focus:border-accent-orange"
                 placeholder="e.g. 0712345678"
                 required
               />
@@ -842,16 +1234,16 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 type="email"
                 value={ownerEmail}
                 onChange={(e) => setOwnerEmail(e.target.value)}
-                className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-brand-beige font-sans focus:outline-none focus:border-accent-orange"
+                className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-brand-beige font-sans focus:outline-none focus:border-accent-orange"
                 placeholder="e.g. claimant@gmail.com"
               />
-              <span className="text-[10px] text-stone-400 block leading-tight">
+              <span className="text-caption text-ink-muted block leading-tight">
                 Provide an email address if you wish to receive billing receipts and collection notices.
               </span>
             </div>
 
             {/* General Terms/Privacy consent */}
-            <div className="flex items-start space-x-2 pt-2 pb-1 bg-brand-beige p-3 rounded-xl border border-stone-100">
+            <div className="flex items-start space-x-2 pt-2 pb-1 bg-brand-beige p-3 rounded-xl border border-line-subtle">
               <input
                 id="owner-agreed-terms"
                 type="checkbox"
@@ -860,7 +1252,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 className="mt-1 h-4 w-4 rounded border-stone-300 text-primary-green focus:ring-primary-green accent-primary-green cursor-pointer"
                 required
               />
-              <label htmlFor="owner-agreed-terms" className="text-xs text-stone-600 leading-tight select-none cursor-pointer">
+              <label htmlFor="owner-agreed-terms" className="text-xs text-ink-muted leading-tight select-none cursor-pointer">
                 I have read and agree to the Return4me{' '}
                 <button
                   type="button"
@@ -886,7 +1278,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             <button
               type="button"
               onClick={() => setVerificationStep('search')}
-              className="flex-1 bg-stone-100 hover:bg-stone-200 text-stone-700 py-3 rounded-xl font-bold transition text-xs"
+              className="flex-1 bg-stone-100 hover:bg-stone-200 text-ink-muted py-3 rounded-xl font-bold transition text-xs"
             >
               Back
             </button>
@@ -894,7 +1286,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               type="button"
               disabled={!agreedTerms || !ownerPhone.trim()}
               onClick={() => setVerificationStep('tier1_security')}
-              className="flex-1 bg-accent-orange hover:bg-accent-hover text-white py-3 rounded-xl font-bold transition text-xs disabled:opacity-50 cursor-pointer"
+              className="flex-1 bg-accent-strong hover:bg-accent-strong-hover text-white py-3 rounded-xl font-bold transition text-xs disabled:opacity-50 cursor-pointer"
             >
               Proceed to Claim
             </button>
@@ -923,13 +1315,13 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
       {/* Tier 2 OTP validation */}
       {verificationStep === 'tier2_otp' && (
-        <div className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm max-w-xl mx-auto space-y-6 text-center fade-in">
+        <div className="bg-white rounded-2xl border border-line-subtle p-6 md:p-8 shadow-sm max-w-xl mx-auto space-y-6 text-center fade-in">
           <div className="w-12 h-12 bg-orange-50 text-accent-orange rounded-full flex items-center justify-center mx-auto">
             <Smartphone size={24} />
           </div>
           <div>
             <h2 className="text-xl font-extrabold text-primary-green mb-1">Verify SMS OTP Code</h2>
-            <p className="text-stone-500 text-xs">Enter the 4-digit code dispatched to {ownerPhone}.</p>
+            <p className="text-ink-muted text-xs">Enter the 4-digit code dispatched to {ownerPhone}.</p>
           </div>
 
           {errorMsg && (
@@ -944,10 +1336,12 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           <form onSubmit={handleOtpVerify} className="space-y-4 max-w-xs mx-auto">
             <input
               type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
               value={otpCode}
               onChange={(e) => setOtpCode(e.target.value)}
               maxLength={4}
-              className="w-full border-2 border-stone-200 rounded-xl text-center py-3 text-xl font-mono tracking-widest focus:outline-none focus:border-accent-orange"
+              className="w-full border-2 border-line-subtle rounded-xl text-center py-3 text-xl font-mono tracking-widest focus:outline-none focus:border-accent-orange"
               placeholder="••••"
               aria-label={lang === 'sw' ? 'Msimbo wa OTP wa tarakimu 4' : '4-digit OTP code'}
               required
@@ -973,13 +1367,13 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
       {/* Payment step */}
       {verificationStep === 'payment' && (
-        <div className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm max-w-xl mx-auto space-y-6 text-center fade-in">
+        <div className="bg-white rounded-2xl border border-line-subtle p-6 md:p-8 shadow-sm max-w-xl mx-auto space-y-6 text-center fade-in">
           <div className="w-14 h-14 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
             <Coins size={28} />
           </div>
           <div>
             <h2 className="text-xl font-extrabold text-primary-green mb-1">{lang === 'en' ? 'Complete Payment to Continue' : 'Maliza Malipo Kuendelea'}</h2>
-            <p className="text-stone-500 text-xs">{t.paymentSubtitle}</p>
+            <p className="text-ink-muted text-xs">{t.paymentSubtitle}</p>
           </div>
 
           {strikeWarning && (
@@ -996,12 +1390,12 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 <span className="font-bold block mb-0.5 text-primary-green">
                   {lang === 'en' ? 'Payment Window Expiry Countdown' : 'Muda wa Kulipa Unayoyoma'}
                 </span>
-                <p className="text-stone-600 mb-1 font-medium">
+                <p className="text-ink-muted mb-1 font-medium">
                   {lang === 'en' 
                     ? 'You must complete the payment within 15 minutes of in-person verification. If you do not pay, the item will be unlocked for other claimants and a strike will be registered on your phone number.' 
                     : 'Lazima ukamilishe malipo ndani ya dakika 15 baada ya kuthibitisha kuona bidhaa. Usipolipa, bidhaa itafunguliwa kwa wadai wengine na utapata adhabu ya strike kwenye nambari yako ya simu.'}
                 </p>
-                <div className="font-mono text-base font-extrabold text-accent-orange">
+                <div className="font-mono text-base font-extrabold text-primary-green">
                   {Math.floor(timeLeft / 60)}m {timeLeft % 60}s
                 </div>
               </div>
@@ -1040,7 +1434,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                   <span className="font-bold block mb-1">
                     {lang === 'en' ? 'Recovery Benefit' : 'Faida ya Kurejesha'}
                   </span>
-                  <p className="font-medium text-stone-600">
+                  <p className="font-medium text-ink-muted">
                     {lang === 'en' ? noteEn : noteSw}
                   </p>
                 </div>
@@ -1057,28 +1451,28 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             const platformShare = catRecord ? Math.round(Number(catRecord.platform_share)) : 0;
 
             return (
-              <div className="bg-brand-beige rounded-2xl border border-stone-200 p-5 text-left space-y-3">
-                <div className="flex justify-between items-center text-xs font-bold text-stone-400 uppercase tracking-wider">
+              <div className="bg-brand-beige rounded-2xl border border-line-subtle p-5 text-left space-y-3">
+                <div className="flex justify-between items-center text-xs font-bold text-ink-muted uppercase tracking-wider">
                   <span>Fee breakdown</span>
                   <span>Amount</span>
                 </div>
-                <div className="h-px bg-stone-200" />
+                <div className="h-px bg-line-subtle" />
                 <div className="flex justify-between text-sm">
-                  <span className="text-stone-600 font-medium">Finder Honorarium (Reward)</span>
-                  <span className="font-mono font-bold text-stone-700">KES {finderShare}</span>
+                  <span className="text-ink-muted font-medium">Finder Honorarium (Reward)</span>
+                  <span className="font-mono font-bold text-ink-muted">KES {finderShare}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-stone-600 font-medium">Physical Agent Hub Handling</span>
-                  <span className="font-mono font-bold text-stone-700">KES {agentShare}</span>
+                  <span className="text-ink-muted font-medium">Physical Agent Hub Handling</span>
+                  <span className="font-mono font-bold text-ink-muted">KES {agentShare}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-stone-600 font-medium">Return4me Escrow & Platform</span>
-                  <span className="font-mono font-bold text-stone-700">KES {platformShare}</span>
+                  <span className="text-ink-muted font-medium">Return4me Escrow & Platform</span>
+                  <span className="font-mono font-bold text-ink-muted">KES {platformShare}</span>
                 </div>
-                <div className="h-px bg-stone-200" />
+                <div className="h-px bg-line-subtle" />
                 <div className="flex justify-between text-base font-extrabold text-primary-green">
                   <span>{t.releaseFee}</span>
-                  <span className="font-mono text-accent-orange">KES {totalFee}</span>
+                  <span className="font-mono text-primary-green">KES {totalFee}</span>
                 </div>
               </div>
             );
@@ -1086,14 +1480,14 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
           {/* Checkout triggers */}
           <div className="space-y-3">
-            <span className="text-xs text-stone-400 block font-medium">Secured M-Pesa Payment</span>
+            <span className="text-xs text-ink-muted block font-medium">Secured M-Pesa Payment</span>
 
             {/* M-Pesa number that will receive the STK Push prompt. The payer may use a
                 different valid M-Pesa number than the claim's registered phone
                 (eCitizen-style); it is validated here and re-validated by the
                 server when the payment session is created. */}
-            <div className="bg-brand-beige rounded-2xl border border-stone-200 p-4 text-left space-y-2">
-              <label htmlFor="mpesa-payment-phone" className="block text-xs font-bold text-stone-500 uppercase tracking-wider">
+            <div className="bg-brand-beige rounded-2xl border border-line-subtle p-4 text-left space-y-2">
+              <label htmlFor="mpesa-payment-phone" className="block text-xs font-bold text-ink-muted uppercase tracking-wider">
                 {t.mpesaPhoneLabel}
               </label>
               <input
@@ -1107,7 +1501,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 className="w-full border border-stone-300 rounded-xl px-3 py-3 text-base font-mono bg-white focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30"
                 aria-invalid={(payerPhone || ownerPhone).trim() !== '' && !isValidKenyanPhoneForPayer(payerPhone || ownerPhone)}
               />
-              <p className="text-stone-500 text-xs">
+              <p className="text-ink-muted text-xs">
                 {lang === 'en'
                   ? 'Enter the Safaricom number that should receive the payment prompt. You may use a different M-Pesa number than the one registered on the claim — your payment stays securely linked to this claim.'
                   : 'Wea nambari ya Safaricom itakayopokea ombi la malipo. Unaweza kutumia nambari tofauti ya M-Pesa kuliko ile iliyobaki kwenye claim — malipo yako yataunganishwa kwa usalama na claim hii.'}
@@ -1116,7 +1510,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 const candidate = (payerPhone || ownerPhone).trim();
                 if (candidate === '') {
                   return (
-                    <p className="text-stone-500 text-xs">
+                    <p className="text-ink-muted text-xs">
                       {lang === 'en' ? 'Enter an M-Pesa phone number.' : 'Wea nambari ya M-Pesa.'}
                     </p>
                   );
@@ -1151,7 +1545,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             <button
               onClick={triggerEscrowPayment}
               disabled={isPaying || !isValidKenyanPhoneForPayer(payerPhone || ownerPhone)}
-              className="w-full bg-accent-orange hover:bg-accent-hover text-white py-3.5 rounded-2xl font-bold transition flex items-center justify-center space-x-2 shadow-lg shadow-orange-500/10 cursor-pointer disabled:opacity-50"
+              className="w-full bg-accent-strong hover:bg-accent-strong-hover text-white py-3.5 rounded-2xl font-bold transition flex items-center justify-center space-x-2 shadow-lg shadow-orange-500/10 cursor-pointer disabled:opacity-50"
             >
               {isPaying ? (
                 <>
@@ -1171,7 +1565,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
       {/* Payment Polling confirmation screen */}
       {verificationStep === 'payment_polling' && (
-        <div className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm max-w-xl mx-auto text-center space-y-6 fade-in">
+        <div className="bg-white rounded-2xl border border-line-subtle p-6 md:p-8 shadow-sm max-w-xl mx-auto text-center space-y-6 fade-in">
           <div className="w-14 h-14 bg-orange-50 text-accent-orange rounded-full flex items-center justify-center mx-auto">
             <Loader2 className="animate-spin text-accent-orange" size={28} />
           </div>
@@ -1179,14 +1573,14 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             <h2 className="text-xl font-extrabold text-primary-green mb-1">
               {lang === 'en' ? 'Waiting for M-Pesa Confirmation' : 'Inasubiri Uthibitisho wa M-Pesa'}
             </h2>
-            <p className="text-stone-500 text-xs">
+            <p className="text-ink-muted text-xs">
               {lang === 'en' 
                 ? `A payment request has been sent to ${payerPhone || ownerPhone}. Complete the payment on your phone using your M-Pesa PIN. Return4me is waiting for confirmation from the payment provider.`
                 : `Ombi la malipo limetumwa kwa ${payerPhone || ownerPhone}. Kamilisha malipo kwenye simu yako kwa kutumia PIN ya M-Pesa. Return4me inasubiri uthibitisho kutoka kwa mtoa-huduma wa malipo.`}
             </p>
           </div>
 
-          <div className="bg-brand-beige border border-stone-200 rounded-2xl p-5 text-left text-xs space-y-3 font-medium text-stone-600">
+          <div className="bg-brand-beige border border-line-subtle rounded-2xl p-5 text-left text-xs space-y-3 font-medium text-stone-600" role="status" aria-live="polite">
             <div className="flex items-center space-x-2 text-emerald-600">
               <CheckCircle size={16} />
               <span>{lang === 'en' ? 'STK Push sent successfully' : 'Ombi la malipo limetumwa kwa ufanisi'}</span>
@@ -1212,7 +1606,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             <button
               onClick={checkPaymentStatus}
               disabled={isPaying}
-              className="w-full bg-accent-orange hover:bg-accent-hover text-white py-3 rounded-2xl font-bold text-xs transition cursor-pointer disabled:opacity-50"
+              className="w-full bg-accent-strong hover:bg-accent-strong-hover text-white py-3 rounded-2xl font-bold text-xs transition cursor-pointer disabled:opacity-50"
             >
               <span>{lang === 'en' ? 'Check payment status' : 'Angalia hali ya malipo'}</span>
             </button>
@@ -1220,7 +1614,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             <button
               onClick={triggerEscrowPayment}
               disabled={isPaying}
-              className="w-full bg-stone-100 hover:bg-stone-200 text-stone-700 py-3 rounded-2xl font-bold text-xs transition cursor-pointer disabled:opacity-50"
+              className="w-full bg-stone-100 hover:bg-stone-200 text-ink-muted py-3 rounded-2xl font-bold text-xs transition cursor-pointer disabled:opacity-50"
             >
               {isPaying ? (
                 <div className="flex items-center justify-center space-x-2">
@@ -1247,57 +1641,47 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
       {/* Physical pickup handover success */}
       {verificationStep === 'handover_success' && (
-        <div className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm max-w-xl mx-auto text-center space-y-6 fade-in">
+        <div className="bg-white rounded-2xl border border-line-subtle p-6 md:p-8 shadow-sm max-w-xl mx-auto text-center space-y-6 fade-in">
           <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
             <CheckCircle size={36} />
           </div>
           <div>
             <h2 className="text-2xl font-extrabold text-primary-green mb-1">{t.paymentSuccess}</h2>
-            <p className="text-stone-500 text-xs">{t.collectionInstructions}</p>
+            <p className="text-ink-muted text-xs">{t.collectionInstructions}</p>
           </div>
 
-          {/* Collection Agent Coordinates card */}
-          <div className="bg-brand-beige p-5 rounded-2xl text-left border border-stone-200 space-y-2">
-            <h3 className="text-[10px] font-extrabold text-stone-400 uppercase tracking-widest">Pickup physical agent point</h3>
-            <div>
-              <h4 className="text-base font-bold text-primary-green">{selectedItem.agent?.business_name}</h4>
-              <p className="text-stone-600 text-xs font-medium">{selectedItem.agent?.location_address}</p>
-              {selectedItem.agent?.contact_phone && (
-                <p className="text-stone-700 text-xs font-semibold mt-1">
-                  Mwasiliano / Phone: <span className="font-mono">{selectedItem.agent.contact_phone}</span>
-                </p>
-              )}
-              {selectedItem.agent?.latitude !== undefined && selectedItem.agent?.latitude !== null && (
-                <a
-                  href={`https://www.google.com/maps/dir/?api=1&destination=${selectedItem.agent.latitude},${selectedItem.agent.longitude}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-primary-green text-xs font-bold mt-2 underline underline-offset-2 hover:text-accent-orange transition"
-                >
-                  <MapPin size={13} />
-                  {lang === 'sw' ? 'Fungua Maelekezo kwenye Google Maps' : 'Open Directions in Google Maps'}
-                </a>
-              )}
-            </div>
+          {/* Collection Agent Coordinates card. Phase 7C.5 (F8): rendered from
+              the explicit pickup-details state, so "no hub assigned", "claim no
+              longer eligible" and a failed refresh are each visible and
+              distinct — and "Fetching..." only ever appears while a real
+              request is in flight. */}
+          <div className="bg-brand-beige p-5 rounded-2xl text-left border border-line-subtle space-y-2">
+            <h3 className="text-caption font-extrabold text-ink-muted uppercase tracking-widest">Pickup physical agent point</h3>
+            <PickupDetailsPanel
+              state={pickupDetails}
+              lang={lang}
+              showDirections
+              onRetry={retryPickupDetails}
+            />
           </div>
 
           {/* Claim reference — this identifies your claim if you need to look
               it up again, but it is NOT the secret code the agent asks for. */}
-          <div className="bg-stone-100 text-stone-600 p-4 rounded-2xl space-y-1">
-            <span className="text-[10px] font-bold uppercase tracking-widest text-stone-400">
+          <div className="bg-canvas-muted text-ink-muted p-4 rounded-2xl space-y-1">
+            <span className="text-caption font-bold uppercase tracking-widest text-ink-muted">
               {lang === 'sw' ? 'Nambari ya Rejea ya Dai (si msimbo wa siri)' : 'Claim Reference (not a secret code)'}
             </span>
-            <div className="text-lg font-mono font-bold tracking-wider text-stone-700">
+            <div className="text-lg font-mono font-bold tracking-wider text-ink-muted">
               {paidClaim.id}
             </div>
-            <p className="text-[10px] text-stone-400">
+            <p className="text-caption text-ink-muted">
               {lang === 'sw' ? 'Tumia hii ukitafuta hali ya dai lako baadaye.' : 'Use this if you need to look up your claim status later.'}
             </p>
           </div>
 
           {/* The actual secret pickup code — this is what the agent needs */}
           <div className="bg-primary-green text-white p-5 rounded-2xl space-y-1">
-            <span className="text-[10px] font-bold uppercase tracking-widest text-stone-300">{t.collectionCode}</span>
+            <span className="text-caption font-bold uppercase tracking-widest text-stone-300">{t.collectionCode}</span>
             {simulatedPickupCode ? (
               <div className="text-2xl font-mono font-extrabold tracking-wider text-accent-orange">
                 {simulatedPickupCode}
@@ -1309,13 +1693,13 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                   : 'We\'ve sent a secret 6-digit code to your phone (SMS) and email. Look for a message from Return4me.'}
               </p>
             )}
-            <p className="text-[10px] text-stone-300">
+            <p className="text-caption text-stone-300">
               {lang === 'sw' ? 'Toa msimbo huu wa siri kwa Agent PEKEE wakati wa kuchukua bidhaa yako.' : 'Give this secret code to the Agent ONLY when collecting your item.'}
             </p>
           </div>
 
           {simulatedPickupCode && (
-            <div className="bg-amber-50 border border-dashed border-amber-300 text-amber-800 p-3 rounded-xl text-[11px] font-bold">
+            <div className="bg-amber-50 border border-dashed border-amber-300 text-amber-800 p-3 rounded-xl text-caption font-bold">
               {lang === 'sw' ? 'Hali ya majaribio: msimbo huu umeonyeshwa hapa kwa sababu SMS/barua pepe halisi haitumwi wakati wa majaribio ya ndani.' : 'Test mode: this code is shown here because real SMS/email isn\'t sent during local testing.'}
             </div>
           )}
@@ -1336,7 +1720,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           </div>
 
           {/* Post Pickup Rating flow */}
-          <div className="border-t border-stone-100 pt-5 space-y-3">
+          <div className="border-t border-line-subtle pt-5 space-y-3">
             <h4 className="text-xs font-extrabold text-primary-green uppercase tracking-wider">{t.rateAgentLabel}</h4>
             {ratingSubmitted ? (
               <span className="text-xs text-emerald-600 font-bold block">Thank you for supporting community trust in Kenya!</span>
@@ -1350,7 +1734,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                     className="text-stone-300 hover:text-accent-orange transition"
                   >
                     <div
-                      className={`w-5 h-5 rounded-full flex items-center justify-center text-white text-[10px] font-extrabold ${userRating && userRating >= star ? 'bg-accent-orange' : 'bg-stone-200'}`}
+                      className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-extrabold ${userRating && userRating >= star ? 'bg-accent-strong text-white' : 'bg-line-subtle text-ink-muted'}`}
                     >
                       {star}
                     </div>
@@ -1373,7 +1757,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               setIsConfident(false);
               handleSearch(); // Refresh lists
             }}
-            className="w-full bg-stone-100 hover:bg-stone-200 text-stone-700 py-3 rounded-2xl font-bold transition text-xs"
+            className="w-full bg-stone-100 hover:bg-stone-200 text-ink-muted py-3 rounded-2xl font-bold transition text-xs"
           >
             Go Back to Search
           </button>
@@ -1382,7 +1766,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
       {/* Awaiting agent in-person verification step */}
       {verificationStep === 'awaiting_agent_confirmation' && (
-        <div className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm max-w-xl mx-auto space-y-6 text-center fade-in">
+        <div className="bg-white rounded-2xl border border-line-subtle p-6 md:p-8 shadow-sm max-w-xl mx-auto space-y-6 text-center fade-in">
           <div className="w-14 h-14 bg-amber-50 text-amber-500 rounded-full flex items-center justify-center mx-auto animate-pulse">
             <Eye size={28} />
           </div>
@@ -1390,7 +1774,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             <h2 className="text-xl font-extrabold text-primary-green mb-1">
               {lang === 'en' ? 'Physical Viewing Verification Required' : 'Uthibitisho wa Kuona Bidhaa Unahitajika'}
             </h2>
-            <p className="text-stone-500 text-xs">
+            <p className="text-ink-muted text-xs">
               {lang === 'en' 
                 ? 'Your ownership claim code is approved! Now, you must visit the agent physical hub to visually inspect your item. The agent will confirm you have viewed and verified the item before payment is requested.' 
                 : 'Msimbo wako wa kudai umethibitishwa! Sasa, lazima utembelee kituo cha wakala ili ukague bidhaa yako physically. Wakala atathibitisha kuwa umeona na kukagua bidhaa kabla ya malipo kuombwa.'}
@@ -1405,30 +1789,37 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             </div>
           )}
 
-          {selectedItem?.agent ? (
-            <div className="bg-brand-beige rounded-2xl border border-stone-200 p-5 text-left space-y-3">
-              <span className="text-[10px] font-extrabold text-stone-400 uppercase tracking-widest block">
-                {lang === 'en' ? 'Hub Location / Mahali pa Wakala' : 'Mahali pa Wakala'}
-              </span>
-              <div>
-                <h4 className="text-base font-bold text-primary-green">{selectedItem.agent.business_name}</h4>
-                <p className="text-stone-600 text-xs font-medium">{selectedItem.agent.location_address}</p>
-                {selectedItem.agent.contact_phone && (
-                  <p className="text-stone-500 text-[11px] mt-1 font-medium">
-                    Contact: <span className="font-mono">{selectedItem.agent.contact_phone}</span>
-                  </p>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="text-stone-400 text-xs py-4 italic">
-              {lang === 'en' ? 'Fetching physical agent location details...' : 'Inapakia maelezo ya mahali pa wakala...'}
+          {/* Phase 7B.2: surface the polling state instead of failing silently.
+              This step previously rendered no error surface at all, so a paused
+              (throttled) poller looked identical to a healthy waiting one. */}
+          {errorMsg && (
+            <div
+              className="bg-red-50 border border-red-100 text-red-700 text-xs rounded-2xl p-4 flex items-start space-x-2 text-left"
+              role="alert"
+            >
+              <AlertCircle size={16} className="shrink-0 mt-0.5" />
+              <span>{errorMsg}</span>
             </div>
           )}
 
-          <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-xs text-left text-primary-green flex items-start space-x-2">
+          {/* Hub pickup location — Phase 7C.5 (F8): this step now actually
+              requests the pickup details (the step effect above) and renders
+              the explicit request state. It previously showed a static
+              placeholder while making no request at all. */}
+          <div className="bg-brand-beige rounded-2xl border border-line-subtle p-5 text-left space-y-3">
+            <span className="text-caption font-extrabold text-ink-muted uppercase tracking-widest block">
+              {lang === 'en' ? 'Hub Location / Mahali pa Wakala' : 'Mahali pa Wakala'}
+            </span>
+            <PickupDetailsPanel
+              state={pickupDetails}
+              lang={lang}
+              onRetry={retryPickupDetails}
+            />
+          </div>
+
+          <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-xs text-left text-primary-green flex items-start space-x-2" role="status" aria-live="polite">
             <Loader2 className="animate-spin text-primary-green shrink-0 mt-0.5" size={16} />
-            <p className="font-medium text-stone-600">
+            <p className="font-medium text-ink-muted">
               {lang === 'en' 
                 ? 'Waiting for the agent to visually verify you have inspected the item... Keep this page open.' 
                 : 'Tunasubiri wakala athibitishe kuwa umekagua bidhaa physically... Tafadhali weka ukurasa huu wazi.'}
@@ -1439,7 +1830,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
       {/* Payment window expired step */}
       {verificationStep === 'payment_window_expired' && (
-        <div className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm max-w-xl mx-auto space-y-6 text-center fade-in">
+        <div className="bg-white rounded-2xl border border-line-subtle p-6 md:p-8 shadow-sm max-w-xl mx-auto space-y-6 text-center fade-in">
           <div className="w-14 h-14 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto">
             <XCircle size={28} />
           </div>
@@ -1447,7 +1838,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             <h2 className="text-xl font-extrabold text-red-600 mb-1">
               {lang === 'en' ? 'Payment Window Expired' : 'Muda wa Kulipa Umeisha'}
             </h2>
-            <p className="text-stone-500 text-xs">
+            <p className="text-ink-muted text-xs">
               {lang === 'en' 
                 ? 'Your 15-minute payment window has expired. For security and fairness, the item has been unlocked for other potential claimants, and a strike has been recorded against your phone number. Repeated strikes will restrict you from making future claims.' 
                 : 'Muda wako wa dakika 15 wa kulipa umeisha. Kwa usalama na usawa, bidhaa hii imefunguliwa kwa wadai wengine na nambari yako imerekodiwa strike. Strikes zikizidi utazuiwa kufanya madai zaidi.'}
@@ -1466,7 +1857,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               setOwnerIdentifyingDetails('');
               setIsConfident(false);
             }}
-            className="w-full bg-stone-100 hover:bg-stone-200 text-stone-700 py-3 rounded-xl font-bold transition text-xs"
+            className="w-full bg-stone-100 hover:bg-stone-200 text-ink-muted py-3 rounded-xl font-bold transition text-xs"
           >
             {lang === 'en' ? 'Back to Search' : 'Rudi kwenye Kutafuta'}
           </button>
@@ -1482,14 +1873,14 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           }}
         >
           <div
-            className="bg-white rounded-2xl p-6 md:p-8 max-w-lg w-full max-h-[90vh] overflow-y-auto space-y-5 shadow-sm relative border border-stone-100"
+            className="bg-white rounded-2xl p-6 md:p-8 max-w-lg w-full max-h-[90vh] overflow-y-auto space-y-5 shadow-sm relative border border-line-subtle"
             role="dialog"
             ref={trackModalRef}
             tabIndex={-1}
             aria-modal="true"
             aria-label={lang === 'sw' ? 'Fuatilia Ombi Lako' : 'Track My Claim'}
           >
-            <div className="flex items-center justify-between border-b border-stone-100 pb-3">
+            <div className="flex items-center justify-between border-b border-line-subtle pb-3">
               <h3 className="text-xl font-extrabold text-primary-green flex items-center gap-2">
                 <Clock size={20} className="text-accent-orange" />
                 <span>{lang === 'sw' ? 'Fuatilia Ombi Lako' : 'Track My Claim'}</span>
@@ -1497,7 +1888,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               <button
                 type="button"
                 onClick={() => setShowTrackModal(false)}
-                className="text-stone-400 hover:text-stone-600 font-bold text-lg cursor-pointer px-2 py-1 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg hover:bg-stone-100"
+                className="text-ink-muted hover:text-stone-600 font-bold text-lg cursor-pointer px-2 py-1 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg hover:bg-stone-100"
                 aria-label={lang === 'sw' ? 'Funga' : 'Close'}
               >
                 <X size={18} aria-hidden="true" />
@@ -1541,10 +1932,13 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 <input
                   id="track-claim-id"
                   type="text"
+                  autoComplete="off"
+                  autoCapitalize="characters"
+                  spellCheck={false}
                   value={trackClaimId}
                   onChange={(e) => setTrackClaimId(e.target.value)}
-                  placeholder="e.g. R4M-CLM-A1B2C3"
-                  className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm font-mono uppercase bg-brand-beige"
+                  placeholder="e.g. CLM-482913"
+                  className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm font-mono uppercase bg-brand-beige"
                   required
                 />
               </div>
@@ -1556,10 +1950,12 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 <input
                   id="track-phone"
                   type="tel"
+                  inputMode="tel"
+                  autoComplete="tel"
                   value={trackPhone}
                   onChange={(e) => setTrackPhone(e.target.value)}
                   placeholder="e.g. 0712345678"
-                  className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm font-mono bg-brand-beige"
+                  className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm font-mono bg-brand-beige"
                   required
                 />
               </div>
@@ -1567,7 +1963,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               <button
                 type="submit"
                 disabled={trackLoading}
-                className="w-full bg-accent-orange hover:bg-accent-hover text-white py-3 rounded-xl font-bold text-sm transition flex items-center justify-center space-x-2 cursor-pointer disabled:opacity-50"
+                className="w-full bg-accent-strong hover:bg-accent-strong-hover text-white py-3 rounded-xl font-bold text-sm transition flex items-center justify-center space-x-2 cursor-pointer disabled:opacity-50"
               >
                 {trackLoading ? (
                   <Loader2 className="animate-spin" size={18} />
@@ -1579,33 +1975,33 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
             {/* Render Lookup Result */}
             {trackResult && (
-              <div className="mt-4 bg-stone-50 border border-stone-200 p-4 rounded-2xl space-y-3 fade-in text-xs">
+              <div className="mt-4 bg-canvas-muted border border-line-subtle p-4 rounded-2xl space-y-3 fade-in text-xs">
                 <div className="flex items-center justify-between">
-                  <span className="font-extrabold text-stone-700">Status:</span>
-                  <span className={`${getClaimStatusDisplay(trackResult.claim.status, lang).className} px-2.5 py-1 rounded-full font-bold uppercase tracking-wider text-[10px]`}>
+                  <span className="font-extrabold text-ink-muted">Status:</span>
+                  <span className={`${getClaimStatusDisplay(trackResult.claim.status, lang).className} px-2.5 py-1 rounded-full font-bold uppercase tracking-wider text-caption`}>
                     {getClaimStatusDisplay(trackResult.claim.status, lang).label}
                   </span>
                 </div>
 
                 {trackResult.item && (
-                  <div className="space-y-1 border-t border-stone-200 pt-2">
+                  <div className="space-y-1 border-t border-line-subtle pt-2">
                     <p className="font-bold text-primary-green text-sm">{trackResult.item.document_name_fuzzy || 'Found Item'}</p>
-                    <p className="text-stone-600">Location: {trackResult.item.location_description}</p>
+                    <p className="text-ink-muted">Location: {trackResult.item.location_description}</p>
                   </div>
                 )}
 
                 {trackResult.agent && (
-                  <div className="bg-white p-3 rounded-xl border border-stone-200 space-y-1">
-                    <p className="font-bold text-stone-800">Assigned Agent Hub:</p>
+                  <div className="bg-white p-3 rounded-xl border border-line-subtle space-y-1">
+                    <p className="font-bold text-ink">Assigned Agent Hub:</p>
                     <p className="text-primary-green font-extrabold">{trackResult.agent.business_name}</p>
-                    <p className="text-stone-500">{trackResult.agent.location_address}</p>
-                    <p className="text-stone-500 font-mono">{trackResult.agent.contact_phone}</p>
+                    <p className="text-ink-muted">{trackResult.agent.location_address}</p>
+                    <p className="text-ink-muted font-mono">{trackResult.agent.contact_phone}</p>
                   </div>
                 )}
 
                 {trackResult.claim.collection_code && (
                   <div className="bg-emerald-100 border border-emerald-200 p-3 rounded-xl text-center">
-                    <p className="text-[10px] text-emerald-800 uppercase font-bold tracking-widest">Collection Verification Code</p>
+                    <p className="text-caption text-emerald-800 uppercase font-bold tracking-widest">Collection Verification Code</p>
                     <p className="text-2xl font-mono font-black text-primary-green tracking-widest mt-0.5">{trackResult.claim.collection_code}</p>
                   </div>
                 )}
@@ -1616,6 +2012,16 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                   <button
                     type="button"
                     onClick={() => {
+                      // Phase 7C.7 (R3): carry the phone the caller just proved in
+                      // this lookup into the claim-flow phone state. The resumed
+                      // claim's pickup-details request reads ownerPhoneRef (which
+                      // mirrors ownerPhone), while the Track flow kept its phone in
+                      // separate state — so a Track-resumed claim used to send an
+                      // EMPTY phone and could never load its hub details. This
+                      // reuses the existing single source of truth instead of
+                      // adding a second one, and the server still re-verifies the
+                      // phone against the claim on every pickup-details call.
+                      setOwnerPhone(trackPhone.trim());
                       const resumedItem = trackResult.item
                         ? { ...trackResult.item, agent: trackResult.agent || undefined }
                         : null;
@@ -1644,7 +2050,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                     <ArrowRight size={16} />
                   </button>
                 ) : (
-                  <p className="text-stone-500 italic text-center pt-1">
+                  <p className="text-ink-muted italic text-center pt-1">
                     {trackResult.claim.status === 'refunded'
                       ? (lang === 'sw'
                           ? 'Umepoteza mzozo huu, lakini fedha yako ya awali imerejeshwa kikamilifu kwa M-Pesa yako. Angalia ujumbe wa M-Pesa kwa uthibitisho.'

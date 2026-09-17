@@ -1,6 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { translations } from '../types';
-import { ShieldCheck, BarChart2, Users, FileCheck, Coins, HelpCircle, Loader2, ArrowRight, AlertCircle, AlertTriangle, RefreshCw, CheckCircle, ShieldAlert, Package } from 'lucide-react';
+import { ShieldCheck, BarChart2, Users, FileCheck, Coins, HelpCircle, Loader2, ArrowRight, AlertCircle, AlertTriangle, RefreshCw, CheckCircle, ShieldAlert, Package, ClipboardList } from 'lucide-react';
+// Phase 6F — Claims Administration lives in its own module so this view stays
+// integration/navigation only. The Claims surface is read-only and talks to the
+// 6E API through that module; it never imports the database or the DTO layer.
+import ClaimsAdministration from './admin/claims/ClaimsAdministration';
+// §10 — the console states who is signed in, using ONLY the claims the
+// authenticated session actually carries. The helper decodes a display label and
+// never returns the token itself (see src/services/adminSession.ts).
+import { readAdminSessionIdentity, adminIdentityLabel } from '../services/adminSession';
 
 interface AdminViewProps {
   lang: 'en' | 'sw';
@@ -8,8 +16,116 @@ interface AdminViewProps {
   setToken: (token: string | null) => void;
 }
 
+// Presentational panel for ONE claimant in a dispute.
+//
+// Everything rendered here comes from the API: the claimant's claim id, phone,
+// claim status and whether escrow was actually paid. There is no hard-coded
+// sample data anywhere in this panel, and no evidence is ever invented — when
+// the on-demand evidence endpoint has not been called, returns nothing, or
+// fails, this panel says exactly that.
+//
+// Evidence is matched to the claimant by claim_id (never by array position).
+function DisputeClaimantPanel({
+  lang,
+  claimant,
+  evidenceState,
+  roleLabel,
+  isWinner,
+  onViewPhoto,
+}: {
+  lang: 'en' | 'sw';
+  claimant: { role: string; claim_id: string; owner_phone: string | null; claim_status: string | null; has_paid_escrow: boolean };
+  evidenceState?: { loading: boolean; error: string | null; items: any[] | null };
+  roleLabel: string;
+  isWinner: boolean;
+  onViewPhoto: (url: string) => void;
+}) {
+  const en = lang === 'en';
+  const ownEvidence = Array.isArray(evidenceState?.items)
+    ? evidenceState!.items.filter((ev: any) => ev?.claim_id === claimant.claim_id)
+    : [];
+
+  return (
+    <div className={`border rounded-2xl p-4 space-y-2 ${isWinner ? 'border-emerald-200 bg-emerald-50/40' : 'border-stone-200 bg-brand-beige'}`}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[9px] font-extrabold text-stone-400 uppercase tracking-widest">{roleLabel}</span>
+        {isWinner && (
+          <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[9px] font-black uppercase tracking-wider">
+            {en ? 'Awarded' : 'Ilipewa ushindi'}
+          </span>
+        )}
+      </div>
+
+      <div className="text-[11px] text-stone-600 space-y-0.5">
+        <p>
+          <span className="text-stone-400">{en ? 'Phone' : 'Simu'}:</span>{' '}
+          <b>{claimant.owner_phone || (en ? 'not recorded' : 'haijarekodiwa')}</b>
+        </p>
+        <p>
+          <span className="text-stone-400">Claim:</span>{' '}
+          <span className="font-mono font-bold">{claimant.claim_id || (en ? 'not recorded' : 'haijarekodiwa')}</span>
+        </p>
+        <p>
+          <span className="text-stone-400">{en ? 'Claim status' : 'Hali ya claim'}:</span>{' '}
+          <b>{claimant.claim_status || (en ? 'unknown' : 'haijulikani')}</b>
+        </p>
+        <p>
+          <span className="text-stone-400">{en ? 'Escrow paid' : 'Amana imelipwa'}:</span>{' '}
+          <b>{claimant.has_paid_escrow ? (en ? 'Yes' : 'Ndiyo') : (en ? 'No' : 'Hapana')}</b>
+        </p>
+      </div>
+
+      <div className="border-t border-stone-200/60 pt-2 space-y-1">
+        <span className="text-[9px] font-extrabold text-stone-400 uppercase tracking-widest block">
+          {en ? 'Submitted evidence' : 'Ushahidi uliowasilishwa'}
+        </span>
+        {!evidenceState ? (
+          <p className="text-[10px] text-stone-400">{en ? 'Not loaded yet.' : 'Haijapakiwa bado.'}</p>
+        ) : evidenceState.loading ? (
+          <p className="text-[10px] text-stone-400">{en ? 'Loading evidence…' : 'Inapakia ushahidi…'}</p>
+        ) : evidenceState.error ? (
+          <p className="text-[10px] text-red-600">
+            {en ? 'Evidence could not be loaded: ' : 'Ushahidi haukupakiwa: '}{evidenceState.error}
+          </p>
+        ) : ownEvidence.length === 0 ? (
+          <p className="text-[10px] text-stone-400">{en ? 'No evidence available.' : 'Hakuna ushahidi unaopatikana.'}</p>
+        ) : (
+          <ul className="space-y-2">
+            {ownEvidence.map((ev: any) => (
+              <li key={ev.id} className="bg-white border border-stone-200 rounded-xl p-2 space-y-1">
+                <p className="text-[10px] text-stone-400">
+                  {ev.created_at ? new Date(ev.created_at).toLocaleString() : ''}
+                </p>
+                {ev.evidence_text && (
+                  <p className="text-[11px] text-stone-700 whitespace-pre-wrap break-words">{ev.evidence_text}</p>
+                )}
+                {ev.evidence_photo_url && (
+                  <img
+                    src={ev.evidence_photo_url}
+                    alt={en ? 'Evidence photograph submitted with this claim' : 'Picha ya ushahidi iliyowasilishwa'}
+                    referrerPolicy="no-referrer"
+                    onClick={() => onViewPhoto(ev.evidence_photo_url)}
+                    className="w-full max-h-40 object-contain rounded-lg border border-stone-200 cursor-zoom-in"
+                  />
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
 export default function AdminView({ lang, token, setToken }: AdminViewProps) {
   const t = translations[lang];
+
+  // §10 — the active administrator, derived from the session on every render so
+  // it follows a login, a refresh and a sign-out. Display-only: it makes no
+  // authorisation decision (the server does that on every request).
+  const adminIdentity = readAdminSessionIdentity(token);
+  const adminLabel = adminIdentityLabel(adminIdentity);
 
   // Passcode verification states
   const [username, setUsername] = useState('');
@@ -18,7 +134,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
   const [authLoading, setAuthLoading] = useState(false);
 
   // Dashboard Stats & Lists states
-  const [activeTab, setActiveTab] = useState<'stats' | 'agents' | 'disputes' | 'ledger' | 'review' | 'categories' | 'strikes' | 'found_items'>('stats');
+  const [activeTab, setActiveTab] = useState<'stats' | 'agents' | 'disputes' | 'ledger' | 'review' | 'categories' | 'strikes' | 'found_items' | 'claims'>('stats');
   const [dashboardData, setDashboardData] = useState<any | null>(null);
   const [dashboardLoading, setDashboardLoading] = useState(false);
   // Guards against duplicate concurrent /api/admin/dashboard fetches (e.g. the
@@ -44,6 +160,16 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
   const [refundReconcileLoading, setRefundReconcileLoading] = useState(false);
   const [refundReconcileProcessing, setRefundReconcileProcessing] = useState<string | null>(null);
 
+  // On-demand dispute evidence, keyed by dispute id.
+  //
+  // Evidence (free-text statements and photos submitted by either claimant) is
+  // deliberately NOT part of the bulk dashboard payload — it is fetched from
+  // the admin-only GET /api/admin/disputes/:id/evidence endpoint only for the
+  // disputes an administrator actually opens. Nothing here is ever fabricated:
+  // an empty array means "no evidence was submitted", a null value with a
+  // non-null error means "we do not know", and the UI states exactly that.
+  const [disputeEvidence, setDisputeEvidence] = useState<Record<string, { loading: boolean; error: string | null; items: any[] | null }>>({});
+
   // Admin 2FA enrollment (Security section, stats tab)
   const [twoFaSetupData, setTwoFaSetupData] = useState<{ secret: string; otpauthUrl: string } | null>(null);
   const [twoFaConfirmCode, setTwoFaConfirmCode] = useState('');
@@ -60,6 +186,14 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
   const [agentSearch, setAgentSearch] = useState('');
   const [agentStatusFilter, setAgentStatusFilter] = useState('all');
   const [expandedAgentId, setExpandedAgentId] = useState<string | null>(null);
+
+  // Agent verification photographs (shop front + national ID document) are
+  // sensitive vetting evidence and are deliberately NOT part of the bulk
+  // /api/admin/dashboard payload. They are fetched on demand for one agent at
+  // a time, when that agent's row is expanded.
+  const [agentDocs, setAgentDocs] = useState<{ id: string; business_name: string; shop_photo_url: string | null; id_document_photo_url: string | null } | null>(null);
+  const [agentDocsLoading, setAgentDocsLoading] = useState<string | null>(null);
+  const [agentDocsError, setAgentDocsError] = useState<string | null>(null);
 
   const [itemSearch, setItemSearch] = useState('');
   const [itemStatusFilter, setItemStatusFilter] = useState('all');
@@ -746,6 +880,66 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
     }
   };
 
+  // Fetch the expanded agent's vetting photographs on demand. The bulk
+  // dashboard intentionally no longer carries these URLs (see
+  // services/adminSafeViews.ts), so the console asks for them only when an
+  // administrator actually opens one agent's row.
+  //
+  // RACE GUARD (6G/N5): expanding agent A then quickly agent B must never let
+  // A's slow response land after B's and overwrite B's panel with A's
+  // documents. Two mechanisms, mirroring the ClaimsAdministration pattern:
+  //   1. AbortController — the in-flight request for the previous row is
+  //      aborted the moment a new expansion starts.
+  //   2. A sequence counter — a late response that slipped past the abort
+  //      (e.g. resolved in the same tick) is discarded unless it is still the
+  //      latest issued request.
+  const agentDocsAbortRef = useRef<AbortController | null>(null);
+  const agentDocsSeqRef = useRef(0);
+  const fetchAgentDocuments = async (agentId: string) => {
+    agentDocsAbortRef.current?.abort();
+    const controller = new AbortController();
+    agentDocsAbortRef.current = controller;
+    const seq = ++agentDocsSeqRef.current;
+    setAgentDocsError(null);
+    setAgentDocsLoading(agentId);
+    try {
+      const response = await fetch(`/api/admin/agents/${encodeURIComponent(agentId)}/documents`, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (seq !== agentDocsSeqRef.current) return; // stale response — a newer row was opened
+      if (!response.ok) throw new Error(data.error || 'Could not load verification photographs.');
+      setAgentDocs(data.documents || null);
+    } catch (e: any) {
+      if (e?.name === 'AbortError' || seq !== agentDocsSeqRef.current) return; // superseded, not an error
+      setAgentDocs(null);
+      setAgentDocsError(e.message);
+    } finally {
+      if (seq === agentDocsSeqRef.current) setAgentDocsLoading(null);
+    }
+  };
+
+  useEffect(() => {
+    if (!expandedAgentId || !token) return;
+    fetchAgentDocuments(expandedAgentId);
+    // Deps intentionally [expandedAgentId, token]: the fetch should fire once
+    // per row expansion / session change, not on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedAgentId, token]);
+
+  // Abort any in-flight document fetch when the row is collapsed or the
+  // console unmounts, so a late response can never write into a closed panel.
+  useEffect(() => {
+    if (expandedAgentId) return;
+    agentDocsAbortRef.current?.abort();
+    agentDocsAbortRef.current = null;
+    agentDocsSeqRef.current++;
+    return () => {
+      agentDocsAbortRef.current?.abort();
+    };
+  }, [expandedAgentId]);
+
   // Approve Agent
   const [locationFormAgentId, setLocationFormAgentId] = useState<string | null>(null);
   const [locationFormLat, setLocationFormLat] = useState('');
@@ -949,17 +1143,113 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
     }
   };
 
-  // Resolve Dispute
-  const handleResolveDispute = (disputeId: string, winningClaimId: string) => {
+  // Load the on-demand evidence for one dispute. Cached per dispute id; the
+  // administrator triggers it explicitly, so opening the tab does not fan out
+  // one request per dispute.
+  const fetchDisputeEvidence = async (disputeId: string) => {
+    setDisputeEvidence((prev) => ({
+      ...prev,
+      [disputeId]: { loading: true, error: null, items: prev[disputeId]?.items ?? null },
+    }));
+    try {
+      const response = await fetch(`/api/admin/disputes/${encodeURIComponent(disputeId)}/evidence`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Could not load dispute evidence.');
+      setDisputeEvidence((prev) => ({
+        ...prev,
+        [disputeId]: { loading: false, error: null, items: Array.isArray(data.evidence) ? data.evidence : [] },
+      }));
+    } catch (e: any) {
+      setDisputeEvidence((prev) => ({
+        ...prev,
+        [disputeId]: { loading: false, error: e.message || 'Could not load dispute evidence.', items: null },
+      }));
+    }
+  };
+
+  // Resolve Dispute.
+  //
+  // The winning claim id comes from the claimant summary the API actually
+  // returned for THIS dispute, and is validated before anything is sent. The
+  // previous version read two field names that never existed on the API
+  // response, so it submitted `undefined` and every attempt failed.
+  const handleResolveDispute = (dispute: any, claimant: any) => {
     setActionSuccess('');
     setActionWarning('');
     setDataError('');
 
+    const winningClaimId = typeof claimant?.claim_id === 'string' ? claimant.claim_id.trim() : '';
+    const participatingClaimIds = Array.isArray(dispute?.claimants)
+      ? dispute.claimants.map((c: any) => (typeof c?.claim_id === 'string' ? c.claim_id : '')).filter(Boolean)
+      : [];
+
+    // Never submit an incomplete decision. If the API has not supplied a real
+    // participating claim id, say so rather than firing a request that cannot
+    // succeed.
+    if (!winningClaimId) {
+      setDataError(
+        lang === 'en'
+          ? 'This dispute has no usable claim ID for that claimant, so it cannot be resolved from the console. Reload the dashboard; if it persists, the dispute record is incomplete.'
+          : 'Mzozo huu hauna kitambulisho cha claim kinachoweza kutumika kwa mdai huyu. Pakia upya dashibodi.'
+      );
+      return;
+    }
+    if (!participatingClaimIds.includes(winningClaimId)) {
+      setDataError(
+        lang === 'en'
+          ? 'That claim is not one of the two claimants in this dispute. Nothing was submitted.'
+          : 'Claim hiyo si mojawapo ya wadai wawili wa mzozo huu. Hakuna kilichotumwa.'
+      );
+      return;
+    }
+
+    const roleLabel = claimant.role === 'original'
+      ? (lang === 'en' ? 'Claimant A — original claim' : 'Mdai A — claim ya awali')
+      : (lang === 'en' ? 'Claimant B — contesting claim' : 'Mdai B — claim inayopinga');
+
+    // D-B1 FIX — the consequence must describe the LOSER's actual outcome.
+    // The previous version keyed the sentence off `claimant.has_paid_escrow`,
+    // i.e. the WINNER (the person being awarded), while the wording described
+    // the OPPOSING side — so it could tell an admin that a refund would be
+    // queued when the loser had never paid, or that the loser would merely be
+    // rejected when they had in fact paid. The refund decision is made from
+    // the LOSER's payment state, so the confirmation must read the opposing
+    // claimant's flag.
+    const opponents = (Array.isArray(dispute?.claimants) ? dispute.claimants : [])
+      .filter((c: any) => c && c.claim_id && c.claim_id !== winningClaimId);
+    const opponent = opponents[0] || null;
+    const winnerPaid = !!claimant.has_paid_escrow;
+    const loserPaid = !!opponent?.has_paid_escrow;
+
+    const winnerOutcome = winnerPaid
+      ? (lang === 'en'
+        ? 'Winning claim stays paid — it will be held at ESCROW HELD and proceed to handover.'
+        : 'Claim ya mshindi inabaki imelipwa — itawekwa kwenye AMANA na kuendelea hadi makabidhiano.')
+      : (lang === 'en'
+        ? 'Winning claim is NOT paid — it goes back to PENDING VERIFICATION and must complete verification and payment normally.'
+        : 'Claim ya mshindi HAIJALIPWA — inarudi kwenye UTHIBITISHO na lazima ikamilishe uthibitisho na malipo kama kawaida.');
+    const loserOutcome = loserPaid
+      ? (lang === 'en'
+        ? 'Losing claim HAS paid — it will be locked to REFUNDING and a real M-Pesa refund will be attempted.'
+        : 'Claim iliyoshindwa IMELIPWA — itafungwa kwenye UREJESHAJI na urejeshaji halisi wa M-Pesa utajaribiwa.')
+      : (lang === 'en'
+        ? 'Losing claim has NOT paid — no refund is owed and it will simply be REJECTED.'
+        : 'Claim iliyoshindwa HAIJALIPWA — hakuna urejeshaji unaodaiwa na itakataliwa tu.');
+    const opponentLabel = opponent
+      ? `${opponent.role === 'original' ? (lang === 'en' ? 'Claimant A' : 'Mdai A') : (lang === 'en' ? 'Claimant B' : 'Mdai B')} (${opponent.owner_phone || (lang === 'en' ? 'no phone recorded' : 'simu haijarekodiwa')}, ${lang === 'en' ? 'claim' : 'claim'} ${opponent.claim_id})`
+      : (lang === 'en' ? 'the opposing claimant' : 'mdai mwingine');
+
     setConfirmModal({
       title: lang === 'en' ? 'Resolve Dispute' : 'Suluhisha Mzozo',
-      message: lang === 'en'
-        ? "Are you sure you want to resolve this dispute in favor of this claimant? Escrow funds will be released and this cannot be undone."
-        : "Je, una uhakika unataka kusuluhisha mzozo huu kwa kumpendelea mdai huyu? Fedha za amana zitatolewa na kitendo hiki hakiwezi kubatilishwa.",
+      message:
+        `${lang === 'en' ? 'Award' : 'Mpa ushindi'} ${dispute.id} (${lang === 'en' ? 'item' : 'bidhaa'} ${dispute.item_id}) ` +
+        `${lang === 'en' ? 'to' : 'kwa'} ${roleLabel} — ${lang === 'en' ? 'phone' : 'simu'} ${claimant.owner_phone || (lang === 'en' ? 'no phone recorded' : 'simu haijarekodiwa')}, ` +
+        `${lang === 'en' ? 'claim' : 'claim'} ${winningClaimId}.\n\n` +
+        `${lang === 'en' ? 'Outcome for the winning claim' : 'Matokeo kwa claim ya mshindi'}: ${winnerOutcome}\n` +
+        `${lang === 'en' ? 'Outcome for' : 'Matokeo kwa'} ${opponentLabel}: ${loserOutcome}\n\n` +
+        (lang === 'en' ? 'This decision is final and cannot be undone.' : 'Uamuzi huu ni wa mwisho.'),
       onConfirm: async () => {
         setAdminActionProcessing(true);
         try {
@@ -970,9 +1260,13 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               Authorization: `Bearer ${token}`,
             },
             body: JSON.stringify({
-              disputeId,
+              disputeId: dispute.id,
               winningClaimId,
-              adminNotes: 'Resolved physically by administrator reviewing official government-issued ID proofs.',
+              // Record only what actually happened. The previous note asserted
+              // that the administrator had reviewed "official government-issued
+              // ID proofs" — which the console does not display — writing a
+              // fabricated justification into the audit trail.
+              adminNotes: `Resolved from the admin console in favour of the ${claimant.role} claimant (claim ${winningClaimId}).`,
             }),
           });
 
@@ -1310,6 +1604,35 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
             </button>
           </div>
 
+          {/* §10 — "Signed in as". Only what the authenticated session actually
+              carries is shown: the username claim from the admin token, or the
+              generic word "Administrator" when the session carries none. No
+              name, email, avatar, last-login or location is invented, and the
+              token itself is never rendered. Sign out clears the session
+              exactly as the navbar logout does (setToken(null)); the server-side
+              revocation path is unchanged. */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border border-stone-200 rounded-2xl bg-white px-4 py-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <span className="w-9 h-9 rounded-full bg-stone-900 text-white flex items-center justify-center shrink-0">
+                <ShieldCheck size={16} aria-hidden="true" />
+              </span>
+              <div className="min-w-0">
+                <p className="text-caption font-extrabold uppercase tracking-widest text-stone-400">Administrator</p>
+                <p className="text-sm font-bold text-stone-900 truncate">{adminLabel}</p>
+                <p className="text-caption text-stone-500">
+                  {adminIdentity.role ? `Signed in · role ${adminIdentity.role}` : 'Signed in · active console session'}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setToken(null)}
+              className="border border-stone-300 hover:border-stone-500 text-stone-700 hover:text-stone-900 text-xs font-bold px-4 py-2 rounded-xl transition self-start sm:self-auto cursor-pointer"
+            >
+              {lang === 'en' ? 'Sign out' : 'Toka'}
+            </button>
+          </div>
+
           {actionSuccess && (
             <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 rounded-2xl text-xs font-bold flex items-center space-x-2">
               <CheckCircle size={16} />
@@ -1400,10 +1723,22 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
             </div>
           )}
 
-          {/* Tab Navigation */}
-          <div className="flex border-b border-stone-200 overflow-x-auto scrollbar-none">
+          {/* REQUEST 05 / SECTION 11 - ADMIN SIDEBAR SHELL
+              The sections below are exactly the sections that already existed.
+              Each one maps to a real admin endpoint; nothing was invented for
+              the sidebar, and no section was added for a feature the backend
+              does not have. Desktop (lg+): a persistent, sticky left sidebar.
+              Below lg the same list stays a horizontally scrollable strip, so a
+              phone never gets a cramped fixed sidebar. The layout rules live in
+              .r4m-admin-nav (src/index.css). */}
+          <div className="lg:grid lg:grid-cols-[236px_minmax(0,1fr)] lg:gap-8 lg:items-start">
+          <nav
+            className="r4m-admin-nav flex border-b border-stone-200 overflow-x-auto scrollbar-none"
+            aria-label={lang === 'en' ? 'Admin sections' : 'Sehemu za msimamizi'}
+          >
             <button
               onClick={() => setActiveTab('stats')}
+              aria-current={activeTab === 'stats' ? 'page' : undefined}
               className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
                 activeTab === 'stats' ? 'border-stone-900 text-stone-950 font-extrabold' : 'border-transparent text-stone-400'
               }`}
@@ -1413,6 +1748,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
             </button>
             <button
               onClick={() => setActiveTab('agents')}
+              aria-current={activeTab === 'agents' ? 'page' : undefined}
               className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
                 activeTab === 'agents' ? 'border-stone-900 text-stone-950 font-extrabold' : 'border-transparent text-stone-400'
               }`}
@@ -1422,6 +1758,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
             </button>
             <button
               onClick={() => setActiveTab('found_items')}
+              aria-current={activeTab === 'found_items' ? 'page' : undefined}
               className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
                 activeTab === 'found_items' ? 'border-stone-900 text-stone-950 font-extrabold' : 'border-transparent text-stone-400'
               }`}
@@ -1431,6 +1768,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
             </button>
             <button
               onClick={() => setActiveTab('disputes')}
+              aria-current={activeTab === 'disputes' ? 'page' : undefined}
               className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
                 activeTab === 'disputes' ? 'border-stone-900 text-stone-950 font-extrabold' : 'border-transparent text-stone-400'
               }`}
@@ -1438,8 +1776,21 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               <HelpCircle size={14} />
               <span>{t.disputesTab}</span>
             </button>
+            {/* Phase 6F — Claims Administration. Read-only; the surface itself
+                enforces nothing (the server does) and exposes no mutation. */}
+            <button
+              onClick={() => setActiveTab('claims')}
+              aria-current={activeTab === 'claims' ? 'page' : undefined}
+              className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
+                activeTab === 'claims' ? 'border-stone-900 text-stone-950 font-extrabold' : 'border-transparent text-stone-400'
+              }`}
+            >
+              <ClipboardList size={14} />
+              <span>{lang === 'en' ? 'Claims' : 'Claims'}</span>
+            </button>
             <button
               onClick={() => setActiveTab('ledger')}
+              aria-current={activeTab === 'ledger' ? 'page' : undefined}
               className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
                 activeTab === 'ledger' ? 'border-stone-900 text-stone-950 font-extrabold' : 'border-transparent text-stone-400'
               }`}
@@ -1449,6 +1800,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
             </button>
             <button
               onClick={() => setActiveTab('review')}
+              aria-current={activeTab === 'review' ? 'page' : undefined}
               className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
                 activeTab === 'review' ? 'border-stone-900 text-stone-950 font-extrabold' : 'border-transparent text-stone-400'
               }`}
@@ -1458,6 +1810,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
             </button>
             <button
               onClick={() => setActiveTab('categories')}
+              aria-current={activeTab === 'categories' ? 'page' : undefined}
               className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
                 activeTab === 'categories' ? 'border-stone-900 text-stone-950 font-extrabold' : 'border-transparent text-stone-400'
               }`}
@@ -1467,6 +1820,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
             </button>
             <button
               onClick={() => setActiveTab('strikes')}
+              aria-current={activeTab === 'strikes' ? 'page' : undefined}
               className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
                 activeTab === 'strikes' ? 'border-stone-900 text-stone-950 font-extrabold' : 'border-transparent text-stone-400'
               }`}
@@ -1474,7 +1828,8 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               <ShieldAlert size={14} />
               <span>Payment Strikes</span>
             </button>
-          </div>
+          </nav>
+          <div className="space-y-6 min-w-0">
 
           {/* TAB CONTENT 1: STATS WORKSPACE */}
           {activeTab === 'stats' && (
@@ -1762,7 +2117,6 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                                   <p><b>Business Name:</b> {agent.business_name}</p>
                                   <p><b>Contact Phone:</b> {agent.contact_phone}</p>
                                   <p><b>Contact Email:</b> {agent.contact_email || 'Not Provided'}</p>
-                                  <p><b>National ID Hash:</b> <span className="font-mono text-[10px] break-all block p-1.5 bg-stone-100 rounded-lg">{agent.national_id_hash || 'None'}</span></p>
                                   <p className="pt-1">
                                     <b>Total Earned:</b>{' '}
                                     <span className="text-emerald-700 font-extrabold">KES {(agent.total_earned || 0).toLocaleString()}</span>
@@ -1874,54 +2228,78 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                                 </div>
                               </div>
 
-                              {/* Shop Front & ID Photos Viewer */}
-                              {(agent.shop_photo_url || agent.id_document_photo_url) && (
+                              {/* Shop Front & ID Photos Viewer.
+                                  These two artefacts are sensitive vetting
+                                  evidence and are no longer part of the bulk
+                                  dashboard payload — they are fetched on demand
+                                  for this agent only, when the row is expanded
+                                  (GET /api/admin/agents/:id/documents). */}
+                              {agentDocsLoading === agent.id ? (
                                 <div className="border-t border-stone-200/60 pt-3 space-y-2">
                                   <span className="text-[10px] font-extrabold text-stone-400 uppercase tracking-wider block">Agent Verification Photographs</span>
-                                  <div className="flex flex-wrap gap-4">
-                                    {agent.shop_photo_url && (
-                                      <div 
-                                        onClick={() => setLightboxImage(agent.shop_photo_url)}
-                                        className="cursor-pointer space-y-1 group"
-                                        role="button"
-                                        tabIndex={0}
-                                        aria-label="View shop / business location photo full-size"
-                                        onKeyDown={(e) => {
-                                          if (e.key === 'Enter' || e.key === ' ') {
-                                            e.preventDefault();
-                                            setLightboxImage(agent.shop_photo_url);
-                                          }
-                                        }}
-                                      >
-                                        <p className="text-[10px] font-bold text-stone-600">Shop / Business Location Front</p>
-                                        <div className="w-32 h-24 rounded-xl border border-stone-200 overflow-hidden bg-stone-100 relative">
-                                          <img src={agent.shop_photo_url} alt="Shop Front" className="w-full h-full object-cover group-hover:scale-105 transition" />
-                                        </div>
-                                      </div>
-                                    )}
-                                    {agent.id_document_photo_url && (
-                                      <div 
-                                        onClick={() => setLightboxImage(agent.id_document_photo_url)}
-                                        className="cursor-pointer space-y-1 group"
-                                        role="button"
-                                        tabIndex={0}
-                                        aria-label="View national ID document photo full-size"
-                                        onKeyDown={(e) => {
-                                          if (e.key === 'Enter' || e.key === ' ') {
-                                            e.preventDefault();
-                                            setLightboxImage(agent.id_document_photo_url);
-                                          }
-                                        }}
-                                      >
-                                        <p className="text-[10px] font-bold text-stone-600">National ID Document Photo</p>
-                                        <div className="w-32 h-24 rounded-xl border border-stone-200 overflow-hidden bg-stone-100 relative">
-                                          <img src={agent.id_document_photo_url} alt="ID Document" className="w-full h-full object-cover group-hover:scale-105 transition" />
-                                        </div>
-                                      </div>
-                                    )}
-                                  </div>
+                                  <p className="text-[10px] text-stone-400 flex items-center gap-1.5">
+                                    <Loader2 className="animate-spin" size={12} /> Loading verification photographs…
+                                  </p>
                                 </div>
-                              )}
+                              ) : agentDocs && agentDocs.id === agent.id ? (
+                                (agentDocs.shop_photo_url || agentDocs.id_document_photo_url) ? (
+                                  <div className="border-t border-stone-200/60 pt-3 space-y-2">
+                                    <span className="text-[10px] font-extrabold text-stone-400 uppercase tracking-wider block">Agent Verification Photographs</span>
+                                    <div className="flex flex-wrap gap-4">
+                                      {agentDocs.shop_photo_url && (
+                                        <div
+                                          onClick={() => setLightboxImage(agentDocs.shop_photo_url)}
+                                          className="cursor-pointer space-y-1 group"
+                                          role="button"
+                                          tabIndex={0}
+                                          aria-label="View shop / business location photo full-size"
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter' || e.key === ' ') {
+                                              e.preventDefault();
+                                              setLightboxImage(agentDocs.shop_photo_url);
+                                            }
+                                          }}
+                                        >
+                                          <p className="text-[10px] font-bold text-stone-600">Shop / Business Location Front</p>
+                                          <div className="w-32 h-24 rounded-xl border border-stone-200 overflow-hidden bg-stone-100 relative">
+                                            <img src={agentDocs.shop_photo_url} alt="Shop Front" className="w-full h-full object-cover group-hover:scale-105 transition" />
+                                          </div>
+                                        </div>
+                                      )}
+                                      {agentDocs.id_document_photo_url && (
+                                        <div
+                                          onClick={() => setLightboxImage(agentDocs.id_document_photo_url)}
+                                          className="cursor-pointer space-y-1 group"
+                                          role="button"
+                                          tabIndex={0}
+                                          aria-label="View national ID document photo full-size"
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter' || e.key === ' ') {
+                                              e.preventDefault();
+                                              setLightboxImage(agentDocs.id_document_photo_url);
+                                            }
+                                          }}
+                                        >
+                                          <p className="text-[10px] font-bold text-stone-600">National ID Document Photo</p>
+                                          <div className="w-32 h-24 rounded-xl border border-stone-200 overflow-hidden bg-stone-100 relative">
+                                            <img src={agentDocs.id_document_photo_url} alt="ID Document" className="w-full h-full object-cover group-hover:scale-105 transition" />
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="border-t border-stone-200/60 pt-3">
+                                    <span className="text-[10px] font-extrabold text-stone-400 uppercase tracking-wider block">Agent Verification Photographs</span>
+                                    <p className="text-[10px] text-stone-400 pt-1">No verification photographs on file for this agent.</p>
+                                  </div>
+                                )
+                              ) : agentDocsError && expandedAgentId === agent.id ? (
+                                <div className="border-t border-stone-200/60 pt-3">
+                                  <span className="text-[10px] font-extrabold text-stone-400 uppercase tracking-wider block">Agent Verification Photographs</span>
+                                  <p className="text-[10px] text-red-600 pt-1">{agentDocsError}</p>
+                                </div>
+                              ) : null}
 
                               {/* Actions on this Agent */}
                               <div className="border-t border-stone-200/60 pt-4 flex flex-wrap justify-end gap-2">
@@ -2301,6 +2679,15 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
             </div>
           )}
 
+          {/* TAB CONTENT: CLAIMS ADMINISTRATION (PHASE 6F) */}
+          {/* Read-only. Mounting is what triggers the fetch, so entering the tab
+              always shows current data (the same freshness guarantee the Agents
+              tab gets from its activeTab effect) and leaving it aborts any
+              in-flight request. */}
+          {activeTab === 'claims' && (
+            <ClaimsAdministration lang={lang} token={token} />
+          )}
+
           {/* TAB CONTENT 3: OPEN DISPUTES CHECKOUT */}
           {activeTab === 'disputes' && (
             <div className="space-y-4">
@@ -2364,68 +2751,129 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
 
               {dashboardData.disputes.length === 0 ? (
                 <div className="bg-white border border-stone-100 rounded-2xl p-8 text-center text-stone-400 text-xs">
-                  Immutable disputes logs are empty! No active owner conflicts found.
+                  {lang === 'en'
+                    ? 'No ownership disputes have been raised. Nothing requires adjudication.'
+                    : 'Hakuna mizozo ya umiliki iliyoanzishwa. Hakuna la kusuluhisha.'}
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {dashboardData.disputes.map((dispute: any) => (
+                  {dashboardData.disputes.map((dispute: any) => {
+                    const claimants: any[] = Array.isArray(dispute.claimants) ? dispute.claimants : [];
+                    const isResolved = !!dispute.resolved_at || !!dispute.resolved_by;
+                    const evidenceState = disputeEvidence[dispute.id];
+                    const roleLabel = (role: string) => role === 'original'
+                      ? (lang === 'en' ? 'Claimant A — original claim' : 'Mdai A — claim ya awali')
+                      : (lang === 'en' ? 'Claimant B — contesting claim' : 'Mdai B — claim inayopinga');
+                    const roleShort = (role: string) => role === 'original'
+                      ? (lang === 'en' ? 'Claimant A' : 'Mdai A')
+                      : (lang === 'en' ? 'Claimant B' : 'Mdai B');
+                    return (
                     <div key={dispute.id} className="bg-white border border-stone-100 rounded-2xl p-5 shadow-sm space-y-4">
-                      <div className="flex justify-between items-center pb-3 border-b border-stone-100">
+                      <div className="flex flex-wrap justify-between items-center gap-2 pb-3 border-b border-stone-100">
                         <div>
                           <span className="text-xs font-mono font-bold text-red-600">DISPUTE: {dispute.id}</span>
-                          <p className="text-[10px] text-stone-400">Created on: {new Date(dispute.created_at).toLocaleDateString()}</p>
+                          <p className="text-[10px] text-stone-400">
+                            {lang === 'en' ? 'Raised on' : 'Ilianzishwa'}{' '}
+                            {dispute.created_at ? new Date(dispute.created_at).toLocaleString() : '—'}
+                          </p>
                         </div>
-                        <span className="text-[10px] font-bold text-stone-500">Item: {dispute.item_id}</span>
-                      </div>
-
-                      {/* Side-by-side claim comparison info */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="border border-stone-200 rounded-2xl p-4 bg-brand-beige space-y-2">
-                          <span className="text-[9px] font-extrabold text-stone-400 uppercase tracking-widest block">Claimant A (Original)</span>
-                          <p className="text-xs font-bold text-primary-green leading-none">Phone: {dispute.original_claim_id}</p>
-                          <div className="text-[10px] text-stone-500 mt-1 leading-tight space-y-1">
-                            <span>Answer last 4: <b>Passed (4812)</b></span>
-                            <span className="block">Details provided: "Lost my national ID Card at Kilimani."</span>
-                          </div>
-                        </div>
-
-                        <div className="border border-stone-200 rounded-2xl p-4 bg-brand-beige space-y-2">
-                          <span className="text-[9px] font-extrabold text-stone-400 uppercase tracking-widest block">Claimant B (Contesting)</span>
-                          <p className="text-xs font-bold text-primary-green leading-none">Phone: {dispute.contesting_claim_id}</p>
-                          <div className="text-[10px] text-stone-500 mt-1 leading-tight space-y-1">
-                            <span>Answer last 4: <b>Passed (4812)</b></span>
-                            <span className="block">Details provided: "National ID slid out of my handbag at Yaya Centre cyber cafe."</span>
-                          </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-bold text-stone-500">
+                            {lang === 'en' ? 'Item' : 'Bidhaa'}: {dispute.item_id || '—'}
+                          </span>
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${isResolved ? 'bg-stone-100 text-stone-600' : 'bg-amber-100 text-amber-800'}`}>
+                            {isResolved ? (lang === 'en' ? 'Resolved' : 'Imetatuliwa') : (lang === 'en' ? 'Open' : 'Wazi')}
+                          </span>
                         </div>
                       </div>
 
-                      {/* Action buttons */}
-                      <div className="flex justify-end space-x-2 pt-2">
+                      {claimants.length === 0 ? (
+                        <p className="text-xs text-red-600">
+                          {lang === 'en'
+                            ? 'No claimant details were returned for this dispute, so it cannot be adjudicated from here.'
+                            : 'Hakuna taarifa za wadai zilizorejeshwa kwa mzozo huu, hivyo hauwezi kusuluhishwa hapa.'}
+                        </p>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {claimants.map((claimant: any) => (
+                            <DisputeClaimantPanel
+                              key={claimant.role + ':' + claimant.claim_id}
+                              lang={lang}
+                              claimant={claimant}
+                              evidenceState={evidenceState}
+                              roleLabel={roleLabel(claimant.role)}
+                              isWinner={isResolved && !!claimant.claim_id && dispute.resolved_claim_id === claimant.claim_id}
+                              onViewPhoto={setLightboxImage}
+                            />
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Evidence is loaded on demand — one request per dispute the
+                          administrator actually inspects, never for the whole list. */}
+                      <div className="flex flex-wrap items-center gap-2">
                         <button
-                          onClick={() => handleResolveDispute(dispute.id, dispute.original_claim_id)}
-                          disabled={adminActionProcessing}
-                          className="bg-stone-900 hover:bg-stone-800 text-white text-xs font-bold px-4 py-2 rounded-xl transition flex items-center justify-center space-x-1.5 disabled:opacity-50"
+                          type="button"
+                          onClick={() => fetchDisputeEvidence(dispute.id)}
+                          disabled={!!evidenceState?.loading}
+                          className="bg-stone-100 hover:bg-stone-200 text-stone-700 text-[11px] font-bold px-3 py-1.5 rounded-lg border border-stone-200 transition disabled:opacity-50 cursor-pointer"
                         >
-                          {adminActionProcessing ? (
-                            <Loader2 className="animate-spin" size={12} />
-                          ) : (
-                            <span>Award Claimant A</span>
-                          )}
-                        </button>
-                        <button
-                          onClick={() => handleResolveDispute(dispute.id, dispute.contesting_claim_id)}
-                          disabled={adminActionProcessing}
-                          className="bg-accent-orange hover:bg-accent-hover text-white text-xs font-bold px-4 py-2 rounded-xl transition flex items-center justify-center space-x-1.5 disabled:opacity-50"
-                        >
-                          {adminActionProcessing ? (
-                            <Loader2 className="animate-spin" size={12} />
-                          ) : (
-                            <span>Award Claimant B</span>
-                          )}
+                          {evidenceState?.loading
+                            ? (lang === 'en' ? 'Loading evidence…' : 'Inapakia ushahidi…')
+                            : (lang === 'en' ? 'Load evidence' : 'Pakia ushahidi')}
                         </button>
                       </div>
+
+                      {/* Resolution actions. Only offered on an OPEN dispute whose
+                          claimant claim IDs actually came back from the API — a
+                          resolved dispute is reported as resolved rather than
+                          offering buttons that can only fail. */}
+                      {isResolved ? (
+                        <p className="text-[11px] text-stone-500 border-t border-stone-100 pt-3">
+                          {lang === 'en' ? 'Resolved' : 'Imetatuliwa'}
+                          {dispute.resolved_at ? ` ${new Date(dispute.resolved_at).toLocaleString()}` : ''}
+                          {dispute.resolved_claim_id
+                            ? ` — ${lang === 'en' ? 'awarded to claim' : 'ilipatiwa claim'} ${dispute.resolved_claim_id}`
+                            : ''}
+                          {dispute.resolved_by ? ` (${dispute.resolved_by})` : ''}
+                        </p>
+                      ) : claimants.length === 0 ? (
+                        <p className="text-[11px] text-red-600 border-t border-stone-100 pt-3">
+                          {lang === 'en'
+                            ? 'Resolution is unavailable: the two claimant claim IDs were not returned for this dispute.'
+                            : 'Kusuluhisha hakuwezekani: vitambulisho vya claim havijarejeshwa.'}
+                        </p>
+                      ) : (
+                        <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-stone-100">
+                          {claimants.map((claimant: any) => (
+                            <button
+                              key={'award:' + claimant.role}
+                              type="button"
+                              onClick={() => handleResolveDispute(dispute, claimant)}
+                              disabled={adminActionProcessing || !claimant.claim_id}
+                              title={!claimant.claim_id
+                                ? (lang === 'en'
+                                  ? 'No claim ID is available for this claimant'
+                                  : 'Hakuna kitambulisho cha claim kwa mdai huyu')
+                                : undefined}
+                              className={`${claimant.role === 'original' ? 'bg-stone-900 hover:bg-stone-800' : 'bg-accent-strong hover:bg-accent-strong-hover'} text-white text-xs font-bold px-4 py-2 rounded-xl transition flex items-center justify-center space-x-1.5 disabled:opacity-50 cursor-pointer`}
+                            >
+                              {adminActionProcessing ? (
+                                <Loader2 className="animate-spin" size={12} />
+                              ) : (
+                                <span>
+                                  {lang === 'en'
+                                    ? `Award ${roleShort(claimant.role)}`
+                                    : `Mpa ushindi ${roleShort(claimant.role)}`}
+                                </span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -2491,7 +2939,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                         <th className="px-5 py-3 font-bold">Transaction Reference</th>
                         <th className="px-5 py-3 font-bold">Type</th>
                         <th className="px-5 py-3 font-bold">Amount</th>
-                        <th className="px-5 py-3 font-bold">Recipient / Target</th>
+                        <th className="px-5 py-3 font-bold">Claim</th>
                         <th className="px-5 py-3 font-bold">Status</th>
                         <th className="px-5 py-3 font-bold">Date</th>
                       </tr>
@@ -2510,7 +2958,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                             </span>
                           </td>
                           <td className="px-5 py-3.5 font-bold text-stone-900">KES {entry.amount}</td>
-                          <td className="px-5 py-3.5">{entry.phone_or_till}</td>
+                          <td className="px-5 py-3.5">{entry.claim_id || '—'}</td>
                           <td className="px-5 py-3.5">
                             <span className={`font-bold ${entry.status === 'completed' ? 'text-emerald-600' : entry.status === 'failed' ? 'text-red-600' : 'text-amber-600'}`}>● {entry.status.toUpperCase()}</span>
                           </td>
@@ -3314,6 +3762,8 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
             </div>
           )}
 
+          </div>
+          </div>
         </div>
       )}
 

@@ -6,8 +6,8 @@ import { motion, AnimatePresence } from 'motion/react';
 interface NavbarProps {
   lang: 'en' | 'sw';
   setLang: (lang: 'en' | 'sw') => void;
-  currentView: 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy';
-  setView: (view: 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy') => void;
+  currentView: 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy' | 'signin' | 'becomeAgent';
+  setView: (view: 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy' | 'signin' | 'becomeAgent') => void;
   token: string | null;
   logout: () => void;
   /** True while the Account/dashboard surface is showing (Phase 2). Kept as a
@@ -18,8 +18,17 @@ interface NavbarProps {
   onOpenAccount?: () => void;
   /** Preferred handler for normal navigation when supplied; lets the app exit
    *  the account surface on any nav click. Falls back to setView. */
-  onNavigate?: (view: 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy') => void;
+  onNavigate?: (view: 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy' | 'signin' | 'becomeAgent') => void;
 }
+
+// PHASE 8.1 — PUBLIC NAVIGATION IA
+// The unauthenticated public destinations are exactly:
+//   Home · I Lost Something · I Found Something · Become an Agent · Sign In
+// "Agent Portal" is deliberately NOT a public destination any more. Agent
+// ACCESS is unchanged and still lives at /agent_portal — it is now reached
+// through "Become an Agent" (the public explanation of the role) and through
+// Sign In → Agent. The internal label still exists in translations for
+// non-navigation use, but no public surface renders it as a destination.
 
 export default function Navbar({ lang, setLang, currentView, setView, token, logout, isAccountView = false, onOpenAccount, onNavigate }: NavbarProps) {
   const t = translations[lang];
@@ -32,7 +41,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
     setIsAdmin(!!adminToken);
   }, [currentView, token]);
 
-  const handleNavClick = (view: 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy') => {
+  const handleNavClick = (view: 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy' | 'signin' | 'becomeAgent') => {
     if (onNavigate) onNavigate(view);
     else setView(view);
     setIsOpen(false);
@@ -42,6 +51,19 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
     if (onOpenAccount) onOpenAccount();
     setIsOpen(false);
   };
+
+  // REQUEST 13 — the Sign In control is deliberately styled differently from the
+  // ordinary navigation links. It is the one item on this bar that starts a
+  // session, so it reads as a control rather than a destination: an outlined
+  // pill, on-brand (deep green on white), 44px tall for touch, and legible in
+  // every state — resting, hover (a green tint with the SAME dark green text,
+  // never white-on-light) and keyboard focus (the global :focus-visible ring).
+  // No gradient, no neon, no size change on hover, so nothing shifts.
+  const signInButtonClass =
+    'ml-1 inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border-2 px-4 text-sm font-bold transition-colors cursor-pointer ' +
+    (currentView === 'signin'
+      ? 'border-primary-green bg-primary-green/10 text-primary-green'
+      : 'border-primary-green/40 text-primary-green hover:border-primary-green hover:bg-primary-green/10');
 
   const accountLinkClass =
     'relative px-3 py-2 text-sm font-medium transition-colors cursor-pointer rounded-md ' +
@@ -103,9 +125,9 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
               {t.finderBtn}
               {navLinkUnderline('finder')}
             </button>
-            <button onClick={() => handleNavClick('agent')} className={navLinkClass('agent')}>
-              {t.agentBtn}
-              {navLinkUnderline('agent')}
+            <button onClick={() => handleNavClick('becomeAgent')} className={navLinkClass('becomeAgent')}>
+              {t.becomeAgentBtn}
+              {navLinkUnderline('becomeAgent')}
             </button>
             {isAdmin && (
               <button onClick={() => handleNavClick('admin')} className={navLinkClass('admin')}>
@@ -113,8 +135,8 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                 {navLinkUnderline('admin')}
               </button>
             )}
-            <button onClick={handleAccountClick} className={accountLinkClass}>
-              {lang === 'en' ? 'Account' : 'Akaunti'}
+            <button onClick={() => (isAccountView ? handleAccountClick() : handleNavClick('signin'))} className={isAccountView ? accountLinkClass : signInButtonClass} aria-current={currentView === 'signin' ? 'page' : undefined}>
+              {isAccountView ? (lang === 'en' ? 'My Account' : 'Akaunti Yangu') : t.signInBtn}
               {isAccountView && (
                 <motion.span
                   layoutId="nav-underline"
@@ -255,17 +277,19 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                     <span>{t.finderBtn}</span>
                   </button>
 
-                  {/* Agent Portal */}
+                  {/* Phase 8.1 — public agent journey. This replaced the
+                      "Agent Portal" item: the internal portal is no longer a
+                      public destination, while agent access is unchanged. */}
                   <button
-                    onClick={() => handleNavClick('agent')}
+                    onClick={() => handleNavClick('becomeAgent')}
                     className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl text-sm font-bold transition-all text-left cursor-pointer ${
-                      currentView === 'agent' 
+                      currentView === 'becomeAgent'
                         ? 'bg-primary-green/10 text-primary-green' 
                         : 'text-brand-dark-text hover:bg-brand-light-gray'
                     }`}
                   >
                     <Globe size={18} />
-                    <span>{t.agentBtn}</span>
+                    <span>{t.becomeAgentBtn}</span>
                   </button>
 
 
@@ -335,15 +359,15 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                     the account surface reuses this same site chrome and is not
                     a separate application. */}
                 <button
-                  onClick={handleAccountClick}
-                  className={`w-full py-3 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center justify-center space-x-2 ${
+                  onClick={() => (isAccountView ? handleAccountClick() : handleNavClick('signin'))}
+                  className={`w-full min-h-[44px] py-3 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center justify-center space-x-2 ${
                     isAccountView
                       ? 'bg-primary-green/10 border-primary-green/30 text-primary-green'
                       : 'bg-white border-brand-border text-brand-dark-text hover:bg-brand-light-gray'
                   }`}
                 >
                   <User size={14} />
-                  <span>{lang === 'en' ? 'My Account' : 'Akaunti Yangu'}</span>
+                  <span>{isAccountView ? (lang === 'en' ? 'My Account' : 'Akaunti Yangu') : t.signInBtn}</span>
                 </button>
 
                 {/* Account Actions */}
@@ -353,7 +377,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                       logout();
                       setIsOpen(false);
                     }}
-                    className="w-full bg-accent-orange hover:bg-accent-hover text-white text-xs font-bold py-3.5 rounded-xl shadow-md shadow-orange-500/10 transition-all cursor-pointer flex items-center justify-center space-x-2"
+                    className="w-full bg-accent-strong hover:bg-accent-strong-hover text-white text-xs font-bold py-3.5 rounded-xl shadow-md shadow-orange-500/10 transition-all cursor-pointer flex items-center justify-center space-x-2"
                   >
                     <LogOut size={14} />
                     <span>{t.logout}</span>
@@ -365,7 +389,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                         <User size={14} />
                       </div>
                       <span className="text-xs font-bold text-brand-dark-text">
-                        {lang === 'en' ? 'Guest Account' : 'Akaunti ya Mgeni'}
+                        {lang === 'en' ? 'Not signed in' : 'Hujaingia'}
                       </span>
                     </div>
                     
@@ -407,13 +431,14 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
           <span className="text-xs font-semibold">{lang === 'sw' ? 'Ripoti' : 'Report'}</span>
         </button>
         <button
-          onClick={() => handleNavClick('agent')}
-          className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 py-1 transition-all ${
-            currentView === 'agent' ? 'text-primary-green' : 'text-brand-muted-text'
+          onClick={() => (isAccountView ? handleAccountClick() : handleNavClick('signin'))}
+          aria-current={(isAccountView || currentView === 'signin') ? 'page' : undefined}
+          className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 min-h-[44px] py-1 transition-all ${
+            (isAccountView || currentView === 'signin') ? 'text-primary-green' : 'text-brand-muted-text'
           }`}
         >
-          <Globe size={18} />
-          <span className="text-xs font-semibold">{lang === 'sw' ? 'Wakala' : 'Agent'}</span>
+          <User size={18} aria-hidden="true" />
+          <span className="text-xs font-semibold">{isAccountView ? (lang === 'sw' ? 'Akaunti' : 'Account') : t.signInBtn}</span>
         </button>
         <button
           onClick={() => setIsOpen(true)}

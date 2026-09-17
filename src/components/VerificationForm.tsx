@@ -252,7 +252,7 @@ export default function VerificationForm({
           <button
             type="submit"
             disabled={!isConfident || !ownerIdentifyingDetails.trim() || !requiredFieldsFilled || !consentRequiredWhenUploaded || isVerifyingClaim}
-            className="flex-1 bg-accent-orange hover:bg-accent-hover text-white py-3 rounded-xl font-bold transition text-xs disabled:opacity-50 cursor-pointer flex items-center justify-center space-x-2"
+            className="flex-1 bg-accent-strong hover:bg-accent-strong-hover text-white py-3 rounded-xl font-bold transition text-xs disabled:opacity-50 cursor-pointer flex items-center justify-center space-x-2"
           >
             {isVerifyingClaim ? (
               <span>{lang === 'sw' ? 'Inafanywa...' : 'Submitting...'}</span>

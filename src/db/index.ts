@@ -29,7 +29,8 @@ const mockDatabaseState: Record<string, any[]> = {
   customers: [],
   customer_otps: [],
   customer_sessions: [],
-  customer_claim_links: []
+  customer_claim_links: [],
+  lost_reports: []
 };
 
 // Uniqueness invariants the in-memory mock enforces on a PLAIN insert.
@@ -923,7 +924,46 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     // Belt-and-braces against the claim-creation race (see the matching
     // comment in schema.ts) — at most one non-terminal claim per item at
     // the database level. Also missing from this incremental path entirely.
+    //
+    // SC-7: the excluded set below MUST equal CLAIM_SLOT_EXCLUDED_STATUSES in
+    // src/config/claimStatuses.ts (and the literals in src/db/schema.ts and
+    // sql/schema.sql). `disputed`/`refunding` must stay excluded or filing a
+    // dispute would violate this index. A test pins all four declarations.
     `CREATE UNIQUE INDEX IF NOT EXISTS uq_claims_one_active_per_item ON claims(item_id) WHERE status NOT IN ('disputed', 'rejected', 'refunding', 'refunded', 'payment_window_expired')`,
+    // AUTHORITATIVE PAYMENT TRUTH (SC-4/SC-6) — see the matching comment in
+    // schema.ts. Nullable, additive, no default and no backfill here: existing
+    // claims keep paid_at = NULL (i.e. "not authoritatively confirmed"), which
+    // is the only safe default for an obligation to refund. Ambiguous legacy
+    // rows (e.g. status='disputed' after createDispute overwrote their real
+    // prior state) must NOT be assumed paid. New confirmations set it via
+    // attemptClaimEscrowHold()'s guarded CAS.
+    `ALTER TABLE claims ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP WITH TIME ZONE`,
+    // CONSERVATIVE BACKFILL (idempotent, runs at most once per row).
+    // Claims that already exist predate paid_at, so without this they would all
+    // read as "unpaid" — and a historically-paid dispute loser would be
+    // rejected instead of refunded, stranding their money.
+    //
+    // This is provably safe rather than a guess: every status below is
+    // reachable ONLY through attemptClaimEscrowHold()'s guarded CAS from
+    // 'pending_payment' (escrow_held -> pending_settlement -> releasing ->
+    // released, and escrow_held -> disputed -> refunding -> refunded), so a row
+    // in one of them has definitely had a confirmed payment. `updated_at` is
+    // used as the best available timestamp — it is an approximation of WHEN,
+    // never of WHETHER.
+    //
+    // DELIBERATELY EXCLUDED: rows still sitting in 'disputed' whose real prior
+    // state was destroyed by the old createDispute() overwrite. Whether such a
+    // claimant had paid is genuinely unknown from the data (that is exactly the
+    // SC-3 information loss), and silently assuming "paid" would fabricate a
+    // refund obligation. openpaying legacy disputes therefore need an
+    // operational decision, reported rather than guessed.
+    `UPDATE claims SET paid_at = updated_at WHERE paid_at IS NULL AND status IN ('escrow_held', 'pending_settlement', 'releasing', 'released', 'refunding', 'refunded')`,
+    // DISPUTE SNAPSHOT (SC-3) — each participant's status/paid state captured
+    // immediately before the dispute was filed. See schema.ts.
+    `ALTER TABLE disputes ADD COLUMN IF NOT EXISTS claimant_1_status_at_dispute VARCHAR(30)`,
+    `ALTER TABLE disputes ADD COLUMN IF NOT EXISTS claimant_2_status_at_dispute VARCHAR(30)`,
+    `ALTER TABLE disputes ADD COLUMN IF NOT EXISTS claimant_1_paid_at_dispute TIMESTAMP WITH TIME ZONE`,
+    `ALTER TABLE disputes ADD COLUMN IF NOT EXISTS claimant_2_paid_at_dispute TIMESTAMP WITH TIME ZONE`,
     // Per-transaction payout reconciliation on the ledger — see the
     // matching comment in schema.ts. Added alongside the schema/SQL
     // changes in the same pass this time, rather than as a follow-up fix.
@@ -1091,6 +1131,45 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS uq_customer_claim_links_pair ON customer_claim_links(customer_id, claim_id)`,
     `CREATE UNIQUE INDEX IF NOT EXISTS uq_customer_claim_links_claim ON customer_claim_links(claim_id)`,
+    // ---------------------------------------------------------------------
+    // LOST-ITEM REPORTS (Phase 9A) — see the matching comment in schema.ts.
+    // CREATE TABLE is placed here (in the incremental path, not just
+    // sql/schema.sql) so an ALREADY-running database picks the table up, and
+    // AFTER the customers table above because it references it (the same
+    // ordering class of bug migrationOrder.test.ts exists to catch).
+    // ---------------------------------------------------------------------
+    `CREATE TABLE IF NOT EXISTS lost_reports (
+      id VARCHAR(50) PRIMARY KEY,
+      customer_id VARCHAR(50) NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      category_id VARCHAR(50) NOT NULL REFERENCES categories(id),
+      status VARCHAR(30) NOT NULL DEFAULT 'active',
+      county VARCHAR(50) NOT NULL,
+      location_area VARCHAR(120) NOT NULL,
+      location_landmark VARCHAR(160),
+      lost_at_from TIMESTAMPTZ NOT NULL,
+      lost_at_to TIMESTAMPTZ,
+      brand VARCHAR(100),
+      model VARCHAR(100),
+      colour VARCHAR(60),
+      material VARCHAR(60),
+      description TEXT,
+      distinctive_marks TEXT,
+      document_type VARCHAR(50),
+      document_number_hash VARCHAR(64),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    // Closed, disjoint status vocabulary — see config/lostReportStatuses.ts.
+    // DROP-then-ADD (not a bare CREATE TABLE constraint) so the constraint is
+    // (re-)asserted on a table that already existed from an earlier version,
+    // exactly like payment_sessions_status_check above.
+    `ALTER TABLE lost_reports DROP CONSTRAINT IF EXISTS lost_reports_status_check`,
+    `ALTER TABLE lost_reports ADD CONSTRAINT lost_reports_status_check CHECK (status IN ('active', 'match_review', 'resolved', 'cancelled', 'lapsed'))`,
+    `CREATE INDEX IF NOT EXISTS idx_lost_reports_customer ON lost_reports(customer_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_lost_reports_category ON lost_reports(category_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_lost_reports_status ON lost_reports(status)`,
+    `CREATE INDEX IF NOT EXISTS idx_lost_reports_document_hash ON lost_reports(document_number_hash)`,
+    `CREATE INDEX IF NOT EXISTS idx_lost_reports_county ON lost_reports(county)`,
   ];
   let migrationFailureCount = 0;
   for (const sql of statements) {

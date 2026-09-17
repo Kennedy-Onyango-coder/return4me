@@ -40,7 +40,7 @@ const variantClasses: Record<ButtonVariant, string> = {
     'bg-primary-green/10 hover:bg-primary-green/20 text-primary-green border border-primary-green/20 transition-colors',
   // Accent — the important financial / recovery CTA (M-Pesa escrow actions).
   accent:
-    'bg-accent-orange hover:bg-accent-hover text-white shadow-sm shadow-accent-orange/20 border border-transparent transition-colors',
+    'bg-accent-strong hover:bg-accent-strong-hover text-white shadow-sm shadow-accent-orange/20 border border-transparent transition-colors',
   // Outline — visible on both light and dark backgrounds via strong border
   // and solid button surface that never disappears into photographic backdrops.
   outline:

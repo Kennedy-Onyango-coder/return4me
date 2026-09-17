@@ -5,6 +5,15 @@ import CustomerDashboard from './CustomerDashboard';
 interface Props {
   lang: 'en' | 'sw';
   onExit: () => void;
+  /** Phase 7B: fired once a session has actually been established (register or
+   *  sign-in verified). The app uses it to return the visitor to the public
+   *  item page they came from, so /item/:id → "It's Mine" → sign in → back to
+   *  /item/:id can finish the journey instead of dead-ending on the dashboard.
+   *  Optional: the surface behaves identically without it. */
+  onAuthenticated?: () => void;
+  /** Phase 9C: opens the public /item/:id page for a possible match, which is
+   *  where the existing "It's Mine" ownership journey begins. */
+  onOpenItem: (itemId: string) => void;
 }
 
 type Mode = 'register' | 'login';
@@ -39,7 +48,7 @@ function formatPhoneForDisplay(phone: string): string {
   return phone;
 }
 
-export default function CustomerAccountView({ lang, onExit }: Props) {
+export default function CustomerAccountView({ lang, onExit, onAuthenticated, onOpenItem }: Props) {
   const sw = lang === 'sw';
   const t = (en: string, swText: string) => (sw ? swText : en);
 
@@ -152,11 +161,32 @@ export default function CustomerAccountView({ lang, onExit }: Props) {
       setCode('');
       setStep('details');
       setNotice(null);
+      // Phase 7B: the session now exists — let the app restore the visitor's
+      // intended destination (an /item/:id page they pressed "It's Mine" on).
+      onAuthenticated?.();
     } catch {
       setError(t('Network error. Please try again.', 'Hitilafu ya mtandao. Tafadhali jaribu tena.'));
     } finally {
       setBusy(false);
     }
+  };
+
+  /**
+   * Phase 9C: an authenticated read inside the dashboard was rejected with 401
+   * (expired or revoked session). Drop straight back to the sign-in card and say
+   * why — no private data stays on screen, and no second authentication
+   * mechanism is introduced.
+   */
+  const handleSessionExpired = () => {
+    setCustomer(null);
+    setMode('login');
+    setStep('details');
+    setCode('');
+    setError(null);
+    setNotice(t(
+      'Your session has ended. Please sign in again to continue.',
+      'Kipindi chako kimeisha. Tafadhali ingia tena ili kuendelea.'
+    ));
   };
 
   const logout = async () => {
@@ -184,7 +214,6 @@ export default function CustomerAccountView({ lang, onExit }: Props) {
       </div>
     );
   }
-
   // Authenticated: hand over to the dashboard. It renders its own sections
   // (identity, My claims, link/unlink) and owns the sign-out action, so it is
   // returned here rather than nested inside the sign-in card.
@@ -195,6 +224,8 @@ export default function CustomerAccountView({ lang, onExit }: Props) {
         customer={customer}
         onSignOut={logout}
         signingOut={busy}
+        onOpenItem={onOpenItem}
+        onSessionExpired={handleSessionExpired}
       />
     );
   }
@@ -260,6 +291,7 @@ export default function CustomerAccountView({ lang, onExit }: Props) {
                     </p>
                   </div>
 
+                  {notice && <InlineMessage kind="info" text={notice} />}
                   {error && <InlineMessage kind="error" text={error} />}
 
                   <button type="submit" disabled={busy} className={primaryButtonClass}>

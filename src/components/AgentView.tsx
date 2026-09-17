@@ -521,7 +521,7 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
               <button
                 type="submit"
                 disabled={authLoading}
-                className="w-full bg-accent-orange hover:bg-accent-hover text-white py-3.5 rounded-2xl font-bold transition flex items-center justify-center space-x-2"
+                className="w-full bg-accent-strong hover:bg-accent-strong-hover text-white py-3.5 rounded-2xl font-bold transition flex items-center justify-center space-x-2"
               >
                 <span>Verify OTP & Open Dashboard</span>
                 <ArrowRight size={18} />
@@ -862,7 +862,7 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
                 <button
                   type="submit"
                   disabled={actionProcessing}
-                  className="bg-accent-orange hover:bg-accent-hover text-white text-xs font-bold px-4 py-2 rounded-xl transition flex items-center justify-center space-x-1.5 disabled:opacity-50"
+                  className="bg-accent-strong hover:bg-accent-strong-hover text-white text-xs font-bold px-4 py-2 rounded-xl transition flex items-center justify-center space-x-1.5 disabled:opacity-50"
                 >
                   {actionProcessing ? (
                     <Loader2 className="animate-spin" size={14} />
