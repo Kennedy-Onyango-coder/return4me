@@ -320,6 +320,17 @@ export interface AdminClaimListParams {
 export const ADMIN_CLAIMS_DEFAULT_LIMIT = 25;
 export const ADMIN_CLAIMS_MAX_LIMIT = 100;
 
+/**
+ * Bounded page size for the ADMIN lost-report list (Phase 11A).
+ *
+ * A separate constant rather than a reuse of the claims limits: the two lists
+ * are independent endpoints, and a future tuning of one must not silently move
+ * the other. It exists at all because an admin list is a bulk operational read
+ * and must never be an unbounded scan of a table that grows with every report.
+ */
+export const ADMIN_LOST_REPORTS_DEFAULT_LIMIT = 25;
+export const ADMIN_LOST_REPORTS_MAX_LIMIT = 100;
+
 /** ISO-8601 normaliser that preserves null/undefined instead of inventing a value. */
 function toIsoOrNull(value: any): string | null {
   if (value === null || value === undefined || value === '') return null;
@@ -5409,6 +5420,44 @@ class DatabaseEngine {
     } catch (error) {
       console.error("Failed to read lost report for customer:", error);
       throw new Error("Failed to read lost report for customer.");
+    }
+  }
+
+  /**
+   * PHASE 11A — a BOUNDED page of lost reports for the admin console.
+   *
+   * WHY THIS EXISTS
+   * The Phase 11 forensic audit found that lost reports had no administrative
+   * surface at all: an administrator could not see, count or triage them. This
+   * is the read that fixes that. It is READ-ONLY — no update, delete or
+   * lifecycle transition is added anywhere.
+   *
+   * BOUNDING: mirrors listAdminClaims' proven shape — newest first, deterministic
+   * tie-break on id, and a `limit + offset + 1` fetch so `hasMore` is derived
+   * from the data rather than from a second COUNT query (which could disagree
+   * with the page it describes).
+   *
+   * PRIVACY: this returns raw rows, exactly like listAdminClaims. The whitelist
+   * is applied by the caller through toAdminSafeLostReportView, which omits
+   * `document_number_hash` and `customer_id`. Do not hand this result to a
+   * client directly.
+   */
+  public async listAdminLostReports(opts: { limit: number; offset: number }): Promise<{ rows: LostReport[]; hasMore: boolean }> {
+    try {
+      const limit = opts.limit;
+      const offset = opts.offset;
+      const rows = await drizzleDb
+        .select()
+        .from(lostReportsTable)
+        .orderBy(desc(lostReportsTable.created_at), desc(lostReportsTable.id))
+        .limit(offset + limit + 1);
+
+      const page = rows.slice(offset, offset + limit).map(parseLostReport);
+      const hasMore = rows.length > offset + limit;
+      return { rows: page, hasMore };
+    } catch (error) {
+      console.error("Failed to list lost reports for admin:", error);
+      throw new Error("Failed to list lost reports for admin.");
     }
   }
 }

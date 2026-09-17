@@ -10,6 +10,8 @@ import {
   parsePublicRoute,
   itemPath,
   accountPath,
+  reportLostPath,
+  reportLostSignInPath,
   legacyClaimItemId,
   viewForRoute,
   pathForView,
@@ -47,6 +49,10 @@ const PublicItemView = lazy(() => import('./components/PublicItemView'));
 // and delegate to the authentication surfaces that already exist.
 const SignInView = lazy(() => import('./components/SignInView'));
 const BecomeAgentView = lazy(() => import('./components/BecomeAgentView'));
+// Phase 11A: the public "Report a Lost Item" entry point. Lazy like the rest,
+// and a thin shell around the EXISTING customer lost-report experience — it
+// renders no report form of its own.
+const ReportLostView = lazy(() => import('./components/ReportLostView'));
 
 // Shown for the brief moment a lazy view's chunk is being fetched — kept
 // minimal and framework-agnostic (no dependency on any single view's
@@ -166,7 +172,10 @@ export default function App() {
 
       // The item surface renders from `route` itself; leave the underlying
       // state-driven view alone so Back returns to what the visitor was doing.
-      if (next.kind === 'item') return;
+      // Phase 11A: /report-lost works the same way — it renders from `route`,
+      // and the underlying view is whatever the navigating caller asked for
+      // ('owner', so the bar keeps showing the lost-item journey).
+      if (next.kind === 'item' || next.kind === 'reportLost') return;
 
       const remembered = historyState?.r4mView;
       if (isRestorableView(preferredView)) setView(preferredView);
@@ -256,6 +265,15 @@ export default function App() {
   // fires, so a screen-reader user gets no confirmation the screen updated
   // at all. Doesn't require a full router to fix.
   useEffect(() => {
+    // PHASE 11A: /report-lost renders from `route`, not from `currentView`, so
+    // it needs its own title branch — otherwise the reported page would
+    // announce whichever screen the visitor happened to arrive from.
+    if (route.kind === 'reportLost') {
+      document.title = lang === 'sw'
+        ? 'Ripoti Kitu Kilichopotea | Return4me'
+        : 'Report a Lost Item | Return4me';
+      return;
+    }
     const titles: Record<typeof currentView, { en: string; sw: string }> = {
       home: { en: "Return4me | Kenya's Trusted Lost & Found Platform", sw: 'Return4me | Jukwaa la Kuaminika la Vitu Vilivyopotea Kenya' },
       finder: { en: 'Report a Found Item | Return4me', sw: 'Ripoti Ulichokipata | Return4me' },
@@ -269,7 +287,7 @@ export default function App() {
       becomeAgent: { en: 'Become an Agent | Return4me', sw: 'Kuwa Wakala | Return4me' },
     };
     document.title = titles[currentView][lang];
-  }, [currentView, lang]);
+  }, [currentView, lang, route.kind]);
 
   // Token management for Agents & Admins
   const [agentToken, setAgentToken] = useState<string | null>(() => localStorage.getItem('agent_token'));
@@ -478,6 +496,24 @@ export default function App() {
               />
             </Suspense>
           </ErrorBoundary>
+        ) : route.kind === 'reportLost' ? (
+          /* PHASE 11A — PUBLIC LOST-REPORT ENTRY POINT. Rendered from the URL
+             alone, so /report-lost is linkable, bookmarkable and refresh-safe.
+             The page itself resolves the customer session and either renders
+             the EXISTING LostReportsSection or hands off to the existing
+             /account authentication boundary with a validated return path. */
+          <ErrorBoundary fallbackTitle="Lost Report Crash">
+            <Suspense fallback={<ViewLoadingFallback />}>
+              <div className="w-full p-4 sm:p-8">
+                <ReportLostView
+                  lang={lang}
+                  onSignIn={() => navigate(reportLostSignInPath(), 'owner')}
+                  onOpenItem={(itemId) => navigate(itemPath(itemId), 'owner')}
+                  onBrowseFound={() => navigate('/lost', 'owner')}
+                />
+              </div>
+            </Suspense>
+          </ErrorBoundary>
         ) : customerMode ? (
           <ErrorBoundary fallbackTitle="Account Page Crash">
             <Suspense fallback={<ViewLoadingFallback />}>
@@ -494,8 +530,13 @@ export default function App() {
                   // Return the visitor to the item they pressed "It's Mine" on,
                   // so the journey continues instead of dead-ending on the
                   // dashboard. The destination is validated in publicRoutes.ts
-                  // (internal /item/... paths only — never an open redirect).
-                  if (route.kind === 'account' && route.next) navigate(route.next, 'home');
+                  // (internal app-owned paths only — never an open redirect).
+                  //
+                  // PHASE 11A: the same mechanism returns a lost reporter to
+                  // /report-lost, where the reporting experience is waiting.
+                  if (route.kind === 'account' && route.next) {
+                    navigate(route.next, route.next === reportLostPath() ? 'owner' : 'home');
+                  }
                 }}
               />
             </Suspense>
@@ -544,6 +585,10 @@ export default function App() {
                    journey without rebuilding the claim flow. */
                 onOpenItem={(itemId: string) => navigate(itemPath(itemId), 'owner')}
                 initialClaimItem={claimItem}
+                /* PHASE 11A: the lost-reporting entry point. This is what makes
+                   the public "I Lost Something" journey actually offer a way to
+                   report a loss, instead of only the claim/search journey. */
+                onReportLost={() => navigate(reportLostPath(), 'owner')}
               />
             </div>
           )}

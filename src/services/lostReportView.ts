@@ -70,3 +70,58 @@ export function toCustomerSafeLostReportView(report: any): any {
     updated_at: toIso(report.updated_at),
   };
 }
+
+/**
+ * PHASE 11A — the ADMIN console's view of one lost report.
+ *
+ * READ-ONLY operational visibility. The Phase 11 forensic audit found that lost
+ * reports had NO administrative surface at all, so an administrator could not
+ * see, count or triage them. This DTO is the smallest shape that fixes that.
+ *
+ * WHAT IT DELIBERATELY OMITS (and why)
+ *   customer_id          — internal account identity. An admin triaging a report
+ *                          does not need it, and it is exactly the kind of
+ *                          correlation key that turns a read-only view into a
+ *                          de-anonymisation surface.
+ *   document_number_hash — the PROTECTED identifier. Even though it is a hash,
+ *                          it must never be presented in a console screen. Only
+ *                          its PRESENCE is exposed, as a boolean, so an
+ *                          administrator can tell that a protected identifier
+ *                          was recorded without ever seeing it.
+ *   description / distinctive_marks / brand / model / colour / material /
+ *   document_type        — the reporter's own private free text and attributes.
+ *                          They are the customer-private bucket of the privacy
+ *                          model: they are the OWNER's data and belong on the
+ *                          owner's screen, not in a bulk operational list. A
+ *                          future phase that genuinely needs them must add them
+ *                          through a deliberate, separately-reviewed detail DTO
+ *                          (the same on-demand principle as
+ *                          toAdminSafeAgentDocumentsView) — not by widening this
+ *                          one.
+ *
+ * `possible_match_count` is passed IN rather than computed here: the count comes
+ * from the existing Phase 9B engine (services/lostReportMatching.ts) via the
+ * same claimability rule the customer-facing matches route uses. No second
+ * matching algorithm is introduced, and this module stays free of matching logic.
+ */
+export function toAdminSafeLostReportView(report: any, possibleMatchCount?: number | null): any {
+  if (!report) return null;
+  return {
+    id: report.id,
+    status: report.status,
+    category_id: report.category_id,
+    county: report.county,
+    location_area: report.location_area,
+    location_landmark: report.location_landmark ?? null,
+    lost_at_from: toIso(report.lost_at_from),
+    lost_at_to: toIso(report.lost_at_to),
+    // Presence only. The hash itself is never selected into this shape.
+    has_document_number: Boolean(report.document_number_hash),
+    // null means "not applicable / not computed" (e.g. a closed report, which
+    // the platform is no longer matching), which is deliberately distinct from 0
+    // ("computed, and there are none").
+    possible_match_count: typeof possibleMatchCount === 'number' ? possibleMatchCount : null,
+    created_at: toIso(report.created_at),
+    updated_at: toIso(report.updated_at),
+  };
+}

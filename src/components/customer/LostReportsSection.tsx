@@ -41,6 +41,15 @@ interface Props {
   onOpenItem: (itemId: string) => void;
   /** 401 from any read — hand back to the account surface. */
   onSessionExpired: () => void;
+  /**
+   * PHASE 11A — open the reporting wizard immediately instead of the report
+   * list. Used by the public /report-lost entry point, where the visitor has
+   * explicitly asked to REPORT something and should not have to find the button
+   * a second time. Defaults to false, so the account dashboard's behaviour is
+   * byte-for-byte unchanged. This adds no second form: it only changes which
+   * view of the SAME section is shown first.
+   */
+  startInWizard?: boolean;
 }
 
 /**
@@ -83,7 +92,7 @@ export function lostReportSummary(report: LostReportView): string {
   return parts.join(' — ');
 }
 
-export default function LostReportsSection({ lang, onOpenItem, onSessionExpired }: Props) {
+export default function LostReportsSection({ lang, onOpenItem, onSessionExpired, startInWizard = false }: Props) {
   const sw = lang === 'sw';
   const t = (en: string, swText: string) => (sw ? swText : en);
 
@@ -94,7 +103,7 @@ export default function LostReportsSection({ lang, onOpenItem, onSessionExpired 
   const [reportsError, setReportsError] = useState<string | null>(null);
   const [matchesByReport, setMatchesByReport] = useState<Record<string, MatchesLoadState>>({});
   const [expandedReport, setExpandedReport] = useState<string | null>(null);
-  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(startInWizard);
   const [createdReference, setCreatedReference] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 

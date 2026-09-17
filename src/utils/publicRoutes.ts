@@ -15,6 +15,11 @@
 //   /item/:id         public found-item detail
 //   /account          existing customer account surface (unchanged)
 //   /lost             I Lost Something  (owner / claimant journey)
+//   /report-lost      Report a Lost Item (Phase 11A) — the dedicated entry to
+//                     the EXISTING customer lost-report experience. It is the
+//                     one destination the /lost page's "Report a Lost Item"
+//                     call to action leads to, and the one safe post-sign-in
+//                     return path a lost reporter can be sent back to.
 //   /found            I Found Something (finder report journey)
 //   /become-an-agent  public Agent journey (leads to /agent_portal)
 //   /sign-in          the single Sign In chooser (Owner/Claimant vs Agent)
@@ -37,6 +42,14 @@ export type PublicRoute =
   | { kind: 'account'; next: string | null }
   | { kind: 'console' }
   | { kind: 'agent' }
+  // PHASE 11A — the dedicated "Report a Lost Item" page. It is the public entry
+  // point to the EXISTING customer lost-report experience (the same wizard the
+  // dashboard hosts), so a visitor who lost something is no longer expected to
+  // discover reporting by accident inside their account dashboard. The route
+  // carries no data: the page itself resolves whether a customer session exists
+  // and either renders the existing reporting experience or hands off to the
+  // existing /account authentication boundary.
+  | { kind: 'reportLost' }
   // A plain, public, unauthenticated screen identified by its own path. These
   // are the state-driven views that also have a real URL, so they can be
   // linked, bookmarked and refreshed like any other page.
@@ -49,6 +62,7 @@ const CONSOLE_PATH = '/console';
 const AGENT_PATH = '/agent_portal';
 const LOST_PATH = '/lost';
 const FOUND_PATH = '/found';
+const REPORT_LOST_PATH = '/report-lost';
 const BECOME_AGENT_PATH = '/become-an-agent';
 const SIGNIN_PATH = '/sign-in';
 
@@ -63,11 +77,20 @@ const VIEW_PATHS: ReadonlyArray<{ path: string; view: PublicViewName }> = [
 ];
 
 // The customer account surface is the authentication boundary the public item
-// page hands off to. Only this shape may be used as a post-authentication
+// page hands off to. Only these shapes may be used as a post-authentication
 // return destination — an attacker-supplied "next" must never be able to turn
 // the sign-in card into an open redirect, and must never point at anything that
-// is not a plain, read-only public page.
-const SAFE_RETURN_PATH = /^\/item\/[^/]+$/i;
+// is not a plain, public page.
+//
+// PHASE 11A adds EXACTLY ONE more accepted shape: /report-lost, the lost-report
+// entry point. Widening this whitelist is a deliberate, reviewed act, and this
+// is deliberately a closed alternation of two literal app-owned path shapes (no
+// wildcard, no prefix match) rather than a loosened pattern:
+//   /item/<id>     — the public found-item page a visitor came from
+//   /report-lost   — the public lost-report entry point
+// Neither can be reached before authentication in a state that reveals anything
+// private: /report-lost renders only a sign-in prompt until a session exists.
+const SAFE_RETURN_PATH = /^\/(?:item\/[^/]+|report-lost)$/i;
 
 // 'signin' and 'becomeAgent' are public, unauthenticated screens (Phase 8.1),
 // so restoring them from history state is safe for the same reason 'home' and
@@ -87,6 +110,25 @@ export function normalizePath(pathname: string): string {
 /** Canonical public path for a found item. */
 export function itemPath(itemId: string): string {
   return `${ITEM_PATH_PREFIX}/${encodeURIComponent(String(itemId || '').trim())}`;
+}
+
+/**
+ * Canonical public path for the "Report a Lost Item" entry point (Phase 11A).
+ * A function rather than a bare constant so no caller hand-concatenates it,
+ * matching itemPath()/accountPath().
+ */
+export function reportLostPath(): string {
+  return REPORT_LOST_PATH;
+}
+
+/**
+ * The canonical /account URL a lost reporter is sent through, remembering that
+ * they should land back on the reporting entry point once authenticated. Built
+ * here (not in a component) so the return destination always goes through
+ * isSafeReturnPath, exactly like the /item/:id hand-off does.
+ */
+export function reportLostSignInPath(): string {
+  return accountPath(REPORT_LOST_PATH);
 }
 
 /** Canonical path for the account surface, preserving a safe return destination. */
@@ -144,6 +186,7 @@ export function parsePublicRoute(pathname: string, search = ''): PublicRoute {
   }
   if (lower === CONSOLE_PATH) return { kind: 'console' };
   if (lower === AGENT_PATH) return { kind: 'agent' };
+  if (lower === REPORT_LOST_PATH) return { kind: 'reportLost' };
 
   const publicView = VIEW_PATHS.find((entry) => entry.path === lower);
   if (publicView) return { kind: 'view', view: publicView.view };
@@ -169,9 +212,11 @@ export function legacyClaimItemId(pathname: string, search: string): string | nu
 }
 
 /**
- * The view a route forces, when it forces one. `home`, `item` and `account` do
- * not force a view: the first is the existing state-driven shell, and the other
- * two render their own surfaces.
+ * The view a route forces, when it forces one. `home`, `item`, `account` and
+ * `reportLost` do not force a view: the first is the existing state-driven
+ * shell, and the other three render their own surfaces (see App.tsx). Nothing
+ * about /report-lost may therefore be summonable by restoring a `currentView`
+ * from history state.
  */
 export function viewForRoute(route: PublicRoute): PublicViewName | null {
   if (route.kind === 'console') return 'admin';

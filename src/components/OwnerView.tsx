@@ -56,6 +56,16 @@ interface OwnerViewProps {
    *  Mine" (after authentication). When present, this view opens directly on
    *  the ownership-confidence step for that item instead of the search list. */
   initialClaimItem?: any | null;
+  /**
+   * PHASE 11A — opens the lost-REPORTING entry point (/report-lost).
+   *
+   * Before this, the public "I Lost Something" journey led here, to a screen
+   * that only helps someone whose item has ALREADY been found, and the actual
+   * report-a-loss experience was reachable only inside the account dashboard.
+   * This view now states both situations explicitly and hands the reporting one
+   * to that dedicated page rather than trying to host a second form itself.
+   */
+  onReportLost?: () => void;
 }
 
 // Mirrors the backend's canonical Kenyan phone normalization (toE164Kenyan in
@@ -237,7 +247,7 @@ function PickupDetailsPanel({
   return <HubDetails agent={state.agent} lang={lang} showDirections={showDirections} />;
 }
 
-export default function OwnerView({ lang, categories, categoriesLoading = false, categoriesError = false, onOpenItem, initialClaimItem = null }: OwnerViewProps) {
+export default function OwnerView({ lang, categories, categoriesLoading = false, categoriesError = false, onOpenItem, initialClaimItem = null, onReportLost }: OwnerViewProps) {
   const t = translations[lang];
 
   // Search States
@@ -930,6 +940,62 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               <span>{lang === 'sw' ? 'Fuatilia Ombi Lako' : 'Track My Existing Claim'}</span>
             </button>
           </div>
+
+          {/* PHASE 11A — LOST-REPORT ENTRY POINT
+              Two genuinely different situations arrive on this page and the
+              page used to serve only the second one:
+                (1) "I have lost something and have not reported it yet"
+                (2) "Something of mine may already have been found"
+              Reporting is a customer-authenticated journey, so the CTA hands off
+              to /report-lost (which itself routes an unauthenticated visitor
+              through the existing /account sign-in and back). No second report
+              form is created here. */}
+          <section
+            aria-labelledby="lost-entry-heading"
+            className="bg-white rounded-2xl border border-line-subtle p-5 sm:p-6 shadow-sm"
+          >
+            <h2 id="lost-entry-heading" className="text-base sm:text-lg font-extrabold text-ink">
+              {lang === 'sw' ? 'Umepoteza kitu?' : 'Something of yours is missing?'}
+            </h2>
+            <p className="mt-1 text-sm text-ink-muted leading-relaxed max-w-2xl">
+              {lang === 'sw'
+                ? 'Kuna njia mbili. Chagua inayokufaa.'
+                : 'There are two different journeys here. Choose the one that matches your situation.'}
+            </p>
+
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-4 sm:p-5 flex flex-col">
+                <h3 className="text-sm font-extrabold text-ink">
+                  {lang === 'sw' ? 'Sijaripoti bado — nataka kuripoti' : 'I have lost it — I want to report it'}
+                </h3>
+                <p className="mt-1.5 text-xs text-ink-muted leading-relaxed flex-1">
+                  {lang === 'sw'
+                    ? 'Wasilisha ripoti ya kitu kilichopotea. Tutalinganisha na vitu vilivyopatikana vinavyostahili kudaiwa na kukuonyesha kinachofanana. Ripoti yako ni ya faragha.'
+                    : 'File a lost-item report. We compare it with found items that are eligible to be claimed and show you anything that looks similar. Your report stays private to you.'}
+                </p>
+                <div className="mt-4">
+                  <Button variant="primary" size="md" onClick={() => onReportLost && onReportLost()}>
+                    <AlertTriangle size={14} />
+                    {lang === 'sw' ? 'Ripoti Kitu Kilichopotea' : 'Report a Lost Item'}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-line-subtle bg-brand-beige/40 p-4 sm:p-5 flex flex-col">
+                <h3 className="text-sm font-extrabold text-ink">
+                  {lang === 'sw' ? 'Labda kimepatikana — nataka kukitafuta' : 'It may have been found — I want to search for it'}
+                </h3>
+                <p className="mt-1.5 text-xs text-ink-muted leading-relaxed flex-1">
+                  {lang === 'sw'
+                    ? 'Tafuta vitu vilivyowasilishwa kama vilivyopatikana hapa chini, kisha dai kitu ambacho ni chako. Ikiwa umeshaanza ombi, fuatilia hali yake.'
+                    : 'Search the items reported as found in the search below, then claim the one that is yours. Already started a claim? Track its status above.'}
+                </p>
+                <p className="mt-4 text-xs font-bold text-ink-muted">
+                  {lang === 'sw' ? 'Tumia utafutaji hapa chini' : 'Use the search below'}
+                </p>
+              </div>
+            </div>
+          </section>
 
           {errorMsg && (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-2xl flex items-center space-x-2.5 text-sm">

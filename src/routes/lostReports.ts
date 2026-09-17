@@ -483,8 +483,13 @@ export function registerLostReportRoutes(app: any, deps: LostReportRouteDeps): v
  * deliberately NOT a bespoke search index: the dataset is small, the filter is
  * indexed, and premature optimisation here would add machinery with no measured
  * need.
+ *
+ * PHASE 11A: EXPORTED so routes/adminLostReports.ts computes its per-report
+ * match counts from the SAME candidate set, through the SAME claimability rule,
+ * instead of growing a second, drifting copy. The admin view is read-only
+ * visibility; it must never become a second matcher.
  */
-async function loadClaimableItems(
+export async function loadClaimableItems(
   canCreateClaim: LostReportRouteDeps['canCreateClaim'],
 ): Promise<any[]> {
   const items = await db.getItemsByStatus('at_agent');

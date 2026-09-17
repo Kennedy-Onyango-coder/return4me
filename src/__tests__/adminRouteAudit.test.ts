@@ -36,6 +36,10 @@ const serverTs = [
   // would place them entirely outside this audit, which is exactly the
   // regression this scanner exists to prevent.
   fs.readFileSync(path.resolve(__dirname, '../routes/adminClaims.ts'), 'utf8'),
+  // PHASE 11A: the admin lost-report read route. Same reasoning as the claims
+  // module above — it is an /api/admin route in its own file, so it must stay
+  // inside this audit's scope or its role check would be unguarded by it.
+  fs.readFileSync(path.resolve(__dirname, '../routes/adminLostReports.ts'), 'utf8'),
 ].join('\n');
 
 function findAdminRoutes(source: string): Array<{ method: string; route: string; body: string }> {

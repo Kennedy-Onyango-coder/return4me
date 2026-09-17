@@ -49,6 +49,7 @@ import { toAdminSafeAgentView, toAdminSafeItemView, toAdminSafeDisputeView, toAd
 import { registerCustomerClaimRoutes } from './routes/customerClaims';
 import { registerAdminDisputeRoutes } from './routes/adminDisputes';
 import { registerAdminClaimRoutes } from './routes/adminClaims';
+import { registerAdminLostReportRoutes } from './routes/adminLostReports';
 import { registerPublicItemRoutes } from './routes/publicItems';
 // Phase 9A: the customer lost-item reporting routes. Registered the same way as
 // the customer-claim routes below so an HTTP test can mount the real handlers.
@@ -4199,6 +4200,22 @@ async function startServer() {
   // endpoint is registered here — lifecycle changes remain the exclusive
   // province of transitionClaimStatus() and the existing admin actions.
   registerAdminClaimRoutes(app, { requireCurrentAdminSession, sendServerError });
+
+  // ============================================================
+  // LOST-REPORT ADMIN VISIBILITY (READ-ONLY, PHASE 11A)
+  // ============================================================
+  // The bounded lost-report list lives in routes/adminLostReports.ts so an HTTP
+  // integration test can mount the REAL handler behind the REAL middleware. It
+  // is registered immediately after the claims routes, so its middleware chain
+  // is identical to every other /api/admin read:
+  //   authenticateJWT -> requireCurrentAdminSession -> inline role check.
+  //
+  // canCreateClaim is injected (never re-implemented) so the possible-match
+  // count a console shows is computed from exactly the items the public search
+  // and the claim endpoint would each accept.
+  //
+  // READ-ONLY: GET only. No lost-report mutation endpoint is registered here.
+  registerAdminLostReportRoutes(app, { requireCurrentAdminSession, sendServerError, canCreateClaim });
 
 
   // ============================================================

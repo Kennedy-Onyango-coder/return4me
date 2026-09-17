@@ -16,9 +16,17 @@ const read = (rel: string) => fs.readFileSync(path.resolve(repoRoot, rel), 'utf8
 const adminView = read('src/components/AdminView.tsx');
 const indexCss = read('src/index.css');
 
-/** The nine sections the console really has, each backed by existing endpoints. */
+/**
+ * The sections the console really has, each backed by existing endpoints.
+ *
+ * PHASE 11A appended 'lost_reports': the admin lost-report list, backed by
+ * GET /api/admin/lost-reports (routes/adminLostReports.ts). It is a real
+ * section with a real endpoint, which is exactly what this list is for — it
+ * exists to stop a section being added for a feature the backend does not have.
+ */
 const REAL_SECTIONS = [
   'stats', 'agents', 'found_items', 'disputes', 'claims', 'ledger', 'review', 'categories', 'strikes',
+  'lost_reports',
 ] as const;
 
 describe('admin sidebar (Request 05 / §11)', () => {
@@ -27,7 +35,7 @@ describe('admin sidebar (Request 05 / §11)', () => {
     expect(adminView).toMatch(/<nav[\s\S]{0,200}aria-label=\{lang === 'en' \? 'Admin sections'/);
   });
 
-  it('exposes exactly the nine sections that already existed — no invented section', () => {
+  it('exposes exactly the sections that already exist — no invented section', () => {
     const declared = [...adminView.matchAll(/aria-current=\{activeTab === '([a-z_]+)'/g)].map((m) => m[1]);
     expect([...declared].sort()).toEqual([...REAL_SECTIONS].sort());
     // ...and each one still renders a panel.

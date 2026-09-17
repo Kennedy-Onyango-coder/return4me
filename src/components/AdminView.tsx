@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { translations } from '../types';
-import { ShieldCheck, BarChart2, Users, FileCheck, Coins, HelpCircle, Loader2, ArrowRight, AlertCircle, AlertTriangle, RefreshCw, CheckCircle, ShieldAlert, Package, ClipboardList } from 'lucide-react';
+import { ShieldCheck, BarChart2, Users, FileCheck, Coins, HelpCircle, Loader2, ArrowRight, AlertCircle, AlertTriangle, RefreshCw, CheckCircle, ShieldAlert, Package, ClipboardList, FileSearch } from 'lucide-react';
 // Phase 6F — Claims Administration lives in its own module so this view stays
 // integration/navigation only. The Claims surface is read-only and talks to the
 // 6E API through that module; it never imports the database or the DTO layer.
 import ClaimsAdministration from './admin/claims/ClaimsAdministration';
+// PHASE 11A: read-only lost-report visibility for administrators.
+import LostReportsAdministration from './admin/lostReports/LostReportsAdministration';
 // §10 — the console states who is signed in, using ONLY the claims the
 // authenticated session actually carries. The helper decodes a display label and
 // never returns the token itself (see src/services/adminSession.ts).
@@ -134,7 +136,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
   const [authLoading, setAuthLoading] = useState(false);
 
   // Dashboard Stats & Lists states
-  const [activeTab, setActiveTab] = useState<'stats' | 'agents' | 'disputes' | 'ledger' | 'review' | 'categories' | 'strikes' | 'found_items' | 'claims'>('stats');
+  const [activeTab, setActiveTab] = useState<'stats' | 'agents' | 'disputes' | 'ledger' | 'review' | 'categories' | 'strikes' | 'found_items' | 'claims' | 'lost_reports'>('stats');
   const [dashboardData, setDashboardData] = useState<any | null>(null);
   const [dashboardLoading, setDashboardLoading] = useState(false);
   // Guards against duplicate concurrent /api/admin/dashboard fetches (e.g. the
@@ -1789,6 +1791,16 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               <span>{lang === 'en' ? 'Claims' : 'Claims'}</span>
             </button>
             <button
+              onClick={() => setActiveTab('lost_reports')}
+              aria-current={activeTab === 'lost_reports' ? 'page' : undefined}
+              className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
+                activeTab === 'lost_reports' ? 'border-stone-900 text-stone-950 font-extrabold' : 'border-transparent text-stone-400'
+              }`}
+            >
+              <FileSearch size={14} />
+              <span>{lang === 'en' ? 'Lost Reports' : 'Ripoti za Vitu'}</span>
+            </button>
+            <button
               onClick={() => setActiveTab('ledger')}
               aria-current={activeTab === 'ledger' ? 'page' : undefined}
               className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
@@ -2699,6 +2711,15 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               in-flight request. */}
           {activeTab === 'claims' && (
             <ClaimsAdministration lang={lang} token={token} />
+          )}
+
+          {/* TAB CONTENT: LOST REPORTS (PHASE 11A) */}
+          {/* Read-only operational visibility. Mounting is what triggers the
+              fetch, so entering the tab always shows current data, and leaving
+              it aborts any in-flight request. There is no admin action here:
+              reports are visible, not editable. */}
+          {activeTab === 'lost_reports' && (
+            <LostReportsAdministration lang={lang} token={token} />
           )}
 
           {/* TAB CONTENT 3: OPEN DISPUTES CHECKOUT */}
