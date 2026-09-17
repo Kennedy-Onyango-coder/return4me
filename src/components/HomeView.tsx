@@ -423,6 +423,23 @@ export default function HomeView(props: HomeViewProps) {
             <div className="mt-8">
               <Skeleton shape="text" className="h-64" />
             </div>
+          ) : categoriesError ? (
+            /* PHASE 11B: the category explorer is the DISCOVERY surface. Before
+               this branch existed, a failed /api/categories left this section
+               rendering its heading over nothing at all — a silent failure on
+               the one screen that tells a visitor what the platform recovers.
+               Deliberately the SAME lightweight bordered message the explorer
+               itself already renders for "no category matches that search", so
+               this section keeps ONE presentation for "nothing to show" (and
+               the Finder/Owner category selects already state this condition
+               too). */
+            <div className="mt-8 rounded-xl border border-line-subtle bg-white p-6 text-center">
+              <p className="text-sm text-ink-muted">
+                {lang === 'en'
+                  ? 'We could not load the list of item types. Please refresh the page to try again.'
+                  : 'Hatukuweza kupakia orodha ya aina za vitu. Tafadhali pakia upya ukurasa.'}
+              </p>
+            </div>
           ) : (
             <CategoryExplorer categories={categories} lang={lang} onReportLost={() => setView('owner')} onReportFound={() => setView('finder')} />
           )}
