@@ -68,6 +68,23 @@ import { resolveFoundCountyInput } from './services/foundItemCounty';
 // null-handling so a valid 0 is not discarded).
 import { normalizeCoordinateInput } from './services/coordinates';
 import { claimStatusPollLimiter } from './config/claimStatusPollLimiter';
+// PHASE 10 (F-1): the ONE server-port resolver. This file previously hardcoded
+// the listen port and ignored the environment, which breaks port-injecting
+// container platforms (see config/serverPort.ts for the full reasoning).
+import { resolveServerPort } from './config/serverPort';
+// PHASE 10 (F-5): the ONE Sentry-DSN acceptability policy. Shared with the
+// browser bundle (main.tsx) so "is Sentry actually configured?" has a single
+// implementation instead of two drifting copies.
+import { isSentryDsnUsable, sentryDsnProblem, sentryDsnProblemLabel } from './config/sentryDsn';
+// PHASE 10 (F-2): the escrow-holdings aggregate. The admin "Escrow Funds Held"
+// card previously displayed a claim COUNT where a monetary total belongs.
+import { computeEscrowFundsHeld } from './services/escrowFunds';
+// PHASE 10 (F-4): the dev payment-simulation gate, extracted so it is testable.
+// This predicate was private to this file, which cannot be imported by a test
+// (it boots the application on import), so the gate that protects a
+// money-faking endpoint had no regression coverage at all. The logic is
+// unchanged — see config/devPaymentSimulation.ts.
+import { resolveDevPaymentSimulationEnabled } from './config/devPaymentSimulation';
 import bcrypt from 'bcryptjs';
 import * as Sentry from '@sentry/node';
 import * as OTPAuth from 'otpauth';
@@ -133,12 +150,15 @@ function scrubPii(obj: any): any {
 // conditions are required, and boot() refuses to start in production if the
 // money-specific flag is set at all.
 function isDevPaymentSimulationEnabled(): boolean {
-  const env = process.env.NODE_ENV;
-  const isExplicitNonProductionEnv = env === 'development' || env === 'test';
-  return (
-    isExplicitNonProductionEnv &&
-    process.env.ALLOW_MOCK_OTP_BYPASS === 'true' &&
-    process.env.ENABLE_DEV_PAYMENT_SIMULATION === 'true'
+  // PHASE 10 (F-4): the logic now lives in config/devPaymentSimulation.ts so it
+  // can be unit-tested (this module cannot be imported by a test). The three
+  // process.env reads — and therefore the gate's behaviour — are unchanged; this
+  // wrapper exists only so every existing call site in this file keeps working
+  // untouched.
+  return resolveDevPaymentSimulationEnabled(
+    process.env.NODE_ENV,
+    process.env.ALLOW_MOCK_OTP_BYPASS,
+    process.env.ENABLE_DEV_PAYMENT_SIMULATION,
   );
 }
 
@@ -242,8 +262,24 @@ if (process.env.NODE_ENV === 'production') {
 const realEnvExists = fs.existsSync(path.resolve(process.cwd(), '.env'));
 
 // Initialize Sentry early
+//
+// PHASE 10 (F-5): the previous guard below only rejected an empty value and the
+// literal substring 'REPLACE_WITH', and the success line was printed purely
+// because Sentry.init() had not thrown. Sentry.init() does NOT throw on an
+// unusable DSN — it logs its own "Invalid Sentry Dsn" warning and returns — so
+// the application announced error tracking as live while no event could ever be
+// delivered, which is worse than not having it at all.
+//
+// The acceptability policy now lives in config/sentryDsn.ts (the same module the
+// browser bundle uses). The messages state exactly what was established: that
+// the DSN passed the application's own configuration policy and that
+// Sentry.init() ran. They deliberately do NOT claim the provider accepted the
+// DSN — verifying that needs network I/O, which this boot path does not perform.
 const sentryDsnBackend = process.env.SENTRY_DSN_BACKEND;
-const isSentryBackendEnabled = sentryDsnBackend && !sentryDsnBackend.includes('REPLACE_WITH') && sentryDsnBackend.trim() !== '';
+const sentryBackendDsnProblem = sentryDsnProblem(sentryDsnBackend);
+// Kept as a boolean with this exact name: the Express error handler registration
+// near app.listen() is gated on it.
+const isSentryBackendEnabled = isSentryDsnUsable(sentryDsnBackend);
 
 if (isSentryBackendEnabled) {
   try {
@@ -266,12 +302,15 @@ if (isSentryBackendEnabled) {
         return event;
       }
     });
-    console.log('[SENTRY] Sentry Backend error tracking with PII scrubbing initialized successfully.');
+    console.log('[SENTRY] Backend error tracking initialised with a configured, well-formed DSN (PII scrubbing active). Provider-side delivery is not verified at boot.');
   } catch (err) {
+    // Initialisation itself failed. Report that — never success.
     console.error('[SENTRY ERROR] Failed to initialize Sentry:', err);
   }
 } else {
-  console.log('[SENTRY] Missing or placeholder Sentry DSN detected. Sentry Backend error tracking is disabled.');
+  // A non-null problem is guaranteed here (isSentryDsnUsable was false), and
+  // `?? 'missing'` keeps the type narrow without a non-null assertion.
+  console.log(`[SENTRY] Backend error tracking is DISABLED — Sentry DSN is ${sentryDsnProblemLabel(sentryBackendDsnProblem ?? 'missing')}. No error events will be sent.`);
 }
 
 
@@ -343,7 +382,33 @@ if (realEnvExists) {
   }
 }
 
-const PORT = 3000;
+// PHASE 10 (F-1): the listen port is now configuration-driven.
+//
+// This was `const PORT = 3000;` — a hardcoded constant that ignored the
+// environment entirely. Managed container platforms (Cloud Run, which
+// .env.example's own comments describe this app as targeting) inject PORT and
+// route traffic and health checks to the port they assigned, so a server that
+// ignores it can report a successful boot while receiving no traffic at all.
+//
+// An ABSENT PORT keeps the long-standing 3000 default, so local development is
+// unchanged. An INVALID PORT also falls back to 3000 — a typo in an environment
+// variable must never be the reason the service is down — but the rejection is
+// reported below rather than swallowed, because a silently ignored
+// misconfiguration is exactly what this phase removes. Port 0 is rejected
+// deliberately; see config/serverPort.ts.
+const serverPortResolution = resolveServerPort(process.env.PORT);
+const PORT = serverPortResolution.port;
+
+if (serverPortResolution.source === 'env') {
+  console.log(`[CONFIG] Server port ${PORT} resolved from the PORT environment variable.`);
+} else if (serverPortResolution.rejectedRawValue !== null) {
+  console.warn(
+    `[CONFIG] WARNING: PORT was set to "${serverPortResolution.rejectedRawValue}", which is not a valid TCP port (a whole number from 1 to 65535). ` +
+    `Falling back to the default port ${PORT}. Fix PORT in the deployment environment; the value provided was ignored.`
+  );
+} else {
+  console.log(`[CONFIG] PORT is not set; using the default server port ${PORT}.`);
+}
 
 // Settlement dispute window: how long a claim sits in 'pending_settlement'
 // (item already physically handed over, payout booked in the ledger as
@@ -3849,11 +3914,27 @@ async function startServer() {
       });
 
       // Computations
+      //
+      // PHASE 10 (F-2): `escrowHeldCount` used to be the ONLY escrow statistic and
+      // the admin console rendered it under the label "Escrow Funds Held" — a
+      // count of claims presented as a monetary figure, directly beside a
+      // genuine `KES {totalRevenue}` card. The amount is now the authoritative
+      // server-side sum of `items.locked_total_fee` over claims in `escrow_held`
+      // (the same field the payment path charges via
+      // resolveAuthoritativePaymentFee), computed from the rows already loaded
+      // above — no new query, no client input, no change to any escrow
+      // transition, authorisation, capture, refund or reconciliation behaviour.
+      // The count is still published, under its own truthful label in the UI.
+      const escrowFundsHeld = computeEscrowFundsHeld(claims, items);
+
       const stats = {
         pendingAgentsCount: agents.filter(a => a.status === 'pending').length,
         itemsInReviewCount: items.filter(i => i.status === 'awaiting_dropoff').length,
         itemsAtAgentCount: items.filter(i => i.status === 'at_agent').length,
-        escrowHeldCount: claims.filter(c => c.status === 'escrow_held').length,
+        // KES actually held for escrow-held claims (SUM of locked_total_fee).
+        escrowHeldAmount: escrowFundsHeld.amount,
+        // How many claims are in escrow_held. Displayed as "Claims in Escrow".
+        escrowHeldCount: escrowFundsHeld.count,
         disputesOpenCount: disputes.filter(d => !d.resolved_at).length,
         totalRevenue: ledger.filter(l => l.type === 'platform_fee' && l.status === 'completed').reduce((sum, l) => sum + l.amount, 0),
       };

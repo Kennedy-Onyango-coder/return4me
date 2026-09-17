@@ -1843,8 +1843,21 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                   <span className="text-stone-400 text-[10px] font-extrabold uppercase tracking-widest">Pending Agents</span>
                   <span className="text-2xl font-black text-accent-orange block">{dashboardData.stats.pendingAgentsCount}</span>
                 </div>
+                {/* PHASE 10 (F-2): this card previously rendered
+                    `stats.escrowHeldCount` — a COUNT of claims — under the label
+                    "Escrow Funds Held", immediately to the left of a genuine
+                    `KES {totalRevenue}` card, so the figure read as money. It now
+                    shows the authoritative monetary total (SUM of the
+                    escrow-held claims' locked_total_fee, computed server-side),
+                    and the count has its own card under a label that says what it
+                    is. The misleading presentation is gone from both the value
+                    and the label. */}
                 <div className="bg-white border border-stone-100 p-5 rounded-2xl shadow-sm text-center space-y-1">
                   <span className="text-stone-400 text-[10px] font-extrabold uppercase tracking-widest">Escrow Funds Held</span>
+                  <span className="text-2xl font-black text-emerald-700 block">KES {dashboardData.stats.escrowHeldAmount}</span>
+                </div>
+                <div className="bg-white border border-stone-100 p-5 rounded-2xl shadow-sm text-center space-y-1">
+                  <span className="text-stone-400 text-[10px] font-extrabold uppercase tracking-widest">Claims in Escrow</span>
                   <span className="text-2xl font-black text-emerald-700 block">{dashboardData.stats.escrowHeldCount}</span>
                 </div>
                 <div className="bg-white border border-stone-100 p-5 rounded-2xl shadow-sm text-center space-y-1">
