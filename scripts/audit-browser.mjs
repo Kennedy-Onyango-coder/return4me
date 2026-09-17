@@ -118,7 +118,15 @@ try {
         snapshot.failedLookup = await evaluate(`document.querySelector('[role=dialog] .bg-red-50')?.textContent.trim() || null`);
         await evaluate(`(()=>{const set=(id,value)=>{const el=document.getElementById(id);Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el,value);el.dispatchEvent(new Event('input',{bubbles:true}))};set('track-claim-id','AUDIT-OK');set('track-phone','0712345678');[...document.querySelectorAll('[role=dialog] button')].find(e=>e.textContent.includes('Look Up')).click()})()`);
         await sleep(800);
-        snapshot.successfulLookup = await evaluate(`document.querySelector('[role=dialog] .bg-stone-50')?.textContent.includes('Pending Verification') || false`);
+        // PHASE 11B: this check went stale TWICE over. It first queried the wrapper class
+        // `[role=dialog] .bg-stone-50`, which stopped matching when the claim-status panel
+        // migrated to the semantic `bg-canvas-muted` token; then, even reading the dialog's
+        // text, a case-sensitive `.includes('Pending Verification')` could never match because
+        // the status badge carries CSS `uppercase`, so innerText is `PENDING VERIFICATION`.
+        // Reproduced in a real browser: the panel DOES render (status text + item block).
+        // Assert case-insensitively on the dialog's text, so neither a palette/token change nor
+        // a CSS text-transform can turn a working lookup into a recorded failure again.
+        snapshot.successfulLookup = await evaluate(`/pending verification/i.test(document.querySelector('[role=dialog]')?.innerText || '')`);
       }
       await call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }); await sleep(100);
       snapshot.closed = await evaluate(`!document.querySelector('[role=dialog]')`);
