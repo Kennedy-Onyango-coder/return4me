@@ -108,6 +108,12 @@ export interface FoundItem {
   location_description: string;
   latitude: number | null;
   longitude: number | null;
+  // PHASE 9D — the FINDER'S EXPLICIT canonical Kenyan county for this found
+  // item (one of the 47 from config/kenyaCounties.ts), or null/undefined when
+  // it is unknown (every pre-Phase-9D row, and any row created before this
+  // field existed). Never inferred, never geocoded. See the column comment in
+  // db/schema.ts for why it is nullable and why there is no backfill.
+  found_county?: string | null;
   finder_phone: string; // Securely stored, never shown
   // Nullable: an item can be awaiting MANUAL agent assignment (see
   // needs_manual_agent_reassignment) when confident automatic matching
@@ -531,8 +537,11 @@ function parseAgent(row: any): Agent {
     business_name: row.business_name,
     contact_phone: row.contact_phone,
     location_address: row.location_address,
-    latitude: row.latitude ? parseFloat(row.latitude) : null,
-    longitude: row.longitude ? parseFloat(row.longitude) : null,
+    // PHASE 9D: explicit null checks (not truthiness) so a stored coordinate of
+    // exactly 0 is not reported as absent — audit finding C3, fixed on the read
+    // path here as well as for items.
+    latitude: row.latitude !== null && row.latitude !== undefined ? parseFloat(row.latitude) : null,
+    longitude: row.longitude !== null && row.longitude !== undefined ? parseFloat(row.longitude) : null,
     mpesa_till_or_paybill: row.mpesa_till_or_paybill,
     payout_method_type: row.payout_method_type || "Till Number",
     status: row.status as any,
@@ -562,8 +571,12 @@ function parseFoundItem(row: any): FoundItem {
     document_number_hash: row.document_number_hash,
     document_name_fuzzy: row.document_name_fuzzy,
     location_description: row.location_description || "",
-    latitude: row.latitude ? parseFloat(row.latitude) : null,
-    longitude: row.longitude ? parseFloat(row.longitude) : null,
+    // PHASE 9D: an explicit null/undefined check rather than a truthiness
+    // check, so a stored coordinate of exactly 0 reads back as 0 instead of
+    // being silently reported as "no coordinate" (audit finding C3).
+    latitude: row.latitude !== null && row.latitude !== undefined ? parseFloat(row.latitude) : null,
+    longitude: row.longitude !== null && row.longitude !== undefined ? parseFloat(row.longitude) : null,
+    found_county: row.found_county ?? null,
     finder_phone: row.finder_phone || "",
     assigned_agent_id: row.assigned_agent_id ?? null,
     status: row.status as any,
@@ -1743,8 +1756,17 @@ class DatabaseEngine {
           document_number_hash: item.document_number_hash,
           document_name_fuzzy: item.document_name_fuzzy,
           location_description: item.location_description,
-          latitude: item.latitude ? String(item.latitude) : null,
-          longitude: item.longitude ? String(item.longitude) : null,
+          // PHASE 9D: explicit null checks so a VALID coordinate of exactly 0
+          // is persisted as 0 rather than silently becoming NULL (audit
+          // finding C3). Callers are expected to have validated the pair with
+          // services/coordinates.ts; this only removes the falsy-zero bug.
+          latitude: item.latitude !== undefined && item.latitude !== null ? String(item.latitude) : null,
+          longitude: item.longitude !== undefined && item.longitude !== null ? String(item.longitude) : null,
+          // PHASE 9D: the finder's explicitly chosen canonical county (see the
+          // column comment in schema.ts). Stored verbatim because it has
+          // already been canonicalized by resolveCountyName() at the API
+          // boundary; null for legacy/unknown.
+          found_county: item.found_county || null,
           finder_phone: item.finder_phone,
           assigned_agent_id: item.assigned_agent_id,
           status: item.status,
@@ -2245,8 +2267,16 @@ class DatabaseEngine {
           business_name: agent.business_name,
           contact_phone: agent.contact_phone,
           location_address: agent.location_address,
-          latitude: agent.latitude ? String(agent.latitude) : null,
-          longitude: agent.longitude ? String(agent.longitude) : null,
+          // PHASE 9D (F1) — explicit null/undefined checks rather than
+          // truthiness, matching createItem and both parseAgent/parseFoundItem
+          // read paths. `agent.latitude ? ... : null` discarded a legitimate
+          // coordinate of exactly 0, which silently produced an agent row with
+          // no coordinates while `needs_manual_geocoding` still said the
+          // geocode had succeeded. Validation is NOT performed here — callers
+          // pass an already-validated pair (services/coordinates.ts); this only
+          // stops a valid 0 from being thrown away.
+          latitude: agent.latitude !== undefined && agent.latitude !== null ? String(agent.latitude) : null,
+          longitude: agent.longitude !== undefined && agent.longitude !== null ? String(agent.longitude) : null,
           mpesa_till_or_paybill: agent.mpesa_till_or_paybill,
           payout_method_type: agent.payout_method_type || "Till Number",
           status: agent.status,

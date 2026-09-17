@@ -93,6 +93,10 @@ function itemRow(id: string, overrides: Record<string, any> = {}) {
     location_description: 'Westlands, Nairobi',
     latitude: -1.2921,
     longitude: 36.8219,
+    // PHASE 9D: the found side's county is now the EXPLICIT canonical field the
+    // Finder selects, not something inferred from the free-text location. The
+    // fixture declares it, so these tests exercise the canonical path.
+    found_county: 'Nairobi City',
     finder_phone: SECRET_FINDER_PHONE,
     assigned_agent_id: SECRET_AGENT,
     status: 'at_agent',
@@ -143,7 +147,15 @@ async function seed() {
   await ensureTestCategory('national-id');
 
   await db.createItem(itemRow(ITEM_MATCH));
-  await db.createItem(itemRow(ITEM_WRONG_COUNTY, { location_description: 'Mombasa, Digo Road' }));
+  // PHASE 9D: the different county must now be DECLARED. Before this phase it
+  // was inferred from "Mombasa, Digo Road" — the exact guessing that produced
+  // the "Mombasa Road" false positive. Declaring it keeps this test's intent
+  // (an item in another county is not offered) while exercising the canonical
+  // field that replaced the inference.
+  await db.createItem(itemRow(ITEM_WRONG_COUNTY, {
+    location_description: 'Mombasa, Digo Road',
+    found_county: 'Mombasa',
+  }));
   // A sensitive document carrying every kind of secret, reachable only through
   // an exact protected-identifier agreement.
   await db.createItem(itemRow(ITEM_SENSITIVE, {
@@ -356,6 +368,8 @@ describe('the candidate DTO the UI receives IS the public boundary', () => {
       'finder_phone', 'finder_email', 'ocr_extracted_number', 'ocr_extracted_name',
       'document_number_hash', 'latitude', 'longitude', 'assigned_agent_id',
       'customer_id', 'verified_document_number', 'agent',
+      // PHASE 9D — the found item's explicit county stays server-side.
+      'found_county',
     ]) {
       expect(raw, `payload exposed ${field}`).not.toContain(field);
     }

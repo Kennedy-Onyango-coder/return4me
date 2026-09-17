@@ -1,11 +1,22 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { translations } from '../types';
 // REQUEST 09 — the canonical Kenyan county list (all 47, ISO 3166-2:KE
-// spellings) lives in one place: src/config/kenyaCounties.ts. It is used here as
-// free-text SUGGESTIONS only — the stored value is still location_description,
-// so no schema, matching or privacy behaviour changes.
-import { KENYA_COUNTY_NAMES } from '../config/kenyaCounties';
+// spellings) lives in one place: src/config/kenyaCounties.ts.
+// PHASE 9D — this list is now used for TWO things here:
+//   1. the free-text suggestions datalist on the area-description field (as
+//      before: the stored value stays location_description), and
+//   2. a REQUIRED County selector, whose value the server canonicalizes with
+//      `resolveCountyName()` and stores in items.found_county. The Finder must
+//      state the county explicitly rather than have it guessed from the free
+//      text — see the Phase 9D note on that column in src/db/schema.ts.
+import { KENYA_COUNTY_NAMES, countiesByUxGroup } from '../config/kenyaCounties';
 import { Camera, Upload, AlertCircle, AlertTriangle, MapPin, CheckCircle, Shield, ArrowRight, Loader2, RefreshCw, X } from 'lucide-react';
+
+// Computed once at module scope: the 47 counties, grouped by the UX-only
+// former-province labels, exactly as the lost-report wizard presents them. The
+// grouping is presentational only and never stored or matched (see
+// config/kenyaCounties.ts).
+const COUNTY_GROUPS = countiesByUxGroup();
 
 interface FinderViewProps {
   lang: 'en' | 'sw';
@@ -31,6 +42,11 @@ export default function FinderView({ lang, categories, categoriesLoading = false
   const [extractedName, setExtractedName] = useState('');
   const [description, setDescription] = useState('');
   const [locationDescription, setLocationDescription] = useState('');
+  // PHASE 9D — the Finder's EXPLICIT county. Required, and kept separate from
+  // both `locationDescription` (their own wording, preserved verbatim) and the
+  // optional device coordinates. The server re-validates and canonicalizes it;
+  // this state holds exactly what the user chose so the select stays truthful.
+  const [foundCounty, setFoundCounty] = useState('');
   const [latitude, setLatitude] = useState<number | null>(null);
   const [longitude, setLongitude] = useState<number | null>(null);
   const [gpsLoading, setGpsLoading] = useState(false);
@@ -229,6 +245,15 @@ export default function FinderView({ lang, categories, categoriesLoading = false
       return;
     }
 
+    // PHASE 9D — county is a required geographic field. This is a UX guard
+    // only: the server re-validates it against the canonical 47-county list
+    // with `resolveCountyName()` and is the authority. A client-side check
+    // never substitutes for that.
+    if (!foundCounty) {
+      setErrorMsg(lang === 'en' ? 'Please choose the county where you found the item.' : 'Tafadhali chagua kaunti ulipopata kitu.');
+      return;
+    }
+
     if (!isSensitive && (!description || !extractedName)) {
       setErrorMsg(lang === 'en' ? 'Please provide a title and description.' : 'Tafadhali weka kichwa cha habari na maelezo.');
       return;
@@ -272,6 +297,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
           extractedNumber: isSensitive ? extractedNumber : undefined,
           extractedName,
           locationDescription,
+          foundCounty,
           latitude,
           longitude,
           finderPhone,
@@ -684,6 +710,46 @@ export default function FinderView({ lang, categories, categoriesLoading = false
 
           {/* Location Details & Precise GPS Matching Prompt */}
           <div className="space-y-3">
+            {/* PHASE 9D — REQUIRED COUNTY. Deliberately the FIRST geographic
+                question, and a select rather than free text: the value is the
+                authoritative found-side county the matcher compares against
+                the lost report's county, and it must be one of the canonical
+                47 rather than something a person typed and the server then has
+                to interpret. Asking here is what removes the old
+                "Mombasa Road -> Mombasa County" style of guess.
+                Requirement is mirrored by the browser's `required` attribute
+                AND re-validated server-side, which is the authority. */}
+            <div className="space-y-1.5">
+              <label htmlFor="finder-county" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">
+                {lang === 'en' ? 'County where you found it' : 'Kaunti ulipopata kitu'} *
+              </label>
+              <select
+                id="finder-county"
+                value={foundCounty}
+                onChange={(e) => setFoundCounty(e.target.value)}
+                className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none"
+                required
+                disabled={isSubmitting}
+                aria-describedby="finder-county-hint"
+              >
+                <option value="">{lang === 'en' ? 'Select a county' : 'Chagua kaunti'}</option>
+                {COUNTY_GROUPS.map((group) => (
+                  <optgroup key={group.group} label={group.group}>
+                    {group.counties.map((county) => (
+                      <option key={county.code} value={county.name}>
+                        {county.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+              <span id="finder-county-hint" className="text-caption text-ink-muted block leading-tight">
+                {lang === 'en'
+                  ? 'We use this to compare your report with items lost in the same county.'
+                  : 'Tunatumia hii kulinganisha ripoti yako na vitu vilivyopotea katika kaunti moja.'}
+              </span>
+            </div>
+
             <label htmlFor="finder-location" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">{t.locLabel} *</label>
             {/* County suggestions from the canonical Kenyan county list (all 47,
                 ISO 3166-2:KE spellings). A datalist is used deliberately: the
@@ -781,8 +847,8 @@ export default function FinderView({ lang, categories, categoriesLoading = false
               or inventing a nearby agent. */}
           <p className="text-caption text-ink-muted leading-normal">
             {lang === 'en'
-              ? 'Your area description is what owners and agents search. If you also share your device location, Return4me uses the coordinates to look for a real active Agent near you; if none can be matched confidently, your report is still accepted and assigned by our team.'
-              : 'Maelezo ya eneo lako ndiyo yanayotafutwa na wamiliki na mawakala. Ukishiriki pia mahali ulipo kwenye kifaa, Return4me hutumia viwianishi kutafuta Wakala halisi aliye karibu nawe; ikiwa hakuna anayeweza kulinganishwa kwa uhakika, ripoti yako bado inakubaliwa na kupangwa na timu yetu.'}
+              ? 'The county you choose is what we use to compare your report with items lost in the same area. Your area description is what owners and agents search. If you also share your device location, Return4me uses the coordinates to look for a real active Agent near you; if none can be matched confidently, your report is still accepted and assigned by our team.'
+              : 'Kaunti unayochagua ndiyo tunayotumia kulinganisha ripoti yako na vitu vilivyopotea eneo moja. Maelezo ya eneo lako ndiyo yanayotafutwa na wamiliki na mawakala. Ukishiriki pia mahali ulipo kwenye kifaa, Return4me hutumia viwianishi kutafuta Wakala halisi aliye karibu nawe; ikiwa hakuna anayeweza kulinganishwa kwa uhakika, ripoti yako bado inakubaliwa na kupangwa na timu yetu.'}
           </p>
 
           {/* Phone Details */}

@@ -75,6 +75,18 @@ CREATE TABLE items (
     location_description TEXT NOT NULL,
     latitude NUMERIC(9, 6),
     longitude NUMERIC(9, 6),
+    -- PHASE 9D: the county the FINDER explicitly selected for where the item
+    -- was found, stored as a CANONICAL name from config/kenyaCounties.ts (one
+    -- of the 47, identical to lost_reports.county). Validated/canonicalized at
+    -- the API boundary by resolveCountyName(); never inferred from
+    -- location_description, never derived from latitude/longitude, and never
+    -- produced by a geocoder.
+    --
+    -- NULLABLE BY DESIGN: every pre-Phase-9D row has no county and must stay
+    -- readable with its county UNKNOWN. There is deliberately no backfill —
+    -- see the longer rationale on this column in src/db/schema.ts and the
+    -- matching comment in src/services/lostReportMatching.ts.
+    found_county VARCHAR(50),
     finder_phone VARCHAR(15) NOT NULL, -- Finder payout target (never shown to owners)
     assigned_agent_id VARCHAR(50) REFERENCES agents(id),
     -- suspected_stolen: claim flow blocked pending admin/legal review.

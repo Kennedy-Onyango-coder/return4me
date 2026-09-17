@@ -179,6 +179,10 @@ describe('the customer-visible layer names no private field', () => {
     'finder_phone', 'finder_email', 'ocr_extracted_number', 'ocr_extracted_name',
     'document_number_hash', 'assigned_agent_id', 'verified_document_number',
     'latitude', 'longitude', 'customer_id',
+    // PHASE 9D — internal geographic data. The customer-visible lost-report
+    // layer must not read or mention the found item's county: it is used for
+    // matching consistency on the server, not shown to a customer.
+    'found_county',
   ];
 
   it('never reads or mentions one', () => {

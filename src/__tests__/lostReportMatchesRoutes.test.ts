@@ -86,6 +86,9 @@ function itemRow(id: string, overrides: Record<string, any> = {}) {
     document_number_hash: null,
     document_name_fuzzy: 'Simu',
     location_description: 'Westlands, Nairobi',
+    // PHASE 9D: the found side's county is the EXPLICIT canonical field the
+    // Finder selects — not something inferred from the free-text location.
+    found_county: 'Nairobi City',
     latitude: null,
     longitude: null,
     finder_phone: SECRET_FINDER_PHONE,
@@ -145,7 +148,13 @@ async function seed() {
 
   // --- items -------------------------------------------------------------
   await db.createItem(itemRow(ITEM_MATCH));
-  await db.createItem(itemRow(ITEM_OTHER_COUNTY, { location_description: 'Mombasa, Digo Road' }));
+  await db.createItem(itemRow(ITEM_OTHER_COUNTY, {
+    location_description: 'Mombasa, Digo Road',
+    // PHASE 9D: declared explicitly. Previously the county was inferred from
+    // this street text — the guessing that produced the "Mombasa Road" false
+    // positive. The test's intent is unchanged; it now uses the canonical field.
+    found_county: 'Mombasa',
+  }));
   await db.createItem(itemRow(ITEM_WRONG_CATEGORY, { category_id: 'laptop' }));
   await db.createItem(itemRow(ITEM_AWAITING, { status: 'awaiting_dropoff' }));
   await db.createItem(itemRow(ITEM_FLAGGED, { flaggedForReview: true }));
@@ -423,6 +432,11 @@ const FORBIDDEN_KEYS = [
   'finder_phone', 'finder_email', 'ocr_extracted_number', 'ocr_extracted_name',
   'document_number_hash', 'owner_phone', 'phone', 'email', 'latitude', 'longitude',
   'assigned_agent_id', 'agent', 'customer_id', 'score', 'signals', 'verified_document_number',
+  // PHASE 9D — no geographic enrichment may reach this DTO. The found item's
+  // explicit county, any distance, and any geocoding provider/precision/
+  // confidence/provenance metadata are all internal to the server.
+  'found_county', 'distance', 'distance_km', 'provider', 'precision', 'confidence',
+  'provenance', 'geocoding', 'geocoded',
 ];
 
 const SECRET_VALUES = [

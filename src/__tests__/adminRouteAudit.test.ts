@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+// PHASE 9D (F3) — the ONE shared coordinate validator. Imported here so the
+// admin agent-location route's contract can be asserted against the exact
+// semantics it now inherits.
+import { normalizeCoordinateInput } from '../services/coordinates';
 
 // authenticateJWT (src/services/auth.ts) only verifies that a token is
 // validly signed and unexpired — it does NOT check role. That means every
@@ -86,4 +90,76 @@ describe('the three admin-2fa routes under /api/auth (outside /api/admin) also e
       expect(body).toMatch(/role\s*!==\s*['"]admin['"]/);
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// PHASE 9D (F3) — ADMIN COORDINATE INPUT GOES THROUGH THE ONE SHARED VALIDATOR
+//
+// The forensic review found this route carried a SECOND, independent
+// coordinate check using a lenient `parseFloat()` — so '1.29junk' was silently
+// accepted as 1.29, and the latitude/longitude range rule was duplicated in a
+// place that could drift from the shared implementation.
+//
+// The route now delegates to `normalizeCoordinateInput` (services/coordinates.ts),
+// the same function the found-item report route uses. The static assertion
+// below catches a future edit that reintroduces local parsing; the behavioural
+// assertions pin the exact accept/reject contract the route inherits.
+// ---------------------------------------------------------------------------
+describe('PHASE 9D — admin agent-location coordinates use the shared validator', () => {
+  const route = findAdminRoutes(serverTs).find((r) => r.route === '/api/admin/agents/:id/location');
+
+  it('the route exists and is still admin-gated (sanity check for this audit)', () => {
+    expect(route).toBeDefined();
+    expect(route!.body).toMatch(/role\s*!==\s*['"]admin['"]/);
+  });
+
+  it('delegates to normalizeCoordinateInput and no longer parses coordinates locally', () => {
+    expect(route!.body).toContain('normalizeCoordinateInput(latitude, longitude)');
+    // The lenient local parser and its duplicated range rule must be gone.
+    expect(route!.body).not.toMatch(/parseFloat\s*\(/);
+    expect(route!.body).not.toMatch(/isNaN\s*\(/);
+    expect(route!.body).not.toMatch(/<\s*-?90|-90\s*>/);
+  });
+
+  it('keeps the same 400 response for an invalid pair', () => {
+    expect(route!.body).toMatch(/status\(400\)/);
+    expect(route!.body).toContain('Invalid latitude/longitude');
+  });
+
+  it('ACCEPTS every value the endpoint must accept (including 0 and boundaries)', () => {
+    const accepted: Array<[any, any]> = [
+      ['1.29', '36.82'],
+      ['0', '36.82'],          // zero latitude — the F1 case, also valid here
+      ['-1.2921', '0'],        // zero longitude
+      [0, 0],                  // numbers, not strings
+      [-1.2921, 36.8219],
+      ['-90', '180'],          // inclusive boundaries
+      ['90', '-180'],
+      [' 36.8219 ', '-1.2921'], // surrounding whitespace
+    ];
+    for (const [lat, lon] of accepted) {
+      expect(normalizeCoordinateInput(lat, lon), `${lat},${lon}`).not.toBeNull();
+    }
+  });
+
+  it('REJECTS trailing garbage and malformed numeric strings (the F3 defect)', () => {
+    for (const bad of ['1.29junk', '12abc', '1,29', 'abc', 'NaN', 'Infinity', '-Infinity']) {
+      expect(normalizeCoordinateInput(bad, '36.82'), `lat=${bad}`).toBeNull();
+      expect(normalizeCoordinateInput('-1.29', bad), `lon=${bad}`).toBeNull();
+    }
+  });
+
+  it('REJECTS blank, whitespace-only, null and missing coordinate input', () => {
+    for (const bad of ['', '   ', null, undefined]) {
+      expect(normalizeCoordinateInput(bad, '36.82'), `lat=${String(bad)}`).toBeNull();
+      expect(normalizeCoordinateInput('-1.29', bad), `lon=${String(bad)}`).toBeNull();
+    }
+  });
+
+  it('REJECTS out-of-range values on either axis, without clamping them', () => {
+    expect(normalizeCoordinateInput('90.0001', '36.82')).toBeNull();
+    expect(normalizeCoordinateInput('-91', '36.82')).toBeNull();
+    expect(normalizeCoordinateInput('-1.29', '180.5')).toBeNull();
+    expect(normalizeCoordinateInput('-1.29', '-181')).toBeNull();
+  });
 });

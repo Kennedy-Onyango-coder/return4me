@@ -78,6 +78,12 @@ const NEVER_PUBLIC_FIELDS = [
   'finder_phone', 'finder_email', 'security_answers', 'owner_phone',
   'owner_id_proof_url', 'payment_reference', 'assigned_agent_id',
   'locked_total_fee', 'declared_value', 'rejection_reason', 'flaggedForReview',
+  // PHASE 9D — the finder's explicit county is INTERNAL geographic data used
+  // for matching consistency. It is deliberately NOT part of the public item
+  // read model (PUBLIC_ITEM_KEYS above is the exact allow-list, so adding it
+  // would fail that assertion too). Phase 9D added no coordinate, distance,
+  // geocoding-provider, precision or confidence field to any public DTO.
+  'found_county',
 ];
 
 function itemRow(id: string, overrides: Record<string, any> = {}) {
@@ -92,6 +98,7 @@ function itemRow(id: string, overrides: Record<string, any> = {}) {
     location_description: 'Nairobi CBD',
     latitude: -1.2921,
     longitude: 36.8219,
+    found_county: 'Nairobi City',
     finder_phone: SECRET_FINDER_PHONE,
     finder_email: SECRET_FINDER_EMAIL,
     assigned_agent_id: AGENT_ID,

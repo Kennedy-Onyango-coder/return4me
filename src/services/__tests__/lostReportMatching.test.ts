@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   normalizeForMatch,
   tokenizeForMatch,
-  detectCountiesInText,
   evaluateLostReportAgainstItem,
   decideCandidate,
   selectLostReportCandidates,
@@ -87,29 +86,132 @@ describe('normalization is deterministic and shape-tolerant', () => {
   });
 });
 
-describe('canonical county detection from free text', () => {
-  it('finds a canonical county from a normal address', () => {
-    expect([...detectCountiesInText('Moi Avenue, Nairobi')]).toContain('Nairobi City');
-    expect([...detectCountiesInText('Nairobi County')]).toContain('Nairobi City');
-    expect([...detectCountiesInText('along Mombasa Road')]).toContain('Mombasa');
+describe('found-side county is EXPLICIT and canonical, never inferred from free text (Phase 9D)', () => {
+  it('uses the explicit canonical found_county when both sides declare one', () => {
+    // Same county declared on both sides => genuine (if weak) geographic
+    // agreement. It is an ANCHOR INPUT only — see the candidate-policy suite,
+    // which proves county agreement alone can never produce a candidate.
+    const item = foundItem({ found_county: 'Nairobi City', location_description: 'unrelated wording' });
+    expect(signalsFor(lostReport(), item).location_match).toBe('match');
   });
 
-  it('handles the two-word county names by requiring ALL distinctive words', () => {
-    expect([...detectCountiesInText('Kitale, Trans Nzoia')]).toContain('Trans Nzoia');
-    // "Trans" alone must not be enough.
-    expect([...detectCountiesInText('trans street')]).not.toContain('Trans Nzoia');
-    expect([...detectCountiesInText('Westlands, Nairobi')]).not.toContain('West Pokot');
+  it('treats two DIFFERENT explicit counties as a contradiction', () => {
+    const item = foundItem({ found_county: 'Mombasa', location_description: 'unrelated wording' });
+    const result = evaluateLostReportAgainstItem(lostReport(), item);
+    expect(result.signals.location_match).toBe('mismatch');
+    expect(result.candidate).toBe(false);
+    expect(result.reason).toBe('location_county_mismatch');
   });
 
-  it('does not invent a county from a town that is not a county', () => {
-    // Kitengela is in Kajiado but is not itself a county name.
-    expect(detectCountiesInText('Kitengela town').size).toBe(0);
+  // -------------------------------------------------------------------------
+  // REGRESSION — the "Mombasa Road" / "Kiambu Road" false positive.
+  //
+  // Before Phase 9D the matcher scanned free-text location descriptions for
+  // canonical county NAMES, so a road named after a county became county
+  // evidence. "Mombasa Road" (a Nairobi street, and the A109) yielded
+  // { Mombasa }, which then ELIMINATED a Nairobi report as
+  // `location_county_mismatch` — a false negative produced by a street name.
+  //
+  // The expected outcomes below are derived from the intended semantics: a
+  // county is only ever known when it is DECLARED, so free text naming a
+  // county-shaped word is NOT county evidence in either direction.
+  // -------------------------------------------------------------------------
+  it('does NOT read "Mombasa Road" as Mombasa County (the original defect)', () => {
+    const lost = lostReport({ county: 'Nairobi City', location_area: 'Westlands' });
+    const item = foundItem({
+      location_description: 'Mombasa Road',
+      verified_found_area: null,
+      found_county: null,
+    });
+    const result = evaluateLostReportAgainstItem(lost, item);
+    // NOT a mismatch: with no declared county the county signal is simply
+    // unknown, so the road name cannot eliminate anything.
+    expect(result.signals.location_match).toBe('unknown');
+    expect(result.reason).not.toBe('location_county_mismatch');
   });
 
-  it('never reports a county the text does not name', () => {
-    expect(detectCountiesInText('Sarit Centre').size).toBe(0);
+  it('does NOT read "Kiambu Road" as Kiambu County', () => {
+    const item = foundItem({
+      location_description: 'Kiambu Road, near the bypass',
+      verified_found_area: null,
+      found_county: null,
+    });
+    const result = evaluateLostReportAgainstItem(lostReport(), item);
+    expect(result.signals.location_match).toBe('unknown');
+    expect(result.reason).not.toBe('location_county_mismatch');
+  });
+
+  it('does NOT read "Nairobi-Mombasa Road" as either county', () => {
+    // The hyphenated compound names two counties' worth of words at once, which
+    // is precisely why it can never be treated as a county declaration.
+    const item = foundItem({
+      location_description: 'Nairobi-Mombasa Road',
+      verified_found_area: null,
+      found_county: null,
+    });
+    const result = evaluateLostReportAgainstItem(lostReport(), item);
+    expect(result.signals.location_match).toBe('unknown');
+    expect(result.reason).not.toBe('location_county_mismatch');
+  });
+  it('an EXPLICIT found_county overrides whatever the free text implies', () => {
+    // The same street text, but now the Finder has declared the county
+    // explicitly. The declared value wins, in both directions.
+    const agreeing = foundItem({ location_description: 'Mombasa Road', found_county: 'Nairobi City' });
+    expect(signalsFor(lostReport(), agreeing).location_match).toBe('match');
+
+    const disagreeing = foundItem({ location_description: 'Mombasa Road', found_county: 'Mombasa' });
+    expect(signalsFor(lostReport(), disagreeing).location_match).toBe('mismatch');
+  });
+
+  it('a LEGACY item with no county stays matchable and is never eliminated', () => {
+    // Every pre-Phase-9D row has found_county NULL. Its county is UNKNOWN, not
+    // guessed, so the county signal is neutral — the item still competes on its
+    // real evidence (here a shared distinctive area token).
+    const lost = lostReport({ county: 'Nairobi City', location_area: 'Westlands' });
+    const item = foundItem({
+      found_county: null,
+      location_description: 'Westlands, near Sarit Centre',
+    });
+    const signals = signalsFor(lost, item);
+    expect(signals.location_match).toBe('match');
+  });
+
+  it('never eliminates on county when only ONE side declares a county', () => {
+    const item = foundItem({ found_county: 'Mombasa', location_description: 'Westlands' });
+    const noCountyReport = lostReport({ county: '', location_area: 'Xyzzy' });
+    const result = evaluateLostReportAgainstItem(noCountyReport, item);
+    expect(result.signals.location_match).not.toBe('mismatch');
+  });
+
+  it('cannot be fooled by a county-shaped word in the REPORT\'s own area text', () => {
+    // A report that merely mentions the word "mombasa" in its own free text does
+    // not thereby declare Mombasa County either.
+    const lost = lostReport({ county: 'Nairobi City', location_area: 'Mombasa Road' });
+    const item = foundItem({ location_description: 'Mombasa Road', found_county: null });
+    const result = evaluateLostReportAgainstItem(lost, item);
+    expect(result.reason).not.toBe('location_county_mismatch');
+  });
+
+  it('county agreement alone can NEVER create a candidate', () => {
+    // Both in Nairobi City, nothing else in common: county is an anchor INPUT,
+    // but the existing MIN_DISTINGUISHING_MATCHES policy still applies, so an
+    // anchor alone is not enough.
+    const lost = lostReport({ county: 'Nairobi City', location_area: 'Zzzzz', location_landmark: null });
+    const item = foundItem({
+      found_county: 'Nairobi City',
+      location_description: 'Qqqqq',
+      description: 'An unrelated thing',
+      document_name_fuzzy: 'Other',
+      created_at: '2026-05-01T09:00:00.000Z',
+    });
+    const result = evaluateLostReportAgainstItem(lost, item);
+    expect(result.signals.location_match).toBe('match');
+    expect(result.candidate).toBe(false);
+    expect(result.reason).toBe('insufficient_evidence');
   });
 });
+
+
 
 describe('threshold policy is pinned', () => {
   it('requires two distinguishing matches and a location/time anchor', () => {
@@ -247,11 +349,23 @@ describe('time window handling', () => {
 });
 
 describe('location matching tolerates text differences but never invents geography', () => {
-  it('matches a county named in the item location text', () => {
-    expect(signalsFor(lostReport(), foundItem({ location_description: 'Moi Avenue, Nairobi' })).location_match).toBe('match');
+  it('matches when the item DECLARES the same county', () => {
+    // PHASE 9D: a county is evidence only when it is declared. Before this
+    // phase the item's free-text address was scanned for county names; it no
+    // longer is (see the Phase 9D suite below for the "Mombasa Road" case).
+    expect(signalsFor(lostReport(), foundItem({ found_county: 'Nairobi City' })).location_match).toBe('match');
   });
 
-  it('matches on a shared area/landmark token even without a county name', () => {
+  it('does NOT treat a county-shaped word in the item free text as a county', () => {
+    // "Moi Avenue, Nairobi" mentions Nairobi, but this is the Finder's own
+    // wording, not a declared county — so it is not county evidence.
+    const item = foundItem({ location_description: 'Moi Avenue, Nairobi', found_county: null });
+    const result = evaluateLostReportAgainstItem(lostReport(), item);
+    expect(result.signals.location_match).toBe('unknown');
+    expect(result.reason).not.toBe('location_county_mismatch');
+  });
+
+  it('matches on a shared area/landmark token even without a county', () => {
     // The item location names the same neighbourhood but NO county at all.
     expect(signalsFor(lostReport(), foundItem({ location_description: 'Westlands stage' })).location_match).toBe('match');
     // A landmark recorded on the report also counts when it appears in the item text.
@@ -264,17 +378,21 @@ describe('location matching tolerates text differences but never invents geograp
     expect(signalsFor(lost, foundItem({ location_description: 'unknown', verified_found_area: null })).location_match).toBe('unknown');
   });
 
-  it('ELIMINATES when the item names a different canonical Kenyan county', () => {
-    const item = foundItem({ location_description: 'Mombasa, Digo Road' });
+  it('ELIMINATES when the item DECLARES a different canonical Kenyan county', () => {
+    // PHASE 9D: the elimination now requires an explicitly declared county on
+    // the item. The free-text street text is present too, and is deliberately
+    // ignored for county purposes.
+    const item = foundItem({ location_description: 'Mombasa, Digo Road', found_county: 'Mombasa' });
     const result = evaluateLostReportAgainstItem(lostReport(), item);
     expect(result.signals.location_match).toBe('mismatch');
     expect(result.candidate).toBe(false);
     expect(result.reason).toBe('location_county_mismatch');
   });
 
-  it('does NOT eliminate for a town that merely lies in a neighbouring county name', () => {
-    // "Kitengela" is not a county name, so no conflict is declared.
-    const item = foundItem({ location_description: 'Kitengela stage', verified_found_area: null });
+  it('does NOT eliminate for a town that is not a county name', () => {
+    // "Kitengela" is a town in Kajiado, not a county name, and nothing here
+    // declares a county — so no conflict is possible.
+    const item = foundItem({ location_description: 'Kitengela stage', verified_found_area: null, found_county: null });
     expect(signalsFor(lostReport(), item).location_match).toBe('unknown');
   });
 
@@ -362,14 +480,20 @@ describe('FALSE-POSITIVE CONTROLS (the cases that must NOT match)', () => {
     });
     const item = foundItem({
       description: 'Black Samsung phone, cracked screen',
+      // PHASE 9D: the different county must now be DECLARED for this
+      // elimination to be the reason. Previously it was inferred from the
+      // street text, which is exactly the guessing Phase 9D removed.
+      found_county: 'Mombasa',
       location_description: 'Mombasa, Digo Road',
       created_at: '2026-04-01T09:00:00.000Z',
     });
     const result = evaluateLostReportAgainstItem(lost, item);
     // Brand AND colour AND shared description all agree — and it is STILL
-    // rejected, because the item is in a different county.
+    // rejected, because the item DECLARES a different county.
     expect(result.signals.brand_match).toBe('match');
     expect(result.signals.colour_match).toBe('match');
+    expect(result.signals.location_match).toBe('mismatch');
+    expect(result.reason).toBe('location_county_mismatch');
     expect(result.candidate).toBe(false);
   });
 
@@ -439,6 +563,130 @@ describe('decision rule precedence', () => {
     expect(decision.candidate).toBe(false);
     expect(decision.reason).toBe('identifier_mismatch');
   });
+
+
+// ---------------------------------------------------------------------------
+// PHASE 9D — GENERIC PLACE VOCABULARY MUST NOT BECOME A LOCATION ANCHOR
+//
+// The defect this pins: `GENERIC_LOCATION_WORDS` removed 'near', 'opposite',
+// 'stage', 'road', 'market', 'mall' and similar, but NOT ordinary place KINDS
+// like 'school' or 'hospital'. Since every token >= 4 characters that is not in
+// that set counted as location evidence, a lost report reading
+// "opposite a school" and a found item reading "near a school, Kisumu" shared
+// the token 'school' and therefore satisfied the MANDATORY location anchor —
+// across counties, on the strength of a generic noun.
+//
+// The distinction these tests lock in is PLACE KIND vs PLACE NAME:
+//   * a place KIND ('school', 'hospital', 'market', 'road') identifies nothing
+//     and must never be evidence;
+//   * a place NAME ('Sarit', 'Westlands', 'Kasarani', 'Donholm') identifies a
+//     specific place and must remain usable evidence.
+// ---------------------------------------------------------------------------
+describe('generic place vocabulary does not create a location anchor (Phase 9D)', () => {
+  it('CASE A — "opposite a school" vs "near a school" is NOT a location anchor', () => {
+    const lost = lostReport({
+      county: 'Nairobi City',
+      location_area: 'Kasarani',
+      location_landmark: 'opposite a school',
+      brand: 'Samsung', colour: 'Black',
+    });
+    const item = foundItem({
+      // A generic KIND in common, but a different county-declaration situation
+      // (none declared) and no shared NAME.
+      location_description: 'Near a school, Kisumu',
+      verified_found_area: null,
+      found_county: null,
+      description: 'Black Samsung phone',
+      created_at: '2026-05-01T09:00:00.000Z',
+    });
+    const result = evaluateLostReportAgainstItem(lost, item);
+    // The shared word 'school' must NOT satisfy the location anchor...
+    expect(result.signals.location_match).toBe('unknown');
+    // ...so with no anchor the candidate is refused even though brand, colour
+    // AND free-text all agree.
+    expect(result.candidate).toBe(false);
+    expect(result.reason).toBe('insufficient_evidence');
+  });
+
+
+  it('CASE B — a DISTINCTIVE landmark still corroborates', () => {
+    // The same sentence shape as Case A, but with a real place NAME. This must
+    // keep working: the fix removed generic KINDS, not legitimate landmarks.
+    const lost = lostReport({
+      county: 'Nairobi City',
+      location_area: 'Westlands',
+      location_landmark: 'opposite Sarit Centre',
+      brand: 'Samsung',
+    });
+    const item = foundItem({
+      location_description: 'near Sarit Centre, Westlands',
+      verified_found_area: null,
+      found_county: null,
+      description: 'A Samsung handset',
+    });
+    const result = evaluateLostReportAgainstItem(lost, item);
+    expect(result.signals.location_match).toBe('match');
+    expect(result.candidate).toBe(true);
+    expect(result.reason).toBe('corroborated_details');
+  });
+
+  it('CASE B2 — distinctive named areas remain significant in their own right', () => {
+    for (const place of ['Westlands', 'Kasarani', 'Dandora', 'Donholm', 'Kilimani', 'Kitengela', 'Kondele']) {
+      const lost = lostReport({ county: '', location_area: place, location_landmark: null });
+      const item = foundItem({ location_description: `something near ${place}`, found_county: null });
+      expect(signalsFor(lost, item).location_match, `place=${place}`).toBe('match');
+    }
+  });
+
+  it('CASE C — "Mombasa Road" on both sides does NOT infer Mombasa County', () => {
+    const lost = lostReport({ county: 'Nairobi City', location_area: 'Westlands', location_landmark: null });
+    const item = foundItem({ location_description: 'Mombasa Road', found_county: null, verified_found_area: null });
+    const result = evaluateLostReportAgainstItem(lost, item);
+    expect(result.signals.location_match).toBe('unknown');
+    expect(result.reason).not.toBe('location_county_mismatch');
+  });
+
+  it('CASE D — an explicit matching county is canonical geographic evidence', () => {
+    const lost = lostReport({ county: 'Nairobi City', location_area: 'Zzzzz', location_landmark: null });
+    const item = foundItem({ found_county: 'Nairobi City' });
+    expect(signalsFor(lost, item).location_match).toBe('match');
+  });
+
+  it('CASE E — different explicit counties preserve the elimination', () => {
+    const lost = lostReport({ county: 'Nairobi City', location_area: 'Westlands' });
+    const item = foundItem({ found_county: 'Mombasa' });
+    const result = evaluateLostReportAgainstItem(lost, item);
+    expect(result.signals.location_match).toBe('mismatch');
+    expect(result.reason).toBe('location_county_mismatch');
+    expect(result.candidate).toBe(false);
+  });
+
+  it('CASE F — an exact identifier still OUTRANKS a county contradiction', () => {
+    // The geographic elimination must never defeat the platform's strongest
+    // identity signal. This is the Phase 9B precedence rule, unchanged.
+    const hash = 'a'.repeat(64);
+    const lost = lostReport({ county: 'Nairobi City', document_number_hash: hash });
+    const item = foundItem({ found_county: 'Mombasa', document_number_hash: hash });
+    const result = evaluateLostReportAgainstItem(lost, item);
+    expect(result.signals.identifier_match).toBe('match');
+    expect(result.signals.location_match).toBe('mismatch');
+    expect(result.candidate).toBe(true);
+    expect(result.reason).toBe('exact_identifier');
+  });
+
+  it('CASE A2 — the same holds for other generic place kinds', () => {
+    for (const kind of ['school', 'hospital', 'church', 'mosque', 'market', 'station', 'mall', 'building']) {
+      const lost = lostReport({ county: 'Nairobi City', location_area: 'Zzzzz', location_landmark: `opposite a ${kind}` });
+      const item = foundItem({
+        location_description: `near a ${kind}, Kisumu`,
+        verified_found_area: null,
+        found_county: null,
+      });
+      expect(signalsFor(lost, item).location_match, `kind=${kind}`).toBe('unknown');
+    }
+  });
+});
+
 
   it('identifier agreement outranks a contradictory location/time', () => {
     const decision = decideCandidate(

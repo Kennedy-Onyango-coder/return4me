@@ -115,3 +115,76 @@ describe('Agent application workflow: signup(pending) -> admin -> approval -> ac
     expect(await db.getAgent(missingId)).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// PHASE 9D (F1) — COORDINATE PERSISTENCE ON AGENT CREATION
+//
+// The original defect: db.createAgent wrote
+//   `latitude: agent.latitude ? String(agent.latitude) : null`
+// which is a TRUTHINESS check, so a legitimate coordinate of exactly 0 was
+// discarded and the agent row came back with no coordinates — while
+// needs_manual_geocoding could still say the geocode succeeded. 0 is a real
+// latitude (the equator crosses Kenya), so this was silent data loss.
+//
+// These assertions FAIL against the truthiness version and pass with the
+// explicit null/undefined check now used by createAgent, createItem and both
+// parse paths.
+// ---------------------------------------------------------------------------
+describe('PHASE 9D — createAgent preserves a legitimate zero coordinate', () => {
+  function agentAt(id: string, phoneSuffix: string, latitude: number | null, longitude: number | null) {
+    return {
+      ...makeAgentFields(id, phoneSuffix, 'active'),
+      latitude,
+      longitude,
+    } as any;
+  }
+
+  it('persists latitude 0 exactly (the case the truthiness check discarded)', async () => {
+    const id = `TEST-AGENT-ZERO-${testRunId}-LAT`;
+    await db.createAgent(agentAt(id, '61', 0, 36.8219));
+
+    const agent = await db.getAgent(id);
+    expect(agent).toBeDefined();
+    // The whole point: 0 must survive as 0, not arrive as null.
+    expect(agent?.latitude).toBe(0);
+    expect(agent?.longitude).toBe(36.8219);
+  });
+
+  it('persists longitude 0 exactly (the mirrored case)', async () => {
+    const id = `TEST-AGENT-ZERO-${testRunId}-LON`;
+    await db.createAgent(agentAt(id, '62', -1.2921, 0));
+
+    const agent = await db.getAgent(id);
+    expect(agent?.latitude).toBe(-1.2921);
+    expect(agent?.longitude).toBe(0);
+  });
+
+  it('still stores null for absent coordinates (no regression in the other direction)', async () => {
+    const id = `TEST-AGENT-ZERO-${testRunId}-NULL`;
+    await db.createAgent(agentAt(id, '63', null, null));
+
+    const agent = await db.getAgent(id);
+    expect(agent?.latitude).toBeNull();
+    expect(agent?.longitude).toBeNull();
+  });
+
+  it('preserves ordinary non-zero coordinates and valid negatives', async () => {
+    const id = `TEST-AGENT-ZERO-${testRunId}-NORMAL`;
+    await db.createAgent(agentAt(id, '64', -1.2921, 36.8219));
+
+    const agent = await db.getAgent(id);
+    expect(agent?.latitude).toBe(-1.2921);
+    expect(agent?.longitude).toBe(36.8219);
+  });
+
+  it('a zero-latitude agent is usable by the nearest-agent comparison (not silently unusable)', async () => {
+    // The observable consequence of the old bug: a hub at exactly 0 latitude
+    // had coordinates=NULL, so isValidCoordinatePair() rejected it and it could
+    // never be matched by distance. With the fix the stored pair is real.
+    const id = `TEST-AGENT-ZERO-${testRunId}-USABLE`;
+    await db.createAgent(agentAt(id, '65', 0, 36.8219));
+
+    const agent = await db.getAgent(id);
+    expect(agent?.latitude !== null && agent?.longitude !== null).toBe(true);
+  });
+});

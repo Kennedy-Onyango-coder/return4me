@@ -1042,6 +1042,12 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     // Matches idx_items_finder_phone in schema.ts — see the comment on
     // getItemsByFinderPhone in database.ts.
     `CREATE INDEX IF NOT EXISTS idx_items_finder_phone ON items(finder_phone)`,
+    // PHASE 9D: the finder's explicit canonical county for a found item.
+    // Must exist in THIS incremental path (not just sql/schema.sql) so an
+    // already-running database picks it up. Deliberately NO data backfill and
+    // NO DEFAULT: existing rows keep found_county = NULL, which the matcher
+    // reads as "county unknown" — see the column comment in schema.ts.
+    `ALTER TABLE items ADD COLUMN IF NOT EXISTS found_county VARCHAR(50)`,
     // Session-revocation mechanism for admin accounts — see the matching
     // comment on admin_users.token_version in schema.ts. Must exist here,
     // not just schema.ts, for an already-running database to pick it up.

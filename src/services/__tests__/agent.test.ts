@@ -44,9 +44,24 @@ async function makeTestAgent(opts: { status?: 'active' | 'suspended' | 'pending'
   return id;
 }
 
+// PHASE 9D (F2) — src/__tests__/setup.testEnv.ts now DISABLES geocoding for the
+// whole test run, so the suite no longer depends on whatever the machine's .env
+// happens to say. The two tests below deliberately exercise the geocoding path,
+// so they switch the provider back on explicitly: opting IN is meant to be a
+// visible, deliberate act rather than an implicit consequence of the
+// environment. Every other test in this file either supplies GPS coordinates or
+// no geocodable text at all, so none of them reaches the provider.
+const ORIGINAL_GEOCODING_PROVIDER = process.env.GEOCODING_PROVIDER;
+
+function enableGeocodingForThisTest() {
+  process.env.GEOCODING_PROVIDER = 'nominatim';
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  if (ORIGINAL_GEOCODING_PROVIDER === undefined) delete process.env.GEOCODING_PROVIDER;
+  else process.env.GEOCODING_PROVIDER = ORIGINAL_GEOCODING_PROVIDER;
 });
 
 describe('AgentMatchingService.assignNearestAgent — never assigns an arbitrary agent', () => {
@@ -60,6 +75,7 @@ describe('AgentMatchingService.assignNearestAgent — never assigns an arbitrary
 
   it('E. Active agents exist but NONE have coordinates on file → NO automatic assignment (can\'t compute distance to nothing)', async () => {
     stubAgents([{ status: 'active', latitude: null, longitude: null }]);
+    enableGeocodingForThisTest();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => [] }));
     const result = await AgentMatchingService.assignNearestAgent(-1.3, 36.8, 'irrelevant text, geocoding also fails');
     // Even though an active agent exists, none has usable coordinates, so
@@ -86,6 +102,7 @@ describe('AgentMatchingService.assignNearestAgent — never assigns an arbitrary
 
   it('B. GPS unavailable but address geocoding succeeds → confidently matched via geocoded text', async () => {
     stubAgents([{ status: 'active', latitude: -1.2921, longitude: 36.8219 }]);
+    enableGeocodingForThisTest();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
       json: async () => [{ lat: '-1.2921', lon: '36.8219' }],

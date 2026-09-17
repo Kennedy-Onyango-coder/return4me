@@ -58,6 +58,15 @@ import { registerLostReportRoutes } from './routes/lostReports';
 // the new lost-item report route share ONE implementation instead of drifting
 // copies. Behaviour is unchanged — see services/documentHash.ts.
 import { hashDocument } from './services/documentHash';
+// PHASE 9D: the found-item county input rule (required + canonical, never
+// inferred). Extracted so the rule is unit-testable rather than trapped in the
+// handler — the same pattern routes/lostReports.ts uses. It delegates to the
+// ONE canonical resolver (`resolveCountyName` in config/kenyaCounties.ts), so
+// this file needs no county list and no second implementation.
+import { resolveFoundCountyInput } from './services/foundItemCounty';
+// PHASE 9D: the ONE coordinate validator (finite + in-range, explicit
+// null-handling so a valid 0 is not discarded).
+import { normalizeCoordinateInput } from './services/coordinates';
 import { claimStatusPollLimiter } from './config/claimStatusPollLimiter';
 import bcrypt from 'bcryptjs';
 import * as Sentry from '@sentry/node';
@@ -1582,6 +1591,7 @@ async function startServer() {
       locationDescription,
       latitude,
       longitude,
+      foundCounty,
       finderPhone,
       createAccount,
       termsAccepted,
@@ -1597,6 +1607,34 @@ async function startServer() {
     if (!categoryId || !photoBase64 || !locationDescription || !finderPhone) {
       return res.status(400).json({ error: 'Tafadhali jaza sehemu zote zinazohitajika.' });
     }
+
+    // -----------------------------------------------------------------------
+    // PHASE 9D — FOUND-ITEM COUNTY (required, canonical, user-declared)
+    // -----------------------------------------------------------------------
+    // The Finder must now state WHICH COUNTY the item was found in. This is the
+    // authoritative found-side geographic field.
+    //
+    // WHY IT IS REQUIRED RATHER THAN INFERRED: before Phase 9D the found side
+    // had no county at all, so the matcher guessed one by scanning the free-text
+    // location for county names. That produced a real, reproducible false
+    // positive — "Mombasa Road" (a Nairobi street) read as Mombasa County and
+    // "Kiambu Road" read as Kiambu County — which could then wrongly ELIMINATE
+    // a correct candidate. Asking the Finder removes the guess at its source.
+    //
+    // VALIDATION IS SERVER-SIDE AND AUTHORITATIVE. The browser may pre-validate
+    // for UX, but nothing from the client is trusted: `resolveCountyName()` is
+    // the SAME canonical resolver (and the same 47-county list) the lost-report
+    // route uses, and it never guesses a nearby county. A value that does not
+    // resolve is REJECTED — it is never silently stored, dropped, or coerced.
+    //
+    // ORDER MATTERS: this runs before image validation and before any agent
+    // matching/geocoding, so an invalid county cannot trigger the paid OCR path
+    // or an outbound geocoding request.
+    const foundCountyResolution = resolveFoundCountyInput(foundCounty);
+    if (!foundCountyResolution.ok) {
+      return res.status(400).json({ error: foundCountyResolution.error });
+    }
+    const canonicalFoundCounty = foundCountyResolution.county;
 
     // Declared value is an OPTIONAL, unverified estimate the finder can give
     // of what the item would cost to replace. It is never treated as fact —
@@ -1627,9 +1665,25 @@ async function startServer() {
       const isSensitive = cat ? (cat.is_sensitive_document !== false) : true;
 
       // 1. Assign nearest physical Return4me agent
-      const numericLat = latitude ? parseFloat(latitude) : null;
-      const numericLon = longitude ? parseFloat(longitude) : null;
-      
+      //
+      // PHASE 9D: the optional device-supplied pair is validated ONCE, here, by
+      // the shared validator. A malformed, non-finite or out-of-range value now
+      // yields `null` for BOTH halves instead of a NaN or an absurd number
+      // reaching the distance comparison and the database. A legitimate
+      // coordinate of exactly 0 is preserved rather than treated as absent.
+      //
+      // This is validation ONLY. It deliberately does not give the pair a
+      // meaning: `items.latitude/longitude` keep exactly the semantic they had
+      // (an optional, best-effort device position used to route the drop-off to
+      // a nearby Agent hub). Nothing downstream may treat it as the item's
+      // found location, as a county, or as evidence about ownership.
+      const coordinates = normalizeCoordinateInput(
+        latitude ?? null,
+        longitude ?? null,
+      );
+      const numericLat = coordinates ? coordinates.latitude : null;
+      const numericLon = coordinates ? coordinates.longitude : null;
+
       const matchingResult = await AgentMatchingService.assignNearestAgent(numericLat, numericLon, locationDescription);
       const assignedAgent = matchingResult.agent;
 
@@ -1693,6 +1747,11 @@ async function startServer() {
         document_number_hash: saltedHash,
         document_name_fuzzy: fuzzyMaskedName,
         location_description: locationDescription,
+        // PHASE 9D: the Finder's explicit, canonical, server-validated county.
+        // `locationDescription` above is stored UNCHANGED — the user's own
+        // wording is never replaced, normalized in place, or overwritten by any
+        // provider result (see §8 of the Phase 9D brief).
+        found_county: canonicalFoundCounty,
         latitude: numericLat,
         longitude: numericLon,
         finder_phone: finderPhone,
@@ -3884,20 +3943,26 @@ async function startServer() {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
       }
-      const lat = parseFloat(latitude);
-      const lon = parseFloat(longitude);
-      if (isNaN(lat) || isNaN(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+      // PHASE 9D (F3) — the SAME shared validator every other coordinate input
+      // goes through. Previously this route used a local, lenient numeric
+      // coercion ('1.29junk' silently became 1.29) and duplicated the
+      // latitude/longitude range rule in a second place that could drift from
+      // the shared one. Authorization, the response shape and valid-value
+      // behaviour are unchanged: an invalid pair still yields the same 400 and
+      // the same bilingual message.
+      const coordinates = normalizeCoordinateInput(latitude, longitude);
+      if (!coordinates) {
         return res.status(400).json({ error: 'Latitude/longitude si sahihi. / Invalid latitude/longitude.' });
       }
       const agent = await db.getAgent(agentId);
       if (!agent) {
         return res.status(404).json({ error: 'Agent haikupatikana.' });
       }
-      const updated = await db.updateAgentLocation(agentId, lat, lon);
+      const updated = await db.updateAgentLocation(agentId, coordinates.latitude, coordinates.longitude);
       await db.logAudit(
         req.user?.username || req.user?.userId || 'admin',
         'AGENT_LOCATION_MANUALLY_SET',
-        `Admin manually set coordinates for agent ${agent.business_name} (${agentId}) to ${lat}, ${lon}`
+        `Admin manually set coordinates for agent ${agent.business_name} (${agentId}) to ${coordinates.latitude}, ${coordinates.longitude}`
       );
       res.json({ success: true, agent: updated, message: 'Mahali pa Agent pamesasishwa. / Agent location updated.' });
     } catch (e: any) {

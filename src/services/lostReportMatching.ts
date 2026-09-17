@@ -24,7 +24,8 @@
 //   category_id                 category_id + verified_category_id
 //   document_number_hash        document_number_hash
 //   document_type               (NO equivalent column)
-//   county                      (NO county column — free-text location only)
+//   county                      found_county (Phase 9D: EXPLICIT, canonical,
+//                               finder-chosen — or NULL for legacy rows)
 //   location_area               location_description / verified_found_area
 //   location_landmark           location_description / verified_found_area
 //   brand                       (NO column)
@@ -61,7 +62,13 @@
 //     brand_match, model_match, colour_match, material_match, text_signal
 //   CORROBORATING ONLY (never sufficient, never counted toward the minimum):
 //     category_match (the gate), document_type_match
-import { KENYA_COUNTIES } from '../config/kenyaCounties.ts';
+//
+// INSTEAD OF importing config/kenyaCounties.ts, this matcher consumes the
+// county VALUES as already-canonical strings on both sides:
+//   lost_reports.county  — canonicalized at the lost-report API boundary
+//   items.found_county   — canonicalized at the found-item API boundary
+// Both are produced by the ONE `resolveCountyName()` implementation, so no
+// county list, alias table or matching rule needs to exist here at all.
 
 // ---------------------------------------------------------------------------
 // SIGNAL STATES
@@ -91,7 +98,7 @@ export type MatchAcceptReason = 'exact_identifier' | 'corroborated_details';
 export type MatchRejectionReason =
   | 'category_mismatch'        // different category, and no equivalence exists in this repo
   | 'identifier_mismatch'      // BOTH sides declared an identifier and they differ
-  | 'location_county_mismatch' // the item names a DIFFERENT canonical Kenyan county
+  | 'location_county_mismatch' // BOTH sides declared a canonical county, and the counties differ
   | 'found_before_lost'        // the item was recorded before the loss is claimed to have happened
   | 'insufficient_evidence';   // plausible, but not enough independent evidence
 
@@ -197,10 +204,39 @@ export function tokenizeForMatch(value: unknown): string[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Administrative/relational words that carry no identifying value in a location
- * string. Used both for location token overlap AND when deciding which words of
- * a county's name are distinctive ('West Pokot' -> 'pokot', so an address
- * mentioning "west gate" can never be read as a mention of West Pokot).
+ * Generic LOCATION VOCABULARY: words that describe a PLACE KIND, a direction, or
+ * a relation — never a specific place.
+ *
+ * THE DISTINCTION THAT MATTERS (Phase 9D):
+ *   A place KIND ("a school", "the hospital", "near the market", "Mombasa Road")
+ *   does not identify WHICH place, so two reports sharing it tell us nothing.
+ *   A place NAME ("Sarit", "Westlands", "Kasarani", "Donholm") does identify a
+ *   specific place, so a shared name is genuine location evidence.
+ *
+ * WHY THIS LIST GREW IN PHASE 9D — a real, reproducible false anchor:
+ *   The Phase 9B list already dropped 'near', 'opposite', 'stage', 'road',
+ *   'market', 'mall', 'building' and similar, but NOT common place KINDS such as
+ *   'school' or 'hospital'. Because every token of length >= 4 that is not in
+ *   this set counts as significant location evidence, a lost report reading
+ *   "opposite a school" and a found item reading "near a school, Kisumu" shared
+ *   the token 'school' and therefore satisfied the mandatory location ANCHOR —
+ *   in different counties, on the strength of a generic English noun. With one
+ *   further distinguishing signal that became a candidate.
+ *
+ *   The fix is to classify those nouns as what they are: place KINDS. Added
+ *   below are school, hospital, church, mosque, clinic, campus, stadium,
+ *   petrol, station, estate, village, college, university, hotel, bank —
+ *   deliberately a focused list of generic kinds rather than a blanket
+ *   blacklist of common words.
+ *
+ * WHAT IS DELIBERATELY NOT HERE: specific place names. 'Westlands', 'Sarit',
+ * 'Kasarani', 'Dandora', 'Donholm', 'Kilimani', 'Ngong', 'Yaya' and every other
+ * named area, estate, landmark or building remain significant tokens, so
+ * "opposite Sarit Centre" and "near Sarit Centre" still corroborate each other.
+ *
+ * This set is used for LOCATION-TOKEN OVERLAP ONLY. It no longer filters county
+ * names, because Phase 9D removed free-text county inference entirely (see the
+ * FOUND-SIDE COUNTY note above).
  */
 const GENERIC_LOCATION_WORDS = new Set<string>([
   'county', 'city', 'town', 'area', 'district', 'sub', 'subcounty', 'ward',
@@ -209,6 +245,13 @@ const GENERIC_LOCATION_WORDS = new Set<string>([
   'road', 'street', 'avenue', 'lane', 'highway', 'junction', 'stage', 'stop',
   'building', 'block', 'floor', 'plaza', 'centre', 'center', 'mall', 'market',
   'shop', 'office', 'gate', 'parking', 'kenya', 'the', 'and', 'with',
+  // PHASE 9D — generic place KINDS (not place names). See the note above.
+  'school', 'schools', 'hospital', 'hospitals', 'church', 'churches',
+  'mosque', 'mosques', 'clinic', 'clinics', 'dispensary', 'campus',
+  'college', 'university', 'stadium', 'petrol', 'station', 'stations',
+  'terminal', 'estate', 'estates', 'village', 'hotel', 'bank', 'atm',
+  'kiosk', 'salon', 'barber', 'lodging', 'apartment', 'apartments',
+  'flat', 'flats', 'plot', 'roadside', 'footbridge', 'roundabout',
 ]);
 
 /**
@@ -271,47 +314,55 @@ function countSharedTokens(needles: string[], haystack: Set<string>): number {
 }
 
 // ---------------------------------------------------------------------------
-// CANONICAL COUNTY DETECTION
+// FOUND-SIDE COUNTY — EXPLICIT AND CANONICAL ONLY (Phase 9D)
 //
-// The lost side stores a CANONICAL county (validated against the 47 in
-// config/kenyaCounties.ts), while the found side stores free text. To compare
-// them, the free text is scanned for mentions of a canonical county.
+// The found side's county now comes from ONE place: `items.found_county`, the
+// canonical Kenyan county the FINDER explicitly selected, validated at the API
+// boundary by `resolveCountyName()` (config/kenyaCounties.ts — the single
+// 47-county implementation).
 //
-// The rule is deterministic: a county is "mentioned" only when EVERY
-// distinctive word of its official name appears in the text. Words that are
-// merely administrative or directional are removed from the county's name first
-// ('West Pokot' -> ['pokot'], 'Nairobi City' -> ['nairobi'],
-// 'Tana River' -> ['tana','river']). This is what stops "west gate" from being
-// read as a mention of West Pokot, and it means a county is never inferred from
-// a single ambiguous common word.
+// WHAT WAS REMOVED, AND WHY — the "Mombasa Road" false positive
+//   Phase 9B had no county on the found side, so it scanned the free-text
+//   location for canonical county NAMES and treated any hit as a county. That
+//   produced a real, reproducible defect:
+//
+//     "Mombasa Road"  -> itemCounties = { Mombasa }   (a Nairobi street / A109)
+//     "Kiambu Road"   -> itemCounties = { Kiambu }
+//
+//   A lost report from Nairobi City then hit `countyConflicts` and was
+//   ELIMINATED (`location_county_mismatch`) — a false negative caused purely by
+//   a road name containing a county name. The Phase 9B test suite even pinned
+//   the buggy behaviour (`detectCountiesInText('along Mombasa Road')` was
+//   asserted to contain 'Mombasa').
+//
+//   The fix is NOT more substring heuristics. It is to stop guessing: the
+//   matcher now reads the explicit field, and when that field is absent it
+//   declares the county UNKNOWN rather than inferring one. That is the safe
+//   direction — an unknown county can neither eliminate nor create a candidate.
+//
+// LEGACY ITEMS (found_county IS NULL) ARE DELIBERATELY STILL MATCHABLE
+//   Every pre-Phase-9D row has no county. Those items keep competing on their
+//   real evidence (identifier, time anchor, shared distinctive area/landmark
+//   tokens, attributes) and simply contribute no county signal. There is no
+//   backfill and no provider call against historical records: an unknown county
+//   is honest, a guessed one is not.
+//
+// A COUNTY NEVER CREATES A CANDIDATE ON ITS OWN
+//   County agreement is an ANCHOR input, but it is still subject to the
+//   existing rule that an anchor alone (one distinguishing signal) is not
+//   enough — see MIN_DISTINGUISHING_MATCHES and decideCandidate below. Two
+//   people in Nairobi City is not evidence that one item is the other's.
 // ---------------------------------------------------------------------------
-interface CountyTokenIndexEntry {
-  name: string;
-  distinctiveTokens: string[];
-}
 
-const COUNTY_TOKEN_INDEX: CountyTokenIndexEntry[] = KENYA_COUNTIES
-  .map((county) => ({
-    name: county.name,
-    distinctiveTokens: tokenizeForMatch(county.name).filter(
-      (token) => !GENERIC_LOCATION_WORDS.has(token) && token.length >= 3,
-    ),
-  }))
-  .filter((entry) => entry.distinctiveTokens.length > 0);
-
-/** Every canonical county named in `tokens`, with no guessing or proximity. */
-export function detectCountiesInTokens(tokens: Set<string>): Set<string> {
-  const found = new Set<string>();
-  for (const entry of COUNTY_TOKEN_INDEX) {
-    if (entry.distinctiveTokens.every((token) => tokens.has(token))) {
-      found.add(entry.name);
-    }
-  }
-  return found;
-}
-
-export function detectCountiesInText(value: unknown): Set<string> {
-  return detectCountiesInTokens(new Set(tokenizeForMatch(value)));
+/**
+ * The item's DECLARED county, or '' when unknown.
+ *
+ * Reads `found_county` and nothing else. It never inspects
+ * `location_description`, `verified_found_area`, a coordinate, or any provider
+ * output — that constraint is the whole point of Phase 9D.
+ */
+function itemDeclaredCounty(item: any): string {
+  return String(item?.found_county || '');
 }
 
 // ---------------------------------------------------------------------------
@@ -457,10 +508,34 @@ export function evaluateLostReportAgainstItem(lost: any, item: any): LostReportM
   signals.material_match = attributeSignal(lost?.material, rawItemTokens);
 
   // --- LOCATION -------------------------------------------------------------
-  const lostCounty = String(lost?.county || '');
+  //
+  // Phase 9D — TWO INDEPENDENT LOCATION INPUTS, and neither is a coordinate:
+  //
+  //   (a) COUNTY, from the EXPLICIT canonical fields only:
+  //         lost_reports.county    (user-declared)
+  //         items.found_county     (user-declared — Phase 9D)
+  //       No free-text scanning, no road-name heuristics, no proximity. If
+  //       either side has no county, the county contributes NOTHING (unknown) —
+  //       which is the safe direction, since an unknown county can neither
+  //       eliminate nor create a candidate. That is what stops "Mombasa Road"
+  //       being read as Mombasa County (see the FOUND-SIDE COUNTY note above).
+  //
+  //   (b) DISTINCTIVE AREA/LANDMARK TOKENS, free text on both sides, filtered
+  //       through GENERIC_LOCATION_WORDS so a shared place KIND ('school',
+  //       'market', 'road') is never treated as a shared place NAME.
+  //
+  // COORDINATES ARE NOT READ HERE, AT ALL. `latitude`/`longitude` appear
+  // nowhere in this function, no distance is computed, and no item is ever
+  // ranked, admitted or eliminated by geography. Phase 9D deliberately keeps
+  // geographic proximity out of matching: see the header's opening section and
+  // the audit's finding that coordinate semantics are UNKNOWN.
+  const lostCounty = normalizeForMatch(lost?.county);
+  const itemCounty = normalizeForMatch(itemDeclaredCounty(item));
+  const countyConflicts = Boolean(lostCounty) && Boolean(itemCounty) && lostCounty !== itemCounty;
+  const countyAgrees = Boolean(lostCounty) && Boolean(itemCounty) && lostCounty === itemCounty;
+
   const itemLocationText = effectiveItemLocationText(item);
   const itemLocationTokens = new Set(tokenizeForMatch(itemLocationText));
-  const itemCounties = detectCountiesInTokens(itemLocationTokens);
   const lostAreaTokens = significantTokens(
     [lost?.location_area, lost?.location_landmark].filter(Boolean).join(' '),
     LOCATION_MIN_TOKEN_LENGTH,
@@ -468,15 +543,18 @@ export function evaluateLostReportAgainstItem(lost: any, item: any): LostReportM
   );
   const areaOverlap = countSharedTokens(lostAreaTokens, itemLocationTokens);
 
-  const countyConflicts = Boolean(lostCounty) && itemCounties.size > 0 && !itemCounties.has(lostCounty);
-  const countyAgrees = Boolean(lostCounty) && itemCounties.has(lostCounty);
-
   if (countyConflicts) {
-    // The item's location names a DIFFERENT canonical Kenyan county. Two
-    // different counties are strong evidence of two different events, so this
-    // eliminates rather than merely failing to corroborate. Only canonical
-    // county names trigger it, so a town inside the right county
-    // (e.g. "Kitengela" for Kajiado) can never cause a false elimination.
+    // BOTH sides EXPLICITLY declared a canonical Kenyan county, and they are
+    // different. Two different counties are strong evidence of two different
+    // events, so this eliminates rather than merely failing to corroborate.
+    //
+    // SCOPE OF THIS ELIMINATION — deliberately narrow:
+    //   * it requires an explicit canonical county on BOTH sides, so a legacy
+    //     item (found_county NULL) can never be eliminated here;
+    //   * it can never be triggered by a road name, a town name, or a
+    //     misspelling, because nothing is inferred from free text;
+    //   * an agreeing IDENTIFIER still outranks it — see decideCandidate, which
+    //     accepts an exact identifier match before location is consulted.
     signals.location_match = 'mismatch';
   } else if (countyAgrees || areaOverlap > 0) {
     signals.location_match = 'match';
@@ -534,9 +612,11 @@ export function evaluateLostReportAgainstItem(lost: any, item: any): LostReportM
  *     approximation ("sometime around 2pm"). An item found in a different
  *     county, or recorded at an odd hour, does not stop a matching document
  *     number from being the same document.
- *  4. LOCATION/TIME contradictions then eliminate: an item that names a
- *     DIFFERENT canonical Kenyan county, or that was recorded well before the
- *     reporter says they lost it.
+ *  4. LOCATION/TIME contradictions then eliminate: an item whose EXPLICIT
+ *     `found_county` is a DIFFERENT canonical Kenyan county from the report's
+ *     declared county, or that was recorded well before the reporter says they
+ *     lost it. Both eliminations require canonical/declared data — neither can
+ *     be triggered by free text, a road name, or a coordinate.
  *  5. Otherwise a candidate needs an ANCHOR (matching location or matching
  *     time) plus MIN_DISTINGUISHING_MATCHES distinguishing matches in total.
  *     Note this means brand + colour agreement ALONE is never enough: a lost

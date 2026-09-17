@@ -86,6 +86,36 @@ export const items = pgTable("items", {
   location_description: text("location_description").notNull(),
   latitude: numeric("latitude", { precision: 9, scale: 6 }),
   longitude: numeric("longitude", { precision: 9, scale: 6 }),
+  // --- PHASE 9D: EXPLICIT FOUND-ITEM COUNTY --------------------------------
+  // The county the FINDER explicitly chose for where the item was found,
+  // stored as a CANONICAL name from config/kenyaCounties.ts (one of the 47,
+  // exactly as `lost_reports.county` already is). Validation and
+  // canonicalization happen at the API boundary in server.ts via the existing
+  // `resolveCountyName()`; this column only ever holds a value that function
+  // produced.
+  //
+  // WHY IT EXISTS: the lost side has had a canonical county since Phase 9A,
+  // while the found side had only free text. The matcher therefore had to
+  // GUESS a found county by scanning the location text for county names, which
+  // produced a real false positive — "Mombasa Road" (a Nairobi street, and
+  // also the A109) read as Mombasa County, and "Kiambu Road" read as Kiambu
+  // County — and could then wrongly ELIMINATE a correct candidate. An explicit
+  // user-chosen county removes the guess entirely.
+  //
+  // NULLABLE ON PURPOSE — three separate reasons:
+  //   1. HISTORICAL ROWS. Every item reported before Phase 9D has no county.
+  //      They must remain readable, and their county must stay UNKNOWN. There
+  //      is deliberately NO backfill and no provider call against historical
+  //      records: an unknown county is honest, a guessed one is not.
+  //   2. The matcher already treats a missing/blank county as "no county
+  //      evidence", so a legacy item simply cannot be eliminated (or created)
+  //      on county grounds — the same safe behaviour as before this phase.
+  //   3. `verified_found_area` / agent verification may legitimately correct
+  //      the AREA without the platform ever asserting a county.
+  //
+  // NOT an inferred value: nothing in the codebase derives this from
+  // `location_description`, from `latitude`/`longitude`, or from a geocoder.
+  found_county: varchar("found_county", { length: 50 }),
   finder_phone: varchar("finder_phone", { length: 15 }).notNull(),
   assigned_agent_id: varchar("assigned_agent_id", { length: 50 }).references(() => agents.id),
   status: varchar("status", { length: 30 }).default("awaiting_dropoff").notNull(),

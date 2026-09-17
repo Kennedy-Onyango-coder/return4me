@@ -57,6 +57,11 @@ export interface FoundItem {
   location_description: string;
   latitude: number | null;
   longitude: number | null;
+  // PHASE 9D — the Finder's explicitly chosen canonical Kenyan county for the
+  // found item, or null when unknown (legacy rows predating the field). This
+  // is user-declared geographic data used for internal matching consistency;
+  // it is NOT part of any public DTO.
+  found_county?: string | null;
   finder_phone: string;
   assigned_agent_id: string;
   status: "awaiting_dropoff" | "at_agent" | "claimed" | "expired" | "rejected";

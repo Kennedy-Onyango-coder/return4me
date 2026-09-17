@@ -94,6 +94,18 @@ const OUTBOUND_PROVIDER_ENV_VARS = [
   // Sentry — avoids polluting the real error-tracking project with test noise.
   'SENTRY_DSN_BACKEND',
   'VITE_SENTRY_DSN_FRONTEND',
+  // PHASE 9D (F2) — geocoding. Empty string is the "not configured" value
+  // readGeocodingConfig() treats as DISABLED (see DISABLED_PROVIDERS in
+  // services/geocoding/index.ts), so an ordinary test run makes NO outbound
+  // geocoding request even if a future test forgets to mock `fetch`.
+  //
+  // Only the provider switch is neutralised here, not the rest of the
+  // GEOCODING_* settings: they are timings that merely shape behaviour, and
+  // the boundary suite sets them explicitly for the cases it exercises.
+  // Tests that DO need a provider stub `fetch` themselves
+  // (services/__tests__/agent.test.ts, services/__tests__/geocodingBoundary.test.ts),
+  // so this cannot mask a real outbound call in those suites.
+  'GEOCODING_PROVIDER',
 ] as const;
 
 for (const key of OUTBOUND_PROVIDER_ENV_VARS) {

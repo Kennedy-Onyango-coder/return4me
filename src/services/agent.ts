@@ -1,4 +1,6 @@
 import { db, Agent } from '../db/database';
+import { geocodeForward } from './geocoding/index.ts';
+import { isValidCoordinatePair } from './coordinates.ts';
 
 // Haversine distance formula in kilometers
 function calculateHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -15,34 +17,38 @@ function calculateHaversineDistance(lat1: number, lon1: number, lat2: number, lo
   return R * c;
 }
 
+/**
+ * Forward-geocodes an Agent's free-text address.
+ *
+ * PHASE 9D — this function is now a THIN ADAPTER over the provider-neutral
+ * geocoding boundary (services/geocoding/index.ts). It exists only to preserve
+ * the tiny legacy return shape the agent-signup route already consumes.
+ *
+ * What changed, and why:
+ *   * the hard-coded Nominatim URL is gone from this file — all provider
+ *     knowledge now lives behind the boundary, so no business-logic module
+ *     contains a provider endpoint;
+ *   * the outbound request now has a bounded TIMEOUT, a CACHE, a THROTTLE and
+ *     IN-FLIGHT DEDUPLICATION, and its coordinates are VALIDATED (finite,
+ *     in-range) before being returned;
+ *   * the caller can DISABLE geocoding entirely by configuration, in which case
+ *     no request is made and `needsManual: true` is returned.
+ *
+ * FAILURE IS UNCHANGED IN SHAPE AND INTENT: every failure mode still yields
+ * `{ latitude: null, longitude: null, needsManual: true }`, which the existing
+ * callers already handle by routing the Agent to the manual review queue rather
+ * than inventing a location. This function never throws.
+ *
+ * SEMANTIC NOTE: an Agent's coordinates mean "where this Agent hub operates".
+ * That is the only coordinate meaning this codebase actually establishes, and
+ * nothing here widens it.
+ */
 export async function geocodeAddress(address: string): Promise<{ latitude: number | null; longitude: number | null; needsManual: boolean }> {
-  try {
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address + ', Kenya')}&format=json&limit=1`;
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'Return4me-Kenya-Lost-and-Found-Platform/1.0 (contact@return4me.co.ke)'
-      }
-    });
-
-    if (!response.ok) {
-      console.error(`Nominatim API returned non-200: ${response.status}`);
-      return { latitude: null, longitude: null, needsManual: true };
-    }
-
-    const data = await response.json() as any[];
-    if (data && data.length > 0) {
-      const lat = parseFloat(data[0].lat);
-      const lon = parseFloat(data[0].lon);
-      if (!isNaN(lat) && !isNaN(lon)) {
-        return { latitude: lat, longitude: lon, needsManual: false };
-      }
-    }
-
-    return { latitude: null, longitude: null, needsManual: true };
-  } catch (error) {
-    console.error('Nominatim geocoding error:', error);
-    return { latitude: null, longitude: null, needsManual: true };
+  const outcome = await geocodeForward(address);
+  if (outcome.status === 'ok') {
+    return { latitude: outcome.latitude, longitude: outcome.longitude, needsManual: false };
   }
+  return { latitude: null, longitude: null, needsManual: true };
 }
 
 export const AgentMatchingService = {
@@ -84,12 +90,23 @@ export const AgentMatchingService = {
     }
 
     // Fallback 1: GPS Haversine assignment (no cutoff)
-    if (lat !== null && lon !== null) {
+    //
+    // PHASE 9D: the caller-supplied pair is now VALIDATED (finite + in range)
+    // before any distance is computed. Previously a non-numeric or absurd
+    // latitude reached this loop and produced an all-NaN comparison, which
+    // silently behaved like "no agent is near" — correct by accident, but for
+    // the wrong reason. An invalid pair is now treated as "no coordinates
+    // supplied", which is exactly the same safe outcome, made explicit.
+    if (isValidCoordinatePair(lat, lon)) {
       let nearestAgent: Agent | null = null;
       let minDistance = Infinity;
 
       for (const agent of activeAgents) {
-        if (agent.latitude !== null && agent.longitude !== null) {
+        // PHASE 9D: an agent's stored coordinates are also validated on read,
+        // so a legacy row holding an out-of-range or non-numeric value is
+        // treated as "this hub has no coordinates" rather than being fed into
+        // the Haversine formula. Its meaning is never guessed or corrected.
+        if (isValidCoordinatePair(agent.latitude, agent.longitude)) {
           const distance = calculateHaversineDistance(lat, lon, agent.latitude, agent.longitude);
           if (distance < minDistance) {
             minDistance = distance;
@@ -112,12 +129,12 @@ export const AgentMatchingService = {
     // Fallback 2: Geocode free-text description
     if (locationDescription && locationDescription.trim() !== '') {
       const geoResult = await geocodeAddress(locationDescription);
-      if (geoResult.latitude !== null && geoResult.longitude !== null) {
+      if (isValidCoordinatePair(geoResult.latitude, geoResult.longitude)) {
         let nearestAgent: Agent | null = null;
         let minDistance = Infinity;
 
         for (const agent of activeAgents) {
-          if (agent.latitude !== null && agent.longitude !== null) {
+          if (isValidCoordinatePair(agent.latitude, agent.longitude)) {
             const distance = calculateHaversineDistance(geoResult.latitude, geoResult.longitude, agent.latitude, agent.longitude);
             if (distance < minDistance) {
               minDistance = distance;
