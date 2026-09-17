@@ -73,7 +73,17 @@ export default defineConfig({
     // weaken any assertion and does NOT skip anything — the same tests run, and a
     // test that genuinely hangs still fails, just without the contention.
     maxWorkers: 2,
-    testTimeout: 30000,
-    hookTimeout: 30000,
+    // PHASE 12 RE-MEASUREMENT — the 30s ceiling is too tight for this host.
+    // The cold `vi.resetModules()` + `await import('../services/auth')` pattern
+    // (errorDisclosure, smsDelivery, socialFailClosed) was measured at 23.4s for a
+    // SINGLE file with no other workers running, and at 99s when a local dev server
+    // was competing for CPU. The same tests complete in ~2-12s when the host is
+    // quiet, so the failures were machine variance (cold import of the full
+    // db/database.ts + db/index.ts graph, plus on-access AV scanning), not logic —
+    // each one passes in isolation. 60s is deliberate headroom over the worst
+    // measured single-file cost. It does NOT weaken any assertion: a test that
+    // genuinely hangs still fails, just after 60s instead of 30s.
+    testTimeout: 60000,
+    hookTimeout: 60000,
   },
 });
