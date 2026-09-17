@@ -81,3 +81,25 @@ export function createClaimStatusPollLimiter(
 
 /** The limiter actually mounted on GET /api/claims/:id/status in server.ts. */
 export const claimStatusPollLimiter = createClaimStatusPollLimiter();
+
+/**
+ * The limiter for the OTHER polled claim route (Phase 12):
+ * GET /api/claims/:id/payment-session/:sessionId/status.
+ *
+ * A SEPARATE INSTANCE, not a second mount of `claimStatusPollLimiter`, for the
+ * reason this module's header already gives: express-rate-limit instances are
+ * shared buckets, so mounting one instance on both polled routes would let the
+ * payment poller drain the claim-status poller's budget (and vice versa) — the
+ * exact cross-starvation defect that separated this policy from
+ * claimGuessLimiter in the first place.
+ *
+ * WHY THE ROUTE NEEDS ONE AT ALL (reproduced Phase 12 finding): OwnerView polls
+ * this endpoint on the same 3-second cadence as the claim-status route
+ * (`payment_polling: 3`), but the route was registered with NO limiter at all —
+ * unlike every other route in the claim family, and unlike its own sibling
+ * polled route. That left an unauthenticated caller an unbounded budget for
+ * claim-ID enumeration, and bounded nothing. The client already renders any
+ * non-OK response's `error` text, so a 429 here degrades to a visible message
+ * rather than a silent failure.
+ */
+export const paymentSessionStatusLimiter = createClaimStatusPollLimiter();

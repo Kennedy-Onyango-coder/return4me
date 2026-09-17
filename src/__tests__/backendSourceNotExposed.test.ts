@@ -46,4 +46,29 @@ describe('backend source under src/ is not exposed via the /src static route', (
     const body = serverTs.slice(start, start + 400);
     expect(body).toMatch(/res\.status\(404\)\.send\('Not Found'\)/);
   });
+
+  // PHASE 12 — the denylist above and express.static were BOTH bypassable through
+  // the hand-rolled /src sourcemap fallback in app.get('*'), which tested the RAW
+  // request path but then resolved it with path.join (which normalises '..'):
+  // '/src/../sql/schema.sql' passed startsWith('/src/') and resolved to
+  // <cwd>/sql/schema.sql, outside src/ — and '/src/../src/db/schema.ts' resolved
+  // back INSIDE src/ and served backend source, defeating this very denylist.
+  it('the /src sourcemap fallback delegates to the containment-checked resolver', () => {
+    expect(serverTs).toContain("import { resolveContainedSourcePath } from './utils/safeStaticPath'");
+    expect(serverTs).toContain('resolveContainedSourcePath(srcRoot, req.path)');
+  });
+
+  it('the /src sourcemap fallback no longer resolves a raw request path with path.join', () => {
+    // Judged on CODE, not prose: this file's own explanatory comment above quotes
+    // the vulnerable expression verbatim. Comment lines are dropped with the same
+    // line-based filter the rest of this suite uses. (A /* ... */ strip is NOT used
+    // here: server.ts's own comments legitimately contain sequences like /src/* and
+    // /api/*, which an unterminated-looking block strip would swallow wholesale.)
+    const codeOnly = serverTs
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('//') && !line.trim().startsWith('*'))
+      .join('\n');
+    // The exact vulnerable expression, which must never come back.
+    expect(codeOnly).not.toContain('path.join(process.cwd(), req.path)');
+  });
 });

@@ -47,7 +47,14 @@ describe('GET /api/claims/:id/status is a minimal, public-safe status DTO', () =
     // /:id/rate, which starved the legitimate owner's own polling + payment.
     expect(serverTs).toMatch(/app\.get\('\/api\/claims\/:id\/status',\s*claimStatusPollLimiter,/);
     expect(serverTs).not.toMatch(/app\.get\('\/api\/claims\/:id\/status',\s*claimGuessLimiter,/);
-    expect(serverTs).toContain("import { claimStatusPollLimiter } from './config/claimStatusPollLimiter';");
+    // The dedicated module must supply this limiter. Expressed as "imported FROM
+    // this module" rather than as one exact brace string: Phase 12 added a second
+    // named export to the SAME module (paymentSessionStatusLimiter, for the other
+    // polled claim route), so pinning the exact single-symbol import text would
+    // fail on a legitimate co-import while proving nothing the two assertions
+    // above do not already prove. Those two — which are what actually encode the
+    // F1 fix — are unchanged.
+    expect(serverTs).toMatch(/import \{[^}]*\bclaimStatusPollLimiter\b[^}]*\} from '\.\/config\/claimStatusPollLimiter';/);
   });
 
   it('the discrete claim limiter still guards its own routes and is unchanged (20/15min)', () => {

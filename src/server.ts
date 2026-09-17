@@ -68,7 +68,7 @@ import { resolveFoundCountyInput } from './services/foundItemCounty';
 // PHASE 9D: the ONE coordinate validator (finite + in-range, explicit
 // null-handling so a valid 0 is not discarded).
 import { normalizeCoordinateInput } from './services/coordinates';
-import { claimStatusPollLimiter } from './config/claimStatusPollLimiter';
+import { claimStatusPollLimiter, paymentSessionStatusLimiter } from './config/claimStatusPollLimiter';
 // PHASE 10 (F-1): the ONE server-port resolver. This file previously hardcoded
 // the listen port and ignored the environment, which breaks port-injecting
 // container platforms (see config/serverPort.ts for the full reasoning).
@@ -77,6 +77,9 @@ import { resolveServerPort } from './config/serverPort';
 // browser bundle (main.tsx) so "is Sentry actually configured?" has a single
 // implementation instead of two drifting copies.
 import { isSentryDsnUsable, sentryDsnProblem, sentryDsnProblemLabel } from './config/sentryDsn';
+// Phase 12: containment-checked resolution of /src/* sourcemap requests (see the
+// module's own documentation for the traversal defect it replaces).
+import { resolveContainedSourcePath } from './utils/safeStaticPath';
 // PHASE 10 (F-2): the escrow-holdings aggregate. The admin "Escrow Funds Held"
 // card previously displayed a claim COUNT where a monetary total belongs.
 import { computeEscrowFundsHeld } from './services/escrowFunds';
@@ -886,11 +889,27 @@ async function startServer() {
         timestamp: new Date().toISOString()
       });
     } catch (err: any) {
+      // PHASE 12 — REPRODUCED DEFECT: this used to include
+      // `error: err.message || String(err)` in the response body. /api/health is
+      // unauthenticated, deliberately exempt from the global limiter, and this is
+      // its "the database is unreachable" branch — i.e. the one moment a raw pg
+      // error is most likely to contain infrastructure detail. MEASURED with the
+      // real pg client against an unreachable local port:
+      //   connect ECONNREFUSED 127.0.0.1:5599
+      // (i.e. host and port), and other pg failure modes name the USER
+      // ("password authentication failed for user \"...\""), the DATABASE, or the
+      // internal hostname ("getaddrinfo ENOTFOUND ..."). That is exactly the class
+      // of leak sendServerError() was introduced to eliminate everywhere else in
+      // this file, and the tripwire test that guards it only matched the
+      // single-line `res.status(500).json({ error: e.message` shape, so this
+      // multi-line 503 slipped through. No client reads this field (verified: no
+      // source file fetches /api/health), so the field is removed rather than
+      // reworded — a health probe only needs status/db, and the full error is
+      // already logged above.
       console.error('[HEALTHCHECK ERROR] Database connection check failed:', err);
       res.status(503).json({
         status: 'error',
         db: 'disconnected',
-        error: err.message || String(err),
         timestamp: new Date().toISOString()
       });
     }
@@ -2683,7 +2702,12 @@ async function startServer() {
   // frontend can never mark a payment confirmed here; it can only observe what
   // the backend/provider have recorded. Also enforces server-side expiry on both
   // the claim and the session.
-  app.get('/api/claims/:id/payment-session/:sessionId/status', async (req, res) => {
+  // PHASE 12: this route is POLLED by OwnerView (`payment_polling: 3`, i.e. the
+  // same 3-second cadence as GET /api/claims/:id/status) and was registered with
+  // no limiter at all, unlike every other route in the claim family. It now
+  // carries its OWN 600/15-minutes-per-IP budget (a distinct limiter instance, so
+  // the two polled routes cannot drain each other's allowance).
+  app.get('/api/claims/:id/payment-session/:sessionId/status', paymentSessionStatusLimiter, async (req, res) => {
     const claimId = req.params.id;
     const sessionId = req.params.sessionId;
     try {
@@ -4891,17 +4915,45 @@ async function startServer() {
     app.get('*', (req, res) => {
       // If a sourcemap or browser requests a source file under /src, check if it exists on disk.
       // If it doesn't exist, send a graceful 200 OK with an explanatory comment to prevent HTTP 404 telemetry errors.
+      //
+      // TRAVERSAL GUARD (Phase 12 — REPRODUCED DEFECT). This branch used to test
+      // the RAW request path with `req.path.startsWith('/src/')` and then resolve
+      // it with `path.join(process.cwd(), req.path)`. path.join NORMALISES `..`,
+      // so the path the code CHECKED was not the path it SERVED:
+      //   req.path = '/src/../sql/schema.sql'
+      //   '/src/../sql/schema.sql'.startsWith('/src/')  -> true       (guard passes)
+      //   path.join(cwd, '/src/../sql/schema.sql')      -> <cwd>/sql/schema.sql
+      //   existsSync(...) then res.sendFile(...)        -> file served
+      // Measured: the same arithmetic resolves '/src/../.env' to '<cwd>/.env'.
+      // Any non-dot file under the deployment directory was therefore readable
+      // unauthenticated — sql/schema.sql, package.json, docs — and, because the
+      // request path still began with '/src/', also src/db/**, src/services/** and
+      // src/server.ts, which is precisely what the denylist above this block was
+      // added to prevent. `express.static`/'send' reject '..' themselves, which is
+      // why the hand-rolled branch is the one that had to be fixed rather than
+      // relied upon. Only a path that RESOLVES to a real file INSIDE <cwd>/src is
+      // served now; anything else falls through to the normal SPA/404 handling and
+      // never touches the filesystem.
       if (req.path.startsWith('/src/')) {
-        const fullPath = path.join(process.cwd(), req.path);
-        if (fs.existsSync(fullPath)) {
-          if (fullPath.endsWith('.tsx') || fullPath.endsWith('.ts') || fullPath.endsWith('.jsx')) {
+        // Containment is delegated to utils/safeStaticPath.ts, which is unit-tested
+        // against every hostile input this branch must reject: '..', '%2e%2e',
+        // '\..\', a NUL byte, and the denylist re-entry '/src/../src/db/schema.ts'
+        // (which resolves back INSIDE src/ and would otherwise re-enable the
+        // backend-source disclosure the denylist exists to prevent).
+        const srcRoot = path.join(process.cwd(), 'src');
+        const resolvedSource = resolveContainedSourcePath(srcRoot, req.path);
+        if (resolvedSource && fs.existsSync(resolvedSource) && fs.statSync(resolvedSource).isFile()) {
+          if (resolvedSource.endsWith('.tsx') || resolvedSource.endsWith('.ts') || resolvedSource.endsWith('.jsx')) {
             res.setHeader('Content-Type', 'text/javascript');
           }
-          return res.sendFile(fullPath);
-        } else {
-          res.setHeader('Content-Type', 'text/javascript');
-          return res.send(`/* Source file ${path.basename(req.path)} is not included in the production build */`);
+          return res.sendFile(resolvedSource);
         }
+        if (resolvedSource) {
+          res.setHeader('Content-Type', 'text/javascript');
+          return res.send(`/* Source file ${path.basename(resolvedSource)} is not included in the production build */`);
+        }
+        // A path that does not resolve inside src/ deliberately falls through to
+        // the normal SPA/404 handling below and never touches the filesystem.
       }
 
       // If the request path has an extension, do not fall back to index.html; return 404 Not Found
@@ -4917,6 +4969,61 @@ async function startServer() {
     Sentry.setupExpressErrorHandler(app);
     console.log('[SENTRY] Sentry Express error handler registered.');
   }
+
+  // ============================================================
+  // PHASE 12 — FINAL JSON API ERROR HANDLER
+  // ============================================================
+  // REPRODUCED DEFECT (found by probing every registered route against the real
+  // server with a malformed JSON body): with no error-handling middleware
+  // registered, a body-parser failure fell through to Express's DEFAULT error
+  // handler, which answered 400 with an HTML page whose <pre> contained the raw
+  // parser message AND — outside production — the complete server-side stack
+  // trace with absolute filesystem paths, e.g.
+  //   SyntaxError: Expected property name or '}' in JSON at position 1
+  //     at JSON.parse (<anonymous>)
+  //     at parse (C:\...\node_modules\body-parser\lib\types\json.js:96:19)
+  //     at read.js:128:18 ... raw-body/index.js:287:7 ...
+  // Measured unauthenticated on /api/customer/register, /api/items/report,
+  // /api/claims/lookup and /api/webhooks/intasend. Because body parsing runs
+  // BEFORE routing, EVERY JSON endpoint was reachable this way, and an API must
+  // never answer with HTML or with internal parser/path detail.
+  //
+  // This is the ONE place that converts an error which escaped a route (or never
+  // reached one, like the parse failure above) into the JSON contract. It
+  // deliberately never echoes err.message to the client — the same rule
+  // sendServerError already applies to route-level failures. Full detail is
+  // logged server-side; client-error noise stays a single concise line so a
+  // malformed-body request cannot flood the log with stacks.
+  app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+    if (res.headersSent) return next(err);
+
+    // Only /api/* gets this contract. Non-API page requests keep the SPA's
+    // existing fallback behaviour.
+    if (!String(req.path || '').startsWith('/api/')) return next(err);
+
+    const type = err?.type;
+    const status =
+      type === 'entity.parse.failed' ? 400
+      : type === 'entity.too.large' ? 413
+      : type === 'encoding.unsupported' ? 415
+      : (typeof err?.status === 'number' && err.status >= 400 && err.status < 500 ? err.status : 500);
+
+    // 5xx = a genuine server fault: log the stack. 4xx = the caller's malformed
+    // request: one line, no stack, so it cannot be used to flood the logs.
+    if (status >= 500) {
+      console.error(`[API_ERROR_HANDLER] ${req.method} ${String(req.path)} -> ${status}`, err?.stack || err);
+    } else {
+      console.warn(`[API_ERROR_HANDLER] ${req.method} ${String(req.path)} -> ${status} (${type || err?.name || 'Error'})`);
+    }
+
+    const message =
+      status === 400 ? 'Ombi lako halikuweza kusomwa. Tafadhali angalia muundo wa data. / Your request could not be read. Please check the data format.'
+      : status === 413 ? 'Ombi lako ni kubwa kupita kiasi. / Your request is too large.'
+      : status === 415 ? 'Muundo wa data hautumiki. / Unsupported data format.'
+      : 'Hitilafu imetokea upande wa seva. Tafadhali jaribu tena baadaye. / A server error occurred. Please try again later.';
+
+    return res.status(status).json({ error: message });
+  });
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[RETURN4ME SERVER] Running on http://0.0.0.0:${PORT}`);
