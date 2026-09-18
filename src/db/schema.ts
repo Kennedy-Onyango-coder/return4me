@@ -674,7 +674,10 @@ export const customer_claim_links = pgTable("customer_claim_links", {
 //                           to the canonical 47 Kenyan counties at the API
 //                           boundary (config/kenyaCounties.ts) and stored as
 //                           the canonical name; `location_area` is the
-//                           town/estate free text; `location_landmark` is an
+//                           reporter's EXACT PLACE — the lost-report "Exact
+//                           place" field, free text in the user's own words and
+//                           stored verbatim, never parsed into a sub-county,
+//                           city, town or ward; `location_landmark` is an
 //                           optional free-text landmark. NO GPS coordinates —
 //                           the existing product does not require them for a
 //                           lost report, and precise location would be

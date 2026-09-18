@@ -238,7 +238,7 @@ function ReportsTable({
             <th scope="col" className={thClass}>{t('Lost Report', 'Ripoti')}</th>
             <th scope="col" className={thClass}>{t('Category', 'Aina')}</th>
             <th scope="col" className={thClass}>{t('County', 'Kaunti')}</th>
-            <th scope="col" className={thClass}>{t('Area', 'Eneo')}</th>
+            <th scope="col" className={thClass}>{t('Exact place', 'Mahali halisi')}</th>
             <th scope="col" className={thClass}>{t('Lost Date/Time', 'Muda Uliopotea')}</th>
             <th scope="col" className={thClass}>{t('Created', 'Iliundwa')}</th>
             <th scope="col" className={thClass}>{t('Status', 'Hali')}</th>

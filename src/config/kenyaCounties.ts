@@ -1,16 +1,35 @@
 /**
  * CANONICAL KENYAN LOCATION DATA
  * ==============================
- * Return4me stores a location as FREE TEXT (`items.location_description`) —
- * there is no county column, and inventing one would be a schema change this
- * phase deliberately does not make. What was missing was a single, canonical,
- * non-duplicated list for the UI to suggest from, so that:
+ * This file is the application's ONE canonical county dataset. There is exactly
+ * one list, it is imported rather than re-typed, and no component may keep a
+ * second copy of it.
  *
- *   - a Finder/Owner/Agent types a county name that actually exists;
- *   - the name is spelled the way Kenyan users and government offices spell it
- *     (so a later geocode/match step is not defeated by "Nairobii" vs "Nairobi");
- *   - the list is defined ONCE and imported, instead of being re-typed inside
- *     each form (which is how the old per-component category lists drifted).
+ * WHAT IS STORED, AND HOW A COUNTY IS VALIDATED
+ *   - `items.found_county` and `lost_reports.county` hold a CANONICAL county
+ *     name — one of the 47 below — or nothing at all where the row predates the
+ *     field. No other value is ever written there.
+ *   - The county VALUE is validated and canonicalised at the API boundary by
+ *     `resolveCountyName()` in this file. That function is the only county
+ *     resolver in the codebase: it returns a canonical name or `null`, and it
+ *     never guesses a nearby county.
+ *   - The Finder (`components/FinderView.tsx`) and the lost-report wizard
+ *     (`components/customer/LostReportWizard.tsx`) both present the county as a
+ *     REQUIRED selector built from `countiesByUxGroup()` — not a free-text
+ *     field, and not a second hard-coded list.
+ *
+ * "EXACT PLACE" IS FREE TEXT, AND IS NEVER INTERPRETED
+ *   The human detail of where something was found or lost stays the user's own
+ *   words, stored verbatim: `items.location_description` (the Finder's "Exact
+ *   place") and `lost_reports.location_area` (the lost report's "Exact place",
+ *   alongside an optional separate `location_landmark`).
+ *
+ *   That text is deliberately NOT parsed. Nothing in this codebase reads an
+ *   exact-place string and derives a sub-county, city, town, ward, estate or
+ *   landmark from it, and no administrative geography is inferred from it —
+ *   not here, not at the API boundary, not in matching. (The single place free
+ *   text is sent to a forward geocoder is operational agent routing, which uses
+ *   the returned COORDINATES and never rewrites or reinterprets the text.)
  *
  * AUTHORITY — the 47 counties are those created by Article 6(1) and the First
  * Schedule of the Constitution of Kenya (2010); there are exactly 47, and they
@@ -24,8 +43,9 @@
  * WHAT THIS FILE DELIBERATELY DOES NOT CONTAIN
  *   - no sub-counties, wards, villages or "areas": those are large (290+
  *     sub-counties, 1,450 wards) and change; hard-coding them here would create
- *     invented or stale administrative data. The UI asks for Town/Area/Landmark
- *     as typed free text instead.
+ *     invented or stale administrative data. The UI asks for the COUNTY as a
+ *     selector (see `countiesByUxGroup()`), and everything below it as typed
+ *     free text — the "Exact place" field.
  *   - no coordinates per county: an approximate centroid would be a fabricated
  *     location, and the only coordinates Return4me uses are the ones the browser
  *     actually reports (see FinderView) or the geocoder actually returns (see

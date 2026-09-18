@@ -44,6 +44,19 @@ describe('Kenya county data is the complete official set', () => {
     expect(new Set(names.map((n) => n.toLowerCase())).size).toBe(47);
   });
 
+  it('carries the complete ISO 3166-2:KE code sequence KE-01 … KE-47, in order', () => {
+    // P14C-5D — the pre-existing tests asserted the count, the name list,
+    // uniqueness and (elsewhere) first/last. A permutation or a malformed
+    // middle code (e.g. 'KE-1', 'KE-003', KE-02/KE-03 swapped) would still have
+    // passed all of those, so the WHOLE expected sequence is constructed here
+    // and compared positionally against the canonical codes.
+    const expectedCodes = Array.from(
+      { length: 47 },
+      (_, index) => `KE-${String(index + 1).padStart(2, '0')}`,
+    );
+    expect(KENYA_COUNTIES.map((c) => c.code)).toEqual(expectedCodes);
+  });
+
   it('assigns every county to exactly one UX-only group, and every group is declared', () => {
     const seen = new Set<string>();
     for (const county of KENYA_COUNTIES) {

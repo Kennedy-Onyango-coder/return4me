@@ -992,16 +992,32 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
                               )}
                             </div>
 
+                            {/* P14C-5B — this label had no `htmlFor` and the input
+                                no `id`, so assistive technology saw an unlabelled
+                                text box. The panel renders for at most ONE item at
+                                a time (`verifyingItemId === item.id`), so a static
+                                id cannot collide. The "Finder: …" note is itself
+                                conditionally rendered, so the `aria-describedby`
+                                reference is attached under the SAME condition — a
+                                reference is never left dangling. Label text only:
+                                the state, the `foundArea` payload and the
+                                `verified_found_area` column are unchanged. */}
                             <div className="space-y-1">
-                              <label className="text-[10px] font-bold text-stone-500 uppercase block">Found area</label>
+                              <label htmlFor="agent-verify-exact-place" className="text-[10px] font-bold text-stone-500 uppercase block">Exact place</label>
                               <input
+                                id="agent-verify-exact-place"
                                 type="text"
                                 value={verifyFoundArea}
                                 onChange={(e) => setVerifyFoundArea(e.target.value)}
                                 className="w-full border border-stone-200 rounded-lg p-2 text-xs"
+                                aria-describedby={
+                                  verifyFoundArea !== (item.location_description || '')
+                                    ? 'agent-verify-exact-place-finder-note'
+                                    : undefined
+                                }
                               />
                               {verifyFoundArea !== (item.location_description || '') && (
-                                <p className="text-[10px] text-stone-400">Finder: {item.location_description}</p>
+                                <p id="agent-verify-exact-place-finder-note" className="text-[10px] text-stone-400">Finder: {item.location_description}</p>
                               )}
                             </div>
 
