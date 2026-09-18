@@ -86,6 +86,56 @@ describe('maskPublicDocumentNumber', () => {
   });
 });
 
+// P13 DEFECT (fixed): an extractor sentinel is not a value. The OCR schema types
+// documentNumber/fullName as "string or null", so a model that cannot read a
+// field commonly returns the literal STRING "NULL" rather than JSON null. Nothing
+// upstream normalized it, so it reached these maskers looking like real data and
+// produced a FABRICATED public recognition clue ("NULL" -> "N***" / "NU**").
+// A sentinel must behave exactly like a missing value: no clue at all.
+describe('extractor sentinels never become public recognition clues (P13 fix)', () => {
+  const sentinels = ['NULL', 'null', 'Null', 'N/A', 'n/a', 'NIL', 'none', 'None', 'undefined', 'UNKNOWN', '-', '--'];
+
+  it('maskPublicName returns no name clue for any sentinel spelling', () => {
+    for (const s of sentinels) {
+      expect(maskPublicName(s), `sentinel ${s} must not produce a name clue`).toBeNull();
+    }
+  });
+
+  it('maskPublicDocumentNumber returns no number clue for any sentinel and style', () => {
+    for (const s of sentinels) {
+      for (const style of ['national_id', 'passport', 'driving_licence', 'card', 'generic']) {
+        expect(
+          maskPublicDocumentNumber(s, style),
+          `sentinel ${s} must not produce a document clue for style ${style}`,
+        ).toBeNull();
+      }
+    }
+  });
+
+  it('the literal sentinel cannot reappear through buildSafePublicClues', () => {
+    const clues = buildSafePublicClues(
+      {
+        is_sensitive_document: true,
+        verification_status: 'confirmed_as_reported',
+        verified_name: 'NULL',
+        verified_document_number: 'NULL',
+        verified_found_area: 'Nairobi',
+      },
+      { public_clue_style: 'national_id' },
+    );
+    expect(clues.nameClue).toBeNull();
+    expect(clues.documentNumberClue).toBeNull();
+  });
+
+  it('real values are still masked exactly as before, and only EXACT sentinels are dropped', () => {
+    expect(maskPublicName('Kennedy Onyango')).toBe('K****** O******');
+    expect(maskPublicDocumentNumber('12345678', 'national_id')).toBe('12******');
+    // A real value that merely begins with "Null" is untouched.
+    expect(maskPublicName('Nullman Ochieng')).toBe('N****** O******');
+    expect(maskPublicDocumentNumber('NULLA123', 'generic')).toBe('N*******');
+  });
+});
+
 describe('safePublicLocation', () => {
   it('keeps an "Area, Town" style location as-is', () => {
     expect(safePublicLocation('Eastleigh, Nairobi')).toBe('Eastleigh, Nairobi');

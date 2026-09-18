@@ -44,8 +44,39 @@ export interface SafePublicClues {
  * null/undefined/empty -> null (caller should omit the name clue
  *   entirely rather than show a placeholder)
  */
+
+// ---------------------------------------------------------------------------
+// SENTINEL VALUES (P13 DEFECT FIX)
+// ---------------------------------------------------------------------------
+// Strings an extractor may emit to mean "I could not read this" rather than a
+// real value. The OCR response schema types documentNumber/fullName as
+// "string or null", so a model that cannot read a field commonly returns the
+// literal STRING "NULL" instead of JSON null. Nothing in the pipeline
+// (services/ocr.ts -> POST /api/items/analyze -> POST /api/items/report ->
+// /api/agents/verify-item -> recordItemVerification) normalizes that sentinel,
+// so it arrived at the maskers below looking exactly like a real name or
+// document number and produced a FABRICATED public recognition clue:
+//     maskPublicName("NULL")            -> "N***"
+//     maskPublicDocumentNumber("NULL", …) -> "NU**" / "N***"
+// A sentinel means "no value", and the established public policy for "no value"
+// is to emit NO clue at all (see the null/empty handling in both functions
+// below). This makes that policy hold for sentinels too.
+//
+// TRADE-OFF, stated deliberately: a genuine surname "Null" (attested in some
+// European naming traditions) would also be suppressed. For a PUBLIC clue the
+// fail-safe direction is to publish nothing rather than to publish a masked
+// clue derived from a string that is overwhelmingly a sentinel.
+const SENTINEL_VALUES: ReadonlySet<string> = new Set([
+  'null', 'n/a', 'n.a.', 'none', 'nil', 'undefined', 'unknown', '-', '--',
+]);
+
+function isSentinelValue(value: string): boolean {
+  return SENTINEL_VALUES.has(value.trim().toLowerCase());
+}
+
 export function maskPublicName(fullName: string | null | undefined): string | null {
   if (!fullName || !fullName.trim()) return null;
+  if (isSentinelValue(fullName)) return null;
 
   const parts = fullName.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return null;
@@ -82,6 +113,10 @@ export function maskPublicDocumentNumber(
 
   const clean = documentNumber.trim().replace(/\s+/g, '');
   if (clean.length === 0) return null;
+  // A provider/field sentinel ("NULL", "N/A", …) is "no value", not a document
+  // number — see the SENTINEL_VALUES comment above. Compound sentinels such as
+  // "N/A" are already whitespace-free by this point.
+  if (isSentinelValue(clean)) return null;
 
   switch (style) {
     case 'national_id': {
