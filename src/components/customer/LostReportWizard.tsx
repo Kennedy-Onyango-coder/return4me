@@ -135,12 +135,12 @@ function validateStep(step: number, form: FormState, t: (en: string, sw: string)
     }
     const area = form.locationArea.trim();
     if (area.length < LOST_REPORT_FIELD_MINIMUMS.locationArea) {
-      return t('Please enter the town or area where you lost it.', 'Tafadhali weka mji au eneo ulipopoteza.');
+      return t('Please enter the exact place where you lost it.', 'Tafadhali weka mahali halisi ulipopoteza.');
     }
     if (area.length > LOST_REPORT_FIELD_LIMITS.locationArea) {
       return t(
-        `Please shorten the town or area to ${LOST_REPORT_FIELD_LIMITS.locationArea} characters or fewer.`,
-        `Tafadhali fupisha mji au eneo hadi herufi ${LOST_REPORT_FIELD_LIMITS.locationArea} au chini.`
+        `Please shorten the exact place to ${LOST_REPORT_FIELD_LIMITS.locationArea} characters or fewer.`,
+        `Tafadhali fupisha mahali halisi hadi herufi ${LOST_REPORT_FIELD_LIMITS.locationArea} au chini.`
       );
     }
 
@@ -516,14 +516,25 @@ export default function LostReportWizard({
             ))}
           </Select>
 
+          {/* P14C-3A — the reporter's own description of where the item was lost,
+              so the label now says "Exact place" instead of "Town, area or
+              estate". The field is UNCHANGED in the data model: still free text,
+              still posted as `locationArea` → lost_reports.location_area, still
+              the same validator. The hint deliberately omits "landmark" because
+              the optional Landmark field directly below already covers that, and
+              repeating it invited the same words to be typed twice. */}
           <Input
-            label={t('Town, area or estate', 'Mji, eneo au mtaa')}
+            label={t('Exact place', 'Mahali halisi')}
             required
             value={form.locationArea}
             onChange={(e) => set('locationArea', e.target.value)}
             maxLength={LOST_REPORT_FIELD_LIMITS.locationArea}
             disabled={submitting}
-            placeholder={t('e.g. Westlands', 'mfano Westlands')}
+            placeholder={t('e.g. Near Sarit Centre, Westlands', 'mfano Karibu na Sarit Centre, Westlands')}
+            hint={t(
+              'Enter the street, estate, building or nearby place you know.',
+              'Weka barabara, mtaa, jengo au mahali pengine unapojua.'
+            )}
           />
 
           <Input

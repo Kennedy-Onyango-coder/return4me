@@ -91,6 +91,33 @@ export function maskPublicName(fullName: string | null | undefined): string | nu
   return parts.slice(0, 2).map(maskWord).join(' ');
 }
 
+// ---------------------------------------------------------------------------
+// AUTHORITATIVE public_clue_style VOCABULARY (P14A / P14-05)
+// ---------------------------------------------------------------------------
+// The complete set of values `categories.public_clue_style` may hold. This is
+// the SINGLE definition: the switch in maskPublicDocumentNumber() below
+// implements exactly these cases, src/db/schema.ts documents the same set, and
+// the admin category routes validate against this list rather than re-typing
+// it. Order is the order the admin console offers them in, safest-first.
+//
+// 'none' means never publish a document-number clue for that category at all,
+// whatever was extracted — the strictest of the styles.
+export const PUBLIC_CLUE_STYLES = [
+  'none',
+  'national_id',
+  'passport',
+  'driving_licence',
+  'card',
+  'generic',
+] as const;
+
+export type PublicClueStyle = (typeof PUBLIC_CLUE_STYLES)[number];
+
+/** True only for a value this module (and the DB column) actually supports. */
+export function isPublicClueStyle(value: unknown): value is PublicClueStyle {
+  return typeof value === 'string' && (PUBLIC_CLUE_STYLES as readonly string[]).includes(value);
+}
+
 /**
  * Category-aware document-number masking. The exact style is driven by
  * category.public_clue_style (admin-configurable — see schema.ts), NOT

@@ -2,14 +2,16 @@ import React, { useState, useRef, useEffect } from 'react';
 import { translations } from '../types';
 // REQUEST 09 — the canonical Kenyan county list (all 47, ISO 3166-2:KE
 // spellings) lives in one place: src/config/kenyaCounties.ts.
-// PHASE 9D — this list is now used for TWO things here:
-//   1. the free-text suggestions datalist on the area-description field (as
-//      before: the stored value stays location_description), and
-//   2. a REQUIRED County selector, whose value the server canonicalizes with
-//      `resolveCountyName()` and stores in items.found_county. The Finder must
-//      state the county explicitly rather than have it guessed from the free
-//      text — see the Phase 9D note on that column in src/db/schema.ts.
-import { KENYA_COUNTY_NAMES, countiesByUxGroup } from '../config/kenyaCounties';
+// PHASE 9D — the Finder states the county explicitly through a REQUIRED County
+// selector, whose value the server canonicalizes with `resolveCountyName()` and
+// stores in items.found_county. The Finder must state the county explicitly
+// rather than have it guessed from the free text — see the Phase 9D note on
+// that column in src/db/schema.ts.
+// P14A (P14-13) — the county list is deliberately NOT used as a `datalist` on
+// the exact-location field any more: that field describes the actual place, and
+// offering county names there invited people to type a county where a place was
+// expected. The exact-location field stays free text.
+import { countiesByUxGroup } from '../config/kenyaCounties';
 import { Camera, Upload, AlertCircle, AlertTriangle, MapPin, CheckCircle, Shield, ArrowRight, Loader2, RefreshCw, X } from 'lucide-react';
 
 // Computed once at module scope: the 47 counties, grouped by the UX-only
@@ -259,11 +261,6 @@ export default function FinderView({ lang, categories, categoriesLoading = false
       return;
     }
 
-    if (categoryId === 'other' && !description) {
-      setErrorMsg(lang === 'en' ? 'Please provide a description.' : 'Tafadhali weka maelezo.');
-      return;
-    }
-
     if (createAccount && !agreedTerms) {
       setErrorMsg(lang === 'en' ? 'You must agree to the Terms of Service and Privacy Policy to create an account.' : 'Ni lazima ukubali Vigezo na Masharti ili kufungua akaunti.');
       return;
@@ -304,7 +301,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
           finderEmail,
           createAccount,
           termsAccepted: agreedTerms,
-          description: (categoryId === 'other' || !isSensitive) ? description : undefined,
+          description: !isSensitive ? description : undefined,
         }),
       });
 
@@ -569,10 +566,6 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                 onChange={(e) => {
                   setCategoryId(e.target.value);
                   setCategoryManuallySet(true);
-                  if (e.target.value === 'other') {
-                    setExtractedNumber('');
-                    setExtractedName('');
-                  }
                 }}
                 className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none disabled:bg-stone-50 disabled:text-stone-400"
                 required
@@ -708,7 +701,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
             </p>
           )}
 
-          {/* Location Details & Precise GPS Matching Prompt */}
+          {/* Location Details & GPS Prompt */}
           <div className="space-y-3">
             {/* PHASE 9D — REQUIRED COUNTY. Deliberately the FIRST geographic
                 question, and a select rather than free text: the value is the
@@ -751,31 +744,25 @@ export default function FinderView({ lang, categories, categoriesLoading = false
             </div>
 
             <label htmlFor="finder-location" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">{t.locLabel} *</label>
-            {/* County suggestions from the canonical Kenyan county list (all 47,
-                ISO 3166-2:KE spellings). A datalist is used deliberately: the
-                field stays FREE TEXT, so nothing about the stored value, the
-                schema or the agent matching changes — it only prevents the real
-                county names being misspelled. No coordinates and no sub-county
-                data are offered, because neither exists in the backend. */}
-            <datalist id="r4m-county-suggestions">
-              {KENYA_COUNTY_NAMES.map((county) => (
-                <option key={county} value={county} />
-              ))}
-            </datalist>
+            {/* P14A (P14-13) — FREE TEXT, with no suggestions attached. The
+                county is chosen in the required selector above; this field
+                describes the actual place (e.g. "Near Sarit Centre, Ring Road
+                Parklands"), so offering county names here was misleading. No
+                sub-county/city dataset exists and none is invented here. */}
             
-            {/* GPS Precise Match Card Prompt */}
-            {!latitude || !longitude ? (
+            {/* GPS prompt — an OPTIONAL aid to agent matching, never a promise of one */}
+            {latitude === null || longitude === null ? (
               <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-3">
                 <div className="flex gap-2.5">
                   <MapPin className="text-accent-orange shrink-0 mt-0.5" size={18} />
                   <div className="space-y-1">
                     <h4 className="text-xs font-bold text-ink leading-none">
-                      {lang === 'en' ? 'Enable Location for Nearest Agent Link' : 'Ruhusu Mahali Ulipo ili Kupata Wakala wa Karibu'}
+                      {lang === 'en' ? 'Help Us Match an Agent' : 'Tusaidie Kupata Wakala'}
                     </h4>
                     <p className="text-caption text-ink-muted leading-normal">
-                      {lang === 'en' 
-                        ? 'Please turn on your GPS location. This automatically matches you to the closest Return4me Agent hub for your physical drop-off, securing your payout faster.' 
-                        : 'Tafadhali washa huduma ya GPS. Hii inakuunganisha moja kwa moja na Wakala wa karibu zaidi wa Return4me ili kuwasilisha hati na kupata malipo yako haraka.'}
+                      {lang === 'en'
+                        ? 'Turning on your location can help us match your report to a nearby available Return4me Agent hub for your drop-off. If no Agent can be matched, our team will assign one for you.'
+                        : 'Kuwasha mahali ulipo kunaweza kutusaidia kulinganisha ripoti yako na Wakala wa Return4me aliye karibu na anayepatikana kwa kuwasilisha. Iwapo Wakala hapatikani, timu yetu itakupangia mmoja.'}
                     </p>
                   </div>
                 </div>
@@ -793,7 +780,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                   ) : (
                     <>
                       <MapPin size={14} />
-                      <span>{lang === 'en' ? 'Turn Location On & Link Agent' : 'Washa Mahali Ulipo na Unganisha Wakala'}</span>
+                      <span>{lang === 'en' ? 'Turn Location On' : 'Washa Mahali Ulipo'}</span>
                     </>
                   )}
                 </button>
@@ -805,12 +792,12 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                 </div>
                 <div className="flex-1 min-w-0">
                   <h4 className="text-xs font-bold text-emerald-900">
-                    {lang === 'en' ? 'Precise Agent Match Enabled!' : 'Unganisho Sahihi wa Wakala Umewashwa!'}
+                    {lang === 'en' ? 'Location Captured' : 'Mahali Pamehifadhiwa'}
                   </h4>
                   <p className="text-caption text-emerald-700 mt-0.5">
                     {lang === 'en'
-                      ? 'Location captured to help match your report with the nearest Return4me Agent.'
-                      : 'Mahali yamehifadhiwa ili kusaidia kulinganisha ripoti yako na Wakala wa Return4me aliye karibu.'}
+                      ? 'Your location has been captured and can help us match your report to a nearby available Return4me Agent hub. If no Agent can be matched, our team will assign one for you.'
+                      : 'Mahali ulipo pamehifadhiwa na kunaweza kutusaidia kulinganisha ripoti yako na Wakala wa Return4me aliye karibu na anayepatikana. Iwapo Wakala hapatikani, timu yetu itakupangia mmoja.'}
                   </p>
                 </div>
                 <button
@@ -825,15 +812,25 @@ export default function FinderView({ lang, categories, categoriesLoading = false
 
             <div className="flex gap-2">
               <input
-                id="finder-location" list="r4m-county-suggestions"
+                id="finder-location"
                 type="text"
                 value={locationDescription}
                 onChange={(e) => setLocationDescription(e.target.value)}
                 className="flex-1 border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none"
-                placeholder={lang === 'en' ? "e.g. Near Yaya Centre, Kilimani" : "Mfano: Karibu na Yaya Centre, Kilimani"}
+                placeholder={lang === 'en' ? 'e.g. Near Sarit Centre, Westlands' : 'Mfano: Karibu na Sarit Centre, Westlands'}
                 required
+                aria-describedby="finder-location-hint"
               />
             </div>
+            {/* P14C-3A — the exact place is the Finder's OWN words, stored
+                verbatim in items.location_description. The hint says what to
+                type; it promises nothing about automatic identification,
+                matching, speed or payout, and it invents no vocabulary. */}
+            <span id="finder-location-hint" className="text-caption text-ink-muted block leading-tight">
+              {lang === 'en'
+                ? 'Enter the street, estate, building, landmark or nearby place you know.'
+                : 'Weka barabara, mtaa, jengo, alama ya eneo au mahali pengine unapojua.'}
+            </span>
           </div>
 
           {/* REQUEST 12/26 — truthful statement of what the location is actually

@@ -151,14 +151,36 @@ export function resolveTaxonomy<T extends { id?: string }>(
   for (const category of categories || []) {
     if (category && typeof category.id === 'string') byId.set(category.id, category);
   }
-  return CATEGORY_TAXONOMY
-    .map((group) => ({
-      ...group,
-      categories: group.ids
-        .map((id) => byId.get(id))
-        .filter((c): c is T => Boolean(c)),
-    }))
-    .filter((group) => group.categories.length > 0);
+
+  const resolved = CATEGORY_TAXONOMY.map((group) => ({
+    ...group,
+    categories: group.ids
+      .map((id) => byId.get(id))
+      .filter((c): c is T => Boolean(c)),
+  }));
+
+  // P14A (P14-02) — UNGROUPED LIVE CATEGORIES MUST STILL BE DISCOVERABLE.
+  // An administrator can create a brand-new category in the console at any
+  // time; its id is by definition not in the hand-maintained `ids` lists
+  // above. That category IS reportable and priced by the backend, so dropping
+  // it here would hide a real category from the homepage's only discovery
+  // surface. It is attached to the single existing fallback group ("Other")
+  // rather than dropped or listed a second time here — no new group, no new
+  // category source, and the grouped ids keep their existing groups.
+  const groupedIds = new Set(groupedCategoryIds());
+  const ungrouped: T[] = [];
+  for (const [id, category] of byId) {
+    if (!groupedIds.has(id)) ungrouped.push(category);
+  }
+  if (ungrouped.length > 0) {
+    const fallback = resolved.find((group) => group.key === FALLBACK_GROUP_KEY);
+    // The fallback group always exists in CATEGORY_TAXONOMY (a test enforces
+    // exactly one); `find` rather than an index so the group is inserted in
+    // its declared position if it had no live members of its own.
+    if (fallback) fallback.categories.push(...ungrouped);
+  }
+
+  return resolved.filter((group) => group.categories.length > 0);
 }
 
 /**

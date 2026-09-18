@@ -380,9 +380,21 @@ describe('finder report flow (Phase 8.5)', () => {
 
   it('keeps the GPS copy tied to the capability the backend actually implements', () => {
     // services/AgentMatchingService.assignNearestAgent(lat, lon, area) is what
-    // runs server-side, and the payload really carries the coordinates — so the
-    // "closest agent" wording is supported, not invented.
+    // runs server-side, and the payload really carries the coordinates.
     expect(finderViewTsx).toMatch(/latitude,\s*\r?\n\s*longitude,/);
-    expect(finderViewTsx).toMatch(/closest Return4me Agent hub/);
+
+    // P14A (P14-16) — the copy used to promise "the closest Return4me Agent hub"
+    // and a FASTER payout ("securing your payout faster"). services/agent.ts only
+    // ever considers agents whose status is 'active', and returns
+    // { method: 'manual_required' } when none are available, so the strongest
+    // honest claim is a NEARBY AVAILABLE hub — plus the manual fallback, which
+    // the old copy never mentioned. Both languages must say so.
+    const gpsCopy = withoutComments(finderViewTsx);
+    expect(gpsCopy).toMatch(/nearby available Return4me Agent hub/);
+    expect(gpsCopy).toMatch(/If no Agent can be matched, our team will assign one for you\./);
+    expect(gpsCopy).toMatch(/timu yetu itakupangia mmoja\./);
+    expect(gpsCopy).not.toMatch(/closest Return4me Agent hub/);
+    expect(gpsCopy).not.toMatch(/securing your payout faster/);
+    expect(gpsCopy).not.toMatch(/Precise Agent Match Enabled/);
   });
 });

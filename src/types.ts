@@ -150,7 +150,11 @@ export const translations = {
     categoryLabel: 'Item Category',
     docNumberLabel: 'Document/Serial Number (if visible)',
     docNameLabel: 'Full Name on Document (if visible)',
-    locLabel: 'Rough Location Found (e.g. Near Yaya Centre)',
+    // P14C-3A — this label used to read "Rough Location Found (e.g. Near Yaya
+    // Centre)", which described the field as approximate. It is the Finder's own
+    // exact description of where the item was found, so it now says so. Only
+    // FinderView consumes this key.
+    locLabel: 'Exact place',
     gpsLabel: 'Share GPS Coordinates (Optional for best agent assignment)',
     gpsSuccess: 'GPS Location Captured!',
     phonePayout: 'Your M-Pesa Phone Number (For automatic reward payout)',
@@ -244,7 +248,7 @@ export const translations = {
     categoryLabel: 'Kategoria ya Bidhaa',
     docNumberLabel: 'Nambari ya Hati/Seriali (ikiwa inaonekana)',
     docNameLabel: 'Majina Kamili kwenye Hati (ikiwa yanaonekana)',
-    locLabel: 'Mahali Takriban Ulipopata (Mfano Karibu na Yaya Centre)',
+    locLabel: 'Mahali halisi',
     gpsLabel: 'Shiriki Vipimo vya GPS (Hiari, kwa ugawaji bora wa wakala)',
     gpsSuccess: 'Eneo la GPS Limepatikana!',
     phonePayout: 'Nambari yako ya M-Pesa ya Kupokelea Zawadi',

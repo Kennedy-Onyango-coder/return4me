@@ -306,6 +306,11 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
   const [payerPhone, setPayerPhone] = useState('');
   // The server-side payment session this claim is currently paying with.
   const [paymentSessionId, setPaymentSessionId] = useState('');
+  // P14A (P14-03) — the authoritative KES amount the SERVER pinned when it
+  // created this claim's payment session. Stays null until a session exists;
+  // the claimant-facing fee block below must never show a fabricated 0 in its
+  // place.
+  const [paymentSessionAmount, setPaymentSessionAmount] = useState<number | null>(null);
   const [ownerEmail, setOwnerEmail] = useState('');
   const [otpCode, setOtpCode] = useState('');
 
@@ -817,6 +822,13 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
         throw new Error('Payment session was not created');
       }
       setPaymentSessionId(sessionId);
+      // P14A (P14-03) — record the authoritative amount the server computed for
+      // this session (it also covers the `reused: true` case, where the server
+      // returned an already-open session rather than creating a new one).
+      if (createData.paymentSession?.amount !== undefined && createData.paymentSession?.amount !== null) {
+        const sessionAmount = Number(createData.paymentSession.amount);
+        if (Number.isFinite(sessionAmount)) setPaymentSessionAmount(sessionAmount);
+      }
 
       const initiateResponse = await fetch(`/api/claims/${paidClaim.id}/payment-session/${sessionId}/initiate`, {
         method: 'POST',
@@ -854,6 +866,11 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
         throw new Error(data.error || 'Could not fetch payment status');
       }
       const s = data.paymentSession;
+      // P14A (P14-03) — the poll is another authoritative source for the amount.
+      if (s?.amount !== undefined && s?.amount !== null) {
+        const polledAmount = Number(s.amount);
+        if (Number.isFinite(polledAmount)) setPaymentSessionAmount(polledAmount);
+      }
       const claimStatus = data.claim?.status;
       if (s?.status === 'confirmed' || claimStatus === 'escrow_held' || claimStatus === 'released') {
         if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
@@ -1510,11 +1527,32 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
           {/* Escrow Fee breakdown details */}
           {(() => {
+            // P14A (P14-03) — THIS BLOCK MUST NEVER FABRICATE A FIGURE.
+            //   * The TOTAL prefers the authoritative amount the SERVER pinned to
+            //     this claim's payment session (the same value the payer is
+            //     actually charged). Only when no session exists yet does it fall
+            //     back to the live category's published fee.
+            //   * The per-party split is shown ONLY when the live category record
+            //     is available, because the server does not return that split to
+            //     this surface. Previously a missing category silently produced
+            //     "KES 0" for all four lines while the server charged the locked
+            //     amount — a fabricated financial figure.
+            //   * Anything that cannot be resolved is labelled unavailable, and a
+            //     genuine server value of 0 still renders as "KES 0".
             const catRecord = categories.find(c => c.id === selectedItem?.category_id);
-            const totalFee = catRecord ? Math.round(Number(catRecord.total_fee)) : 0;
-            const finderShare = catRecord ? Math.round(Number(catRecord.finder_share)) : 0;
-            const agentShare = catRecord ? Math.round(Number(catRecord.agent_share)) : 0;
-            const platformShare = catRecord ? Math.round(Number(catRecord.platform_share)) : 0;
+            const authoritativeTotal = paymentSessionAmount !== null && Number.isFinite(paymentSessionAmount)
+              ? Math.round(paymentSessionAmount)
+              : null;
+            const totalFee = authoritativeTotal !== null
+              ? authoritativeTotal
+              : (catRecord ? Math.round(Number(catRecord.total_fee)) : null);
+            const finderShare = catRecord ? Math.round(Number(catRecord.finder_share)) : null;
+            const agentShare = catRecord ? Math.round(Number(catRecord.agent_share)) : null;
+            const platformShare = catRecord ? Math.round(Number(catRecord.platform_share)) : null;
+            const money = (value: number | null) =>
+              value === null
+                ? (lang === 'en' ? 'Unavailable' : 'Haipatikani')
+                : `KES ${value}`;
 
             return (
               <div className="bg-brand-beige rounded-2xl border border-line-subtle p-5 text-left space-y-3">
@@ -1525,20 +1563,20 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 <div className="h-px bg-line-subtle" />
                 <div className="flex justify-between text-sm">
                   <span className="text-ink-muted font-medium">Finder Honorarium (Reward)</span>
-                  <span className="font-mono font-bold text-ink-muted">KES {finderShare}</span>
+                  <span className="font-mono font-bold text-ink-muted">{money(finderShare)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-ink-muted font-medium">Physical Agent Hub Handling</span>
-                  <span className="font-mono font-bold text-ink-muted">KES {agentShare}</span>
+                  <span className="font-mono font-bold text-ink-muted">{money(agentShare)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-ink-muted font-medium">Return4me Escrow & Platform</span>
-                  <span className="font-mono font-bold text-ink-muted">KES {platformShare}</span>
+                  <span className="font-mono font-bold text-ink-muted">{money(platformShare)}</span>
                 </div>
                 <div className="h-px bg-line-subtle" />
                 <div className="flex justify-between text-base font-extrabold text-primary-green">
                   <span>{t.releaseFee}</span>
-                  <span className="font-mono text-primary-green">KES {totalFee}</span>
+                  <span className="font-mono text-primary-green">{money(totalFee)}</span>
                 </div>
               </div>
             );

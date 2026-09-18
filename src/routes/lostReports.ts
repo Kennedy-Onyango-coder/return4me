@@ -201,7 +201,11 @@ export function validateLostReportPayload(body: any, categories: Array<{ id: str
   const county = resolveCountyName(body.county);
   if (!county) return { ok: false, error: MESSAGES.countyInvalid };
 
-  const locationArea = requiredText(body.locationArea, FIELD_LIMITS.locationArea, LOCATION_AREA_MIN_LENGTH, 'Town/Area');
+  // P14C-3A — copy-only: this label is interpolated into the user-facing
+  // tooShort/tooLong messages. The REQUEST FIELD is still `locationArea` and the
+  // DB column is still lost_reports.location_area; only the human-readable label
+  // changed, so the API contract and stored data are untouched.
+  const locationArea = requiredText(body.locationArea, FIELD_LIMITS.locationArea, LOCATION_AREA_MIN_LENGTH, 'Exact place');
   if (!locationArea.ok) return locationArea;
 
   const locationLandmark = optionalText(body.locationLandmark, FIELD_LIMITS.locationLandmark, 'Landmark');

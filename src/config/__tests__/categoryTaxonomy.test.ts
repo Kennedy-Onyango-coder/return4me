@@ -101,3 +101,65 @@ describe('resolveTaxonomy never advertises a category the backend cannot accept'
     expect(resolveTaxonomy(undefined)).toEqual([]);
   });
 });
+
+describe('resolveTaxonomy keeps every LIVE category reachable (P14A / P14-02)', () => {
+  const seeded = seededCategoryIds();
+
+  it('every seeded category is reachable from exactly one explorer group', () => {
+    const live = seeded.map((id) => ({ id }));
+    const groups = resolveTaxonomy(live);
+    const reachable = groups.flatMap((group) => group.categories.map((c) => c.id));
+
+    const missing = seeded.filter((id) => !reachable.includes(id));
+    expect(missing, `live categories not reachable from any group: ${missing.join(', ')}`).toEqual([]);
+
+    const counts = new Map<string, number>();
+    for (const id of reachable) counts.set(id, (counts.get(id) || 0) + 1);
+    const duplicated = [...counts.entries()].filter(([, n]) => n > 1).map(([id]) => id);
+    expect(duplicated, `live category rendered in more than one group: ${duplicated.join(', ')}`).toEqual([]);
+  });
+
+  it('an admin-created category the taxonomy does not know about is NOT silently dropped', () => {
+    const groups = resolveTaxonomy([
+      { id: 'national-id' },
+      { id: 'brand-new-admin-category' },
+    ]);
+    const reachable = groups.flatMap((group) => group.categories.map((c) => c.id));
+    expect(reachable).toContain('brand-new-admin-category');
+    // …and it lands in the ONE existing fallback group, not a new one.
+    const holder = groups.filter((group) => group.categories.some((c) => c.id === 'brand-new-admin-category'));
+    expect(holder.map((g) => g.key)).toEqual([FALLBACK_GROUP_KEY]);
+  });
+
+  it('an ungrouped category is shown even when the fallback group has none of its own ids live', () => {
+    // 'other-item' is deliberately absent here, so the fallback group would
+    // otherwise be dropped as empty and its unknown sibling would vanish.
+    const groups = resolveTaxonomy([
+      { id: 'national-id' },
+      { id: 'brand-new-admin-category' },
+    ]);
+    expect(groups.map((g) => g.key)).toContain(FALLBACK_GROUP_KEY);
+  });
+
+  it('existing taxonomy grouping is unchanged for categories that ARE grouped', () => {
+    const live = [{ id: 'national-id' }, { id: 'smartphone' }, { id: 'other-item' }];
+    const groups = resolveTaxonomy(live);
+    // Same keys, same order, same membership as before P14A — the ungrouped
+    // bucket adds nothing when every live category is already grouped.
+    expect(groups.map((g) => g.key)).toEqual(['identity-documents', 'phones-electronics', 'other']);
+    expect(groups.map((g) => g.categories.map((c) => c.id))).toEqual([
+      ['national-id'],
+      ['smartphone'],
+      ['other-item'],
+    ]);
+  });
+
+  it('deduplicates a repeated live id instead of rendering it twice', () => {
+    const groups = resolveTaxonomy([
+      { id: 'duplicated-new-category' },
+      { id: 'duplicated-new-category' },
+    ]);
+    const reachable = groups.flatMap((group) => group.categories.map((c) => c.id));
+    expect(reachable.filter((id) => id === 'duplicated-new-category')).toHaveLength(1);
+  });
+});

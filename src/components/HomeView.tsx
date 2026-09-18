@@ -44,13 +44,14 @@ export default function HomeView(props: HomeViewProps) {
   } = props;
   const t = translations[lang];
 
+  // P14A (P14-09) — the ONLY source of a category's human-readable name is the
+  // live category list. This used to fall back to a hard-coded label map for
+  // four ids, which meant an admin RENAME of one of those categories kept
+  // showing the old name here. An unresolvable id now shows the id itself — a
+  // neutral, honest label that never contradicts the live data.
   const getCategoryName = (categoryId: string) => {
     const cat = categories.find((c: any) => c.id === categoryId);
     if (cat) return lang === 'en' ? cat.name_en : cat.name_sw;
-    if (categoryId === 'national-id') return lang === 'en' ? 'National ID' : 'Kitambulisho cha Kitaifa';
-    if (categoryId === 'vehicle-logbook') return lang === 'en' ? 'Vehicle Logbook' : 'Kitabu cha Magari';
-    if (categoryId === 'driving-licence') return lang === 'en' ? 'Driving Licence' : 'Leseni ya Udereva';
-    if (categoryId === 'number-plate') return lang === 'en' ? 'Number Plate' : 'Nambari ya Gari';
     return categoryId;
   };
 

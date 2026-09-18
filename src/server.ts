@@ -65,6 +65,11 @@ import { hashDocument } from './services/documentHash';
 // ONE canonical resolver (`resolveCountyName` in config/kenyaCounties.ts), so
 // this file needs no county list and no second implementation.
 import { resolveFoundCountyInput } from './services/foundItemCounty';
+// P14A (P14-05): the ONE authoritative vocabulary for
+// `categories.public_clue_style`. The admin category routes validate against
+// this list instead of re-typing it, so the console can configure the masking
+// policy the public-recognition service actually implements.
+import { isPublicClueStyle, PUBLIC_CLUE_STYLES } from './services/publicRecognition';
 // PHASE 9D: the ONE coordinate validator (finite + in-range, explicit
 // null-handling so a valid 0 is not discarded).
 import { normalizeCoordinateInput } from './services/coordinates';
@@ -1744,7 +1749,6 @@ async function startServer() {
     }
 
     try {
-      const isOther = categoryId === 'other';
       const categories = await db.getCategories();
 
       // -----------------------------------------------------------------------
@@ -1802,15 +1806,14 @@ async function startServer() {
 
       // 3. Create document hashes for privacy-safe exact matching via secure HMAC-SHA256
       // Skip OCR and salted hashing entirely for non-sensitive items
-      const saltedHash = (isSensitive && !isOther && extractedNumber) ? hashDocument(extractedNumber) : null;
-      const fuzzyMaskedName = (isSensitive && !isOther && extractedName) ? maskName(extractedName) : (isSensitive ? null : (extractedName || (cat ? cat.name_en : 'Found Item')));
+      const saltedHash = (isSensitive && extractedNumber) ? hashDocument(extractedNumber) : null;
+      const fuzzyMaskedName = (isSensitive && extractedName) ? maskName(extractedName) : (isSensitive ? null : (extractedName || (cat ? cat.name_en : 'Found Item')));
 
       // Get finder phone reputation
       const reputation = await db.getPhoneReputation(finderPhone);
 
-      // Determine flagged status - default to true if other, key details are missing (only for sensitive docs), category requires elevated review (cash/children's-property), agent assignment could not be made with any real confidence, or client specifies, or reputation auto-flags
-      const isFlagged = isOther || 
-                        reputation.autoFlag || 
+      // Determine flagged status - default to true if key details are missing (only for sensitive docs), category requires elevated review (cash/children's-property), agent assignment could not be made with any real confidence, or client specifies, or reputation auto-flags
+      const isFlagged = reputation.autoFlag || 
                         (cat ? cat.elevated_review : false) ||
                         matchingResult.needsManualAgentReassignment ||
                         (req.body.flaggedForReview !== undefined ? !!req.body.flaggedForReview : (isSensitive ? (!extractedNumber || !extractedName) : false));
@@ -1849,8 +1852,8 @@ async function startServer() {
         id: dropoffCode,
         category_id: categoryId,
         photo_url: photoUrl,
-        ocr_extracted_number: (isSensitive && !isOther) ? (extractedNumber || null) : null,
-        ocr_extracted_name: (isSensitive && !isOther) ? (extractedName ? extractedName.toUpperCase() : null) : null,
+        ocr_extracted_number: isSensitive ? (extractedNumber || null) : null,
+        ocr_extracted_name: isSensitive ? (extractedName ? extractedName.toUpperCase() : null) : null,
         document_number_hash: saltedHash,
         document_name_fuzzy: fuzzyMaskedName,
         location_description: locationDescription,
@@ -1872,8 +1875,8 @@ async function startServer() {
         assigned_agent_id: assignedAgent ? assignedAgent.id : null,
         status: 'awaiting_dropoff',
         flaggedForReview: isFlagged,
-        isDescriptionOnly: isOther || !isSensitive,
-        description: (isOther || !isSensitive) ? (description || extractedName || (cat ? cat.name_en : 'Found item')) : null,
+        isDescriptionOnly: !isSensitive,
+        description: (!isSensitive) ? (description || extractedName || (cat ? cat.name_en : 'Found item')) : null,
         is_sensitive_document: isSensitive,
         rejection_reason: null,
         locked_total_fee: lockedTotalFee,
@@ -4711,11 +4714,23 @@ async function startServer() {
       const {
         id, name_en, name_sw, total_fee, finder_share, agent_share, platform_share, is_sensitive_document,
         base_fee, complexity_fee, delay_fee, ceiling_percent, finder_pct, agent_pct, platform_pct, finder_reward_cap,
-        elevated_review,
+        elevated_review, public_clue_style,
       } = req.body;
 
       if (!id || typeof id !== 'string' || !/^[a-z0-9-]+$/.test(id)) {
         return res.status(400).json({ error: 'ID lazima iwe herufi ndogo na kistari (lowercase-kebab-case) pekee, na isikuwe tupu.' });
+      }
+
+      // P14A (P14-05) — allow-listed public-recognition masking style. An
+      // OMITTED field keeps the existing default ('generic', applied by the DB
+      // column); a supplied but unsupported value is rejected outright rather
+      // than silently coerced.
+      if (public_clue_style !== undefined && public_clue_style !== null && public_clue_style !== '') {
+        if (!isPublicClueStyle(public_clue_style)) {
+          return res.status(400).json({
+            error: `public_clue_style lazima iwe mojawapo ya: ${PUBLIC_CLUE_STYLES.join(', ')}. / public_clue_style must be one of: ${PUBLIC_CLUE_STYLES.join(', ')}.`
+          });
+        }
       }
 
       if (!name_en || typeof name_en !== 'string' || name_en.trim() === '' || !name_sw || typeof name_sw !== 'string' || name_sw.trim() === '') {
@@ -4763,13 +4778,17 @@ async function startServer() {
         platform_pct: platform_pct !== undefined ? Number(platform_pct) : undefined,
         finder_reward_cap: finder_reward_cap === null || finder_reward_cap === undefined || finder_reward_cap === '' ? null : Number(finder_reward_cap),
         elevated_review: !!elevated_review,
+        // Omitted → undefined, so the column's own 'generic' default applies.
+        public_clue_style: public_clue_style === undefined || public_clue_style === null || public_clue_style === ''
+          ? undefined
+          : public_clue_style,
       });
 
       const adminUser = req.user?.username || req.user?.userId || 'admin';
       await db.logAudit(
         adminUser,
         'CATEGORY_CREATED',
-        `Admin created category: id=${id}, name=${name_en}, total_fee=${total_fee}`
+        `Admin created category: id=${id}, name=${name_en}, total_fee=${total_fee}, public_clue_style=${newCat?.public_clue_style ?? 'generic'}`
       );
 
       res.json({ success: true, category: newCat });
@@ -4793,8 +4812,19 @@ async function startServer() {
       const {
         name_en, name_sw, total_fee, finder_share, agent_share, platform_share, is_sensitive_document,
         base_fee, complexity_fee, delay_fee, ceiling_percent, finder_pct, agent_pct, platform_pct, finder_reward_cap,
-        elevated_review, is_admin_modified,
+        elevated_review, is_admin_modified, public_clue_style,
       } = req.body;
+
+      // P14A (P14-05) — allow-listed masking style. OMITTED preserves whatever
+      // the category already has; an unsupported value is rejected, never
+      // silently coerced or written through.
+      if (public_clue_style !== undefined && public_clue_style !== null && public_clue_style !== '') {
+        if (!isPublicClueStyle(public_clue_style)) {
+          return res.status(400).json({
+            error: `public_clue_style lazima iwe mojawapo ya: ${PUBLIC_CLUE_STYLES.join(', ')}. / public_clue_style must be one of: ${PUBLIC_CLUE_STYLES.join(', ')}.`
+          });
+        }
+      }
 
       if (!name_en || typeof name_en !== 'string' || name_en.trim() === '' || !name_sw || typeof name_sw !== 'string' || name_sw.trim() === '') {
         return res.status(400).json({ error: 'Majina ya kategoria (English & Swahili) lazima yajazwe.' });
@@ -4845,13 +4875,17 @@ async function startServer() {
         platform_pct: platform_pct !== undefined ? Number(platform_pct) : undefined,
         finder_reward_cap: finder_reward_cap === undefined ? undefined : (finder_reward_cap === null || finder_reward_cap === '' ? null : Number(finder_reward_cap)),
         elevated_review: elevated_review !== undefined ? !!elevated_review : undefined,
+        // Omitted → undefined, which updateCategory treats as "leave unchanged".
+        public_clue_style: public_clue_style === undefined || public_clue_style === null || public_clue_style === ''
+          ? undefined
+          : public_clue_style,
       });
 
       const adminUser = req.user?.username || req.user?.userId || 'admin';
       await db.logAudit(
         adminUser,
         'CATEGORY_UPDATED',
-        `Admin updated category id=${id}, old total_fee=${existing.total_fee}, new total_fee=${total_fee}`
+        `Admin updated category id=${id}, old total_fee=${existing.total_fee}, new total_fee=${total_fee}, public_clue_style=${updatedCat?.public_clue_style ?? existing.public_clue_style}`
       );
 
       res.json({ success: true, category: updatedCat });

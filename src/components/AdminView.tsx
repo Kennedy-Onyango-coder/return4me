@@ -11,6 +11,23 @@ import LostReportsAdministration from './admin/lostReports/LostReportsAdministra
 // authenticated session actually carries. The helper decodes a display label and
 // never returns the token itself (see src/services/adminSession.ts).
 import { readAdminSessionIdentity, adminIdentityLabel } from '../services/adminSession';
+// P14A (P14-05) — the ONE authoritative vocabulary for a category's
+// public-recognition masking style. The console offers exactly these values (it
+// never re-types the list), and the admin category routes validate against it.
+import { PUBLIC_CLUE_STYLES } from '../services/publicRecognition';
+
+// P14A (P14-05) — human-readable labels for the canonical masking styles. Keyed
+// by the values in PUBLIC_CLUE_STYLES (the single source); an unmapped value
+// falls back to its raw enum name, so a style added to the service can never
+// silently vanish from this select.
+const PUBLIC_CLUE_STYLE_LABELS: Record<string, string> = {
+  none: 'None — never publish a document-number clue',
+  national_id: 'National ID — first 2 characters (e.g. 12******)',
+  passport: 'Passport — first character only (e.g. A*******)',
+  driving_licence: 'Driving licence — first character only (e.g. K*******)',
+  card: 'Card — last 4 digits only (e.g. •••• 4821)',
+  generic: 'Generic — first character only (e.g. X********)',
+};
 
 interface AdminViewProps {
   lang: 'en' | 'sw';
@@ -249,6 +266,9 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
   const [catFormFinderRewardCap, setCatFormFinderRewardCap] = useState<string>('');
   const [catFormElevatedReview, setCatFormElevatedReview] = useState(false);
   const [catFormIsAdminModified, setCatFormIsAdminModified] = useState(false);
+  // P14A (P14-05) — public-recognition masking style (canonical enum value).
+  // 'generic' is the DB column's own default.
+  const [catFormPublicClueStyle, setCatFormPublicClueStyle] = useState<string>('generic');
 
   const resetCategoryForm = (mode: 'create' | 'edit', cat?: any) => {
     setShowCategoryForm(mode);
@@ -271,6 +291,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
       setCatFormFinderRewardCap('');
       setCatFormElevatedReview(false);
       setCatFormIsAdminModified(false);
+      setCatFormPublicClueStyle('generic');
       setSelectedCategory(null);
     } else if (mode === 'edit' && cat) {
       setCatFormId(cat.id);
@@ -291,6 +312,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
       setCatFormFinderRewardCap(cat.finder_reward_cap !== undefined && cat.finder_reward_cap !== null ? String(cat.finder_reward_cap) : '');
       setCatFormElevatedReview(cat.elevated_review || false);
       setCatFormIsAdminModified(cat.is_admin_modified || false);
+      setCatFormPublicClueStyle(cat.public_clue_style || 'generic');
       setSelectedCategory(cat);
     }
   };
@@ -542,6 +564,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
         finder_reward_cap: catFormFinderRewardCap.trim() === '' ? null : parseFloat(catFormFinderRewardCap),
         elevated_review: catFormElevatedReview,
         is_admin_modified: catFormIsAdminModified,
+        public_clue_style: catFormPublicClueStyle,
       };
 
       const res = await fetch(url, {
@@ -3364,6 +3387,31 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                             Elevated Review — force admin approval before this category's items go public
                           </label>
                         </div>
+                      </div>
+
+                      {/* P14A (P14-05) — public-recognition masking style. Drives how this
+                          category's document-number clue is masked in public posts (see
+                          services/publicRecognition.ts). The option VALUES are the canonical
+                          enum values the server validates against; only the labels differ. */}
+                      <div className="col-span-3 space-y-1">
+                        <label htmlFor="catFormPublicClueStyle" className="text-xs font-bold text-stone-700">
+                          Public Recognition — document-number clue style
+                        </label>
+                        <select
+                          id="catFormPublicClueStyle"
+                          value={catFormPublicClueStyle}
+                          onChange={(e) => setCatFormPublicClueStyle(e.target.value)}
+                          className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:border-primary-green"
+                        >
+                          {PUBLIC_CLUE_STYLES.map((style) => (
+                            <option key={style} value={style}>
+                              {PUBLIC_CLUE_STYLE_LABELS[style] ?? style}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="text-[10px] text-stone-500">
+                          Applies to public/social recognition posts only. "None" never publishes a document-number clue for this category.
+                        </p>
                       </div>
 
                       {/* Flat fee override toggle — decides whether total_fee/finder_share/
