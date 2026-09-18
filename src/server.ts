@@ -1746,8 +1746,30 @@ async function startServer() {
     try {
       const isOther = categoryId === 'other';
       const categories = await db.getCategories();
+
+      // -----------------------------------------------------------------------
+      // PHASE 12 (P12-F1): the category is validated BEFORE any side effect.
+      //
+      // This route previously looked the category up and then carried on even
+      // when it did not exist: `cat` was undefined, `isSensitive` fell back to
+      // its fail-closed `true`, and execution continued through agent matching
+      // and `uploadBase64Image()` — a REAL storage write — before `db.createItem`
+      // finally failed the `items_category_id_fkey` constraint. The catch below
+      // then reported it as a 500 "Failed to save found item.", so a trivially
+      // malformed public request produced (a) a 5xx instead of a 4xx, (b) a full
+      // stack trace in the error log for a client input error, and (c) an
+      // orphaned uploaded photo object with no item row referencing it.
+      //
+      // The lost-report route has always rejected an unknown category up front
+      // (routes/lostReports.ts -> validateLostReportPayload -> MESSAGES.categoryInvalid);
+      // this makes the found-item route behave the same way, with the same
+      // wording, and keeps the rejection free of side effects.
+      // -----------------------------------------------------------------------
       const cat = categories.find(c => c.id === categoryId);
-      const isSensitive = cat ? (cat.is_sensitive_document !== false) : true;
+      if (!cat) {
+        return res.status(400).json({ error: 'Aina ya kitu haikubaliki. / That item category is not valid.' });
+      }
+      const isSensitive = cat.is_sensitive_document !== false;
 
       // 1. Assign nearest physical Return4me agent
       //
@@ -2090,13 +2112,19 @@ async function startServer() {
       // claimant and NOT a dispute). Historical records stay in the DB
       // for audit; they must simply stop acting as live reservations.
       {
-        const cleanOwnerPhone = ownerPhone.replace(/\s+/g, '');
+        // P12-F2: compare NORMALIZED phones on both sides — claims are stored in
+        // E.164 (`normalizedOwnerPhone`), so comparing the raw client string let a
+        // returning claimant miss their own claim, creating a duplicate plus a
+        // self-collision dispute that froze the item with 423. Full rationale and
+        // the live reproduction: src/__tests__/claimDuplicatePhoneNormalization.test.ts
+        const normalizeOwnerPhone = (p: unknown) => toE164Kenyan(String(p || '').replace(/\s+/g, ''));
+        const targetOwnerPhone = normalizedOwnerPhone;
         const isActiveClaim = (c: { status: string }) => !INACTIVE_CLAIM_STATUSES.has(c.status);
-        const sameOwnerClaim = (await db.getClaims()).find(c => 
-          c.item_id === itemId && 
+        const sameOwnerClaim = (await db.getClaims()).find(c =>
+          c.item_id === itemId &&
           isActiveClaim(c) &&
-          c.owner_phone && 
-          c.owner_phone.replace(/\s+/g, '') === cleanOwnerPhone
+          c.owner_phone &&
+          normalizeOwnerPhone(c.owner_phone) === targetOwnerPhone
         );
 
         if (sameOwnerClaim) {
@@ -2106,11 +2134,11 @@ async function startServer() {
           });
         }
 
-        const existingClaims = (await db.getClaims()).filter(c => 
-          c.item_id === itemId && 
+        const existingClaims = (await db.getClaims()).filter(c =>
+          c.item_id === itemId &&
           isActiveClaim(c) &&
           c.owner_phone &&
-          c.owner_phone.replace(/\s+/g, '') !== cleanOwnerPhone
+          normalizeOwnerPhone(c.owner_phone) !== targetOwnerPhone
         );
 
         if (existingClaims.length > 0) {
