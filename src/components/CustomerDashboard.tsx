@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Loader2, Link2, Unlink, RefreshCw, LayoutDashboard, FileSearch, type LucideIcon } from 'lucide-react';
-import { Badge, Button, EmptyState, Input, OTPInput, Banner } from './ui';
+import { Loader2, Link2, Unlink, RefreshCw, LayoutDashboard, FileSearch, ArrowRight, type LucideIcon } from 'lucide-react';
+import { Badge, Button, EmptyState, Input, OTPInput, Banner, StatCard, Skeleton } from './ui';
 import { getClaimStatusDisplay } from './claimStatus';
 import { getVerificationFields } from '../config/verificationProfiles';
 import { verificationTranslation } from '../config/verificationTranslations';
@@ -63,6 +63,11 @@ interface AccountSectionCopy {
   label: string;
   title: string;
   description: string;
+  /**
+   * Optional one-line purpose, used only by the section cards on the Overview.
+   * The section's own page heading keeps using `description`.
+   */
+  hint?: string;
 }
 
 type AccountSectionKey = 'overview' | 'lost' | 'claims';
@@ -75,12 +80,12 @@ const ACCOUNT_SECTIONS: Record<AccountSectionKey, { icon: LucideIcon; en: Accoun
     en: {
       label: 'Overview',
       title: 'Overview',
-      description: 'Your account at a glance, and the fastest way into your lost reports and claims.',
+      description: 'Keep track of your lost reports and the claims linked to this account, all in one place.',
     },
     sw: {
       label: 'Muhtasari',
       title: 'Muhtasari',
-      description: 'Akaunti yako kwa muhtasari, na njia ya haraka kufikia ripoti na claims zako.',
+      description: 'Fuatilia ripoti zako za vitu vilivyopotea na claims zilizounganishwa na akaunti hii, mahali pamoja.',
     },
   },
   lost: {
@@ -89,11 +94,13 @@ const ACCOUNT_SECTIONS: Record<AccountSectionKey, { icon: LucideIcon; en: Accoun
       label: 'My Lost Reports',
       title: 'My Lost Reports',
       description: 'Reports you have filed with Return4me. Anything that looks similar is shown as a possible match, never as a confirmation.',
+      hint: 'File a report and check for possible matches.',
     },
     sw: {
       label: 'Ripoti Zangu',
       title: 'Ripoti zangu za vitu vilivyopotea',
       description: 'Ripoti ulizowasilisha kwa Return4me. Kitu chochote kinachofanana huonyeshwa kama mechi inayowezekana, sio uthibitisho.',
+      hint: 'Wasilisha ripoti na uangalie mechi zinazowezekana.',
     },
   },
   claims: {
@@ -102,11 +109,13 @@ const ACCOUNT_SECTIONS: Record<AccountSectionKey, { icon: LucideIcon; en: Accoun
       label: 'My Claims',
       title: 'My Claims',
       description: 'Claims linked to this account, and the verification you must pass before a claim is added.',
+      hint: 'See the claims linked to this account.',
     },
     sw: {
       label: 'Claims Zangu',
       title: 'Claims Zangu',
       description: 'Claims zilizounganishwa na akaunti hii, na uthibitisho unaohitajika kabla ya claim kuongezwa.',
+      hint: 'Ona claims zilizounganishwa na akaunti hii.',
     },
   },
 };
@@ -384,48 +393,107 @@ export default function CustomerDashboard({
             <p className="text-sm text-brand-muted-text leading-relaxed max-w-2xl">{sectionCopy.description}</p>
           </div>
 
-          {/* OVERVIEW - the account's own identity and the way into the other
-              two sections. It renders data this component already holds and
-              makes no request of its own. */}
+          {/* OVERVIEW - the account's own identity, a summary derived from data
+              this component already holds, and the way into the other two
+              sections. It makes no request of its own. */}
           {tab === 'overview' && (
-            <section className="space-y-5" aria-labelledby="account-section-heading">
-              {/* Identity summary - the same fields and the same Sign out
-                  control this surface already rendered, not duplicated. The
-                  name is a plain element, not a heading: the page title above
-                  owns that role, so a section never renders two of them. */}
-              <div className="bg-white border border-brand-border rounded-2xl p-5">
-                <div className="flex items-start justify-between gap-4">
+            <section className="space-y-6" aria-labelledby="account-section-heading">
+              {/* ACCOUNT BAND - the same fields, the same masking and the same
+                  single Sign out control this surface already had, promoted to
+                  a deliberate account summary. The name is a plain element, not
+                  a heading: the page title above owns that role, so a rendered
+                  section never carries two of them. */}
+              <div className="bg-white border border-brand-border rounded-2xl p-5 sm:p-6">
+                <h2 className="text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">
+                  {t('Your account', 'Akaunti yako')}
+                </h2>
+                <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
-                    <p className="text-lg font-extrabold text-brand-dark-text break-words">{customer.full_name}</p>
-                    <p className="mt-1 text-sm text-brand-muted-text">{maskPhone(customer.phone)}</p>
-                    <div className="mt-2">
+                    <p className="text-lg sm:text-xl font-extrabold text-brand-dark-text break-words">{customer.full_name}</p>
+                    <p className="mt-1 text-sm text-brand-muted-text tabular-nums">{maskPhone(customer.phone)}</p>
+                    <div className="mt-2.5">
                       <Badge variant={customer.status === 'active' ? 'success' : 'danger'}>
                         {customer.status === 'active' ? t('Active', 'Hai') : customer.status}
                       </Badge>
                     </div>
                   </div>
-                  <Button variant="outline" size="sm" onClick={onSignOut} loading={signingOut}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={onSignOut}
+                    loading={signingOut}
+                    className="self-start sm:self-auto shrink-0"
+                  >
                     {t('Sign out', 'Toka')}
                   </Button>
                 </div>
               </div>
 
-              <div className="bg-white border border-brand-border rounded-2xl p-5 space-y-4">
-                <p className="text-sm text-brand-muted-text leading-relaxed max-w-2xl">
-                  {t(
-                    'Your lost reports and the claims linked to this account are managed in their own sections.',
-                    'Ripoti zako za vitu vilivyopotea na claims zilizounganishwa na akaunti hii zinasimamiwa katika sehemu zake.'
+              {/* ACTIVITY SUMMARY - derived from the claims this component has
+                  ALREADY loaded; no request is made here. The lost-report
+                  collection is owned by LostReportsSection and is loaded only
+                  when that section is opened, so the Overview reports no count
+                  it does not have, and never fetches one twice. */}
+              <div className="space-y-3">
+                <h2 className="text-base font-extrabold text-brand-dark-text">{t('Your activity', 'Shughuli zako')}</h2>
+                <div className="grid gap-3 sm:gap-4 sm:grid-cols-2">
+                  {claims === null ? (
+                    loading ? (
+                      <Skeleton shape="card" />
+                    ) : (
+                      <p className="text-xs text-brand-muted-text leading-relaxed max-w-xl">
+                        {t(
+                          'Your claims summary is unavailable right now. Open My Claims to try again.',
+                          'Muhtasari wa claims zako haupatikani kwa sasa. Fungua Claims Zangu ili kujaribu tena.'
+                        )}
+                      </p>
+                    )
+                  ) : (
+                    <StatCard
+                      icon={Link2}
+                      label={t('Claims', 'Claims')}
+                      value={claims.length}
+                      description={t(
+                        `${activeClaims.length} active, ${historyClaims.length} past`,
+                        `${activeClaims.length} zinazoendelea, ${historyClaims.length} za nyuma`
+                      )}
+                    />
                   )}
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  <Button variant="secondary" size="sm" onClick={() => setTab('lost')}>
-                    <FileSearch size={14} aria-hidden="true" />
-                    {ACCOUNT_SECTIONS.lost[lang].label}
-                  </Button>
-                  <Button variant="secondary" size="sm" onClick={() => setTab('claims')}>
-                    <Link2 size={14} aria-hidden="true" />
-                    {ACCOUNT_SECTIONS.claims[lang].label}
-                  </Button>
+                </div>
+              </div>
+
+              {/* SECTION LINKS - the local section switch established in Batch 1.
+                  No route and no shortcut into a workflow: each card opens the
+                  section, and the section stays responsible for its own steps. */}
+              <div className="space-y-3">
+                <h2 className="text-base font-extrabold text-brand-dark-text">{t('Your sections', 'Sehemu zako')}</h2>
+                <div className="grid gap-3 sm:gap-4 sm:grid-cols-2">
+                  {(['lost', 'claims'] as const).map((key) => {
+                    const copy = ACCOUNT_SECTIONS[key][lang];
+                    const Icon = ACCOUNT_SECTIONS[key].icon;
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => setTab(key)}
+                        className="group flex min-h-11 items-start gap-3 rounded-2xl border border-brand-border bg-white p-4 text-left transition-colors cursor-pointer hover:border-primary-green focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange/40"
+                      >
+                        <span
+                          aria-hidden="true"
+                          className="w-9 h-9 shrink-0 rounded-xl bg-primary-green/10 text-primary-green flex items-center justify-center"
+                        >
+                          <Icon size={17} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-extrabold text-brand-dark-text">{copy.label}</span>
+                          {copy.hint && (
+                            <span className="mt-1 block text-xs text-brand-muted-text leading-snug">{copy.hint}</span>
+                          )}
+                        </span>
+                        <ArrowRight size={16} aria-hidden="true" className="shrink-0 self-center text-brand-muted-text group-hover:text-primary-green" />
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             </section>
