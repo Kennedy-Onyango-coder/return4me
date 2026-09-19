@@ -145,6 +145,21 @@ describe('16-C: authenticated workspaces use the available width', () => {
     expect(gutters.length).toBeGreaterThanOrEqual(3);
   });
 
+  it('no workspace wrapper re-imposes a narrow centred column inside the shell', () => {
+    // The shell can be full-bleed and still be defeated by an inner
+    // `max-w-5xl mx-auto px-4 py-8` wrapper — which is exactly what all three
+    // authenticated surfaces used to do, making §8/§27/§28/§29 cosmetic.
+    expect(stripComments(read('src/components/AdminView.tsx'))).not.toContain('max-w-5xl mx-auto');
+    expect(stripComments(read('src/components/AgentView.tsx'))).not.toContain('max-w-4xl mx-auto');
+    expect(stripComments(read('src/components/CustomerDashboard.tsx'))).not.toContain('max-w-5xl mx-auto');
+  });
+
+  it('individual forms keep an internal width, so the canvas is wide but content is not stretched', () => {
+    // The customer link-a-claim form is the one control block that would
+    // otherwise span a 1920px canvas.
+    expect(stripComments(read('src/components/CustomerDashboard.tsx'))).toContain('mt-4 max-w-2xl border');
+  });
+
   it('still keeps a way back to the public site and a way to sign out', () => {
     // The width change must not have removed the shell's two exits.
     expect(shellCode).toMatch(/onClick=\{onExitSite\}/);

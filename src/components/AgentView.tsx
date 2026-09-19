@@ -484,7 +484,7 @@ export default function AgentView({ lang, token, setToken }: AgentViewProps) {
   };
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-8 fade-in">
+    <div className="w-full fade-in">
       
       {/* 1. NOT LOGGED IN / ONBOARDING VIEW */}
       {!token && (

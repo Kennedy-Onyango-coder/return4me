@@ -357,7 +357,7 @@ export default function CustomerDashboard({
   };
 
   return (
-    <div className="w-full max-w-5xl mx-auto space-y-6">
+    <div className="w-full space-y-6">
       {/*
         PHASE 15 BATCH 1 - PRIVATE DASHBOARD WORKSPACE.
         The navigation below contains exactly the three destinations this surface
@@ -558,7 +558,7 @@ export default function CustomerDashboard({
 
         {/* Link-a-claim panel */}
         {linkOpen && (
-          <div className="mt-4 border border-brand-border rounded-2xl p-4 sm:p-5 bg-brand-light-gray/50">
+          <div className="mt-4 max-w-2xl border border-brand-border rounded-2xl p-4 sm:p-5 bg-brand-light-gray/50">
             <h2 className="text-base font-extrabold text-brand-dark-text">
               {t('Link an existing claim', 'Unganisha claim iliyopo')}
             </h2>

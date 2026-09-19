@@ -1616,7 +1616,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
   const sectionCopy = CONSOLE_SECTIONS[activeTab][lang];
 
   return (
-    <div className="max-w-5xl mx-auto px-4 py-8 fade-in">
+    <div className="w-full fade-in">
       
       {/* 1. SECURE ADMIN PASSCODE LOGIN (No public signups allowed to prevent privilege-escalation) */}
       {!token && (
