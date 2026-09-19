@@ -50,6 +50,14 @@ interface Props {
    * view of the SAME section is shown first.
    */
   startInWizard?: boolean;
+  /**
+   * PRESENTATION ONLY (Phase 15, Batch 1). Suppresses this section's own
+   * heading + description when the PRIVATE account dashboard renders it,
+   * because the dashboard owns that section's single page-level heading. The
+   * public /report-lost page does not pass it, so its heading is unchanged.
+   * No state, handler, service call or request is affected by this flag.
+   */
+  hideHeading?: boolean;
 }
 
 /**
@@ -92,7 +100,7 @@ export function lostReportSummary(report: LostReportView): string {
   return parts.join(' — ');
 }
 
-export default function LostReportsSection({ lang, onOpenItem, onSessionExpired, startInWizard = false }: Props) {
+export default function LostReportsSection({ lang, onOpenItem, onSessionExpired, startInWizard = false, hideHeading = false }: Props) {
   const sw = lang === 'sw';
   const t = (en: string, swText: string) => (sw ? swText : en);
 
@@ -242,15 +250,19 @@ export default function LostReportsSection({ lang, onOpenItem, onSessionExpired,
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="text-base font-extrabold text-brand-dark-text">
-            {t('My lost reports', 'Ripoti zangu za vitu vilivyopotea')}
-          </h2>
-          <p className="mt-1 text-xs text-brand-muted-text leading-relaxed max-w-xl">
-            {t(
-              'Reports you have filed with Return4me. Anything that looks similar to a report is shown as a possible match — never as a confirmation.',
-              'Ripoti ulizowasilisha kwa Return4me. Kitu chochote kinachofanana na ripoti huonyeshwa kama mechi inayowezekana — sio uthibitisho.'
-            )}
-          </p>
+          {!hideHeading && (
+            <>
+            <h2 className="text-base font-extrabold text-brand-dark-text">
+              {t('My lost reports', 'Ripoti zangu za vitu vilivyopotea')}
+            </h2>
+            <p className="mt-1 text-xs text-brand-muted-text leading-relaxed max-w-xl">
+              {t(
+                'Reports you have filed with Return4me. Anything that looks similar to a report is shown as a possible match — never as a confirmation.',
+                'Ripoti ulizowasilisha kwa Return4me. Kitu chochote kinachofanana na ripoti huonyeshwa kama mechi inayowezekana — sio uthibitisho.'
+              )}
+            </p>
+            </>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Button

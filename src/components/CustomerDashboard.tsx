@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Loader2, Link2, Unlink, RefreshCw } from 'lucide-react';
+import { Loader2, Link2, Unlink, RefreshCw, LayoutDashboard, FileSearch, type LucideIcon } from 'lucide-react';
 import { Badge, Button, EmptyState, Input, OTPInput, Banner } from './ui';
 import { getClaimStatusDisplay } from './claimStatus';
 import { getVerificationFields } from '../config/verificationProfiles';
@@ -54,15 +54,75 @@ function formatDateTime(value: string | null | undefined, lang: 'en' | 'sw'): st
   });
 }
 
+// PHASE 15 BATCH 1: the private dashboard's information architecture. Each entry
+// is the navigation label, the section's single page-level heading and its
+// description. This is copy only - no request, permission or business rule is
+// attached to a section, and the public owner journey on /lost is a different
+// surface that this table never touches.
+interface AccountSectionCopy {
+  label: string;
+  title: string;
+  description: string;
+}
+
+type AccountSectionKey = 'overview' | 'lost' | 'claims';
+
+const ACCOUNT_SECTION_ORDER: AccountSectionKey[] = ['overview', 'lost', 'claims'];
+
+const ACCOUNT_SECTIONS: Record<AccountSectionKey, { icon: LucideIcon; en: AccountSectionCopy; sw: AccountSectionCopy }> = {
+  overview: {
+    icon: LayoutDashboard,
+    en: {
+      label: 'Overview',
+      title: 'Overview',
+      description: 'Your account at a glance, and the fastest way into your lost reports and claims.',
+    },
+    sw: {
+      label: 'Muhtasari',
+      title: 'Muhtasari',
+      description: 'Akaunti yako kwa muhtasari, na njia ya haraka kufikia ripoti na claims zako.',
+    },
+  },
+  lost: {
+    icon: FileSearch,
+    en: {
+      label: 'My Lost Reports',
+      title: 'My Lost Reports',
+      description: 'Reports you have filed with Return4me. Anything that looks similar is shown as a possible match, never as a confirmation.',
+    },
+    sw: {
+      label: 'Ripoti Zangu',
+      title: 'Ripoti zangu za vitu vilivyopotea',
+      description: 'Ripoti ulizowasilisha kwa Return4me. Kitu chochote kinachofanana huonyeshwa kama mechi inayowezekana, sio uthibitisho.',
+    },
+  },
+  claims: {
+    icon: Link2,
+    en: {
+      label: 'My Claims',
+      title: 'My Claims',
+      description: 'Claims linked to this account, and the verification you must pass before a claim is added.',
+    },
+    sw: {
+      label: 'Claims Zangu',
+      title: 'Claims Zangu',
+      description: 'Claims zilizounganishwa na akaunti hii, na uthibitisho unaohitajika kabla ya claim kuongezwa.',
+    },
+  },
+};
+
 export default function CustomerDashboard({
   lang, customer, onSignOut, signingOut = false, onOpenItem, onSessionExpired,
 }: Props) {
   const t = (en: string, sw: string) => (lang === 'sw' ? sw : en);
 
-  // Which account section is open. 'lost' is the default because reporting and
-  // tracking a lost item is the journey this surface is now the only entry to;
-  // claims are one labelled click away and their content is unchanged.
-  const [tab, setTab] = useState<'lost' | 'claims'>('lost');
+  // Which dashboard section is open. 'overview' is the default because it is
+  // the first section of the dashboard's information architecture and the only
+  // place the account's own identity summary is now shown. Every other section
+  // is one labelled click away and no section's content or handlers changed.
+  // PHASE 15 BATCH 1: this stays local state on purpose - the sections are not
+  // routes, so no router and no new URL was introduced for them.
+  const [tab, setTab] = useState<AccountSectionKey>('overview');
 
   const [claims, setClaims] = useState<any[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -212,6 +272,11 @@ export default function CustomerDashboard({
   const historyClaims = (claims || []).filter((c: any) => !c.is_active);
   const linkFields = getVerificationFields(linkCategory);
 
+  // Copy for the active section (navigation label, page title, description).
+  // Presentation only: it drives the navigation and the page heading, never
+  // any request or handler.
+  const sectionCopy = ACCOUNT_SECTIONS[tab][lang];
+
   const renderClaimCard = (claim: any) => {
     const disp = getClaimStatusDisplay(claim.status, lang);
     return (
@@ -260,78 +325,134 @@ export default function CustomerDashboard({
   };
 
   return (
-    <div className="w-full max-w-3xl mx-auto space-y-6">
-      {/* Identity summary */}
-      <section className="bg-white border border-brand-border rounded-2xl p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <h1 className="text-lg font-extrabold text-brand-dark-text break-words">{customer.full_name}</h1>
-            <p className="mt-1 text-sm text-brand-muted-text">{maskPhone(customer.phone)}</p>
-            <div className="mt-2">
-              <Badge variant={customer.status === 'active' ? 'success' : 'danger'}>
-                {customer.status === 'active' ? t('Active', 'Hai') : customer.status}
-              </Badge>
-            </div>
-          </div>
-          <Button variant="outline" size="sm" onClick={onSignOut} loading={signingOut}>
-            {t('Sign out', 'Toka')}
-          </Button>
-        </div>
-      </section>
-
+    <div className="w-full max-w-5xl mx-auto space-y-6">
       {/*
-        SECTION SWITCH — plain toggle buttons, not role="tablist".
-        A real ARIA tab pattern requires roving tabindex plus Arrow-key
-        handling; shipping `role="tab"` without that is an incomplete pattern
-        that reads worse to assistive tech than an honest button group. These
-        two buttons expose their selected state via aria-pressed and each panel
-        is labelled by its button.
-      */}
-      <div
-        className="flex items-center gap-1 border-b border-brand-border"
-        role="group"
-        aria-label={t('Account sections', 'Sehemu za akaunti')}
-      >
-        {([
-          { key: 'lost' as const, label: t('My lost reports', 'Ripoti zangu') },
-          { key: 'claims' as const, label: t('My claims', 'Claims zangu') },
-        ]).map((entry) => (
-          <button
-            key={entry.key}
-            type="button"
-            id={`account-section-${entry.key}`}
-            aria-pressed={tab === entry.key}
-            onClick={() => setTab(entry.key)}
-            className={`px-3 sm:px-4 h-11 text-xs sm:text-sm font-bold border-b-2 -mb-px transition-colors cursor-pointer ${
-              tab === entry.key
-                ? 'border-primary-green text-primary-green'
-                : 'border-transparent text-brand-muted-text hover:text-brand-dark-text'
-            }`}
-          >
-            {entry.label}
-          </button>
-        ))}
-      </div>
+        PHASE 15 BATCH 1 - PRIVATE DASHBOARD WORKSPACE.
+        The navigation below contains exactly the three destinations this surface
+        supports: Overview (the account itself), the lost-report experience that
+        already lived here, and the claims list that already lived here. Nothing
+        was invented for the navigation, and no handler, service call, API path
+        or piece of state changed - only where the existing content is rendered.
 
-      {/* MY LOST REPORTS — reporting, the report list, and possible matches. */}
-      {tab === 'lost' && (
-        <section
-          className="bg-white border border-brand-border rounded-2xl p-5"
-          aria-labelledby="account-section-lost"
+        Desktop (lg+): a persistent left navigation beside the active section,
+        matching the layout language of the already-modernized admin console.
+        Below lg: the same items stay a horizontally scrollable strip, so a
+        phone never gets a cramped fixed sidebar and no drawer state has to be
+        invented. The active item is marked by an accent bar, a tint AND weight
+        (never by colour alone) and carries aria-current="page".
+      */}
+      <div className="lg:grid lg:grid-cols-[236px_minmax(0,1fr)] lg:gap-8 lg:items-start">
+        <nav
+          className="flex items-stretch overflow-x-auto border-b border-line-subtle [scrollbar-width:none] [&::-webkit-scrollbar]:hidden lg:sticky lg:top-6 lg:flex-col lg:items-stretch lg:gap-0.5 lg:overflow-visible lg:border-b-0 lg:border-r lg:border-line-subtle lg:pb-1 lg:pr-3"
+          aria-label={t('Account sections', 'Sehemu za akaunti')}
         >
-          <LostReportsSection
-            lang={lang}
-            onOpenItem={onOpenItem}
-            onSessionExpired={onSessionExpired}
-          />
-        </section>
-      )}
+          {ACCOUNT_SECTION_ORDER.map((key) => {
+            const copy = ACCOUNT_SECTIONS[key][lang];
+            const Icon = ACCOUNT_SECTIONS[key].icon;
+            const active = tab === key;
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setTab(key)}
+                aria-current={active ? 'page' : undefined}
+                className={`flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap border-b-2 -mb-px px-3.5 text-xs font-bold transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange/40 sm:px-4 lg:w-full lg:mb-0 lg:justify-start lg:rounded-lg lg:border-b-0 lg:border-l-[3px] lg:px-3 lg:py-2.5 ${
+                  active
+                    ? 'border-primary-green bg-primary-green/10 text-primary-green font-extrabold lg:border-l-primary-green'
+                    : 'border-transparent text-brand-muted-text hover:bg-brand-light-gray hover:text-brand-dark-text lg:border-l-transparent'
+                }`}
+              >
+                <Icon size={14} aria-hidden="true" className="shrink-0" />
+                <span>{copy.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="min-w-0 space-y-5">
+          {/* PAGE TITLE - the workspace's ONE page-level heading. It belongs to
+              the active section, so every rendered section has exactly one, and
+              the title/description come from the same table that drives the
+              navigation. */}
+          <div className="space-y-1 border-b border-brand-border pb-3">
+            <h1
+              id="account-section-heading"
+              className="text-xl sm:text-2xl font-extrabold tracking-tight text-brand-dark-text"
+            >
+              {sectionCopy.title}
+            </h1>
+            <p className="text-sm text-brand-muted-text leading-relaxed max-w-2xl">{sectionCopy.description}</p>
+          </div>
+
+          {/* OVERVIEW - the account's own identity and the way into the other
+              two sections. It renders data this component already holds and
+              makes no request of its own. */}
+          {tab === 'overview' && (
+            <section className="space-y-5" aria-labelledby="account-section-heading">
+              {/* Identity summary - the same fields and the same Sign out
+                  control this surface already rendered, not duplicated. The
+                  name is a plain element, not a heading: the page title above
+                  owns that role, so a section never renders two of them. */}
+              <div className="bg-white border border-brand-border rounded-2xl p-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="text-lg font-extrabold text-brand-dark-text break-words">{customer.full_name}</p>
+                    <p className="mt-1 text-sm text-brand-muted-text">{maskPhone(customer.phone)}</p>
+                    <div className="mt-2">
+                      <Badge variant={customer.status === 'active' ? 'success' : 'danger'}>
+                        {customer.status === 'active' ? t('Active', 'Hai') : customer.status}
+                      </Badge>
+                    </div>
+                  </div>
+                  <Button variant="outline" size="sm" onClick={onSignOut} loading={signingOut}>
+                    {t('Sign out', 'Toka')}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="bg-white border border-brand-border rounded-2xl p-5 space-y-4">
+                <p className="text-sm text-brand-muted-text leading-relaxed max-w-2xl">
+                  {t(
+                    'Your lost reports and the claims linked to this account are managed in their own sections.',
+                    'Ripoti zako za vitu vilivyopotea na claims zilizounganishwa na akaunti hii zinasimamiwa katika sehemu zake.'
+                  )}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="secondary" size="sm" onClick={() => setTab('lost')}>
+                    <FileSearch size={14} aria-hidden="true" />
+                    {ACCOUNT_SECTIONS.lost[lang].label}
+                  </Button>
+                  <Button variant="secondary" size="sm" onClick={() => setTab('claims')}>
+                    <Link2 size={14} aria-hidden="true" />
+                    {ACCOUNT_SECTIONS.claims[lang].label}
+                  </Button>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {/* MY LOST REPORTS - reporting, the report list, and possible matches.
+              The section renders the SAME component with the SAME props; it only
+              stops printing its own title, because the page title above is now
+              the section's single heading. */}
+          {tab === 'lost' && (
+            <section
+              className="bg-white border border-brand-border rounded-2xl p-5"
+              aria-labelledby="account-section-heading"
+            >
+              <LostReportsSection
+                lang={lang}
+                onOpenItem={onOpenItem}
+                onSessionExpired={onSessionExpired}
+                hideHeading
+              />
+            </section>
+          )}
 
       {/* My claims */}
       {tab === 'claims' && (
-      <section className="bg-white border border-brand-border rounded-2xl p-5" aria-labelledby="account-section-claims">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <h2 className="text-base font-extrabold text-brand-dark-text">{t('My claims', 'Claims zangu')}</h2>
+      <section className="bg-white border border-brand-border rounded-2xl p-5" aria-labelledby="account-section-heading">
+        <div className="flex items-center justify-end gap-3 flex-wrap">
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="sm" onClick={loadClaims} aria-label={t('Refresh', 'Onyesha upya')}>
               <RefreshCw size={14} />
@@ -465,6 +586,8 @@ export default function CustomerDashboard({
         )}
       </section>
       )}
+        </div>
+      </div>
     </div>
   );
 }
