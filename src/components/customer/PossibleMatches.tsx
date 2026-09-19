@@ -272,8 +272,8 @@ export default function PossibleMatches({
   if (state.status === 'idle') {
     return (
       <div className="flex flex-wrap items-center gap-3">
-        <Button variant="secondary" size="sm" onClick={onReload}>
-          <Search size={14} />
+        <Button variant="secondary" size="md" onClick={onReload}>
+          <Search size={16} />
           {t('Check for possible matches', 'Angalia mechi zinazowezekana')}
         </Button>
         <p className="text-xs text-brand-muted-text">
@@ -290,13 +290,13 @@ export default function PossibleMatches({
         <Banner kind={copy.kind}>{copy.text}</Banner>
         <div className="flex flex-wrap gap-2">
           {copy.retry && (
-            <Button variant="secondary" size="sm" onClick={onReload}>
-              <RefreshCw size={14} />
+            <Button variant="secondary" size="md" onClick={onReload}>
+              <RefreshCw size={16} />
               {t('Try again', 'Jaribu tena')}
             </Button>
           )}
           {state.errorKind === 'auth' && (
-            <Button variant="secondary" size="sm" onClick={onSessionExpired}>
+            <Button variant="secondary" size="md" onClick={onSessionExpired}>
               {t('Sign in again', 'Ingia tena')}
             </Button>
           )}
@@ -339,8 +339,8 @@ export default function PossibleMatches({
           )}
         />
         <div>
-          <Button variant="ghost" size="sm" onClick={onReload}>
-            <RefreshCw size={14} />
+          <Button variant="ghost" size="md" onClick={onReload}>
+            <RefreshCw size={16} />
             {t('Check again', 'Angalia tena')}
           </Button>
         </div>
@@ -372,8 +372,8 @@ export default function PossibleMatches({
       </ul>
 
       <div className="flex flex-wrap items-center gap-3">
-        <Button variant="ghost" size="sm" onClick={onReload}>
-          <RefreshCw size={14} />
+        <Button variant="ghost" size="md" onClick={onReload}>
+          <RefreshCw size={16} />
           {t('Check again', 'Angalia tena')}
         </Button>
         <p className="text-caption text-brand-muted-text flex items-center gap-1.5">

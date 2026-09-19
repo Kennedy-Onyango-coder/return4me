@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Loader2, Link2, Unlink, RefreshCw, LayoutDashboard, FileSearch, ArrowRight, type LucideIcon } from 'lucide-react';
+import { Link2, Unlink, RefreshCw, LayoutDashboard, FileSearch, ArrowRight, MapPin, Store, CalendarDays, Clock, type LucideIcon } from 'lucide-react';
 import { Badge, Button, EmptyState, Input, OTPInput, Banner, StatCard, Skeleton } from './ui';
 import { getClaimStatusDisplay } from './claimStatus';
 import { getVerificationFields } from '../config/verificationProfiles';
@@ -289,44 +289,67 @@ export default function CustomerDashboard({
   const renderClaimCard = (claim: any) => {
     const disp = getClaimStatusDisplay(claim.status, lang);
     return (
-      <li key={claim.id} className="border border-brand-border rounded-xl p-4 bg-white">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 flex-wrap">
+            <li key={claim.id} className="bg-white border border-brand-border rounded-2xl p-4 sm:p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0 flex-1 space-y-2.5">
+            <div className="flex flex-wrap items-center gap-2">
               <Badge variant={disp.variant}>{disp.label}</Badge>
-              <span className="font-mono text-xs text-brand-muted-text break-all">{claim.id}</span>
+              <Badge variant="code">{claim.id}</Badge>
             </div>
+
             {claim.item && (
-              <p className="mt-2 text-sm font-semibold text-brand-dark-text break-words">
+              <p className="text-sm font-extrabold text-brand-dark-text break-words">
                 {claim.item.document_name_fuzzy || claim.item.category_id}
               </p>
             )}
-            {claim.item && claim.item.location_description && (
-              <p className="mt-0.5 text-xs text-brand-muted-text break-words">{claim.item.location_description}</p>
-            )}
-            {claim.agent && (
-              <p className="mt-1 text-xs text-brand-muted-text break-words">
-                {claim.agent.business_name}
-                {claim.agent.location_address ? ' · ' + claim.agent.location_address : ''}
-              </p>
-            )}
-            <p className="mt-1.5 text-xs text-brand-muted-text">
-              {t('Claimed', 'Iliyoundwa')} {formatDate(claim.created_at, lang)}
-            </p>
-            {claim.expires_at && (
-              <p className="mt-0.5 text-xs font-semibold text-status-warning">
-                {t('Pay before', 'Lipa kabla ya')} {formatDateTime(claim.expires_at, lang)}
-              </p>
-            )}
+
+            {/* The same fields as before, read as one metadata block instead of
+                a stack of equal-weight paragraphs. Every value is unchanged. */}
+            <dl className="space-y-1.5 text-xs text-brand-muted-text">
+              {claim.item && claim.item.location_description && (
+                <div className="flex items-start gap-2">
+                  <dt className="sr-only">{t('Where it was recorded', 'Ilipowekwa kumbukumbu')}</dt>
+                  <MapPin size={13} aria-hidden="true" className="mt-0.5 shrink-0 text-accent-orange" />
+                  <dd className="leading-relaxed break-words">{claim.item.location_description}</dd>
+                </div>
+              )}
+              {claim.agent && (
+                <div className="flex items-start gap-2">
+                  <dt className="sr-only">{t('Holding agent', 'Wakala anayeshikilia')}</dt>
+                  <Store size={13} aria-hidden="true" className="mt-0.5 shrink-0 text-accent-orange" />
+                  <dd className="leading-relaxed break-words">
+                    {claim.agent.business_name}
+                    {claim.agent.location_address ? ', ' + claim.agent.location_address : ''}
+                  </dd>
+                </div>
+              )}
+              <div className="flex items-start gap-2">
+                <dt className="sr-only">{t('When it was claimed', 'Iliyoundwa lini')}</dt>
+                <CalendarDays size={13} aria-hidden="true" className="mt-0.5 shrink-0 text-accent-orange" />
+                <dd className="leading-relaxed">
+                  {t('Claimed', 'Iliyoundwa')} {formatDate(claim.created_at, lang)}
+                </dd>
+              </div>
+              {claim.expires_at && (
+                <div className="flex items-start gap-2">
+                  <dt className="sr-only">{t('Payment deadline', 'Tarehe ya mwisho ya kulipa')}</dt>
+                  <Clock size={13} aria-hidden="true" className="mt-0.5 shrink-0 text-status-warning" />
+                  <dd className="leading-relaxed font-semibold text-status-warning">
+                    {t('Pay before', 'Lipa kabla ya')} {formatDateTime(claim.expires_at, lang)}
+                  </dd>
+                </div>
+              )}
+            </dl>
           </div>
+
           <Button
             variant="ghost"
-            size="sm"
+            size="md"
             onClick={() => unlink(claim.id)}
             loading={rowBusy === claim.id}
             aria-label={t('Remove from my account', 'Ondoa kwenye akaunti yangu')}
           >
-            <Unlink size={14} />
+            <Unlink size={16} />
           </Button>
         </div>
       </li>
@@ -505,7 +528,7 @@ export default function CustomerDashboard({
               the section's single heading. */}
           {tab === 'lost' && (
             <section
-              className="bg-white border border-brand-border rounded-2xl p-5"
+              className="bg-white border border-brand-border rounded-2xl p-4 sm:p-6"
               aria-labelledby="account-section-heading"
             >
               <LostReportsSection
@@ -519,26 +542,27 @@ export default function CustomerDashboard({
 
       {/* My claims */}
       {tab === 'claims' && (
-      <section className="bg-white border border-brand-border rounded-2xl p-5" aria-labelledby="account-section-heading">
-        <div className="flex items-center justify-end gap-3 flex-wrap">
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={loadClaims} aria-label={t('Refresh', 'Onyesha upya')}>
-              <RefreshCw size={14} />
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => { if (linkOpen) resetLink(); setLinkOpen(o => !o); }}
-            >
-              <Link2 size={14} /> {t('Link a claim', 'Unganisha claim')}
-            </Button>
-          </div>
+      <section className="bg-white border border-brand-border rounded-2xl p-4 sm:p-6" aria-labelledby="account-section-heading">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button variant="ghost" size="md" onClick={loadClaims} aria-label={t('Refresh', 'Onyesha upya')}>
+            <RefreshCw size={16} />
+          </Button>
+          <Button
+            variant="primary"
+            size="md"
+            onClick={() => { if (linkOpen) resetLink(); setLinkOpen(o => !o); }}
+          >
+            <Link2 size={16} /> {t('Link a claim', 'Unganisha claim')}
+          </Button>
         </div>
 
         {/* Link-a-claim panel */}
         {linkOpen && (
-          <div className="mt-4 border border-brand-border rounded-xl p-4 bg-brand-light-gray/50">
-            <p className="text-xs text-brand-muted-text leading-relaxed">
+          <div className="mt-4 border border-brand-border rounded-2xl p-4 sm:p-5 bg-brand-light-gray/50">
+            <h2 className="text-base font-extrabold text-brand-dark-text">
+              {t('Link an existing claim', 'Unganisha claim iliyopo')}
+            </h2>
+            <p className="mt-1 text-xs text-brand-muted-text leading-relaxed">
               {t(
                 'Enter an existing claim ID. To link it we will text a code to the phone number registered on that claim, and ask the ownership questions that were set when the claim was made.',
                 'Weka msimbo wa claim uliyo nayo. Ili kuunganisha, tutatuma msimbo kwa nambari ya simu iliyosajiliwa kwenye claim hiyo, na kukuuliza maswali ya umiliki yaliyowekwa wakati claim iliundwa.'
@@ -559,11 +583,11 @@ export default function CustomerDashboard({
                   autoComplete="off"
                   className="font-mono"
                 />
-                <div className="flex items-center gap-2">
-                  <Button type="submit" variant="primary" size="sm" loading={linkBusy}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button type="submit" variant="primary" size="md" loading={linkBusy}>
                     {t('Send code', 'Tuma msimbo')}
                   </Button>
-                  <Button type="button" variant="ghost" size="sm" onClick={() => { resetLink(); setLinkOpen(false); }}>
+                  <Button type="button" variant="ghost" size="md" onClick={() => { resetLink(); setLinkOpen(false); }}>
                     {t('Cancel', 'Ghairi')}
                   </Button>
                 </div>
@@ -599,11 +623,11 @@ export default function CustomerDashboard({
                   );
                 })}
 
-                <div className="flex items-center gap-2">
-                  <Button type="submit" variant="primary" size="sm" loading={linkBusy}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button type="submit" variant="primary" size="md" loading={linkBusy}>
                     {t('Verify and link', 'Thibitisha na unganisha')}
                   </Button>
-                  <Button type="button" variant="ghost" size="sm" onClick={resetLink} disabled={linkBusy}>
+                  <Button type="button" variant="ghost" size="md" onClick={resetLink} disabled={linkBusy}>
                     {t('Back', 'Rudi')}
                   </Button>
                 </div>
@@ -614,8 +638,10 @@ export default function CustomerDashboard({
 
         {/* Claims list */}
         {loading ? (
-          <div className="flex items-center justify-center py-10">
-            <Loader2 className="animate-spin text-primary-green" size={22} />
+          <div className="mt-4 space-y-3" aria-busy="true">
+            <span className="sr-only">{t('Loading your claims', 'Inapakia claims zako')}</span>
+            <Skeleton shape="card" className="w-full" />
+            <Skeleton shape="card" className="w-full" />
           </div>
         ) : (claims === null || claims.length === 0) ? (
           <div className="mt-4">
@@ -626,28 +652,47 @@ export default function CustomerDashboard({
                 'Claims are linked one at a time, and only after you prove they are yours. Nothing is added automatically.',
                 'Claims huunganishwa moja moja, na tu baada ya kuthibitisha kuwa ni zako. Hakuna kinachoongezwa kiotomatiki.'
               )}
+              action={(
+                <Button
+                  variant="primary"
+                  size="md"
+                  onClick={() => { if (linkOpen) resetLink(); setLinkOpen(o => !o); }}
+                >
+                  <Link2 size={16} /> {t('Link a claim', 'Unganisha claim')}
+                </Button>
+              )}
             />
           </div>
         ) : (
-          <div className="mt-4 space-y-5">
-            <div>
-              <h3 className="text-xs font-extrabold uppercase tracking-wider text-brand-muted-text">
-                {t('Active', 'Zinazoendelea')}
-              </h3>
+          <div className="mt-5 space-y-6">
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2 border-b border-brand-border pb-2">
+                <h2 className="text-base font-extrabold text-brand-dark-text">
+                  {t('Active claims', 'Claims zinazoendelea')}
+                </h2>
+                <Badge variant="neutral">{activeClaims.length}</Badge>
+              </div>
               {activeClaims.length === 0 ? (
-                <p className="mt-2 text-xs text-brand-muted-text">{t('No active claims.', 'Hakuna claim inayoendelea.')}</p>
+                <p className="rounded-xl border border-brand-border bg-brand-light-gray/60 px-4 py-3 text-xs text-brand-muted-text">
+                  {t('No active claims.', 'Hakuna claim inayoendelea.')}
+                </p>
               ) : (
-                <ul className="mt-2 space-y-3">{activeClaims.map(renderClaimCard)}</ul>
+                <ul className="space-y-3">{activeClaims.map(renderClaimCard)}</ul>
               )}
             </div>
-            <div>
-              <h3 className="text-xs font-extrabold uppercase tracking-wider text-brand-muted-text">
-                {t('History', 'Historia')}
-              </h3>
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2 border-b border-brand-border pb-2">
+                <h2 className="text-base font-extrabold text-brand-dark-text">
+                  {t('Claim history', 'Historia ya claims')}
+                </h2>
+                <Badge variant="neutral">{historyClaims.length}</Badge>
+              </div>
               {historyClaims.length === 0 ? (
-                <p className="mt-2 text-xs text-brand-muted-text">{t('No past claims yet.', 'Hakuna claim za nyuma bado.')}</p>
+                <p className="rounded-xl border border-brand-border bg-brand-light-gray/60 px-4 py-3 text-xs text-brand-muted-text">
+                  {t('No past claims yet.', 'Hakuna claim za nyuma bado.')}
+                </p>
               ) : (
-                <ul className="mt-2 space-y-3">{historyClaims.map(renderClaimCard)}</ul>
+                <ul className="space-y-3">{historyClaims.map(renderClaimCard)}</ul>
               )}
             </div>
           </div>

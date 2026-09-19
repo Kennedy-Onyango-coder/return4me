@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Loader2, MapPin, Plus, RefreshCw, Search } from 'lucide-react';
+import { AlertTriangle, CalendarDays, CheckCircle2, Clock, Loader2, MapPin, Plus, RefreshCw, Search } from 'lucide-react';
 import { Badge, Banner, Button, EmptyState, Skeleton } from '../ui';
 import PossibleMatches, { categoryLabel, type MatchesLoadState } from './PossibleMatches';
 import LostReportWizard from './LostReportWizard';
@@ -264,22 +264,22 @@ export default function LostReportsSection({ lang, onOpenItem, onSessionExpired,
             </>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="ghost"
-            size="sm"
+            size="md"
             onClick={() => loadReports({ isRefresh: true })}
             loading={refreshing}
             aria-label={t('Refresh lost reports', 'Onyesha upya ripoti')}
           >
-            <RefreshCw size={14} />
+            <RefreshCw size={16} />
           </Button>
           <Button
             variant="primary"
-            size="sm"
+            size="md"
             onClick={() => { setCreatedReference(null); setWizardOpen(true); }}
           >
-            <Plus size={14} /> {t('Report something lost', 'Ripoti kitu kilichopotea')}
+            <Plus size={16} /> {t('Report something lost', 'Ripoti kitu kilichopotea')}
           </Button>
         </div>
       </div>
@@ -399,65 +399,83 @@ function ReportCard({
 
   return (
     <li className="bg-white border border-brand-border rounded-2xl p-4 sm:p-5 space-y-3">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0 space-y-2 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={status.variant}>{status.label}</Badge>
-            <Badge variant="code">{report.id}</Badge>
-          </div>
-
-          <p className="text-sm font-extrabold text-brand-dark-text break-words">{category}</p>
-
-          {summary && (
-            <p className="text-xs text-brand-muted-text leading-relaxed break-words">{summary}</p>
-          )}
-
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-brand-muted-text">
-            {place && (
-              <span className="inline-flex items-center gap-1.5">
-                <MapPin size={12} aria-hidden="true" className="shrink-0 text-accent-orange" />
-                {place}
-              </span>
-            )}
-            {window && <span>{t('Lost', 'Ilipotea')}: {window}</span>}
-            {report.created_at && (
-              <span>{t('Reported', 'Iliripotiwa')} {formatDate(report.created_at, lang)}</span>
-            )}
-          </div>
-
-          {status.description && (
-            <p className="text-xs text-brand-muted-text leading-relaxed">{status.description}</p>
-          )}
+      <div className="min-w-0 space-y-2.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant={status.variant}>{status.label}</Badge>
+          <Badge variant="code">{report.id}</Badge>
         </div>
 
-        <div className="flex flex-col items-start sm:items-end gap-2 shrink-0">
-          {availability && (
-            <Badge variant={availability.variant} icon={availability.icon}>
-              <span className={availability.spin ? 'motion-safe:animate-pulse' : undefined}>
-                {availability.label}
-              </span>
-            </Badge>
-          )}
+        {/* Item identity leads the card. The reference code above is the
+            machine identifier and the badge is the report's state; neither is
+            the headline. */}
+        <p className="text-sm sm:text-base font-extrabold text-brand-dark-text break-words">{category}</p>
 
-          {status.searching && (
+        {summary && (
+          <p className="text-xs text-brand-muted-text leading-relaxed break-words">{summary}</p>
+        )}
+
+        {/* The same three facts as before, now labelled for assistive tech and
+            grouped instead of reading as one flat line. No value changed. */}
+        <dl className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-brand-muted-text">
+          {place && (
+            <div className="flex items-center gap-1.5">
+              <dt className="sr-only">{t('Where it was lost', 'Ilipotea wapi')}</dt>
+              <MapPin size={13} aria-hidden="true" className="shrink-0 text-accent-orange" />
+              <dd>{place}</dd>
+            </div>
+          )}
+          {window && (
+            <div className="flex items-center gap-1.5">
+              <dt className="sr-only">{t('When it was lost', 'Ilipotea lini')}</dt>
+              <CalendarDays size={13} aria-hidden="true" className="shrink-0 text-accent-orange" />
+              <dd>{t('Lost', 'Ilipotea')}: {window}</dd>
+            </div>
+          )}
+          {report.created_at && (
+            <div className="flex items-center gap-1.5">
+              <dt className="sr-only">{t('When it was reported', 'Iliripotiwa lini')}</dt>
+              <Clock size={13} aria-hidden="true" className="shrink-0 text-accent-orange" />
+              <dd>{t('Reported', 'Iliripotiwa')} {formatDate(report.created_at, lang)}</dd>
+            </div>
+          )}
+        </dl>
+
+        {status.description && (
+          <p className="text-xs text-brand-muted-text leading-relaxed">{status.description}</p>
+        )}
+
+        {status.searching && (
+          <div className="flex flex-wrap items-center gap-2 pt-1">
             <Button
               variant="secondary"
-              size="sm"
+              size="md"
               onClick={onToggle}
               aria-expanded={expanded}
               aria-controls={`lost-report-matches-${report.id}`}
             >
-              <Search size={13} />
+              <Search size={15} />
               {expanded
                 ? t('Hide possible matches', 'Ficha mechi zinazowezekana')
                 : t('Possible matches', 'Mechi zinazowezekana')}
             </Button>
-          )}
-        </div>
+            {availability && (
+              <Badge variant={availability.variant} icon={availability.icon}>
+                <span className={availability.spin ? 'motion-safe:animate-pulse' : undefined}>
+                  {availability.label}
+                </span>
+              </Badge>
+            )}
+          </div>
+        )}
       </div>
 
       {expanded && status.searching && (
-        <div id={`lost-report-matches-${report.id}`} className="border-t border-brand-border pt-4">
+        <div id={`lost-report-matches-${report.id}`} className="space-y-3 border-t border-brand-border pt-4">
+          {/* Names the region this disclosure opened, so the candidates read as
+              a child of THIS report rather than as unrelated entries. */}
+          <p className="text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">
+            {t('Possible matches', 'Mechi zinazowezekana')}
+          </p>
           <PossibleMatches
             lang={lang}
             categories={categories}
