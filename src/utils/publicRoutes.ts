@@ -90,7 +90,22 @@ const VIEW_PATHS: ReadonlyArray<{ path: string; view: PublicViewName }> = [
 //   /report-lost   — the public lost-report entry point
 // Neither can be reached before authentication in a state that reveals anything
 // private: /report-lost renders only a sign-in prompt until a session exists.
-const SAFE_RETURN_PATH = /^\/(?:item\/[^/]+|report-lost)$/i;
+//
+// PHASE 16 adds ONE more literal shape for the same, already-reviewed reason:
+//   /lost          — the public "I Lost Something" search/claim journey, which
+//                    now hosts the Track My Claim entry point. Tracking is a
+//                    customer-authenticated action (see OwnerView + the
+//                    /api/claims/lookup route), so a signed-out visitor is sent
+//                    through the EXISTING /account boundary and returned here
+//                    with an explicit `?track=1` intent. /lost is a fully
+//                    public, read-only screen: it renders no claim data at all
+//                    until the visitor deliberately submits the lookup form, so
+//                    returning to it cannot reveal anything private. The
+//                    query is stripped before matching (the pathname is what is
+//                    validated), which is why `?track=1` is not part of the
+//                    pattern: the intent rides on the validated path, exactly
+//                    like the existing /report-lost hand-off.
+const SAFE_RETURN_PATH = /^\/(?:item\/[^/]+|report-lost|lost)$/i;
 
 // 'signin' and 'becomeAgent' are public, unauthenticated screens (Phase 8.1),
 // so restoring them from history state is safe for the same reason 'home' and
@@ -129,6 +144,32 @@ export function reportLostPath(): string {
  */
 export function reportLostSignInPath(): string {
   return accountPath(REPORT_LOST_PATH);
+}
+
+/**
+ * PHASE 16 — the public /lost URL that asks the page to open Track My Claim
+ * once the visitor is authenticated.
+ *
+ * WHY AN INTENT PARAMETER AND NOT A NEW ROUTE: §23 of the phase brief forbids a
+ * second route system, and /lost already IS the owner/claim journey. The intent
+ * is a plain, non-sensitive query flag on the EXISTING public page — it carries
+ * no claim id, no phone number and no credential — so it stays safe to put in a
+ * URL, safe to bookmark, and safe to survive a refresh. OwnerView reads it
+ * through App and simply opens the modal it already owns.
+ */
+export function lostTrackPath(): string {
+  return `${LOST_PATH}?track=1`;
+}
+
+/**
+ * The canonical /account URL a signed-out visitor is sent through to reach
+ * authenticated Track My Claim, remembering the intent to return.
+ *
+ * Built here (not in a component) so the return destination always goes through
+ * isSafeReturnPath — exactly like the /item/:id and /report-lost hand-offs.
+ */
+export function lostTrackSignInPath(): string {
+  return accountPath(lostTrackPath());
 }
 
 /** Canonical path for the account surface, preserving a safe return destination. */

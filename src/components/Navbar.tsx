@@ -57,6 +57,23 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
   // already owns.
   const signedIn = Boolean(token) || accountSignedIn;
 
+  // PHASE 16 — A LIVE TOKEN SESSION IS STILL A SESSION.
+  //
+  // The account control below used to test only `isAccountView ||
+  // accountSignedIn` — the CUSTOMER session. So an agent or an administrator
+  // whose `agent_token`/`admin_token` was live, browsing the public site, fell
+  // straight through to the signed-OUT branch and was shown a "Sign In" control
+  // (and, on mobile, a "Sign In" tab), telling a signed-in operator they were
+  // signed out. That is the exact class of untruthfulness Phase 16 removes.
+  //
+  // The account control belongs to the CUSTOMER account journey, and a token
+  // session is NOT a customer session, so it is not re-pointed at /account (that
+  // would be a different lie). For a token-only session the control is simply
+  // not rendered: the bar keeps the public destinations and the ONE truthful
+  // action, Sign out, and the agent/admin surfaces carry their own navigation.
+  // No second authentication mechanism, no new public destination.
+  const isTokenOnlySession = Boolean(token) && !accountSignedIn && !isAccountView;
+
   // The account control's label. `isAccountView` deliberately stays the FIRST
   // test and keeps this exact contiguous shape: publicNavigation.test.ts pins
   // `isAccountView ? (lang === 'en' ? 'My Account'` as the tripwire proving a
@@ -163,6 +180,10 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                 {navLinkUnderline('admin')}
               </button>
             )}
+            {/* PHASE 16 — the customer account control is not offered to a
+                token-only (agent/admin) session: it would read "Sign In" to
+                someone who is signed in. See isTokenOnlySession above. */}
+            {!isTokenOnlySession && (
             <button onClick={() => (isAccountView || accountSignedIn ? handleAccountClick() : handleNavClick('signin'))} className={isAccountView || accountSignedIn ? accountLinkClass : signInButtonClass} aria-current={currentView === 'signin' ? 'page' : undefined}>
               {accountControlLabel}
               {(isAccountView || accountSignedIn) && (
@@ -173,6 +194,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                 />
               )}
             </button>
+            )}
           </nav>
 
           <div className="hidden lg:flex items-center gap-3">
@@ -386,6 +408,10 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                     A single restrained entry point rather than a new section:
                     the account surface reuses this same site chrome and is not
                     a separate application. */}
+                {/* PHASE 16 — same rule as the desktop bar: a token-only
+                    (agent/admin) session is never shown the customer "Sign In"
+                    entry point. See isTokenOnlySession above. */}
+                {!isTokenOnlySession && (
                 <button
                   onClick={() => (isAccountView || accountSignedIn ? handleAccountClick() : handleNavClick('signin'))}
                   className={`w-full min-h-[44px] py-3 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center justify-center space-x-2 ${
@@ -397,6 +423,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                   <User size={14} />
                   <span>{accountControlLabel}</span>
                 </button>
+                )}
 
                 {/* Account Actions */}
                 {signedIn ? (
@@ -458,6 +485,9 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
           <MapPin size={18} />
           <span className="text-xs font-semibold">{lang === 'sw' ? 'Ripoti' : 'Report'}</span>
         </button>
+        {/* PHASE 16 — a token-only (agent/admin) session is not offered the
+            customer "Sign In" tab. See isTokenOnlySession above. */}
+        {!isTokenOnlySession && (
         <button
           onClick={() => (isAccountView || accountSignedIn ? handleAccountClick() : handleNavClick('signin'))}
           aria-current={(isAccountView || currentView === 'signin') ? 'page' : undefined}
@@ -468,6 +498,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
           <User size={18} aria-hidden="true" />
           <span className="text-xs font-semibold">{(isAccountView || accountSignedIn) ? (lang === 'sw' ? 'Akaunti' : 'Account') : t.signInBtn}</span>
         </button>
+        )}
         <button
           onClick={() => setIsOpen(true)}
           className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 py-1 transition-all ${

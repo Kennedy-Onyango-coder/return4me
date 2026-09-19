@@ -1,5 +1,5 @@
 import React from 'react';
-import { Globe, LogOut, ExternalLink, LayoutDashboard, User, ShieldCheck, Store } from 'lucide-react';
+import { Globe, LogOut, ExternalLink, User } from 'lucide-react';
 // BATCH 2 (shell polish) — the shell's own controls now use the shared design
 // system instead of hand-rolled hover/focus styling. Presentation only: every
 // handler, label and aria attribute below is unchanged, and this component
@@ -64,11 +64,12 @@ const SURFACE_COPY: Record<DashboardSurface, { en: string; sw: string }> = {
   admin: { en: 'Admin Console', sw: 'Konsoli ya Msimamizi' },
 };
 
-function SurfaceIcon({ surface }: { surface: DashboardSurface }) {
-  if (surface === 'admin') return <ShieldCheck size={16} aria-hidden="true" />;
-  if (surface === 'agent') return <Store size={16} aria-hidden="true" />;
-  return <LayoutDashboard size={16} aria-hidden="true" />;
-}
+// PHASE 16 — the generic per-role Lucide glyph that used to head this band
+// (LayoutDashboard / Store / ShieldCheck) is gone: the header now carries the
+// product's own approved wordmark (see the header markup below), so the
+// authenticated workspace reads as Return4me rather than as a generic dashboard
+// template. Nothing about the surface's identity logic changed — SURFACE_COPY
+// above still names it, and App still owns WHO is signed in.
 
 export default function DashboardShell({
   lang,
@@ -85,20 +86,35 @@ export default function DashboardShell({
   return (
     <div className="min-h-screen bg-brand-light-gray flex flex-col antialiased">
       {/* Dashboard header — a dark brand band (not the public bar), so the
-          change of context is unmistakable. */}
+          change of context is unmistakable. PHASE 16: full-bleed, because an
+          authenticated workspace is an operations surface rather than a
+          marketing page — it uses the whole viewport instead of a centred
+          1280px column, with gutters that grow with the screen
+          (px-4 → sm:px-6 → lg:px-10). */}
       <header className="bg-primary-green text-white shadow-sm">
-        <div className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between gap-3 min-h-[60px] py-2">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/15">
-                <SurfaceIcon surface={surface} />
+        <div className="w-full px-4 sm:px-6 lg:px-10">
+          <div className="flex items-center justify-between gap-3 min-h-[64px] py-2">
+            <div className="flex items-center gap-3 min-w-0">
+              {/* PHASE 16 — OFFICIAL BRANDING. This band used to introduce the
+                  workspace with a generic Lucide role icon (LayoutDashboard /
+                  Store / ShieldCheck), which made a signed-in Return4me
+                  workspace read like a generic dashboard template. It now
+                  carries the product's own approved wordmark — the SAME
+                  /assets/logo_wordmark_transparent.png the public Navbar
+                  renders, undistorted (h-6, w-auto, object-contain) on a white
+                  plate so it keeps its contrast against the dark brand band.
+                  No replacement, redrawn or generated logo is introduced. The
+                  surface name stays in words beside it, so the role is never
+                  conveyed by imagery alone. */}
+              <span className="flex h-9 shrink-0 items-center rounded-lg bg-white px-2">
+                <img
+                  src="/assets/logo_wordmark_transparent.png"
+                  alt="Return4me"
+                  className="h-6 w-auto object-contain"
+                  referrerPolicy="no-referrer"
+                />
               </span>
-              <div className="min-w-0">
-                <p className="text-[13px] font-extrabold leading-tight truncate">{label}</p>
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-white/70">
-                  Return4me
-                </p>
-              </div>
+              <p className="min-w-0 truncate text-sm font-extrabold leading-tight">{label}</p>
             </div>
 
             <div className="flex items-center justify-end gap-1.5 sm:gap-2 flex-wrap">
@@ -151,14 +167,18 @@ export default function DashboardShell({
         </div>
       </header>
 
-      {/* Workspace — the surface renders its OWN sections/nav in here. */}
-      <main className="flex-grow w-full mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6">
+      {/* Workspace — the surface renders its OWN sections/nav in here. PHASE 16:
+          full width, so a dense admin/agent table or a multi-column dashboard
+          band is not squeezed into a centred column. Each surface keeps its own
+          INTERNAL max-widths where a form or a reading block needs one — the
+          canvas is wide, the content is not stretched. */}
+      <main className="flex-grow w-full px-4 sm:px-6 lg:px-10 py-6">
         {children}
       </main>
 
       <footer className="border-t border-brand-border bg-white">
-        <div className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 py-4">
-          <p className="text-[11px] text-brand-muted-text">
+        <div className="w-full px-4 sm:px-6 lg:px-10 py-4">
+          <p className="text-caption text-brand-muted-text">
             {lang === 'en'
               ? 'You are signed in. Dashboard actions are recorded against your session.'
               : 'Umeingia. Vitendo vya dashibodi hurekodiwa dhidi ya kipindi chako.'}

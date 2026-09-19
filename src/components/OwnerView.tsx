@@ -66,6 +66,33 @@ interface OwnerViewProps {
    * to that dedicated page rather than trying to host a second form itself.
    */
   onReportLost?: () => void;
+  /**
+   * PHASE 16 — Track My Claim authentication boundary.
+   *
+   * True when a live CUSTOMER session exists, as already resolved by App from
+   * the SAME GET /api/customer/me every other customer surface uses. Tracking a
+   * claim is now a customer-authenticated action, so this view must not offer an
+   * anonymous lookup form: the server enforces the boundary too
+   * (requireCustomerAuth on POST /api/claims/lookup), and this flag is what lets
+   * the UI send a signed-out visitor through the EXISTING /account boundary
+   * instead of into a form that would be rejected.
+   *
+   * It introduces no session mechanism of its own — this component never reads
+   * a cookie, a token or storage.
+   */
+  isSignedIn?: boolean;
+  /**
+   * PHASE 16 — hands an unauthenticated visitor to the existing /account
+   * authentication boundary, remembering `?track=1` so they land back HERE with
+   * Track My Claim open. App owns the navigation and the validated return path.
+   */
+  onRequireTrackSignIn?: () => void;
+  /**
+   * PHASE 16 — set when the visitor arrived (or was returned) with the
+   * `?track=1` intent, i.e. they asked to track a claim and have now
+   * authenticated. Opens the existing Track My Claim modal once.
+   */
+  trackIntent?: boolean;
 }
 
 // Mirrors the backend's canonical Kenyan phone normalization (toE164Kenyan in
@@ -248,7 +275,7 @@ function PickupDetailsPanel({
   return <HubDetails agent={state.agent} lang={lang} showDirections={showDirections} />;
 }
 
-export default function OwnerView({ lang, categories, categoriesLoading = false, categoriesError = false, onOpenItem, initialClaimItem = null, onReportLost }: OwnerViewProps) {
+export default function OwnerView({ lang, categories, categoriesLoading = false, categoriesError = false, onOpenItem, initialClaimItem = null, onReportLost, isSignedIn = false, onRequireTrackSignIn, trackIntent = false }: OwnerViewProps) {
   const t = translations[lang];
 
   // Search States
@@ -545,6 +572,19 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
       };
     }
   }, [showTrackModal]);
+
+  // PHASE 16 — the post-authentication return: the visitor arrived (or came
+  // back from /account) with the `?track=1` intent, so open the Track My Claim
+  // modal they asked for. It opens only once the session is actually live —
+  // without one, App has already routed them through /account instead, and the
+  // modal (and the lookup it performs) stays closed.
+  useEffect(() => {
+    if (trackIntent && isSignedIn) {
+      setShowTrackModal(true);
+      setTrackError('');
+      setTrackResult(null);
+    }
+  }, [trackIntent, isSignedIn]);
 
   // Agent Rating
   const [userRating, setUserRating] = useState<number | null>(null);
@@ -948,6 +988,15 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               ref={trackModalTriggerRef}
               type="button"
               onClick={() => {
+                // PHASE 16 — Track My Claim is a customer-authenticated action.
+                // A signed-out visitor is handed to the EXISTING /account
+                // boundary (with a validated return to this page and the
+                // ?track=1 intent) instead of being shown a lookup form the
+                // server now refuses. No second auth mechanism is involved.
+                if (!isSignedIn) {
+                  onRequireTrackSignIn?.();
+                  return;
+                }
                 setShowTrackModal(true);
                 setTrackError('');
                 setTrackResult(null);
@@ -957,6 +1006,13 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               <Clock size={14} className="text-accent-orange" />
               <span>{lang === 'sw' ? 'Fuatilia Ombi Lako' : 'Track My Existing Claim'}</span>
             </button>
+            {!isSignedIn && (
+              <p className="text-caption text-ink-muted">
+                {lang === 'sw'
+                  ? 'Kufuatilia claim kunahitaji akaunti ya Return4me. Utarudishwa hapa moja kwa moja baada ya kuingia.'
+                  : 'Tracking a claim needs a Return4me account. You are returned here straight after signing in.'}
+              </p>
+            )}
           </div>
 
           {/* PHASE 11A — LOST-REPORT ENTRY POINT
@@ -1972,8 +2028,11 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
         </div>
       )}
 
-      {/* TRACK MY CLAIM MODAL */}
-      {showTrackModal && (
+      {/* TRACK MY CLAIM MODAL — rendered only for a live customer session. The
+          server enforces the same boundary (requireCustomerAuth on
+          POST /api/claims/lookup), so this is defence in depth rather than the
+          control itself: a stale open state can never reach the endpoint. */}
+      {showTrackModal && isSignedIn && (
         <div
           className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50"
           onClick={(e) => {
@@ -2018,6 +2077,9 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               try {
                 const res = await fetch('/api/claims/lookup', {
                   method: 'POST',
+                  // PHASE 16 — the customer session is an httpOnly cookie
+                  // (services/customerAuth.ts) and the route now requires it.
+                  credentials: 'same-origin',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ claimId: trackClaimId, phone: trackPhone }),
                 });

@@ -62,7 +62,9 @@ describe('GET /api/claims/:id/status is a minimal, public-safe status DTO', () =
       "app.post('/api/claims/:id/payment-auth', claimGuessLimiter,",
       "app.post('/api/claims/:id/payment-session', claimGuessLimiter,",
       "app.post('/api/claims/:id/pay', claimGuessLimiter,",
-      "app.post('/api/claims/lookup', claimGuessLimiter,",
+      // PHASE 16 — /lookup now resolves the customer session FIRST; the
+      // discrete limiter is unchanged and still applied behind that boundary.
+      "app.post('/api/claims/lookup', requireCustomerAuth, claimGuessLimiter,",
       "app.post('/api/claims/:id/rate', claimGuessLimiter,",
     ];
     for (const route of discreteRoutes) {

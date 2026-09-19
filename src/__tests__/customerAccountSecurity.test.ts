@@ -199,7 +199,12 @@ describe('customer foundation: regression boundaries', () => {
     // GET /api/claims/:id/status for the result. There is no separate
     // GET /api/claims/track/:claimId/:phone route here — this asserts the
     // real surface so the test stays honest about what exists.
-    expect(serverTs).toContain("app.post('/api/claims/lookup', claimGuessLimiter,");
+    //
+    // PHASE 16: the lookup route additionally resolves the CUSTOMER session
+    // (requireCustomerAuth) before the limiter, because Track My Claim is now
+    // an authenticated journey. The route itself, its phone match and its
+    // discrete rate limit are all unchanged.
+    expect(serverTs).toContain("app.post('/api/claims/lookup', requireCustomerAuth, claimGuessLimiter,");
     expect(serverTs).toContain("app.post('/api/claims/:id/request-otp',");
     expect(serverTs).toContain("app.post('/api/claims/:id/verify-otp', otpVerifyLimiter,");
     expect(serverTs).toContain("app.get('/api/claims/:id/status',");

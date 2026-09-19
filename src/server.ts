@@ -2933,7 +2933,35 @@ async function startServer() {
   // the same vocabulary. NOTE: ownership proof is unchanged — a matching
   // registered phone is still required, and the claim's real owner phone remains
   // the only credential this route accepts.
-  app.post('/api/claims/lookup', claimGuessLimiter, async (req, res) => {
+  //
+  // PHASE 16 (P0) — THE AUTHENTICATED BOUNDARY.
+  //
+  // This route used to be reachable ANONYMOUSLY: a claim ID (CLM-######, under
+  // 900,000 values — see generateUniqueClaimId below) plus the owner phone was
+  // the only credential, and the phone comparison itself was the only thing
+  // standing between a stranger and the claim's status, its masked item view and
+  // — while the claim is pickup-eligible — the hub's operational contact DTO.
+  // The product requirement is now AUTHENTICATED claim tracking: the Track My
+  // Claim surface lives on the public /lost page but hands a signed-out visitor
+  // through the existing /account customer boundary (GET /api/customer/me, the
+  // httpOnly r4m_customer_session cookie) before the form is ever rendered.
+  //
+  // The server therefore enforces the same boundary rather than relying on the
+  // UI hiding a form: `requireCustomerAuth` runs FIRST and answers 401 for a
+  // caller with no live customer session. It is deliberately ADDITIVE, not a
+  // replacement — the phone-match check below is untouched, so a signed-in
+  // customer still cannot read a claim that is not theirs. This cannot become a
+  // second authentication system: it is the SAME middleware, resolving the SAME
+  // cookie session, that guards /api/customer/me and every /api/customer/claims
+  // route. Nothing about the claim state machine, the payment flow, the DTO
+  // privacy rules or the rate limiter changes.
+  //
+  // Consequence, stated plainly: an owner who has never created a Return4me
+  // account can no longer track a claim anonymously. They are not locked out —
+  // the public /lost page routes them through the existing one-time-code account
+  // creation (the same phone number the claim already holds) and returns them
+  // here with the tracking form open.
+  app.post('/api/claims/lookup', requireCustomerAuth, claimGuessLimiter, async (req, res) => {
     const { claimId, phone } = req.body;
     if (!claimId || !phone) {
       return res.status(400).json({ error: 'Msimbo wa claim (Claim ID) na nambari ya simu zinahitajika.' });

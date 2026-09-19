@@ -23,6 +23,18 @@ const server = http.createServer((req, res) => {
       '/api/categories': categories, '/api/regions': ['Nairobi'],
       '/api/stats': { activeAgentsCount: 0 }, '/api/items/search': [],
       '/api/dev/test-mode': { testModeEnabled: false },
+      // PHASE 16 — Track My Claim is now a customer-authenticated action, so
+      // the page only opens the lookup modal when a live customer session
+      // exists. This synthetic server therefore has to present one, in the same
+      // shape the real GET /api/customer/me returns. WITHOUT this the Track My
+      // Claim click legitimately redirects to /account and the modal assertions
+      // below would fail for the right reason but measure nothing.
+      '/api/customer/me': {
+        customer: {
+          id: 'AUDIT-CUSTOMER', full_name: 'Audit Customer', phone: '+254712345678',
+          status: 'active', created_at: null, updated_at: null,
+        },
+      },
     };
     if (url.pathname === '/api/claims/lookup') {
       let body = ''; req.on('data', chunk => body += chunk);

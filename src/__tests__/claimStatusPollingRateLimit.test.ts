@@ -226,7 +226,11 @@ describe('wiring: the failure mode cannot silently return (source-level tripwire
       "app.post('/api/claims/:id/payment-auth', claimGuessLimiter,",
       "app.post('/api/claims/:id/payment-session', claimGuessLimiter,",
       "app.post('/api/claims/:id/pay', claimGuessLimiter,",
-      "app.post('/api/claims/lookup', claimGuessLimiter,",
+      // PHASE 16 — /lookup gained the customer authentication boundary as its
+      // FIRST middleware (Track My Claim is now an authenticated journey). The
+      // discrete limiter is unchanged and still applied to the same route —
+      // it was moved behind the boundary, not dropped.
+      "app.post('/api/claims/lookup', requireCustomerAuth, claimGuessLimiter,",
       "app.post('/api/claims/:id/rate', claimGuessLimiter,",
     ]) {
       expect(serverTs).toContain(route);

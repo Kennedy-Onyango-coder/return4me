@@ -16,6 +16,8 @@ import {
   accountPath,
   reportLostPath,
   reportLostSignInPath,
+  lostTrackPath,
+  lostTrackSignInPath,
   legacyClaimItemId,
   viewForRoute,
   pathForView,
@@ -108,6 +110,18 @@ export default function App() {
   // journey. Null whenever the owner view was entered the old way (Navbar).
   const [claimItem, setClaimItem] = useState<any | null>(null);
 
+  // PHASE 16 — TRACK MY CLAIM INTENT.
+  //
+  // Track My Claim is now a customer-authenticated action, so a signed-out
+  // visitor is routed through the EXISTING /account boundary and returned to
+  // /lost. This is the "they asked to track, and are now authenticated" flag
+  // OwnerView opens its modal on. It is derived ONLY from the URL
+  // (publicRoutes.lostTrackPath, i.e. `?track=1` on the public, read-only /lost
+  // page) — it carries no claim id, phone number or credential, and it grants
+  // nothing on its own: the session still has to exist, and the server still
+  // enforces the boundary on POST /api/claims/lookup.
+  const [trackClaimIntent, setTrackClaimIntent] = useState(false);
+
   /**
    * Applies a location to the app's state. Does not touch history except for
    * the two cases that are themselves redirects (the legacy ?claim= link and
@@ -138,6 +152,21 @@ export default function App() {
 
       const next = parsePublicRoute(pathname, search);
       setRoute(next);
+
+      // PHASE 16 — read the Track My Claim intent off the URL. It can only ever
+      // be true on the public owner/claim page (/lost?track=1); every other
+      // route clears it, so navigating anywhere else can never leave a stale
+      // "open the track modal" instruction behind.
+      let wantsTrack = false;
+      try {
+        wantsTrack =
+          next.kind === 'view' &&
+          next.view === 'owner' &&
+          new URLSearchParams(search).get('track') === '1';
+      } catch {
+        wantsTrack = false;
+      }
+      setTrackClaimIntent(wantsTrack);
 
       if (next.kind === 'console') {
         // REQUEST 04 — /console IS the admin route, and it stays in the URL.
@@ -575,7 +604,15 @@ export default function App() {
           // public "Guest"/"Sign In" state immediately — no page reload.
           refreshCustomerSession();
           if (route.kind === 'account' && route.next) {
-            navigate(route.next, route.next === reportLostPath() ? 'owner' : 'home');
+            // PHASE 16 — the Track My Claim return. The visitor asked to track a
+            // claim, was sent through this boundary, and now holds a live
+            // session; send them back to the owner journey with the ?track=1
+            // intent so OwnerView opens the modal they asked for.
+            if (route.next === lostTrackPath()) {
+              navigate(route.next, 'owner');
+            } else {
+              navigate(route.next, route.next === reportLostPath() ? 'owner' : 'home');
+            }
           }
         }}
         /* PHASE 11B: signing out — or being rejected with 401 inside the
@@ -744,6 +781,15 @@ export default function App() {
                    the public "I Lost Something" journey actually offer a way to
                    report a loss, instead of only the claim/search journey. */
                 onReportLost={() => navigate(reportLostPath(), 'owner')}
+                /* PHASE 16 — Track My Claim authentication boundary. Both values
+                   come from the ONE customer session App already resolves from
+                   GET /api/customer/me; a signed-out visitor is handed to the
+                   existing /account boundary with a validated return to this
+                   page, and comes back with Track My Claim already open. No
+                   second session mechanism is created here. */
+                isSignedIn={Boolean(customerSession)}
+                onRequireTrackSignIn={() => navigate(lostTrackSignInPath(), 'owner')}
+                trackIntent={trackClaimIntent}
               />
             </div>
           )}

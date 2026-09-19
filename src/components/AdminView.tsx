@@ -3378,13 +3378,13 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                 </p>
                 {!showCategoryForm && (
                   <Button variant="primary" size="sm" onClick={() => resetCategoryForm('create')} className="shrink-0">
-                    <span>+ Add New Category (Weka Kategoria Mpya)</span>
+                    Add new category / Ongeza kategoria
                   </Button>
                 )}
               </div>
 
               {showCategoryForm ? (
-                <div className="bg-white border border-brand-border rounded-2xl p-6 md:p-8 shadow-sm space-y-6 max-w-2xl mx-auto">
+                <div className="bg-white border border-brand-border rounded-2xl p-5 sm:p-6 md:p-8 shadow-sm space-y-6 max-w-3xl mx-auto">
                   <div className="flex justify-between items-center gap-3 border-b border-brand-border pb-3">
                     <h3 className="font-extrabold text-brand-dark-text">
                       {showCategoryForm === 'create' ? 'Create New Category' : `Editing Category: ${catFormId}`}
@@ -3394,8 +3394,32 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                     </Button>
                   </div>
 
-                  <form onSubmit={handleSaveCategory} className="space-y-4">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* ============================================================
+                      PHASE 16 — THE CATEGORY EDITOR IS NOW SECTIONS.
+                      It previously presented every field as one undifferentiated
+                      2-column grid: identity, both names, privacy, moderation and
+                      six fee inputs all at the same visual weight, with the
+                      save/cancel pair sitting immediately after the fee preview.
+                      An admin could not see where "basic information" ended and
+                      the pricing model began.
+
+                      Only PRESENTATION changed. Every control keeps its id, its
+                      binding, its validation and its submit handler; no payload
+                      key moved; no category or fee calculation was touched. The
+                      five sections are exactly the model this form already had.
+                      ============================================================ */}
+                  <form onSubmit={handleSaveCategory} className="space-y-8">
+                    {/* SECTION 1 — BASIC CATEGORY INFORMATION */}
+                    <section className="space-y-4" aria-labelledby="cat-section-basic">
+                      <div className="border-b border-brand-border pb-2">
+                        <h4 id="cat-section-basic" className="text-sm font-extrabold text-brand-dark-text">
+                          Basic category information / Taarifa za msingi
+                        </h4>
+                        <p className="mt-1 text-caption text-brand-muted-text">
+                          How this category is identified internally and shown to customers in both languages.
+                        </p>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {/* ID (only editable in create mode) */}
                       <Input
                         label="ID / Msimbo (lowercase-kebab-case)"
@@ -3409,79 +3433,6 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                         hint={showCategoryForm === 'create' ? 'Must be unique, letters, numbers and hyphens only.' : undefined}
                         required
                       />
-
-                      {/* Is Sensitive Document */}
-                      <div className="space-y-1 flex flex-col justify-end pb-2">
-                        <div className="flex items-center space-x-2">
-                          <input
-                            type="checkbox"
-                            id="catFormIsSensitive"
-                            checked={catFormIsSensitive}
-                            onChange={(e) => setCatFormIsSensitive(e.target.checked)}
-                            className="rounded text-primary-green focus:ring-primary-green h-4 w-4"
-                          />
-                          <label htmlFor="catFormIsSensitive" className="text-xs font-bold text-brand-dark-text">
-                            Is Sensitive Document? (Inahitaji OCR/ID ya mmliki)
-                          </label>
-                        </div>
-                      </div>
-
-                      {/* Elevated Review (cash, children's-property style categories) */}
-                      <div className="space-y-1 flex flex-col justify-end pb-2">
-                        <div className="flex items-center space-x-2">
-                          <input
-                            type="checkbox"
-                            id="catFormElevatedReview"
-                            checked={catFormElevatedReview}
-                            onChange={(e) => setCatFormElevatedReview(e.target.checked)}
-                            className="rounded text-red-600 focus:ring-red-500 h-4 w-4"
-                          />
-                          <label htmlFor="catFormElevatedReview" className="text-xs font-bold text-brand-dark-text">
-                            Elevated Review — force admin approval before this category's items go public
-                          </label>
-                        </div>
-                      </div>
-
-                      {/* P14A (P14-05) — public-recognition masking style. Drives how this
-                          category's document-number clue is masked in public posts (see
-                          services/publicRecognition.ts). The option VALUES are the canonical
-                          enum values the server validates against; only the labels differ. */}
-                      <Select
-                        className="col-span-3"
-                        label="Public Recognition — document-number clue style"
-                        id="catFormPublicClueStyle"
-                        value={catFormPublicClueStyle}
-                        onChange={(e) => setCatFormPublicClueStyle(e.target.value)}
-                        hint={'Applies to public/social recognition posts only. "None" never publishes a document-number clue for this category.'}
-                      >
-                        {PUBLIC_CLUE_STYLES.map((style) => (
-                          <option key={style} value={style}>
-                            {PUBLIC_CLUE_STYLE_LABELS[style] ?? style}
-                          </option>
-                        ))}
-                      </Select>
-
-                      {/* Flat fee override toggle — decides whether total_fee/finder_share/
-                          agent_share/platform_share below win outright (ignoring the Recovery
-                          Fee Engine section further down), or whether the engine computes the
-                          fee fresh from base/complexity/delay/ceiling every time. Previously
-                          this was silently forced on by every save from this form, which meant
-                          editing the engine fields below had no effect the moment you saved —
-                          it's now an explicit choice. */}
-                      <div className="col-span-3 space-y-1">
-                        <div className="flex items-center space-x-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-                          <input
-                            type="checkbox"
-                            id="catFormIsAdminModified"
-                            checked={catFormIsAdminModified}
-                            onChange={(e) => setCatFormIsAdminModified(e.target.checked)}
-                            className="rounded text-amber-600 focus:ring-amber-500 h-4 w-4"
-                          />
-                          <label htmlFor="catFormIsAdminModified" className="text-xs font-bold text-amber-800">
-                            Use flat fee override — pin Total/Finder/Agent/Platform fee below exactly, and ignore the Recovery Fee Engine config further down entirely
-                          </label>
-                        </div>
-                      </div>
 
                       {/* Name EN */}
                       <Input
@@ -3504,7 +3455,143 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                         placeholder="e.g. Leseni ya Udereva"
                         required
                       />
+                      </div>
+                    </section>
 
+                    {/* SECTION 2 — RECOGNITION & PRIVACY.
+                        The two settings that decide what the PUBLIC may be told
+                        about this category: how a document-number clue is masked
+                        in public/social recognition posts, and whether the owner's
+                        identity document is required before release. */}
+                    <section className="space-y-4" aria-labelledby="cat-section-privacy">
+                      <div className="border-b border-brand-border pb-2">
+                        <h4 id="cat-section-privacy" className="text-sm font-extrabold text-brand-dark-text">
+                          Recognition &amp; privacy / Utambuzi na faragha
+                        </h4>
+                        <p className="mt-1 text-caption text-brand-muted-text">
+                          What a public post may reveal about items in this category.
+                        </p>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* P14A (P14-05) — public-recognition masking style. Drives how this
+                            category's document-number clue is masked in public posts (see
+                            services/publicRecognition.ts). The option VALUES are the canonical
+                            enum values the server validates against; only the labels differ. */}
+                        <Select
+                          className="md:col-span-2"
+                          label="Public recognition — document-number clue style"
+                          id="catFormPublicClueStyle"
+                          value={catFormPublicClueStyle}
+                          onChange={(e) => setCatFormPublicClueStyle(e.target.value)}
+                          hint={'Applies to public/social recognition posts only. "None" never publishes a document-number clue for this category.'}
+                        >
+                          {PUBLIC_CLUE_STYLES.map((style) => (
+                            <option key={style} value={style}>
+                              {PUBLIC_CLUE_STYLE_LABELS[style] ?? style}
+                            </option>
+                          ))}
+                        </Select>
+
+                        {/* Sensitive document — a labelled card, not a bare 16px
+                            checkbox, so the whole row is the target (≥44px) and the
+                            consequence is stated in words rather than implied. */}
+                        <label
+                          htmlFor="catFormIsSensitive"
+                          className="flex items-start gap-3 min-h-11 rounded-xl border border-brand-border bg-white px-3 py-2.5 cursor-pointer"
+                        >
+                          <input
+                            type="checkbox"
+                            id="catFormIsSensitive"
+                            checked={catFormIsSensitive}
+                            onChange={(e) => setCatFormIsSensitive(e.target.checked)}
+                            className="mt-0.5 h-5 w-5 shrink-0 rounded border-brand-border text-primary-green focus:ring-2 focus:ring-accent-orange/30 cursor-pointer"
+                          />
+                          <span className="text-sm text-brand-dark-text">
+                            <span className="font-bold">Sensitive document / Hati nyeti</span>
+                            <span className="mt-0.5 block text-caption text-brand-muted-text">
+                              Requires the owner's identity proof (OCR / ID) before release.
+                            </span>
+                          </span>
+                        </label>
+                      </div>
+                    </section>
+
+                    {/* SECTION 3 — REVIEW CONTROLS.
+                        Categories that must never go public without an
+                        administrator looking at the item first. */}
+                    <section className="space-y-4" aria-labelledby="cat-section-review">
+                      <div className="border-b border-brand-border pb-2">
+                        <h4 id="cat-section-review" className="text-sm font-extrabold text-brand-dark-text">
+                          Review controls / Udhibiti wa ukaguzi
+                        </h4>
+                        <p className="mt-1 text-caption text-brand-muted-text">
+                          Whether items in this category need an administrator's approval before they go public.
+                        </p>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* Elevated Review (cash, children's-property style categories) */}
+                        <label
+                          htmlFor="catFormElevatedReview"
+                          className="flex items-start gap-3 min-h-11 rounded-xl border border-status-danger-border bg-status-danger-surface/50 px-3 py-2.5 cursor-pointer"
+                        >
+                          <input
+                            type="checkbox"
+                            id="catFormElevatedReview"
+                            checked={catFormElevatedReview}
+                            onChange={(e) => setCatFormElevatedReview(e.target.checked)}
+                            className="mt-0.5 h-5 w-5 shrink-0 rounded border-brand-border text-status-danger focus:ring-2 focus:ring-status-danger/30 cursor-pointer"
+                          />
+                          <span className="text-sm text-brand-dark-text">
+                            <span className="font-bold">Elevated review / Ukaguzi wa hali ya juu</span>
+                            <span className="mt-0.5 block text-caption text-brand-muted-text">
+                              Forces admin approval before this category's items go public.
+                            </span>
+                          </span>
+                        </label>
+                      </div>
+                    </section>
+
+                    {/* SECTION 4 — FEE CONFIGURATION.
+                        Two mutually exclusive pricing models, exactly as before: a
+                        flat admin-set override, or the Recovery Fee Engine. Nothing
+                        about either calculation changed in this phase. */}
+                    <section className="space-y-4" aria-labelledby="cat-section-fee">
+                      <div className="border-b border-brand-border pb-2">
+                        <h4 id="cat-section-fee" className="text-sm font-extrabold text-brand-dark-text">
+                          Fee configuration / Mipangilio ya ada
+                        </h4>
+                        <p className="mt-1 text-caption text-brand-muted-text">
+                          Choose one model: a flat override, or the Recovery Fee Engine that prices every item at report time.
+                        </p>
+                      </div>
+
+                      {/* Flat fee override toggle — decides whether total_fee/finder_share/
+                          agent_share/platform_share below win outright (ignoring the Recovery
+                          Fee Engine section further down), or whether the engine computes the
+                          fee fresh from base/complexity/delay/ceiling every time. Previously
+                          this was silently forced on by every save from this form, which meant
+                          editing the engine fields below had no effect the moment you saved —
+                          it's now an explicit choice. */}
+                      <label
+                        htmlFor="catFormIsAdminModified"
+                        className="flex items-start gap-3 min-h-11 rounded-xl border border-status-warning-border bg-status-warning-surface/60 px-3 py-2.5 cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          id="catFormIsAdminModified"
+                          checked={catFormIsAdminModified}
+                          onChange={(e) => setCatFormIsAdminModified(e.target.checked)}
+                          className="mt-0.5 h-5 w-5 shrink-0 rounded border-brand-border text-status-warning focus:ring-2 focus:ring-status-warning/30 cursor-pointer"
+                        />
+                        <span className="text-sm text-brand-dark-text">
+                          <span className="font-bold">Use flat fee override / Tumia ada isiyobadilika</span>
+                          <span className="mt-0.5 block text-caption text-brand-muted-text">
+                            Pins Total / Finder / Agent / Platform fee below exactly and ignores the Recovery Fee Engine config entirely.
+                          </span>
+                        </span>
+                      </label>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {/* Total Fee */}
                       <Input
                         label="Total Fee (KES) / Ada ya Jumla"
@@ -3750,13 +3837,29 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                       </div>
                     </div>
 
-                    <div className="flex gap-2 pt-2">
+                    </section>
+
+                    {/* SECTION 5 — ACTIONS.
+                        Save is the ONLY submit control in this form (see
+                        adminConsoleSectionChrome.test.ts) and Cancel is a real
+                        button rather than a link — nothing about the handler,
+                        the payload or the disabled rule (`splitsMatch`) moved. */}
+                    <section className="space-y-3 border-t border-brand-border pt-4" aria-labelledby="cat-section-actions">
+                      <div>
+                        <h4 id="cat-section-actions" className="text-sm font-extrabold text-brand-dark-text">
+                          Actions / Vitendo
+                        </h4>
+                        <p className="mt-1 text-caption text-brand-muted-text">
+                          Saving writes this category immediately and is recorded against your admin session.
+                        </p>
+                      </div>
+                      <div className="flex flex-col sm:flex-row gap-2">
                       <Button
                         type="submit"
                         variant="primary"
                         disabled={!splitsMatch}
                         loading={catSaving}
-                        className="flex-1"
+                        className="sm:flex-1"
                       >
                         <span>Save Category / Hifadhi</span>
                         <ArrowRight size={16} aria-hidden="true" />
@@ -3768,7 +3871,8 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                       >
                         Cancel / Ghairi
                       </Button>
-                    </div>
+                      </div>
+                    </section>
                   </form>
                 </div>
               ) : (
