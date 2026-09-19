@@ -1,5 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import Navbar from './components/Navbar';
+import DashboardShell, { type DashboardSurface } from './components/dashboard/DashboardShell';
+// Display-only identity helper for the dashboard shell header. It reads the
+// admin username/userId CLAIM and never the token itself (see the module docs).
+import { readAdminSessionIdentity, adminIdentityLabel } from './services/adminSession';
 import HomeView from './components/HomeView';
 import ErrorBoundary from './components/ErrorBoundary';
 import { translations } from './types';
@@ -492,15 +496,124 @@ export default function App() {
 
   const t = translations[lang];
 
-  // (Phase 2 moved the account surface into the standard shell below — see the
-  // customerMode branch inside <main>.)
+  // ---------------------------------------------------------------------------
+  // PART B — THE SHELL BOUNDARY (public site shell vs authenticated dashboard)
+  //
+  // App used to render ONE shell for the whole application: the public <Navbar>
+  // + <main> + public <footer>. Every authenticated surface therefore rendered
+  // INSIDE the public shell, so someone signed in and working in a dashboard was
+  // still shown the five public destinations (Home · I Lost Something · I Found
+  // Something · Become an Agent · Sign In) and the fixed mobile bottom tab bar.
+  // Phase 11B only made that public bar session-aware ("My Account" + sign out);
+  // it never created a boundary. A session-aware public bar is still a PUBLIC
+  // bar, which is why the complaint persisted.
+  //
+  // The boundary is decided by a LIVE SESSION, not merely by which view is
+  // selected:
+  //   · /account (customerMode) is always an authenticated surface;
+  //   · /agent_portal is a dashboard only once an agent token exists — WITHOUT
+  //     one it is the public agent sign-in/registration page, which must keep
+  //     public navigation;
+  //   · /console is a dashboard only once an admin token exists — without one it
+  //     is the public admin authentication gate.
+  //
+  // OwnerView (/lost) is deliberately NOT an authenticated dashboard: it is the
+  // PUBLIC search/claim journey reachable by anyone from "I Lost Something". The
+  // authenticated claimant dashboard is /account. Keeping OwnerView in the
+  // public shell is required, not an oversight.
+  //
+  // The public Navbar is NOT MOUNTED on dashboard surfaces (not hidden with
+  // CSS): no public destinations, no nav handlers and no mobile tab bar exist
+  // while someone is inside a dashboard.
+  // ---------------------------------------------------------------------------
+  const dashboardSurface: DashboardSurface | null = customerMode
+    ? 'account'
+    : currentView === 'agent' && agentToken
+      ? 'agent'
+      : currentView === 'admin' && adminToken
+        ? 'admin'
+        : null;
 
-  // NOTE (Phase 2): the account/dashboard surface deliberately renders INSIDE
-  // the standard site shell (Navbar + main + footer) rather than as a separate
-  // full-page early return, so it keeps the same visual identity and navigation
-  // as the rest of Return4me. `customerMode` is still its own flag rather than
-  // a member of the `currentView` union — it does not need to widen every
-  // view's prop types.
+  // A safe, display-only label for the dashboard shell's identity chip.
+  //   · admin   — reuses the SAME helper AdminView already uses; it reads only
+  //               the username/userId claim and can never return the token;
+  //   · account — the customer's own name from the server session;
+  //   · agent   — no trustworthy label exists at this level, so the generic
+  //               word is used rather than inventing an identity.
+  const dashboardIdentityLabel = dashboardSurface === 'admin'
+    ? adminIdentityLabel(readAdminSessionIdentity(adminToken))
+    : dashboardSurface === 'account'
+      ? (customerSession?.full_name || (lang === 'en' ? 'My Account' : 'Akaunti Yangu'))
+      : dashboardSurface === 'agent'
+        ? (lang === 'en' ? 'Agent' : 'Wakala')
+        : undefined;
+
+  // The ONE customer-account surface, extracted so it renders in the dashboard
+  // shell below. Every callback is unchanged from the previous inline version.
+  const accountSurface = (
+    <ErrorBoundary fallbackTitle="Account Page Crash">
+      <CustomerAccountView
+        lang={lang}
+        onExit={() => {
+          navigate('/', 'home');
+        }}
+        /* Phase 9C: a possible match opens the public /item/:id page,
+           which is where the EXISTING "It's Mine" ownership journey
+           begins. The matcher never becomes a second claim path. */
+        onOpenItem={(itemId) => navigate(itemPath(itemId), 'home')}
+        onAuthenticated={() => {
+          // Return the visitor to the item they pressed "It's Mine" on,
+          // so the journey continues instead of dead-ending on the
+          // dashboard. The destination is validated in publicRoutes.ts
+          // (internal app-owned paths only — never an open redirect).
+          //
+          // PHASE 11A: the same mechanism returns a lost reporter to
+          // /report-lost, where the reporting experience is waiting.
+          //
+          // PHASE 11B: the customer now holds a live cookie session, so
+          // re-resolve it here and the chrome switches out of its
+          // public "Guest"/"Sign In" state immediately — no page reload.
+          refreshCustomerSession();
+          if (route.kind === 'account' && route.next) {
+            navigate(route.next, route.next === reportLostPath() ? 'owner' : 'home');
+          }
+        }}
+        /* PHASE 11B: signing out — or being rejected with 401 inside the
+           dashboard — must clear the shell's session state as well, or the
+           chrome would keep advertising a session the server has ended. */
+        onSessionEnded={() => setCustomerSession(null)}
+      />
+    </ErrorBoundary>
+  );
+
+  // Authenticated surfaces get their own shell. Nothing below this line is the
+  // public site: the public Navbar/footer are not rendered here at all.
+  if (dashboardSurface) {
+    return (
+      <DashboardShell
+        lang={lang}
+        setLang={setLang}
+        surface={dashboardSurface}
+        identityLabel={dashboardIdentityLabel}
+        onExitSite={() => navigate('/', 'home')}
+        onSignOut={logout}
+      >
+        <Suspense fallback={<ViewLoadingFallback />}>
+          {dashboardSurface === 'account' && accountSurface}
+
+          {dashboardSurface === 'agent' && (
+            <AgentView lang={lang} token={agentToken} setToken={handleSetAgentToken} />
+          )}
+
+          {dashboardSurface === 'admin' && (
+            <ErrorBoundary fallbackTitle="Admin Panel Crash">
+              <AdminView lang={lang} token={adminToken} setToken={handleSetAdminToken} />
+            </ErrorBoundary>
+          )}
+        </Suspense>
+      </DashboardShell>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-brand-beige flex flex-col antialiased">
@@ -581,42 +694,6 @@ export default function App() {
                   onBrowseFound={() => navigate('/lost', 'owner')}
                 />
               </div>
-            </Suspense>
-          </ErrorBoundary>
-        ) : customerMode ? (
-          <ErrorBoundary fallbackTitle="Account Page Crash">
-            <Suspense fallback={<ViewLoadingFallback />}>
-              <CustomerAccountView
-                lang={lang}
-                onExit={() => {
-                  navigate('/', 'home');
-                }}
-                /* Phase 9C: a possible match opens the public /item/:id page,
-                   which is where the EXISTING "It's Mine" ownership journey
-                   begins. The matcher never becomes a second claim path. */
-                onOpenItem={(itemId) => navigate(itemPath(itemId), 'home')}
-                onAuthenticated={() => {
-                  // Return the visitor to the item they pressed "It's Mine" on,
-                  // so the journey continues instead of dead-ending on the
-                  // dashboard. The destination is validated in publicRoutes.ts
-                  // (internal app-owned paths only — never an open redirect).
-                  //
-                  // PHASE 11A: the same mechanism returns a lost reporter to
-                  // /report-lost, where the reporting experience is waiting.
-                  //
-                  // PHASE 11B: the customer now holds a live cookie session, so
-                  // re-resolve it here and the site chrome switches out of its
-                  // public "Guest"/"Sign In" state immediately — no page reload.
-                  refreshCustomerSession();
-                  if (route.kind === 'account' && route.next) {
-                    navigate(route.next, route.next === reportLostPath() ? 'owner' : 'home');
-                  }
-                }}
-                /* PHASE 11B: signing out — or being rejected with 401 inside the
-                   dashboard — must clear the bar's session state as well, or the
-                   chrome would keep advertising a session the server has ended. */
-                onSessionEnded={() => setCustomerSession(null)}
-              />
             </Suspense>
           </ErrorBoundary>
         ) : (

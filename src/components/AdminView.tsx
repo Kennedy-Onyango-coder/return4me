@@ -1,6 +1,21 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { translations } from '../types';
+// PART C — the category form previews the finder/agent/platform split with the
+// SAME authoritative engine the server uses, so the numbers an admin sees in
+// the console are the numbers the claim will actually be priced from.
+import { computeRecoveryFee } from '../services/feeEngine';
 import { ShieldCheck, BarChart2, Users, FileCheck, Coins, HelpCircle, Loader2, ArrowRight, AlertCircle, AlertTriangle, RefreshCw, CheckCircle, ShieldAlert, Package, ClipboardList, FileSearch } from 'lucide-react';
+// BATCH 1 (shared admin visual language) — the console reuses the SAME design
+// system every other surface uses. These are presentation primitives only:
+// they hold no data, make no requests and change no behaviour.
+import Button from './ui/Button';
+import Badge from './ui/Badge';
+import Banner from './ui/Banner';
+import EmptyState from './ui/EmptyState';
+import Textarea from './ui/Textarea';
+import Select from './ui/Select';
+import Input from './ui/Input';
+import StatCard from './ui/StatCard';
 // Phase 6F — Claims Administration lives in its own module so this view stays
 // integration/navigation only. The Claims surface is read-only and talks to the
 // 6E API through that module; it never imports the database or the DTO layer.
@@ -65,58 +80,58 @@ function DisputeClaimantPanel({
     : [];
 
   return (
-    <div className={`border rounded-2xl p-4 space-y-2 ${isWinner ? 'border-emerald-200 bg-emerald-50/40' : 'border-stone-200 bg-brand-beige'}`}>
+    <div className={`border rounded-2xl p-4 space-y-2 ${isWinner ? 'border-status-success-border bg-status-success-surface/40' : 'border-brand-border bg-canvas-sunken'}`}>
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[9px] font-extrabold text-stone-400 uppercase tracking-widest">{roleLabel}</span>
+        <span className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-widest">{roleLabel}</span>
         {isWinner && (
-          <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[9px] font-black uppercase tracking-wider">
+          <Badge variant="success">
             {en ? 'Awarded' : 'Ilipewa ushindi'}
-          </span>
+          </Badge>
         )}
       </div>
 
-      <div className="text-[11px] text-stone-600 space-y-0.5">
+      <div className="text-[11px] text-brand-muted-text space-y-0.5">
         <p>
-          <span className="text-stone-400">{en ? 'Phone' : 'Simu'}:</span>{' '}
-          <b>{claimant.owner_phone || (en ? 'not recorded' : 'haijarekodiwa')}</b>
+          <span className="text-brand-muted-text">{en ? 'Phone' : 'Simu'}:</span>{' '}
+          <b className="text-brand-dark-text">{claimant.owner_phone || (en ? 'not recorded' : 'haijarekodiwa')}</b>
         </p>
         <p>
-          <span className="text-stone-400">Claim:</span>{' '}
-          <span className="font-mono font-bold">{claimant.claim_id || (en ? 'not recorded' : 'haijarekodiwa')}</span>
+          <span className="text-brand-muted-text">Claim:</span>{' '}
+          <span className="font-mono font-bold text-brand-dark-text">{claimant.claim_id || (en ? 'not recorded' : 'haijarekodiwa')}</span>
         </p>
         <p>
-          <span className="text-stone-400">{en ? 'Claim status' : 'Hali ya claim'}:</span>{' '}
-          <b>{claimant.claim_status || (en ? 'unknown' : 'haijulikani')}</b>
+          <span className="text-brand-muted-text">{en ? 'Claim status' : 'Hali ya claim'}:</span>{' '}
+          <b className="text-brand-dark-text">{claimant.claim_status || (en ? 'unknown' : 'haijulikani')}</b>
         </p>
         <p>
-          <span className="text-stone-400">{en ? 'Escrow paid' : 'Amana imelipwa'}:</span>{' '}
-          <b>{claimant.has_paid_escrow ? (en ? 'Yes' : 'Ndiyo') : (en ? 'No' : 'Hapana')}</b>
+          <span className="text-brand-muted-text">{en ? 'Escrow paid' : 'Amana imelipwa'}:</span>{' '}
+          <b className="text-brand-dark-text">{claimant.has_paid_escrow ? (en ? 'Yes' : 'Ndiyo') : (en ? 'No' : 'Hapana')}</b>
         </p>
       </div>
 
-      <div className="border-t border-stone-200/60 pt-2 space-y-1">
-        <span className="text-[9px] font-extrabold text-stone-400 uppercase tracking-widest block">
+      <div className="border-t border-brand-border pt-2 space-y-1">
+        <span className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-widest block">
           {en ? 'Submitted evidence' : 'Ushahidi uliowasilishwa'}
         </span>
         {!evidenceState ? (
-          <p className="text-[10px] text-stone-400">{en ? 'Not loaded yet.' : 'Haijapakiwa bado.'}</p>
+          <p className="text-[11px] text-brand-muted-text">{en ? 'Not loaded yet.' : 'Haijapakiwa bado.'}</p>
         ) : evidenceState.loading ? (
-          <p className="text-[10px] text-stone-400">{en ? 'Loading evidence…' : 'Inapakia ushahidi…'}</p>
+          <p className="text-[11px] text-brand-muted-text" aria-busy="true">{en ? 'Loading evidence…' : 'Inapakia ushahidi…'}</p>
         ) : evidenceState.error ? (
-          <p className="text-[10px] text-red-600">
+          <p className="text-[11px] text-status-danger">
             {en ? 'Evidence could not be loaded: ' : 'Ushahidi haukupakiwa: '}{evidenceState.error}
           </p>
         ) : ownEvidence.length === 0 ? (
-          <p className="text-[10px] text-stone-400">{en ? 'No evidence available.' : 'Hakuna ushahidi unaopatikana.'}</p>
+          <p className="text-[11px] text-brand-muted-text">{en ? 'No evidence available.' : 'Hakuna ushahidi unaopatikana.'}</p>
         ) : (
           <ul className="space-y-2">
             {ownEvidence.map((ev: any) => (
-              <li key={ev.id} className="bg-white border border-stone-200 rounded-xl p-2 space-y-1">
-                <p className="text-[10px] text-stone-400">
+              <li key={ev.id} className="bg-white border border-brand-border rounded-xl p-2 space-y-1">
+                <p className="text-[11px] text-brand-muted-text">
                   {ev.created_at ? new Date(ev.created_at).toLocaleString() : ''}
                 </p>
                 {ev.evidence_text && (
-                  <p className="text-[11px] text-stone-700 whitespace-pre-wrap break-words">{ev.evidence_text}</p>
+                  <p className="text-[11px] text-brand-dark-text whitespace-pre-wrap break-words">{ev.evidence_text}</p>
                 )}
                 {ev.evidence_photo_url && (
                   <img
@@ -124,7 +139,7 @@ function DisputeClaimantPanel({
                     alt={en ? 'Evidence photograph submitted with this claim' : 'Picha ya ushahidi iliyowasilishwa'}
                     referrerPolicy="no-referrer"
                     onClick={() => onViewPhoto(ev.evidence_photo_url)}
-                    className="w-full max-h-40 object-contain rounded-lg border border-stone-200 cursor-zoom-in"
+                    className="w-full max-h-40 object-contain rounded-lg border border-brand-border cursor-zoom-in"
                   />
                 )}
               </li>
@@ -136,6 +151,58 @@ function DisputeClaimantPanel({
   );
 }
 
+
+// Console section metadata, keyed by the EXISTING activeTab union. This is the
+// ONE place the console's page-level <h1> and its supporting description come
+// from; nothing about a section's data, permissions or behaviour is derived
+// from it. Kept as one table rather than twenty literals so the heading, the
+// description and the navigation label for a section cannot drift apart.
+type ConsoleSectionKey =
+  | 'stats' | 'agents' | 'found_items' | 'disputes' | 'claims'
+  | 'lost_reports' | 'ledger' | 'review' | 'categories' | 'strikes';
+interface ConsoleSectionCopy { title: string; description: string }
+const CONSOLE_SECTIONS: Record<ConsoleSectionKey, { en: ConsoleSectionCopy; sw: ConsoleSectionCopy }> = {
+  stats: {
+    en: { title: 'Overview', description: 'Monitor platform activity, recovery performance, and operational health.' },
+    sw: { title: 'Muhtasari', description: 'Fuatilia shughuli za jukwaa, utendaji wa uokoaji, na afya ya uendeshaji.' },
+  },
+  agents: {
+    en: { title: 'Agents Hub', description: 'Review agent activity, verification, and operational status.' },
+    sw: { title: 'Mawakala', description: 'Kagua shughuli za mawakala, uthibitishaji, na hali ya uendeshaji.' },
+  },
+  found_items: {
+    en: { title: 'Found Items', description: 'Review recovered items and their current recovery state.' },
+    sw: { title: 'Vitu Vilivyopatikana', description: 'Kagua vitu vilivyookolewa na hali yao ya sasa ya uokoaji.' },
+  },
+  disputes: {
+    en: { title: 'Disputes', description: 'Investigate claims requiring administrative resolution.' },
+    sw: { title: 'Migogoro', description: 'Chunguza madai yanayohitaji usuluhishi wa kiutawala.' },
+  },
+  claims: {
+    en: { title: 'Claims', description: 'Monitor and administer active and completed recovery claims.' },
+    sw: { title: 'Madai', description: 'Fuatilia na simamia madai ya uokoaji yanayoendelea na yaliyokamilika.' },
+  },
+  lost_reports: {
+    en: { title: 'Lost Reports', description: 'Review submitted lost-item reports and their discovery status.' },
+    sw: { title: 'Ripoti za Vitu', description: 'Kagua ripoti za vitu vilivyopotea na hali ya ugunduzi.' },
+  },
+  ledger: {
+    en: { title: 'Ledger', description: 'Review settlement and financial ledger activity.' },
+    sw: { title: 'Leja', description: 'Kagua shughuli za malipo na leja ya kifedha.' },
+  },
+  review: {
+    en: { title: 'Manual Review', description: 'Review operational items requiring administrative attention.' },
+    sw: { title: 'Ukaguzi wa Mkono', description: 'Kagua vitu vinavyohitaji uangalizi wa kiutawala.' },
+  },
+  categories: {
+    en: { title: 'Categories & Fees', description: 'Configure recovery categories, fees, and finder/agent/platform allocation.' },
+    sw: { title: 'Aina na Ada', description: 'Sanidi aina za uokoaji, ada, na mgawanyo wa aliyepata/wakala/jukwaa.' },
+  },
+  strikes: {
+    en: { title: 'Payment Strikes', description: 'Review agent strikes and enforcement history.' },
+    sw: { title: 'Adhabu za Malipo', description: 'Kagua adhabu za mawakala na historia ya utekelezaji.' },
+  },
+};
 
 export default function AdminView({ lang, token, setToken }: AdminViewProps) {
   const t = translations[lang];
@@ -1482,6 +1549,72 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
 
   const splitsMatch = parseFloat((Number(catFormFinderShare) + Number(catFormAgentShare) + Number(catFormPlatformShare)).toFixed(2)) === parseFloat(Number(catFormTotalFee).toFixed(2));
 
+  // ---------------------------------------------------------------------------
+  // PART C — LIVE FEE SPLIT PREVIEW FOR THE CATEGORY FORM
+  //
+  // The form already asked for an amount (Base + Complexity + Delay) and for the
+  // three split percentages, but it never showed what the split actually pays
+  // out. An admin had to do the arithmetic by hand to know whether a KES 1,000
+  // claim pays the finder KES 250 or KES 500.
+  //
+  // This preview calls the SAME `computeRecoveryFee()` the server uses to price a
+  // real claim — it is a preview of the authoritative calculation, not a second
+  // implementation of it. If this preview and the server ever disagreed, the
+  // server is still the authority (the browser is never trusted for money), but
+  // because there is only one function they cannot drift.
+  //
+  // Declared value is deliberately passed as `null`: the admin is configuring the
+  // fee itself, and with no declared value the engine prices at exactly rawFee.
+  // Passing a declared value here would show a ceiling-capped number the admin
+  // is not actually configuring.
+  // ---------------------------------------------------------------------------
+  const enginePreview = useMemo(
+    () =>
+      computeRecoveryFee(
+        {
+          base_fee: Number(catFormBaseFee) || 0,
+          complexity_fee: Number(catFormComplexityFee) || 0,
+          delay_fee: Number(catFormDelayFee) || 0,
+          ceiling_percent: Number(catFormCeilingPercent) || 0,
+          finder_pct: Number(catFormFinderPct) || 0,
+          agent_pct: Number(catFormAgentPct) || 0,
+          platform_pct: Number(catFormPlatformPct) || 0,
+          finder_reward_cap:
+            catFormFinderRewardCap.trim() === '' ? null : Number(catFormFinderRewardCap),
+        },
+        null,
+      ),
+    [
+      catFormBaseFee,
+      catFormComplexityFee,
+      catFormDelayFee,
+      catFormCeilingPercent,
+      catFormFinderPct,
+      catFormAgentPct,
+      catFormPlatformPct,
+      catFormFinderRewardCap,
+    ],
+  );
+
+  // The three engine shares always reconcile to the fee by construction (the
+  // platform share is the residual), so this is a display of that guarantee.
+  const enginePreviewSplitTotal = parseFloat(
+    (enginePreview.finderAmount + enginePreview.agentAmount + enginePreview.platformAmount).toFixed(2),
+  );
+  const kes = (n: number) => `KES ${(Number(n) || 0).toFixed(2)}`;
+
+  // Is an amount actually configured yet? Base + Complexity + Delay is the fee
+  // the admin is pricing. Until at least one is non-zero the engine would report
+  // KES 0.00 for every share, and printing "KES 0.00" as though it were a
+  // computed fee would be a FABRICATED financial value. So the preview says it is
+  // not yet calculable instead — it never dresses up an unconfigured form as a
+  // real split.
+  const catFormAmountEntered =
+    (Number(catFormBaseFee) || 0) + (Number(catFormComplexityFee) || 0) + (Number(catFormDelayFee) || 0) > 0;
+
+  // The single page-level heading + description for whichever section is open.
+  const sectionCopy = CONSOLE_SECTIONS[activeTab][lang];
+
   return (
     <div className="max-w-5xl mx-auto px-4 py-8 fade-in">
       
@@ -1613,22 +1746,10 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
       {token && dashboardData && (
         <div className="space-y-6 fade-in">
           
-          {/* Header */}
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-            <div>
-              <h1 className="text-3xl font-extrabold text-stone-900">{t.adminTitle}</h1>
-              <p className="text-stone-500 text-xs mt-1">{t.adminSubtitle}</p>
-            </div>
-            <button
-              onClick={fetchDashboardData}
-              className="bg-stone-100 hover:bg-stone-200 p-2.5 rounded-xl border border-stone-200 text-stone-700 transition"
-              title="Refresh Audit Data"
-              aria-label="Refresh Audit Data"
-            >
-              <RefreshCw size={16} />
-            </button>
-          </div>
-
+          {/* The console's page-level heading is the section title band further
+              down (inside the sidebar shell). The old standalone 3xl title
+              living here was removed in Batch 1 so there is exactly ONE <h1>
+              on the page and it names the section actually open. */}
           {/* §10 — "Signed in as". Only what the authenticated session actually
               carries is shown: the username claim from the admin token, or the
               generic word "Administrator" when the session carries none. No
@@ -1636,15 +1757,15 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               token itself is never rendered. Sign out clears the session
               exactly as the navbar logout does (setToken(null)); the server-side
               revocation path is unchanged. */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border border-stone-200 rounded-2xl bg-white px-4 py-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-brand-border bg-white px-4 py-3.5 shadow-sm">
             <div className="flex items-center gap-3 min-w-0">
-              <span className="w-9 h-9 rounded-full bg-stone-900 text-white flex items-center justify-center shrink-0">
-                <ShieldCheck size={16} aria-hidden="true" />
+              <span className="w-10 h-10 rounded-xl bg-primary-green text-white flex items-center justify-center shrink-0">
+                <ShieldCheck size={18} aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <p className="text-caption font-extrabold uppercase tracking-widest text-stone-400">Administrator</p>
-                <p className="text-sm font-bold text-stone-900 truncate">{adminLabel}</p>
-                <p className="text-caption text-stone-500">
+                <p className="text-caption font-extrabold uppercase tracking-widest text-brand-muted-text">Administrator</p>
+                <p className="text-sm font-extrabold text-brand-dark-text truncate">{adminLabel}</p>
+                <p className="text-caption text-brand-muted-text">
                   {adminIdentity.role ? `Signed in · role ${adminIdentity.role}` : 'Signed in · active console session'}
                 </p>
               </div>
@@ -1652,43 +1773,35 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
             <button
               type="button"
               onClick={() => setToken(null)}
-              className="border border-stone-300 hover:border-stone-500 text-stone-700 hover:text-stone-900 text-xs font-bold px-4 py-2 rounded-xl transition self-start sm:self-auto cursor-pointer"
+              className="border border-brand-border hover:border-primary-green text-brand-dark-text hover:text-primary-green text-xs font-bold px-4 py-2.5 rounded-xl transition self-start sm:self-auto cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange/40"
             >
               {lang === 'en' ? 'Sign out' : 'Toka'}
             </button>
           </div>
 
-          {actionSuccess && (
-            <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 rounded-2xl text-xs font-bold flex items-center space-x-2">
-              <CheckCircle size={16} />
-              <span>{actionSuccess}</span>
-            </div>
-          )}
+          {actionSuccess && <Banner kind="success">{actionSuccess}</Banner>}
 
           {/* Social media publishing emergency stop — global, server-enforced,
               deliberately visible on every tab rather than tucked into
               settings. See isSocialPublishingPaused() in server.ts: every
               broadcast call site checks this before posting, and a failed
               check fails safe (treated as paused). */}
-          <div className={`px-4 py-3 rounded-2xl text-xs font-bold flex flex-wrap items-center justify-between gap-2 border ${
-            dashboardData.socialPublishingPaused ? 'bg-red-50 border-red-200 text-red-800' : 'bg-white border-stone-100 text-stone-500'
-          }`}>
-            <span className="flex items-center space-x-2">
-              <ShieldAlert size={16} />
-              <span>
-                Social Media Publishing: {dashboardData.socialPublishingPaused ? 'PAUSED — no new posts will go out' : 'Active'}
-              </span>
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-brand-border bg-white px-4 py-3 shadow-sm">
+            <span className="flex items-center gap-2.5 min-w-0">
+              <ShieldAlert size={16} aria-hidden="true" className="shrink-0 text-brand-muted-text" />
+              <span className="text-sm font-bold text-brand-dark-text">Social Media Publishing</span>
+              <Badge variant={dashboardData.socialPublishingPaused ? 'danger' : 'success'}>
+                {dashboardData.socialPublishingPaused ? 'Paused — no new posts' : 'Active'}
+              </Badge>
             </span>
-            <button
-              type="button"
-              disabled={itemActionProcessing === 'social-pause'}
+            <Button
+              variant={dashboardData.socialPublishingPaused ? 'secondary' : 'danger'}
+              size="sm"
+              loading={itemActionProcessing === 'social-pause'}
               onClick={() => handleToggleSocialPause(!dashboardData.socialPublishingPaused)}
-              className={`text-[10px] font-black px-3.5 py-1.5 rounded-lg uppercase tracking-wider transition cursor-pointer disabled:opacity-50 ${
-                dashboardData.socialPublishingPaused ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-red-600 hover:bg-red-700 text-white'
-              }`}
             >
-              {itemActionProcessing === 'social-pause' ? '...' : dashboardData.socialPublishingPaused ? 'Resume Publishing' : 'Pause All Publishing'}
-            </button>
+              {dashboardData.socialPublishingPaused ? 'Resume Publishing' : 'Pause All Publishing'}
+            </Button>
           </div>
 
           {/* The other five emergency pause scopes — reports, claims,
@@ -1710,43 +1823,31 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                 return (
                   <div
                     key={scope}
-                    className={`px-3.5 py-2.5 rounded-2xl text-[11px] font-bold flex items-center justify-between gap-2 border ${
-                      isPaused ? 'bg-red-50 border-red-200 text-red-800' : 'bg-white border-stone-100 text-stone-500'
-                    }`}
+                    className="flex items-center justify-between gap-2 rounded-xl border border-brand-border bg-white px-3.5 py-2.5 shadow-sm"
                   >
-                    <span className="flex items-center space-x-1.5">
-                      <ShieldAlert size={14} />
-                      <span>{label}: {isPaused ? 'PAUSED' : 'Active'}</span>
+                    <span className="flex items-center gap-2 min-w-0">
+                      <ShieldAlert size={14} aria-hidden="true" className="shrink-0 text-brand-muted-text" />
+                      <span className="text-xs font-bold text-brand-dark-text">{label}</span>
+                      <Badge variant={isPaused ? 'danger' : 'success'}>{isPaused ? 'Paused' : 'Active'}</Badge>
                     </span>
-                    <button
-                      type="button"
-                      disabled={isBusy}
+                    <Button
+                      variant={isPaused ? 'secondary' : 'danger'}
+                      size="sm"
+                      loading={isBusy}
                       onClick={() => handleTogglePause(scope, !isPaused)}
-                      className={`text-[9px] font-black px-2.5 py-1 rounded-lg uppercase tracking-wider transition cursor-pointer disabled:opacity-50 shrink-0 ${
-                        isPaused ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-red-600 hover:bg-red-700 text-white'
-                      }`}
+                      className="shrink-0"
                     >
-                      {isBusy ? '...' : isPaused ? 'Resume' : 'Pause'}
-                    </button>
+                      {isPaused ? 'Resume' : 'Pause'}
+                    </Button>
                   </div>
                 );
               })}
             </div>
           )}
 
-          {actionWarning && (
-            <div className="bg-amber-50 border border-amber-300 text-amber-900 px-4 py-3 rounded-2xl text-xs font-bold flex items-center space-x-2">
-              <AlertTriangle size={16} />
-              <span>{actionWarning}</span>
-            </div>
-          )}
+          {actionWarning && <Banner kind="warning">{actionWarning}</Banner>}
 
-          {dataError && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-2.5 rounded-2xl text-xs flex items-center space-x-2">
-              <AlertCircle size={16} />
-              <span>{dataError}</span>
-            </div>
-          )}
+          {dataError && <Banner kind="error">{dataError}</Banner>}
 
           {/* REQUEST 05 / SECTION 11 - ADMIN SIDEBAR SHELL
               The sections below are exactly the sections that already existed.
@@ -1765,7 +1866,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               onClick={() => setActiveTab('stats')}
               aria-current={activeTab === 'stats' ? 'page' : undefined}
               className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
-                activeTab === 'stats' ? 'border-stone-900 text-stone-950 font-extrabold' : 'border-transparent text-stone-400'
+                activeTab === 'stats' ? 'border-primary-green text-brand-dark-text font-extrabold' : 'border-transparent text-brand-muted-text hover:text-brand-dark-text'
               }`}
             >
               <BarChart2 size={14} />
@@ -1775,7 +1876,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               onClick={() => setActiveTab('agents')}
               aria-current={activeTab === 'agents' ? 'page' : undefined}
               className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
-                activeTab === 'agents' ? 'border-stone-900 text-stone-950 font-extrabold' : 'border-transparent text-stone-400'
+                activeTab === 'agents' ? 'border-primary-green text-brand-dark-text font-extrabold' : 'border-transparent text-brand-muted-text hover:text-brand-dark-text'
               }`}
             >
               <Users size={14} />
@@ -1785,7 +1886,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               onClick={() => setActiveTab('found_items')}
               aria-current={activeTab === 'found_items' ? 'page' : undefined}
               className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
-                activeTab === 'found_items' ? 'border-stone-900 text-stone-950 font-extrabold' : 'border-transparent text-stone-400'
+                activeTab === 'found_items' ? 'border-primary-green text-brand-dark-text font-extrabold' : 'border-transparent text-brand-muted-text hover:text-brand-dark-text'
               }`}
             >
               <Package size={14} />
@@ -1795,7 +1896,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               onClick={() => setActiveTab('disputes')}
               aria-current={activeTab === 'disputes' ? 'page' : undefined}
               className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
-                activeTab === 'disputes' ? 'border-stone-900 text-stone-950 font-extrabold' : 'border-transparent text-stone-400'
+                activeTab === 'disputes' ? 'border-primary-green text-brand-dark-text font-extrabold' : 'border-transparent text-brand-muted-text hover:text-brand-dark-text'
               }`}
             >
               <HelpCircle size={14} />
@@ -1807,7 +1908,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               onClick={() => setActiveTab('claims')}
               aria-current={activeTab === 'claims' ? 'page' : undefined}
               className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
-                activeTab === 'claims' ? 'border-stone-900 text-stone-950 font-extrabold' : 'border-transparent text-stone-400'
+                activeTab === 'claims' ? 'border-primary-green text-brand-dark-text font-extrabold' : 'border-transparent text-brand-muted-text hover:text-brand-dark-text'
               }`}
             >
               <ClipboardList size={14} />
@@ -1817,7 +1918,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               onClick={() => setActiveTab('lost_reports')}
               aria-current={activeTab === 'lost_reports' ? 'page' : undefined}
               className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
-                activeTab === 'lost_reports' ? 'border-stone-900 text-stone-950 font-extrabold' : 'border-transparent text-stone-400'
+                activeTab === 'lost_reports' ? 'border-primary-green text-brand-dark-text font-extrabold' : 'border-transparent text-brand-muted-text hover:text-brand-dark-text'
               }`}
             >
               <FileSearch size={14} />
@@ -1827,7 +1928,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               onClick={() => setActiveTab('ledger')}
               aria-current={activeTab === 'ledger' ? 'page' : undefined}
               className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
-                activeTab === 'ledger' ? 'border-stone-900 text-stone-950 font-extrabold' : 'border-transparent text-stone-400'
+                activeTab === 'ledger' ? 'border-primary-green text-brand-dark-text font-extrabold' : 'border-transparent text-brand-muted-text hover:text-brand-dark-text'
               }`}
             >
               <Coins size={14} />
@@ -1837,7 +1938,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               onClick={() => setActiveTab('review')}
               aria-current={activeTab === 'review' ? 'page' : undefined}
               className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
-                activeTab === 'review' ? 'border-stone-900 text-stone-950 font-extrabold' : 'border-transparent text-stone-400'
+                activeTab === 'review' ? 'border-primary-green text-brand-dark-text font-extrabold' : 'border-transparent text-brand-muted-text hover:text-brand-dark-text'
               }`}
             >
               <FileCheck size={14} />
@@ -1847,7 +1948,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               onClick={() => setActiveTab('categories')}
               aria-current={activeTab === 'categories' ? 'page' : undefined}
               className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
-                activeTab === 'categories' ? 'border-stone-900 text-stone-950 font-extrabold' : 'border-transparent text-stone-400'
+                activeTab === 'categories' ? 'border-primary-green text-brand-dark-text font-extrabold' : 'border-transparent text-brand-muted-text hover:text-brand-dark-text'
               }`}
             >
               <Coins size={14} />
@@ -1857,7 +1958,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               onClick={() => setActiveTab('strikes')}
               aria-current={activeTab === 'strikes' ? 'page' : undefined}
               className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
-                activeTab === 'strikes' ? 'border-stone-900 text-stone-950 font-extrabold' : 'border-transparent text-stone-400'
+                activeTab === 'strikes' ? 'border-primary-green text-brand-dark-text font-extrabold' : 'border-transparent text-brand-muted-text hover:text-brand-dark-text'
               }`}
             >
               <ShieldAlert size={14} />
@@ -1866,18 +1967,46 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
           </nav>
           <div className="space-y-6 min-w-0">
 
+          {/* PAGE TITLE — the console's ONE page-level <h1>. The old 3xl title
+              above the sidebar was removed, so this band is the single heading
+              owner; its title and description come from the shared
+              CONSOLE_SECTIONS table and change with the active section. The
+              dashboard refresh control lives here because it refreshes the
+              whole console payload, not any one section. */}
+          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 pb-3 border-b border-brand-border">
+            <div className="space-y-1 min-w-0">
+              <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight text-brand-dark-text">
+                {sectionCopy.title}
+              </h1>
+              <p className="text-sm text-brand-muted-text leading-relaxed max-w-2xl">{sectionCopy.description}</p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={fetchDashboardData}
+              title="Refresh Audit Data"
+              aria-label="Refresh Audit Data"
+              className="shrink-0 self-start"
+            >
+              <RefreshCw size={14} aria-hidden="true" />
+              <span>{lang === 'en' ? 'Refresh' : 'Huisha'}</span>
+            </Button>
+          </div>
+
           {/* TAB CONTENT 1: STATS WORKSPACE */}
           {activeTab === 'stats' && (
             <div className="space-y-6">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="bg-white border border-stone-100 p-5 rounded-2xl shadow-sm text-center space-y-1">
-                  <span className="text-stone-400 text-[10px] font-extrabold uppercase tracking-widest">Active Holding Items</span>
-                  <span className="text-2xl font-black text-primary-green block">{dashboardData.stats.itemsAtAgentCount}</span>
-                </div>
-                <div className="bg-white border border-stone-100 p-5 rounded-2xl shadow-sm text-center space-y-1">
-                  <span className="text-stone-400 text-[10px] font-extrabold uppercase tracking-widest">Pending Agents</span>
-                  <span className="text-2xl font-black text-accent-orange block">{dashboardData.stats.pendingAgentsCount}</span>
-                </div>
+              <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4">
+                <StatCard
+                  icon={Package}
+                  label={lang === 'en' ? 'Active Holding Items' : 'Vitu Vinavyoshikiliwa'}
+                  value={dashboardData.stats.itemsAtAgentCount}
+                />
+                <StatCard
+                  icon={Users}
+                  label={lang === 'en' ? 'Pending Agents' : 'Mawakala Wanaosubiri'}
+                  value={dashboardData.stats.pendingAgentsCount}
+                />
                 {/* PHASE 10 (F-2): this card previously rendered
                     `stats.escrowHeldCount` — a COUNT of claims — under the label
                     "Escrow Funds Held", immediately to the left of a genuine
@@ -1887,67 +2016,65 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                     and the count has its own card under a label that says what it
                     is. The misleading presentation is gone from both the value
                     and the label. */}
-                <div className="bg-white border border-stone-100 p-5 rounded-2xl shadow-sm text-center space-y-1">
-                  <span className="text-stone-400 text-[10px] font-extrabold uppercase tracking-widest">Escrow Funds Held</span>
-                  <span className="text-2xl font-black text-emerald-700 block">KES {dashboardData.stats.escrowHeldAmount}</span>
+                {/* These two cards are deliberately NOT <StatCard>: their exact
+                    rendered label/value markup is pinned by adminEscrowMetric.test.ts
+                    (the financial-truthfulness guard that stops a claim COUNT
+                    being shown as money). They are styled to the same visual
+                    language as StatCard so the grid still reads as one set. */}
+                <div className="bg-white border border-brand-border rounded-2xl p-4 sm:p-5 shadow-sm">
+                  <span className="block text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">Escrow Funds Held</span>
+                  <span className="block mt-1 text-2xl font-extrabold text-primary-green tabular-nums tracking-tight leading-tight">KES {dashboardData.stats.escrowHeldAmount}</span>
                 </div>
-                <div className="bg-white border border-stone-100 p-5 rounded-2xl shadow-sm text-center space-y-1">
-                  <span className="text-stone-400 text-[10px] font-extrabold uppercase tracking-widest">Claims in Escrow</span>
-                  <span className="text-2xl font-black text-emerald-700 block">{dashboardData.stats.escrowHeldCount}</span>
+                <div className="bg-white border border-brand-border rounded-2xl p-4 sm:p-5 shadow-sm">
+                  <span className="block text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">Claims in Escrow</span>
+                  <span className="block mt-1 text-2xl font-extrabold text-primary-green tabular-nums tracking-tight leading-tight">{dashboardData.stats.escrowHeldCount}</span>
                 </div>
-                <div className="bg-white border border-stone-100 p-5 rounded-2xl shadow-sm text-center space-y-1">
-                  <span className="text-stone-400 text-[10px] font-extrabold uppercase tracking-widest">{t.totalRev}</span>
-                  <span className="text-2xl font-black text-stone-900 block">KES {dashboardData.stats.totalRevenue}</span>
-                </div>
+                <StatCard
+                  icon={Coins}
+                  label={t.totalRev}
+                  value={`KES ${dashboardData.stats.totalRevenue}`}
+                />
               </div>
 
               {/* Admin 2FA / Security */}
-              <div className="bg-white border border-stone-100 rounded-2xl p-6 shadow-sm space-y-4">
-                <div className="flex items-center justify-between">
-                  <h3 className="font-extrabold text-sm text-stone-500 uppercase tracking-widest flex items-center gap-2">
-                    <ShieldCheck size={16} />
+              <div className="bg-white border border-brand-border rounded-2xl p-6 shadow-sm space-y-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="font-extrabold text-sm text-brand-muted-text uppercase tracking-widest flex items-center gap-2">
+                    <ShieldCheck size={16} aria-hidden="true" />
                     Two-Factor Authentication (2FA)
                   </h3>
-                  <span className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full ${adminTotpEnabled ? 'bg-emerald-100 text-emerald-800' : 'bg-stone-100 text-stone-500'}`}>
+                  <Badge variant={adminTotpEnabled ? 'success' : 'neutral'}>
                     {adminTotpEnabled ? 'Enabled' : 'Not Enabled'}
-                  </span>
+                  </Badge>
                 </div>
 
-                {twoFaError && (
-                  <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-xl text-xs">{twoFaError}</div>
-                )}
-                {twoFaMessage && (
-                  <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-3 py-2 rounded-xl text-xs">{twoFaMessage}</div>
-                )}
+                {twoFaError && <Banner kind="error">{twoFaError}</Banner>}
+                {twoFaMessage && <Banner kind="success">{twoFaMessage}</Banner>}
 
                 {!adminTotpEnabled && !twoFaSetupData && (
                   <div className="space-y-2">
-                    <p className="text-xs text-stone-500">
+                    <p className="text-sm text-brand-muted-text">
                       This admin account does not have 2FA enabled. Given this account controls dispute resolution, agent approval, and the full financial ledger, we strongly recommend enabling it.
                     </p>
-                    <button
-                      onClick={handleTwoFaStartSetup}
-                      disabled={twoFaProcessing}
-                      className="bg-stone-900 hover:bg-stone-800 text-white text-xs font-bold px-4 py-2 rounded-xl transition disabled:opacity-50"
-                    >
-                      {twoFaProcessing ? 'Starting...' : 'Enable 2FA'}
-                    </button>
+                    <Button variant="primary" loading={twoFaProcessing} onClick={handleTwoFaStartSetup} className="self-start">
+                      Enable 2FA
+                    </Button>
                   </div>
                 )}
 
                 {twoFaSetupData && (
-                  <div className="space-y-3 bg-stone-50 border border-stone-200 rounded-2xl p-4">
-                    <p className="text-xs text-stone-600">
+                  <div className="space-y-3 bg-canvas-muted border border-brand-border rounded-2xl p-4">
+                    <p className="text-sm text-brand-muted-text">
                       Add this account to Google Authenticator, Authy, or any TOTP app — either by scanning a QR code generated from the URL below, or by entering the secret manually.
                     </p>
-                    <div className="text-[10px] font-mono bg-white border border-stone-200 rounded-lg p-2 break-all">{twoFaSetupData.otpauthUrl}</div>
-                    <div className="text-xs">
+                    <div className="text-[11px] font-mono bg-white border border-brand-border rounded-lg p-2 break-all">{twoFaSetupData.otpauthUrl}</div>
+                    <div className="text-xs text-brand-dark-text">
                       <span className="font-bold">Manual entry secret:</span>{' '}
                       <span className="font-mono">{twoFaSetupData.secret}</span>
                     </div>
                     <form onSubmit={handleTwoFaConfirm} className="flex gap-2 items-end">
                       <div className="flex-1 space-y-1">
-                        <label htmlFor="twofa-confirm-code" className="text-[10px] font-bold text-stone-500 uppercase">Enter code to confirm</label>
+                        <label htmlFor="twofa-confirm-code" className="block text-xs font-bold text-brand-dark-text">Enter code to confirm</label>
                         <input
                           id="twofa-confirm-code"
                           type="text"
@@ -1956,68 +2083,71 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                           value={twoFaConfirmCode}
                           onChange={(e) => setTwoFaConfirmCode(e.target.value)}
                           placeholder="123456"
-                          className="w-full border border-stone-200 rounded-lg px-3 py-2 text-sm font-mono text-center"
+                          className="w-full h-11 border border-brand-border rounded-xl px-3 text-sm font-mono text-center focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30"
                           required
                         />
                       </div>
-                      <button
-                        type="submit"
-                        disabled={twoFaProcessing}
-                        className="bg-primary-green text-white text-xs font-bold px-4 py-2 rounded-xl transition disabled:opacity-50"
-                      >
+                      <Button type="submit" variant="primary" loading={twoFaProcessing}>
                         Confirm &amp; Enable
-                      </button>
+                      </Button>
                     </form>
                   </div>
                 )}
 
                 {adminTotpEnabled && !twoFaShowDisableForm && (
                   <button
+                    type="button"
                     onClick={() => setTwoFaShowDisableForm(true)}
-                    className="text-xs font-bold text-red-600 hover:text-red-700 underline"
+                    className="self-start text-xs font-bold text-status-danger underline hover:no-underline cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange/40 rounded"
                   >
                     Disable 2FA
                   </button>
                 )}
 
                 {adminTotpEnabled && twoFaShowDisableForm && (
-                  <form onSubmit={handleTwoFaDisable} className="flex gap-2 items-end bg-red-50/50 border border-red-100 rounded-2xl p-4">
+                  <form onSubmit={handleTwoFaDisable} className="flex gap-2 items-end bg-status-danger-surface border border-status-danger-border rounded-2xl p-4">
                     <div className="flex-1 space-y-1">
-                      <label htmlFor="twofa-disable-password" className="text-[10px] font-bold text-red-800 uppercase">Confirm password to disable 2FA</label>
+                      <label htmlFor="twofa-disable-password" className="block text-xs font-bold text-status-danger">Confirm password to disable 2FA</label>
                       <input
                         id="twofa-disable-password"
                         type="password"
                         value={twoFaDisablePassword}
                         onChange={(e) => setTwoFaDisablePassword(e.target.value)}
-                        className="w-full border border-stone-200 rounded-lg px-3 py-2 text-sm"
+                        className="w-full h-11 border border-brand-border rounded-xl px-3 text-sm focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30"
                         required
                       />
                     </div>
-                    <button
-                      type="submit"
-                      disabled={twoFaProcessing}
-                      className="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition disabled:opacity-50"
-                    >
+                    <Button type="submit" variant="danger" loading={twoFaProcessing}>
                       Disable
-                    </button>
+                    </Button>
                   </form>
                 )}
               </div>
 
               {/* Audit logs timeline */}
-              <div className="bg-white border border-stone-100 rounded-2xl p-6 shadow-sm space-y-4">
-                <h3 className="font-extrabold text-sm text-stone-500 uppercase tracking-widest">Real-time Platform Audit Logs</h3>
-                <div className="h-60 overflow-y-auto border border-stone-100 rounded-xl font-mono text-[10px] p-4 bg-brand-beige space-y-2 leading-tight">
-                  {dashboardData.auditLogs.map((log: any) => (
-                    <div key={log.id} className="text-stone-600 border-b border-stone-200/50 pb-1.5 flex justify-between items-start">
-                      <div>
-                        <span className="text-primary-green font-bold mr-2">[{log.action.toUpperCase()}]</span>
-                        <span>{log.details}</span>
+              <div className="bg-white border border-brand-border rounded-2xl p-6 shadow-sm space-y-4">
+                <h3 className="font-extrabold text-sm text-brand-muted-text uppercase tracking-widest">Real-time Platform Audit Logs</h3>
+                {dashboardData.auditLogs.length === 0 ? (
+                  <EmptyState
+                    icon={ClipboardList}
+                    title={lang === 'en' ? 'No audit activity yet' : 'Hakuna shughuli bado'}
+                    description={lang === 'en'
+                      ? 'Platform actions appear here as they are recorded.'
+                      : 'Vitendo vya jukwaa vinaonekana hapa vinaporekodiwa.'}
+                  />
+                ) : (
+                  <div className="h-60 overflow-y-auto border border-brand-border rounded-xl font-mono text-[11px] p-4 bg-brand-beige space-y-2 leading-relaxed">
+                    {dashboardData.auditLogs.map((log: any) => (
+                      <div key={log.id} className="text-brand-muted-text border-b border-brand-border/60 pb-1.5 flex justify-between items-start gap-3">
+                        <div className="min-w-0">
+                          <span className="text-primary-green font-bold mr-2">[{log.action.toUpperCase()}]</span>
+                          <span>{log.details}</span>
+                        </div>
+                        <span className="text-brand-muted-text shrink-0 ml-3">{new Date(log.created_at).toLocaleString()}</span>
                       </div>
-                      <span className="text-stone-400 shrink-0 ml-3">{new Date(log.created_at).toLocaleString()}</span>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -2025,44 +2155,29 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
           {/* TAB CONTENT 2: AGENTS VETTING & DIRECTORY */}
           {activeTab === 'agents' && (
             <div className="space-y-6">
-              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                <div>
-                  <h2 className="text-lg font-bold text-primary-green">
-                    {lang === 'en' ? 'Agents Directory & Vetting Hub' : 'Saraka ya Mawakala na Kitovu cha Uhakiki'}
-                  </h2>
-                  <p className="text-stone-500 text-xs">
-                    {lang === 'en' 
-                      ? 'Monitor registered physical drop-off stations, approve pending applications, or suspend active hubs.' 
-                      : 'Fuatilia vituo vya mawakala wa makabidhiano, idhinisha mawakala wapya, au msimamishe kazi wakala.'}
-                  </p>
-                </div>
-              </div>
-
               {/* Search & Filters */}
-              <div className="bg-white border border-stone-100 rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row gap-3">
-                <div className="flex-1">
-                  <input
-                    type="text"
-                    value={agentSearch}
-                    onChange={(e) => setAgentSearch(e.target.value)}
-                    placeholder={lang === 'en' ? 'Search by business name, phone, email, till...' : 'Tafuta kwa jina la biashara, simu, barua pepe...'}
-                    aria-label={lang === 'en' ? 'Search agents' : 'Tafuta mawakala'}
-                    className="w-full border border-stone-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-accent-orange"
-                  />
-                </div>
-                <div className="flex gap-2">
-                  <select
-                    value={agentStatusFilter}
-                    onChange={(e) => setAgentStatusFilter(e.target.value)}
-                    aria-label={lang === 'en' ? 'Filter by agent status' : 'Chuja kwa hali ya wakala'}
-                    className="border border-stone-200 rounded-xl px-3 py-2 text-xs bg-white font-semibold focus:outline-none"
-                  >
-                    <option value="all">{lang === 'en' ? 'All Statuses' : 'Hali Zote'}</option>
-                    <option value="pending">{lang === 'en' ? 'Pending Approval' : 'Wanasubiri Uhakiki'}</option>
-                    <option value="active">{lang === 'en' ? 'Active Hubs' : 'Mawakala Wanaofanya Kazi'}</option>
-                    <option value="suspended">{lang === 'en' ? 'Suspended Hubs' : 'Waliosimamishwa Kazi'}</option>
-                  </select>
-                </div>
+              <div className="bg-white border border-brand-border rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row gap-3 sm:items-end">
+                <Input
+                  label={lang === 'en' ? 'Search agents' : 'Tafuta mawakala'}
+                  hideLabel
+                  type="text"
+                  value={agentSearch}
+                  onChange={(e) => setAgentSearch(e.target.value)}
+                  placeholder={lang === 'en' ? 'Search by business name, phone, email, till...' : 'Tafuta kwa jina la biashara, simu, barua pepe...'}
+                  className="flex-1"
+                />
+                <Select
+                  label={lang === 'en' ? 'Filter by agent status' : 'Chuja kwa hali ya wakala'}
+                  hideLabel
+                  value={agentStatusFilter}
+                  onChange={(e) => setAgentStatusFilter(e.target.value)}
+                  className="sm:w-60"
+                >
+                  <option value="all">{lang === 'en' ? 'All Statuses' : 'Hali Zote'}</option>
+                  <option value="pending">{lang === 'en' ? 'Pending Approval' : 'Wanasubiri Uhakiki'}</option>
+                  <option value="active">{lang === 'en' ? 'Active Hubs' : 'Mawakala Wanaofanya Kazi'}</option>
+                  <option value="suspended">{lang === 'en' ? 'Suspended Hubs' : 'Waliosimamishwa Kazi'}</option>
+                </Select>
               </div>
 
               {/* Agent List */}
@@ -2083,9 +2198,13 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
 
                 if (filteredAgents.length === 0) {
                   return (
-                    <div className="bg-white border border-stone-100 rounded-2xl p-8 text-center text-stone-400 text-xs">
-                      {lang === 'en' ? 'No agents found matching your criteria.' : 'Hakuna mawakala waliopatikana wanaolingana na vigezo vyako.'}
-                    </div>
+                    <EmptyState
+                      icon={Users}
+                      title={lang === 'en' ? 'No agents found' : 'Hakuna mawakala'}
+                      description={lang === 'en'
+                        ? 'No registered agents match the current search or status filter.'
+                        : 'Hakuna mawakala walioandikishwa wanaolingana na utafutaji au kichujio cha hali.'}
+                    />
                   );
                 }
 
@@ -2096,12 +2215,12 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                       return (
                         <div 
                           key={agent.id} 
-                          className="bg-white border border-stone-100 rounded-2xl shadow-sm hover:border-stone-200 transition overflow-hidden"
+                          className="bg-white border border-brand-border rounded-2xl shadow-sm hover:shadow-md transition overflow-hidden"
                         >
                           {/* Core Row Header */}
                           <div 
                             onClick={() => setExpandedAgentId(isExpanded ? null : agent.id)}
-                            className="p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 cursor-pointer hover:bg-stone-50 transition"
+                            className="p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 cursor-pointer hover:bg-canvas-muted transition"
                             role="button"
                             tabIndex={0}
                             aria-expanded={isExpanded}
@@ -2115,53 +2234,45 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                           >
                             <div className="space-y-1">
                               <div className="flex flex-wrap items-center gap-2">
-                                <span className={`text-[9px] font-black px-2.5 py-0.5 rounded-full uppercase ${
-                                  agent.status === 'active' 
-                                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' 
-                                    : agent.status === 'pending'
-                                    ? 'bg-amber-50 text-amber-700 border border-amber-100'
-                                    : 'bg-red-50 text-red-700 border border-red-100'
-                                }`}>
+                                <Badge variant={agent.status === 'active' ? 'success' : agent.status === 'pending' ? 'warning' : 'danger'}>
                                   {agent.status}
-                                </span>
+                                </Badge>
                                 {agent.needs_manual_geocoding && (
-                                  <span className="bg-red-50 text-red-600 text-[9px] font-black px-2 py-0.5 rounded-full border border-red-100 uppercase">
-                                    Needs Geocoding
-                                  </span>
+                                  <Badge variant="danger">Needs Geocoding</Badge>
                                 )}
-                                <span className="text-[10px] text-stone-400 font-mono">ID: {agent.id}</span>
+                                <Badge variant="code">ID: {agent.id}</Badge>
                               </div>
-                              <h3 className="font-extrabold text-stone-900 text-sm md:text-base">{agent.business_name}</h3>
-                              <p className="text-stone-500 text-xs line-clamp-1">{agent.location_address}</p>
+                              <h3 className="font-extrabold text-brand-dark-text text-sm md:text-base">{agent.business_name}</h3>
+                              <p className="text-brand-muted-text text-xs line-clamp-1">{agent.location_address}</p>
                             </div>
 
                             <div className="flex items-center gap-3 self-stretch md:self-auto justify-between md:justify-end">
                               <div className="text-right hidden md:block">
-                                <div className="text-xs font-bold text-emerald-700">KES {(agent.total_earned || 0).toLocaleString()} {lang === 'en' ? 'earned' : 'iliyopatikana'}</div>
-                                <div className="text-[10px] text-stone-400 font-mono">{agent.contact_phone} · Till: {agent.mpesa_till_or_paybill}</div>
+                                <div className="text-xs font-bold text-status-success">KES {(agent.total_earned || 0).toLocaleString()} {lang === 'en' ? 'earned' : 'iliyopatikana'}</div>
+                                <div className="text-[11px] text-brand-muted-text font-mono">{agent.contact_phone} · Till: {agent.mpesa_till_or_paybill}</div>
                               </div>
                               <div className="flex items-center gap-2">
-                                <button
-                                  type="button"
+                                <Button
+                                  variant="outline"
+                                  size="sm"
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     setExpandedAgentId(isExpanded ? null : agent.id);
                                   }}
-                                  className="text-stone-500 hover:text-stone-800 text-xs font-bold px-3 py-1.5 rounded-lg border border-stone-200 hover:border-stone-300 transition"
                                 >
                                   {isExpanded ? (lang === 'en' ? 'Hide Details' : 'Ficha') : (lang === 'en' ? 'View Details' : 'Angalia')}
-                                </button>
+                                </Button>
                               </div>
                             </div>
                           </div>
 
                           {/* Expanded Details Body */}
                           {isExpanded && (
-                            <div className="border-t border-stone-100 bg-stone-50/50 p-5 space-y-4 fade-in text-xs text-stone-600">
+                            <div className="border-t border-brand-border bg-canvas-sunken/60 p-5 space-y-4 fade-in text-xs text-brand-muted-text">
                               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                                 {/* Column 1: Verification / Details */}
                                 <div className="space-y-2">
-                                  <span className="text-[10px] font-extrabold text-stone-400 uppercase tracking-wider block">Agent Contact Details</span>
+                                  <span className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-wider block">Agent Contact Details</span>
                                   <p><b>Business Name:</b> {agent.business_name}</p>
                                   <p><b>Contact Phone:</b> {agent.contact_phone}</p>
                                   <p><b>Contact Email:</b> {agent.contact_email || 'Not Provided'}</p>
@@ -2174,7 +2285,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
 
                                 {/* Column 2: Location and Map */}
                                 <div className="space-y-2">
-                                  <span className="text-[10px] font-extrabold text-stone-400 uppercase tracking-wider block">Physical Coordinates</span>
+                                  <span className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-wider block">Physical Coordinates</span>
                                   <p><b>Full Address:</b> {agent.location_address}</p>
                                   {agent.latitude && agent.longitude ? (
                                     <>
@@ -2256,7 +2367,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
 
                                 {/* Column 3: Performance, Finance & Warnings */}
                                 <div className="space-y-2">
-                                  <span className="text-[10px] font-extrabold text-stone-400 uppercase tracking-wider block">Financials, Rating & Warnings</span>
+                                  <span className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-wider block">Financials, Rating & Warnings</span>
                                   <p><b>Payout Method:</b> {agent.payout_method_type || 'Till Number'}</p>
                                   <p><b>M-Pesa Target:</b> {agent.mpesa_till_or_paybill}</p>
                                   <p><b>Refundable Security Deposit:</b> KES {parseFloat(agent.refundable_deposit || '0').toLocaleString()}</p>
@@ -2283,16 +2394,16 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                                   for this agent only, when the row is expanded
                                   (GET /api/admin/agents/:id/documents). */}
                               {agentDocsLoading === agent.id ? (
-                                <div className="border-t border-stone-200/60 pt-3 space-y-2">
-                                  <span className="text-[10px] font-extrabold text-stone-400 uppercase tracking-wider block">Agent Verification Photographs</span>
-                                  <p className="text-[10px] text-stone-400 flex items-center gap-1.5">
-                                    <Loader2 className="animate-spin" size={12} /> Loading verification photographs…
+                                <div className="border-t border-brand-border pt-3 space-y-2">
+                                  <span className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-wider block">Agent Verification Photographs</span>
+                                  <p className="text-[11px] text-brand-muted-text flex items-center gap-1.5" aria-busy="true">
+                                    <Loader2 className="animate-spin" size={12} aria-hidden="true" /> Loading verification photographs…
                                   </p>
                                 </div>
                               ) : agentDocs && agentDocs.id === agent.id ? (
                                 (agentDocs.shop_photo_url || agentDocs.id_document_photo_url) ? (
-                                  <div className="border-t border-stone-200/60 pt-3 space-y-2">
-                                    <span className="text-[10px] font-extrabold text-stone-400 uppercase tracking-wider block">Agent Verification Photographs</span>
+                                  <div className="border-t border-brand-border pt-3 space-y-2">
+                                    <span className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-wider block">Agent Verification Photographs</span>
                                     <div className="flex flex-wrap gap-4">
                                       {agentDocs.shop_photo_url && (
                                         <div
@@ -2308,8 +2419,8 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                                             }
                                           }}
                                         >
-                                          <p className="text-[10px] font-bold text-stone-600">Shop / Business Location Front</p>
-                                          <div className="w-32 h-24 rounded-xl border border-stone-200 overflow-hidden bg-stone-100 relative">
+                                          <p className="text-[11px] font-bold text-brand-dark-text">Shop / Business Location Front</p>
+                                          <div className="w-32 h-24 rounded-xl border border-brand-border overflow-hidden bg-canvas-muted relative">
                                             <img src={agentDocs.shop_photo_url} alt="Shop Front" className="w-full h-full object-cover group-hover:scale-105 transition" />
                                           </div>
                                         </div>
@@ -2328,8 +2439,8 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                                             }
                                           }}
                                         >
-                                          <p className="text-[10px] font-bold text-stone-600">National ID Document Photo</p>
-                                          <div className="w-32 h-24 rounded-xl border border-stone-200 overflow-hidden bg-stone-100 relative">
+                                          <p className="text-[11px] font-bold text-brand-dark-text">National ID Document Photo</p>
+                                          <div className="w-32 h-24 rounded-xl border border-brand-border overflow-hidden bg-canvas-muted relative">
                                             <img src={agentDocs.id_document_photo_url} alt="ID Document" className="w-full h-full object-cover group-hover:scale-105 transition" />
                                           </div>
                                         </div>
@@ -2337,59 +2448,59 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                                     </div>
                                   </div>
                                 ) : (
-                                  <div className="border-t border-stone-200/60 pt-3">
-                                    <span className="text-[10px] font-extrabold text-stone-400 uppercase tracking-wider block">Agent Verification Photographs</span>
-                                    <p className="text-[10px] text-stone-400 pt-1">No verification photographs on file for this agent.</p>
+                                  <div className="border-t border-brand-border pt-3">
+                                    <span className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-wider block">Agent Verification Photographs</span>
+                                    <p className="text-[11px] text-brand-muted-text pt-1">No verification photographs on file for this agent.</p>
                                   </div>
                                 )
                               ) : agentDocsError && expandedAgentId === agent.id ? (
-                                <div className="border-t border-stone-200/60 pt-3">
-                                  <span className="text-[10px] font-extrabold text-stone-400 uppercase tracking-wider block">Agent Verification Photographs</span>
-                                  <p className="text-[10px] text-red-600 pt-1">{agentDocsError}</p>
+                                <div className="border-t border-brand-border pt-3">
+                                  <span className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-wider block">Agent Verification Photographs</span>
+                                  <p className="text-[11px] text-status-danger pt-1">{agentDocsError}</p>
                                 </div>
                               ) : null}
 
                               {/* Actions on this Agent */}
                               <div className="border-t border-stone-200/60 pt-4 flex flex-wrap justify-end gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => handleWarnAgent(agent.id)}
+                                <Button
+                                  variant="outline"
+                                  size="sm"
                                   disabled={adminActionProcessing}
-                                  className="bg-amber-600 hover:bg-amber-700 text-white font-bold px-4 py-2 rounded-xl transition flex items-center space-x-1 disabled:opacity-50 cursor-pointer"
+                                  onClick={() => handleWarnAgent(agent.id)}
                                 >
-                                  <span>Issue Warning</span>
-                                </button>
+                                  Issue Warning
+                                </Button>
                                 {agent.status === 'pending' && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleApproveAgent(agent.id)}
+                                  <Button
+                                    variant="primary"
+                                    size="sm"
                                     disabled={adminActionProcessing}
-                                    className="bg-primary-green hover:bg-primary-hover text-white font-bold px-4 py-2 rounded-xl transition flex items-center space-x-1 disabled:opacity-50 cursor-pointer"
+                                    onClick={() => handleApproveAgent(agent.id)}
                                   >
-                                    <span>{t.approveBtn}</span>
-                                  </button>
+                                    {t.approveBtn}
+                                  </Button>
                                 )}
 
                                 {agent.status === 'active' && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleSuspendAgent(agent.id)}
+                                  <Button
+                                    variant="danger"
+                                    size="sm"
                                     disabled={adminActionProcessing}
-                                    className="bg-red-600 hover:bg-red-700 text-white font-bold px-4 py-2 rounded-xl transition flex items-center space-x-1 disabled:opacity-50 cursor-pointer"
+                                    onClick={() => handleSuspendAgent(agent.id)}
                                   >
-                                    <span>Suspend Agent</span>
-                                  </button>
+                                    Suspend Agent
+                                  </Button>
                                 )}
 
                                 {agent.status === 'suspended' && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleApproveAgent(agent.id)}
+                                  <Button
+                                    variant="secondary"
+                                    size="sm"
                                     disabled={adminActionProcessing}
-                                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-xl transition flex items-center space-x-1 disabled:opacity-50 cursor-pointer"
+                                    onClick={() => handleApproveAgent(agent.id)}
                                   >
-                                    <span>Re-Activate Agent</span>
-                                  </button>
+                                    Re-Activate Agent
+                                  </Button>
                                 )}
                               </div>
                             </div>
@@ -2406,78 +2517,57 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
           {/* TAB CONTENT: ALL FOUND ITEMS REAL-TIME DIRECTORY */}
           {activeTab === 'found_items' && (
             <div className="space-y-6">
-              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                <div>
-                  <h2 className="text-lg font-bold text-primary-green">
-                    {lang === 'en' ? 'Found Items Real-Time Ledger' : 'Sajili ya Vitu Vilivyopatikana'}
-                  </h2>
-                  <p className="text-stone-500 text-xs">
-                    {lang === 'en' 
-                      ? 'Live real-time registry of all items uploaded by finders. Track drop-off states, assigned hubs, and claimed assets.' 
-                      : 'Orodha ya moja kwa moja ya vitu vyote vilivyowasilishwa na wavumbuzi. Fuatilia makabidhiano na madai.'}
-                  </p>
-                </div>
-              </div>
-
               {/* Filters Panel */}
-              <div className="bg-white border border-stone-100 rounded-2xl p-5 shadow-sm space-y-4">
+              <div className="bg-white border border-brand-border rounded-2xl p-5 shadow-sm space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                   {/* Search bar */}
-                  <div className="md:col-span-2 space-y-1">
-                    <label htmlFor="item-search" className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Search Items</label>
-                    <input
-                      id="item-search"
-                      type="text"
-                      value={itemSearch}
-                      onChange={(e) => setItemSearch(e.target.value)}
-                      placeholder="Search by Code, OCR info, Location, Phone..."
-                      className="w-full border border-stone-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-accent-orange"
-                    />
-                  </div>
+                  <Input
+                    label="Search Items"
+                    id="item-search"
+                    type="text"
+                    value={itemSearch}
+                    onChange={(e) => setItemSearch(e.target.value)}
+                    placeholder="Search by Code, OCR info, Location, Phone..."
+                    className="md:col-span-2"
+                  />
 
                   {/* Status filter */}
-                  <div className="space-y-1">
-                    <label htmlFor="item-status-filter" className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Hali / Status</label>
-                    <select
-                      id="item-status-filter"
-                      value={itemStatusFilter}
-                      onChange={(e) => setItemStatusFilter(e.target.value)}
-                      className="w-full border border-stone-200 rounded-xl px-3 py-2 text-xs bg-white font-medium focus:outline-none"
-                    >
-                      <option value="all">All Statuses</option>
-                      <option value="awaiting_dropoff">Awaiting Drop-off</option>
-                      <option value="at_agent">At Agent Station</option>
-                      <option value="claimed">Claimed & Handed Over</option>
-                      <option value="expired">Expired</option>
-                      <option value="suspected_stolen">Suspected Stolen</option>
-                      <option value="legal_hold">Legal Hold</option>
-                    </select>
-                  </div>
+                  <Select
+                    label="Hali / Status"
+                    id="item-status-filter"
+                    value={itemStatusFilter}
+                    onChange={(e) => setItemStatusFilter(e.target.value)}
+                  >
+                    <option value="all">All Statuses</option>
+                    <option value="awaiting_dropoff">Awaiting Drop-off</option>
+                    <option value="at_agent">At Agent Station</option>
+                    <option value="claimed">Claimed & Handed Over</option>
+                    <option value="expired">Expired</option>
+                    <option value="suspected_stolen">Suspected Stolen</option>
+                    <option value="legal_hold">Legal Hold</option>
+                  </Select>
 
                   {/* Flagged filter */}
-                  <div className="space-y-1">
-                    <label htmlFor="item-flag-filter" className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Review Flag</label>
-                    <select
-                      id="item-flag-filter"
-                      value={itemFlagFilter}
-                      onChange={(e) => setItemFlagFilter(e.target.value)}
-                      className="w-full border border-stone-200 rounded-xl px-3 py-2 text-xs bg-white font-medium focus:outline-none"
-                    >
-                      <option value="all">All Items</option>
-                      <option value="flagged">Flagged for Review</option>
-                      <option value="normal">Normal / Approved</option>
-                    </select>
-                  </div>
+                  <Select
+                    label="Review Flag"
+                    id="item-flag-filter"
+                    value={itemFlagFilter}
+                    onChange={(e) => setItemFlagFilter(e.target.value)}
+                  >
+                    <option value="all">All Items</option>
+                    <option value="flagged">Flagged for Review</option>
+                    <option value="normal">Normal / Approved</option>
+                  </Select>
                 </div>
 
-                <div className="flex flex-wrap gap-2 pt-1 border-t border-stone-100/60">
-                  <span className="text-[10px] font-bold text-stone-400 self-center uppercase tracking-wider mr-1">Quick Categories:</span>
+                <div className="flex flex-wrap gap-2 pt-2 border-t border-brand-border">
+                  <span className="text-[11px] font-bold text-brand-muted-text self-center uppercase tracking-wider mr-1">Quick Categories:</span>
                   <button
                     onClick={() => setItemCategoryFilter('all')}
-                    className={`px-3 py-1 text-[10px] font-black rounded-full transition cursor-pointer ${
-                      itemCategoryFilter === 'all' 
-                        ? 'bg-stone-900 text-white' 
-                        : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
+                    className={`px-3 py-1.5 text-[11px] font-bold rounded-full border transition cursor-pointer ${
+                      itemCategoryFilter === 'all'
+                        ? 'bg-primary-green text-white border-primary-green'
+                        : 'bg-white text-brand-dark-text border-brand-border hover:border-primary-green'
                     }`}
                   >
                     All Categories
@@ -2486,10 +2576,10 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                     <button
                       key={cat.id}
                       onClick={() => setItemCategoryFilter(cat.id)}
-                      className={`px-3 py-1 text-[10px] font-black rounded-full transition cursor-pointer ${
-                        itemCategoryFilter === cat.id 
-                          ? 'bg-stone-900 text-white' 
-                          : 'bg-stone-100 text-stone-600 hover:bg-stone-200'
+                      className={`px-3 py-1.5 text-[11px] font-bold rounded-full border transition cursor-pointer ${
+                        itemCategoryFilter === cat.id
+                          ? 'bg-primary-green text-white border-primary-green'
+                          : 'bg-white text-brand-dark-text border-brand-border hover:border-primary-green'
                       }`}
                     >
                       {lang === 'en' ? cat.name_en : cat.name_sw}
@@ -2521,9 +2611,13 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
 
                 if (filteredItems.length === 0) {
                   return (
-                    <div className="bg-white border border-stone-100 rounded-2xl p-12 text-center text-stone-400 text-xs">
-                      {lang === 'en' ? 'No found items match your filters.' : 'Hakuna vitu vilivyopatikana vinavyolingana na vigezo vyako.'}
-                    </div>
+                    <EmptyState
+                      icon={Package}
+                      title={lang === 'en' ? 'No found items match your filters' : 'Hakuna vitu vinavyolingana'}
+                      description={lang === 'en'
+                        ? 'Adjust the search, status, category or review-flag filters to see recovered items.'
+                        : 'Badilisha vichujio vya utafutaji, hali, aina au ukaguzi ili kuona vitu.'}
+                    />
                   );
                 }
 
@@ -2533,11 +2627,11 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                       // Lookup agent
                       const agentObj = dashboardData.agents.find((a: any) => a.id === item.assigned_agent_id);
                       return (
-                        <div key={item.id} className="bg-white border border-stone-100 rounded-2xl p-5 shadow-sm hover:border-stone-200 transition flex flex-col md:flex-row gap-5">
+                        <div key={item.id} className="bg-white border border-brand-border rounded-2xl p-5 shadow-sm hover:shadow-md transition flex flex-col md:flex-row gap-5">
                           {/* Image Thumbnail with zoom trigger */}
                           <div 
                             onClick={() => setLightboxImage(item.photo_url)}
-                            className="w-full md:w-36 h-36 rounded-2xl bg-stone-50 border border-stone-100 overflow-hidden shrink-0 flex items-center justify-center cursor-zoom-in relative group"
+                            className="w-full md:w-36 h-36 rounded-2xl bg-canvas-muted border border-brand-border overflow-hidden shrink-0 flex items-center justify-center cursor-zoom-in relative group"
                             role="button"
                             tabIndex={0}
                             aria-label="View item photo full-size"
@@ -2564,26 +2658,22 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                             <div className="space-y-1.5">
                               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-100 pb-2">
                                 <div className="flex items-center gap-1.5">
-                                  <span className="text-xs font-mono font-black text-stone-900">CODE: {item.id}</span>
+                                  <Badge variant="code">CODE: {item.id}</Badge>
                                   {item.flaggedForReview && (
-                                    <span className="bg-red-50 text-red-600 text-[9px] font-black px-2 py-0.5 rounded-full border border-red-100 animate-pulse">
-                                      Flagged
-                                    </span>
+                                    <Badge variant="danger">Flagged</Badge>
                                   )}
                                 </div>
-                                <span className={`text-[9px] font-extrabold px-2 py-0.5 rounded-full uppercase ${
-                                  item.status === 'claimed'
-                                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-100'
-                                    : item.status === 'at_agent'
-                                    ? 'bg-blue-50 text-blue-700 border border-blue-100'
-                                    : item.status === 'awaiting_dropoff'
-                                    ? 'bg-amber-50 text-amber-700 border border-amber-100'
-                                    : item.status === 'suspected_stolen' || item.status === 'legal_hold'
-                                    ? 'bg-red-50 text-red-700 border border-red-200'
-                                    : 'bg-stone-100 text-stone-700 border border-stone-200'
-                                }`}>
+                                <Badge
+                                  variant={
+                                    item.status === 'claimed' ? 'success'
+                                      : item.status === 'at_agent' ? 'info'
+                                        : item.status === 'awaiting_dropoff' ? 'warning'
+                                          : item.status === 'suspected_stolen' || item.status === 'legal_hold' ? 'danger'
+                                            : 'neutral'
+                                  }
+                                >
                                   {item.status === 'awaiting_dropoff' ? 'awaiting drop-off' : item.status === 'suspected_stolen' ? 'suspected stolen' : item.status === 'legal_hold' ? 'legal hold' : item.status}
-                                </span>
+                                </Badge>
                               </div>
 
                               <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
@@ -2668,17 +2758,17 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
 
                             {/* Action to correct / review */}
                             {item.flaggedForReview && (
-                              <div className="pt-2 border-t border-stone-100 flex justify-end">
-                                <button
-                                  type="button"
+                              <div className="pt-2 border-t border-brand-border flex justify-end">
+                                <Button
+                                  variant="primary"
+                                  size="sm"
                                   onClick={() => {
                                     setActiveTab('review');
                                     startReview(item);
                                   }}
-                                  className="bg-stone-900 hover:bg-stone-800 text-white text-[10px] font-black px-3.5 py-1.5 rounded-lg uppercase tracking-wider transition cursor-pointer"
                                 >
                                   Fix Details / Reassign Hub
-                                </button>
+                                </Button>
                               </div>
                             )}
 
@@ -2686,34 +2776,34 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                                 never publishes an accusation; this only ever changes
                                 claimability, and a reason is required and audit-logged
                                 for every transition. */}
-                            <div className="pt-2 border-t border-stone-100 flex flex-wrap justify-end gap-2">
+                            <div className="pt-2 border-t border-brand-border flex flex-wrap justify-end gap-2">
                               {(item.status === 'suspected_stolen' || item.status === 'legal_hold') ? (
-                                <button
-                                  type="button"
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
                                   disabled={itemActionProcessing === item.id + 'clear-hold'}
                                   onClick={() => promptItemReviewStatusChange(item.id, 'clear-hold', 'Reason for clearing this hold (optional):')}
-                                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black px-3.5 py-1.5 rounded-lg uppercase tracking-wider transition cursor-pointer disabled:opacity-50"
                                 >
-                                  {itemActionProcessing === item.id + 'clear-hold' ? '...' : 'Clear Hold'}
-                                </button>
+                                  Clear Hold
+                                </Button>
                               ) : (
                                 <>
-                                  <button
-                                    type="button"
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
                                     disabled={itemActionProcessing === item.id + 'flag-stolen'}
                                     onClick={() => promptItemReviewStatusChange(item.id, 'flag-stolen', 'Reason for flagging this item as suspected stolen (required, audit-logged):')}
-                                    className="bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 text-[10px] font-black px-3.5 py-1.5 rounded-lg uppercase tracking-wider transition cursor-pointer disabled:opacity-50"
                                   >
-                                    {itemActionProcessing === item.id + 'flag-stolen' ? '...' : 'Flag Suspected Stolen'}
-                                  </button>
-                                  <button
-                                    type="button"
+                                    Flag Suspected Stolen
+                                  </Button>
+                                  <Button
+                                    variant="danger"
+                                    size="sm"
                                     disabled={itemActionProcessing === item.id + 'legal-hold'}
                                     onClick={() => promptItemReviewStatusChange(item.id, 'legal-hold', 'Reason for placing this item under legal hold (required, audit-logged):')}
-                                    className="bg-red-600 hover:bg-red-700 text-white text-[10px] font-black px-3.5 py-1.5 rounded-lg uppercase tracking-wider transition cursor-pointer disabled:opacity-50"
                                   >
-                                    {itemActionProcessing === item.id + 'legal-hold' ? '...' : 'Place Legal Hold'}
-                                  </button>
+                                    Place Legal Hold
+                                  </Button>
                                 </>
                               )}
                             </div>
@@ -2748,57 +2838,59 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
           {/* TAB CONTENT 3: OPEN DISPUTES CHECKOUT */}
           {activeTab === 'disputes' && (
             <div className="space-y-4">
-              <div className="space-y-1">
-                <h2 className="text-lg font-bold text-primary-green">{t.openDisputes}</h2>
-                <p className="text-stone-500 text-xs">{t.disputeDesc}</p>
-              </div>
-
               {/* REFUNDS REQUIRING RECONCILIATION (A1 unknown-outcome workflow) */}
-              <div className="bg-white border border-amber-200 rounded-2xl p-5 shadow-sm">
+              <div className="bg-white border border-status-warning-border rounded-2xl p-5 shadow-sm">
                 <div className="flex items-start justify-between gap-3 mb-3">
                   <div>
-                    <h3 className="font-extrabold text-sm text-amber-700 uppercase tracking-widest">Refunds Requiring Reconciliation</h3>
-                    <p className="text-[11px] text-stone-500 mt-1">
+                    <h3 className="font-extrabold text-sm text-status-warning uppercase tracking-widest">Refunds Requiring Reconciliation</h3>
+                    <p className="text-xs text-brand-muted-text mt-1">
                       Claims locked in <span className="font-mono">refunding</span> — a real refund was attempted but the provider outcome is UNKNOWN (network/timeout). No automatic retry is ever issued. Verify the outcome with the payment provider (IntaSend) before choosing an action. Neither action sends money.
                     </p>
                   </div>
-                  <button
-                    type="button"
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    loading={refundReconcileLoading}
                     onClick={fetchRefundReconciliation}
-                    disabled={refundReconcileLoading}
-                    className="text-[10px] font-bold text-stone-500 hover:text-stone-800 border border-stone-200 rounded-lg px-2 py-1 disabled:opacity-50 shrink-0"
-                  >Refresh</button>
+                    className="shrink-0"
+                  >
+                    Refresh
+                  </Button>
                 </div>
 
                 {refundReconcileLoading ? (
-                  <p className="text-xs text-stone-400 py-3">Loading&hellip;</p>
+                  <p className="text-xs text-brand-muted-text py-3" aria-busy="true">Loading&hellip;</p>
                 ) : !refundReconcileItems || refundReconcileItems.length === 0 ? (
-                  <p className="text-xs text-stone-400 py-2">No refunds currently require reconciliation.</p>
+                  <p className="text-xs text-brand-muted-text py-2">No refunds currently require reconciliation.</p>
                 ) : (
                   <div className="space-y-2">
                     {refundReconcileItems.map((item: any) => (
-                      <div key={item.claimId} className="border border-stone-100 rounded-xl p-3 space-y-1">
+                      <div key={item.claimId} className="border border-brand-border rounded-xl p-3 space-y-2">
                         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-                          <span className="font-mono font-bold text-stone-800">Claim: {item.claimId}</span>
-                          <span className="text-stone-500">Item: {item.itemId || '\u2014'}</span>
-                          <span className="text-stone-500">Recipient: {item.ownerPhone}</span>
-                          <span className="text-stone-500">Amount: KES {item.refundAmount}</span>
-                          <span className="text-stone-500">Waiting since: {item.waitingSince ? new Date(item.waitingSince).toLocaleString() : '\u2014'}</span>
-                          <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[9px] font-bold uppercase">Outcome UNKNOWN</span>
+                          <Badge variant="code">Claim: {item.claimId}</Badge>
+                          <span className="text-brand-muted-text">Item: {item.itemId || '\u2014'}</span>
+                          <span className="text-brand-muted-text">Recipient: {item.ownerPhone}</span>
+                          <span className="text-brand-muted-text">Amount: KES {item.refundAmount}</span>
+                          <span className="text-brand-muted-text">Waiting since: {item.waitingSince ? new Date(item.waitingSince).toLocaleString() : '\u2014'}</span>
+                          <Badge variant="warning">Outcome UNKNOWN</Badge>
                         </div>
                         <div className="flex flex-wrap gap-2 pt-1">
-                          <button
-                            type="button"
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            disabled={refundReconcileProcessing === item.claimId}
                             onClick={() => handleRefundFinalize(item.claimId)}
+                          >
+                            Confirm refund EXECUTED
+                          </Button>
+                          <Button
+                            variant="danger"
+                            size="sm"
                             disabled={refundReconcileProcessing === item.claimId}
-                            className="bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold px-3 py-1.5 rounded-lg disabled:opacity-50"
-                          >Confirm refund EXECUTED</button>
-                          <button
-                            type="button"
                             onClick={() => handleRefundRevert(item.claimId)}
-                            disabled={refundReconcileProcessing === item.claimId}
-                            className="bg-red-600 hover:bg-red-700 text-white text-[11px] font-bold px-3 py-1.5 rounded-lg disabled:opacity-50"
-                          >Confirm refund NOT executed</button>
+                          >
+                            Confirm refund NOT executed
+                          </Button>
                         </div>
                       </div>
                     ))}
@@ -2807,11 +2899,13 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               </div>
 
               {dashboardData.disputes.length === 0 ? (
-                <div className="bg-white border border-stone-100 rounded-2xl p-8 text-center text-stone-400 text-xs">
-                  {lang === 'en'
-                    ? 'No ownership disputes have been raised. Nothing requires adjudication.'
-                    : 'Hakuna mizozo ya umiliki iliyoanzishwa. Hakuna la kusuluhisha.'}
-                </div>
+                <EmptyState
+                  icon={AlertTriangle}
+                  title={lang === 'en' ? 'No disputes to adjudicate' : 'Hakuna mizozo ya kusuluhisha'}
+                  description={lang === 'en'
+                    ? 'No ownership disputes have been raised.'
+                    : 'Hakuna mizozo ya umiliki iliyoanzishwa.'}
+                />
               ) : (
                 <div className="space-y-4">
                   {dashboardData.disputes.map((dispute: any) => {
@@ -2825,27 +2919,27 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                       ? (lang === 'en' ? 'Claimant A' : 'Mdai A')
                       : (lang === 'en' ? 'Claimant B' : 'Mdai B');
                     return (
-                    <div key={dispute.id} className="bg-white border border-stone-100 rounded-2xl p-5 shadow-sm space-y-4">
-                      <div className="flex flex-wrap justify-between items-center gap-2 pb-3 border-b border-stone-100">
+                    <div key={dispute.id} className="bg-white border border-brand-border rounded-2xl p-5 shadow-sm space-y-4">
+                      <div className="flex flex-wrap justify-between items-center gap-2 pb-3 border-b border-brand-border">
                         <div>
-                          <span className="text-xs font-mono font-bold text-red-600">DISPUTE: {dispute.id}</span>
-                          <p className="text-[10px] text-stone-400">
+                          <span className="text-xs font-mono font-bold text-status-danger">DISPUTE: {dispute.id}</span>
+                          <p className="text-[11px] text-brand-muted-text">
                             {lang === 'en' ? 'Raised on' : 'Ilianzishwa'}{' '}
                             {dispute.created_at ? new Date(dispute.created_at).toLocaleString() : '—'}
                           </p>
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-bold text-stone-500">
+                          <span className="text-[11px] font-bold text-brand-muted-text">
                             {lang === 'en' ? 'Item' : 'Bidhaa'}: {dispute.item_id || '—'}
                           </span>
-                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${isResolved ? 'bg-stone-100 text-stone-600' : 'bg-amber-100 text-amber-800'}`}>
+                          <Badge variant={isResolved ? 'neutral' : 'warning'}>
                             {isResolved ? (lang === 'en' ? 'Resolved' : 'Imetatuliwa') : (lang === 'en' ? 'Open' : 'Wazi')}
-                          </span>
+                          </Badge>
                         </div>
                       </div>
 
                       {claimants.length === 0 ? (
-                        <p className="text-xs text-red-600">
+                        <p className="text-xs text-status-danger">
                           {lang === 'en'
                             ? 'No claimant details were returned for this dispute, so it cannot be adjudicated from here.'
                             : 'Hakuna taarifa za wadai zilizorejeshwa kwa mzozo huu, hivyo hauwezi kusuluhishwa hapa.'}
@@ -2869,16 +2963,14 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                       {/* Evidence is loaded on demand — one request per dispute the
                           administrator actually inspects, never for the whole list. */}
                       <div className="flex flex-wrap items-center gap-2">
-                        <button
-                          type="button"
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          loading={!!evidenceState?.loading}
                           onClick={() => fetchDisputeEvidence(dispute.id)}
-                          disabled={!!evidenceState?.loading}
-                          className="bg-stone-100 hover:bg-stone-200 text-stone-700 text-[11px] font-bold px-3 py-1.5 rounded-lg border border-stone-200 transition disabled:opacity-50 cursor-pointer"
                         >
-                          {evidenceState?.loading
-                            ? (lang === 'en' ? 'Loading evidence…' : 'Inapakia ushahidi…')
-                            : (lang === 'en' ? 'Load evidence' : 'Pakia ushahidi')}
-                        </button>
+                          {lang === 'en' ? 'Load evidence' : 'Pakia ushahidi'}
+                        </Button>
                       </div>
 
                       {/* Resolution actions. Only offered on an OPEN dispute whose
@@ -2886,8 +2978,8 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                           resolved dispute is reported as resolved rather than
                           offering buttons that can only fail. */}
                       {isResolved ? (
-                        <p className="text-[11px] text-stone-500 border-t border-stone-100 pt-3">
-                          {lang === 'en' ? 'Resolved' : 'Imetatuliwa'}
+                        <p className="text-xs text-brand-muted-text border-t border-brand-border pt-3">
+                          {lang === 'en' ? 'Resolved' : 'Imemetatuliwa'}
                           {dispute.resolved_at ? ` ${new Date(dispute.resolved_at).toLocaleString()}` : ''}
                           {dispute.resolved_claim_id
                             ? ` — ${lang === 'en' ? 'awarded to claim' : 'ilipatiwa claim'} ${dispute.resolved_claim_id}`
@@ -2895,36 +2987,30 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                           {dispute.resolved_by ? ` (${dispute.resolved_by})` : ''}
                         </p>
                       ) : claimants.length === 0 ? (
-                        <p className="text-[11px] text-red-600 border-t border-stone-100 pt-3">
+                        <p className="text-xs text-status-danger border-t border-brand-border pt-3">
                           {lang === 'en'
                             ? 'Resolution is unavailable: the two claimant claim IDs were not returned for this dispute.'
                             : 'Kusuluhisha hakuwezekani: vitambulisho vya claim havijarejeshwa.'}
                         </p>
                       ) : (
-                        <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-stone-100">
+                        <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-brand-border">
                           {claimants.map((claimant: any) => (
-                            <button
+                            <Button
                               key={'award:' + claimant.role}
-                              type="button"
-                              onClick={() => handleResolveDispute(dispute, claimant)}
+                              variant={claimant.role === 'original' ? 'primary' : 'accent'}
+                              size="sm"
                               disabled={adminActionProcessing || !claimant.claim_id}
                               title={!claimant.claim_id
                                 ? (lang === 'en'
                                   ? 'No claim ID is available for this claimant'
                                   : 'Hakuna kitambulisho cha claim kwa mdai huyu')
                                 : undefined}
-                              className={`${claimant.role === 'original' ? 'bg-stone-900 hover:bg-stone-800' : 'bg-accent-strong hover:bg-accent-strong-hover'} text-white text-xs font-bold px-4 py-2 rounded-xl transition flex items-center justify-center space-x-1.5 disabled:opacity-50 cursor-pointer`}
+                              onClick={() => handleResolveDispute(dispute, claimant)}
                             >
-                              {adminActionProcessing ? (
-                                <Loader2 className="animate-spin" size={12} />
-                              ) : (
-                                <span>
-                                  {lang === 'en'
-                                    ? `Award ${roleShort(claimant.role)}`
-                                    : `Mpa ushindi ${roleShort(claimant.role)}`}
-                                </span>
-                              )}
-                            </button>
+                              {lang === 'en'
+                                ? `Award ${roleShort(claimant.role)}`
+                                : `Mpa ushindi ${roleShort(claimant.role)}`}
+                            </Button>
                           ))}
                         </div>
                       )}
@@ -2939,48 +3025,46 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
           {/* TAB CONTENT 4: FINANCIAL IMMUTABLE LEDGER */}
           {activeTab === 'ledger' && (
             <div className="space-y-4">
-              <h2 className="text-lg font-bold text-primary-green">{t.ledgerTitle}</h2>
-
               {/* Pending Settlements — claims that have physically handed over
                   the item but whose real M-Pesa payout is still inside the
                   dispute window. Released automatically once settleAt passes,
                   or immediately here via admin override (audit-logged). */}
-              <div className="bg-white border border-stone-100 rounded-2xl shadow-sm p-5 space-y-3">
+              <div className="bg-white border border-brand-border rounded-2xl shadow-sm p-5 space-y-3">
                 <div>
-                  <h3 className="text-sm font-extrabold text-stone-800">Pending Settlements</h3>
-                  <p className="text-[11px] text-stone-500">
+                  <h3 className="text-sm font-extrabold text-brand-dark-text">Pending Settlements</h3>
+                  <p className="text-xs text-brand-muted-text">
                     Handover confirmed, payout booked, dispute window still open. Settles automatically, or release now to override.
                   </p>
                 </div>
                 {(!dashboardData.pendingSettlements || dashboardData.pendingSettlements.length === 0) ? (
-                  <div className="text-center text-stone-400 text-xs py-4">No claims currently in the dispute window.</div>
+                  <p className="text-center text-brand-muted-text text-xs py-4">No claims currently in the dispute window.</p>
                 ) : (
                   <div className="space-y-2">
                     {dashboardData.pendingSettlements.map((ps: any) => {
                       const settleAtDate = ps.settleAt ? new Date(ps.settleAt) : null;
                       const isDue = settleAtDate ? settleAtDate.getTime() <= Date.now() : false;
                       return (
-                        <div key={ps.claimId} className="flex flex-wrap items-center justify-between gap-2 border border-stone-100 rounded-xl p-3 bg-brand-beige/40">
+                        <div key={ps.claimId} className="flex flex-wrap items-center justify-between gap-2 border border-brand-border rounded-xl p-3 bg-brand-beige/40">
                           <div className="text-xs">
-                            <span className="font-mono font-bold text-stone-900">{ps.claimId}</span>
-                            <span className="text-stone-400 mx-1.5">·</span>
-                            <span className="text-stone-500">Item {ps.itemId}</span>
-                            <span className="text-stone-400 mx-1.5">·</span>
-                            <span className={`font-bold ${isDue ? 'text-emerald-600' : 'text-amber-600'}`}>
+                            <span className="font-mono font-bold text-brand-dark-text">{ps.claimId}</span>
+                            <span className="text-brand-muted-text/60 mx-1.5">·</span>
+                            <span className="text-brand-muted-text">Item {ps.itemId}</span>
+                            <span className="text-brand-muted-text/60 mx-1.5">·</span>
+                            <span className={`font-bold ${isDue ? 'text-status-success' : 'text-status-warning'}`}>
                               {settleAtDate ? (isDue ? 'Due now' : `Settles ${settleAtDate.toLocaleString()}`) : 'No settle time set'}
                             </span>
                             {ps.lockedTotalFee !== null && (
-                              <span className="text-stone-400"> · KES {ps.lockedTotalFee}</span>
+                              <span className="text-brand-muted-text"> · KES {ps.lockedTotalFee}</span>
                             )}
                           </div>
-                          <button
-                            type="button"
-                            disabled={itemActionProcessing === 'settlement:' + ps.claimId}
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            loading={itemActionProcessing === 'settlement:' + ps.claimId}
                             onClick={() => handleReleaseSettlementNow(ps.claimId)}
-                            className="bg-stone-900 hover:bg-stone-800 text-white text-[10px] font-black px-3.5 py-1.5 rounded-lg uppercase tracking-wider transition cursor-pointer disabled:opacity-50"
                           >
-                            {itemActionProcessing === 'settlement:' + ps.claimId ? '...' : 'Release Now'}
-                          </button>
+                            Release Now
+                          </Button>
                         </div>
                       );
                     })}
@@ -2988,11 +3072,11 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                 )}
               </div>
 
-              <div className="bg-white border border-stone-100 rounded-2xl shadow-sm overflow-hidden">
+              <div className="bg-white border border-brand-border rounded-2xl shadow-sm overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse">
                     <thead>
-                      <tr className="bg-brand-beige text-[10px] font-extrabold text-stone-400 uppercase tracking-widest border-b border-stone-200">
+                      <tr className="bg-brand-light-gray text-xs font-extrabold text-brand-muted-text uppercase tracking-widest border-b border-brand-border">
                         <th className="px-5 py-3 font-bold">Transaction Reference</th>
                         <th className="px-5 py-3 font-bold">Type</th>
                         <th className="px-5 py-3 font-bold">Amount</th>
@@ -3001,25 +3085,38 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                         <th className="px-5 py-3 font-bold">Date</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-stone-100 text-xs text-stone-600 font-mono">
+                    <tbody className="divide-y divide-brand-border text-xs text-brand-muted-text font-mono">
                       {dashboardData.ledger.map((entry: any) => (
                         <tr key={entry.id} className="hover:bg-brand-beige/50 transition">
-                          <td className="px-5 py-3.5 font-bold text-stone-900">{entry.id}</td>
+                          <td className="px-5 py-3.5 font-bold text-brand-dark-text">{entry.id}</td>
                           <td className="px-5 py-3.5">
-                            <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-bold uppercase ${
-                              entry.type === 'payment_received' ? 'bg-blue-50 text-blue-700' :
-                              entry.type === 'finder_payout' ? 'bg-emerald-50 text-emerald-700' :
-                              entry.type === 'agent_payout' ? 'bg-orange-50 text-orange-700' : 'bg-purple-50 text-purple-700'
-                            }`}>
+                            {/* Transaction TYPE label — a classification, not a
+                                lifecycle status — so each type keeps its own
+                                distinct design-system variant instead of raw
+                                palette classes. Values are unchanged. */}
+                            <Badge
+                              variant={
+                                entry.type === 'payment_received' ? 'info' :
+                                  entry.type === 'finder_payout' ? 'success' :
+                                    entry.type === 'agent_payout' ? 'warning' : 'neutral'
+                              }
+                            >
                               {entry.type.replace('_', ' ')}
-                            </span>
+                            </Badge>
                           </td>
-                          <td className="px-5 py-3.5 font-bold text-stone-900">KES {entry.amount}</td>
+                          <td className="px-5 py-3.5 font-bold text-brand-dark-text">KES {entry.amount}</td>
                           <td className="px-5 py-3.5">{entry.claim_id || '—'}</td>
                           <td className="px-5 py-3.5">
-                            <span className={`font-bold ${entry.status === 'completed' ? 'text-emerald-600' : entry.status === 'failed' ? 'text-red-600' : 'text-amber-600'}`}>● {entry.status.toUpperCase()}</span>
+                            <Badge
+                              variant={
+                                entry.status === 'completed' ? 'success'
+                                  : entry.status === 'failed' ? 'danger' : 'warning'
+                              }
+                            >
+                              {entry.status.toUpperCase()}
+                            </Badge>
                           </td>
-                          <td className="px-5 py-3.5 text-stone-400 text-[11px] whitespace-nowrap">
+                          <td className="px-5 py-3.5 text-brand-muted-text text-xs whitespace-nowrap">
                             {entry.created_at ? new Date(entry.created_at).toLocaleString() : '—'}
                           </td>
                         </tr>
@@ -3034,28 +3131,27 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
           {/* TAB CONTENT 5: MANUAL REVIEW QUEUE */}
           {activeTab === 'review' && (
             <div className="space-y-6">
-              <div className="space-y-1">
-                <h2 className="text-lg font-bold text-primary-green">Flagged for Manual Review</h2>
-                <p className="text-stone-500 text-xs">These items have low OCR confidence, missing details, or require administrator correction.</p>
-              </div>
+              {/* Supporting context for the review queue. The page-level h1 and
+                  section description come from the console title band
+                  (CONSOLE_SECTIONS), so this is deliberately NOT a heading. */}
+              <p className="text-xs text-brand-muted-text max-w-2xl">
+                These items have low OCR confidence, missing details, or require administrator correction.
+              </p>
 
               {selectedReviewItem ? (
-                <div className="bg-white border border-stone-200 rounded-2xl p-6 md:p-8 shadow-md space-y-6 max-w-2xl mx-auto">
-                  <div className="flex justify-between items-center border-b border-stone-100 pb-3">
-                    <h3 className="font-extrabold text-stone-900">Reviewing Item: {selectedReviewItem.id}</h3>
-                    <button
-                      onClick={() => setSelectedReviewItem(null)}
-                      className="text-stone-400 hover:text-stone-600 text-xs font-bold"
-                    >
+                <div className="bg-white border border-brand-border rounded-2xl p-6 md:p-8 shadow-sm space-y-6 max-w-2xl mx-auto">
+                  <div className="flex justify-between items-center border-b border-brand-border pb-3">
+                    <h3 className="font-extrabold text-brand-dark-text">Reviewing Item: {selectedReviewItem.id}</h3>
+                    <Button variant="ghost" size="sm" onClick={() => setSelectedReviewItem(null)}>
                       Back to list
-                    </button>
+                    </Button>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {/* Left: Finder Photo */}
                     <div className="space-y-2">
-                      <span className="text-[10px] font-extrabold text-stone-400 uppercase tracking-widest block">Uploaded Photo</span>
-                      <div className="border border-stone-100 rounded-2xl overflow-hidden bg-stone-50 aspect-[4/3] flex items-center justify-center">
+                      <span className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-widest block">Uploaded Photo</span>
+                      <div className="border border-brand-border rounded-2xl overflow-hidden bg-brand-light-gray aspect-[4/3] flex items-center justify-center">
                         <img
                           src={selectedReviewItem.photo_url}
                           alt="Document to review"
@@ -3067,15 +3163,13 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
 
                     {/* Right: Correction Form */}
                     <form onSubmit={handleSaveReview} className="space-y-4">
-                      <div className="space-y-1">
-                        <label htmlFor="review-category" className="block text-xs font-bold text-stone-700 uppercase tracking-wider">Item Category</label>
-                        <select
-                          id="review-category"
-                          value={reviewCategoryId}
-                          onChange={(e) => setReviewCategoryId(e.target.value)}
-                          className="w-full border border-stone-200 rounded-xl px-3 py-2 text-xs font-semibold bg-white disabled:bg-stone-50 disabled:text-stone-400"
-                          disabled={categoriesLoading}
-                        >
+                      <Select
+                        label="Item Category"
+                        id="review-category"
+                        value={reviewCategoryId}
+                        onChange={(e) => setReviewCategoryId(e.target.value)}
+                        disabled={categoriesLoading}
+                      >
                           {categoriesLoading ? (
                             <option value="">Loading categories...</option>
                           ) : (
@@ -3092,18 +3186,15 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                               ));
                             })()
                           )}
-                        </select>
-                      </div>
+                      </Select>
 
                       {/* Reassign Agent Dropdown */}
-                      <div className="space-y-1">
-                        <label htmlFor="review-assigned-agent" className="block text-xs font-bold text-stone-700 uppercase tracking-wider">Assigned Agent Hub</label>
-                        <select
-                          id="review-assigned-agent"
-                          value={reviewAssignedAgentId}
-                          onChange={(e) => setReviewAssignedAgentId(e.target.value)}
-                          className="w-full border border-stone-200 rounded-xl px-3 py-2 text-xs font-semibold bg-white"
-                        >
+                      <Select
+                        label="Assigned Agent Hub"
+                        id="review-assigned-agent"
+                        value={reviewAssignedAgentId}
+                        onChange={(e) => setReviewAssignedAgentId(e.target.value)}
+                      >
                           <option value="">-- Select Agent Hub --</option>
                           {dashboardData.agents && dashboardData.agents
                             .filter((agent: any) => agent.status === 'active')
@@ -3113,21 +3204,20 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                               </option>
                             ))
                           }
-                        </select>
-                      </div>
+                      </Select>
 
                       {/* Assignment Metadata Info */}
                       {selectedReviewItem.agent_assignment_method && (
-                        <div className="p-2.5 bg-stone-50 border border-stone-100 rounded-xl text-[10px] font-mono text-stone-600 space-y-1">
-                          <p className="font-sans font-bold text-stone-700">Assignment Metadata:</p>
-                          <p>Method: <span className="font-bold text-stone-900">{selectedReviewItem.agent_assignment_method}</span></p>
+                        <div className="p-2.5 bg-brand-light-gray border border-brand-border rounded-xl text-[11px] font-mono text-brand-muted-text space-y-1">
+                          <p className="font-sans font-bold text-brand-dark-text">Assignment Metadata:</p>
+                          <p>Method: <span className="font-bold text-brand-dark-text">{selectedReviewItem.agent_assignment_method}</span></p>
                           {selectedReviewItem.agent_assignment_distance_km !== null && (
-                            <p>Calculated Distance: <span className="font-bold text-stone-900">{parseFloat(selectedReviewItem.agent_assignment_distance_km).toFixed(2)} km</span></p>
+                            <p>Calculated Distance: <span className="font-bold text-brand-dark-text">{parseFloat(selectedReviewItem.agent_assignment_distance_km).toFixed(2)} km</span></p>
                           )}
                           {selectedReviewItem.needs_manual_agent_reassignment ? (
-                            <p className="text-red-600 font-sans font-extrabold uppercase animate-pulse">Reassigned to Default Backup Agent (Needs Manual Correction)</p>
+                            <p className="text-status-danger font-sans font-extrabold uppercase animate-pulse">Reassigned to Default Backup Agent (Needs Manual Correction)</p>
                           ) : (
-                            <p className="text-emerald-600 font-sans font-extrabold uppercase">Successfully Auto-Assigned</p>
+                            <p className="text-status-success font-sans font-extrabold uppercase">Successfully Auto-Assigned</p>
                           )}
                         </div>
                       )}
@@ -3140,78 +3230,59 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                           onChange={(e) => setReviewIsDescriptionOnly(e.target.checked)}
                           className="rounded text-primary-green focus:ring-primary-green h-4 w-4"
                         />
-                        <label htmlFor="reviewIsDescriptionOnly" className="text-xs font-bold text-stone-700">
+                        <label htmlFor="reviewIsDescriptionOnly" className="text-xs font-bold text-brand-dark-text">
                           Mark as Description-Only Item (e.g. keys, bags)
                         </label>
                       </div>
 
                       {reviewIsDescriptionOnly ? (
-                        <div className="space-y-1">
-                          <label htmlFor="review-description" className="block text-xs font-bold text-stone-700 uppercase tracking-wider">Free-text Description</label>
-                          <textarea
-                            id="review-description"
-                            value={reviewDescription}
-                            onChange={(e) => setReviewDescription(e.target.value)}
-                            placeholder="Write a clear, searchable description of the item (e.g. 'Key ring with a black fob and 3 keys')"
-                            className="w-full border border-stone-200 rounded-xl px-3 py-2 text-xs h-24"
-                            required
-                          />
-                        </div>
+                        <Textarea
+                          label="Free-text Description"
+                          id="review-description"
+                          value={reviewDescription}
+                          onChange={(e) => setReviewDescription(e.target.value)}
+                          placeholder="Write a clear, searchable description of the item (e.g. 'Key ring with a black fob and 3 keys')"
+                          required
+                        />
                       ) : (
                         <>
-                          <div className="space-y-1">
-                            <label htmlFor="review-ocr-number" className="block text-xs font-bold text-stone-700 uppercase tracking-wider">Document / ID Number</label>
-                            <input
-                              id="review-ocr-number"
-                              type="text"
-                              value={reviewOcrNumber}
-                              onChange={(e) => setReviewOcrNumber(e.target.value)}
-                              placeholder="e.g. 3841920"
-                              className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-xs font-semibold"
-                              required
-                            />
-                            <p className="text-[10px] text-stone-400 font-medium">Original OCR: {selectedReviewItem.ocr_extracted_number || 'None'}</p>
-                          </div>
+                          <Input
+                            label="Document / ID Number"
+                            id="review-ocr-number"
+                            type="text"
+                            value={reviewOcrNumber}
+                            onChange={(e) => setReviewOcrNumber(e.target.value)}
+                            placeholder="e.g. 3841920"
+                            required
+                          />
+                          <p className="text-xs text-brand-muted-text">Original OCR: {selectedReviewItem.ocr_extracted_number || 'None'}</p>
 
-                          <div className="space-y-1">
-                            <label htmlFor="review-ocr-name" className="block text-xs font-bold text-stone-700 uppercase tracking-wider">Full Name on Document</label>
-                            <input
-                              id="review-ocr-name"
-                              type="text"
-                              value={reviewOcrName}
-                              onChange={(e) => setReviewOcrName(e.target.value)}
-                              placeholder="e.g. JOHN DOE"
-                              className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-xs font-semibold uppercase"
-                              required
-                            />
-                            <p className="text-[10px] text-stone-400 font-medium">Original OCR: {selectedReviewItem.ocr_extracted_name || 'None'}</p>
-                          </div>
+                          <Input
+                            label="Full Name on Document"
+                            id="review-ocr-name"
+                            type="text"
+                            value={reviewOcrName}
+                            onChange={(e) => setReviewOcrName(e.target.value)}
+                            placeholder="e.g. JOHN DOE"
+                            required
+                          />
+                          <p className="text-xs text-brand-muted-text">Original OCR: {selectedReviewItem.ocr_extracted_name || 'None'}</p>
                         </>
                       )}
 
                       <div className="flex gap-2">
-                        <button
-                          type="submit"
-                          disabled={reviewSaving}
-                          className="flex-1 bg-stone-900 hover:bg-stone-800 text-white py-3 rounded-xl font-bold text-xs transition flex items-center justify-center space-x-2 cursor-pointer"
-                        >
-                          {reviewSaving ? (
-                            <Loader2 className="animate-spin" size={16} />
-                          ) : (
-                            <>
-                              <span>Save Correction</span>
-                              <ArrowRight size={16} />
-                            </>
-                          )}
-                        </button>
-                        <button
+                        <Button type="submit" variant="primary" loading={reviewSaving} className="flex-1">
+                          <span>Save Correction</span>
+                          <ArrowRight size={16} aria-hidden="true" />
+                        </Button>
+                        <Button
                           type="button"
+                          variant="danger"
                           disabled={reviewSaving}
                           onClick={() => handleRejectAsSpam(selectedReviewItem.id)}
-                          className="bg-red-600 hover:bg-red-700 text-white px-4 py-3 rounded-xl font-bold text-xs transition cursor-pointer"
                         >
                           Reject as Spam
-                        </button>
+                        </Button>
                       </div>
                     </form>
                   </div>
@@ -3219,18 +3290,20 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
               ) : (
                 <div className="space-y-3">
                   {dashboardData.items.filter((item: any) => item.flaggedForReview).length === 0 ? (
-                    <div className="bg-white border border-stone-100 rounded-2xl p-8 text-center text-stone-400 text-xs">
-                      All reported items have been reviewed! Review queue is empty.
-                    </div>
+                    <EmptyState
+                      icon={CheckCircle}
+                      title="All reported items have been reviewed!"
+                      description="Review queue is empty."
+                    />
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {dashboardData.items
                         .filter((item: any) => item.flaggedForReview)
                         .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
                         .map((item: any) => (
-                          <div key={item.id} className="bg-white border border-stone-100 rounded-2xl p-5 shadow-sm flex flex-col justify-between gap-4">
+                          <div key={item.id} className="bg-white border border-brand-border rounded-2xl p-5 shadow-sm flex flex-col justify-between gap-4">
                             <div className="flex gap-4">
-                              <div className="w-16 h-16 rounded-xl bg-stone-50 border border-stone-100 overflow-hidden shrink-0 flex items-center justify-center">
+                              <div className="w-16 h-16 rounded-xl bg-brand-light-gray border border-brand-border overflow-hidden shrink-0 flex items-center justify-center">
                                 <img
                                   src={item.photo_url}
                                   alt="Thumbnail"
@@ -3239,61 +3312,54 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                                 />
                               </div>
                               <div className="space-y-1">
-                                <span className="bg-red-50 text-red-600 text-[9px] font-black px-2 py-0.5 rounded-full uppercase">Flagged</span>
-                                <h3 className="font-extrabold text-stone-900 text-xs">Code: {item.id}</h3>
-                                <p className="text-stone-500 text-[10px] leading-snug">{item.location_description}</p>
-                                <p className="text-stone-400 text-[9px] font-mono">Date: {new Date(item.created_at).toLocaleDateString()}</p>
+                                <Badge variant="danger">Flagged</Badge>
+                                <h3 className="font-extrabold text-brand-dark-text text-xs">Code: {item.id}</h3>
+                                <p className="text-brand-muted-text text-xs leading-snug">{item.location_description}</p>
+                                <p className="text-brand-muted-text text-[11px] font-mono">Date: {new Date(item.created_at).toLocaleDateString()}</p>
                                 {item.agent_assignment_method && (
-                                  <div className="mt-1.5 p-1.5 bg-stone-50 rounded-lg text-[9px] font-mono text-stone-600">
+                                  <div className="mt-1.5 p-1.5 bg-brand-light-gray rounded-lg text-[11px] font-mono text-brand-muted-text">
                                     <p>Assignment: <span className="font-bold">{item.agent_assignment_method}</span></p>
                                     {item.agent_assignment_distance_km !== null && (
                                       <p>Distance: <span className="font-bold">{parseFloat(item.agent_assignment_distance_km).toFixed(2)} km</span></p>
                                     )}
                                     {item.needs_manual_agent_reassignment && (
-                                      <p className="text-red-600 font-bold uppercase animate-pulse">Needs Manual Reassignment</p>
+                                      <p className="text-status-danger font-bold uppercase animate-pulse">Needs Manual Reassignment</p>
                                     )}
                                   </div>
                                 )}
                                 {item.reputation && (
                                   <div className="mt-1.5 space-y-1">
-                                    <p className="text-[10px] text-stone-700 font-bold">
+                                    <p className="text-xs text-brand-dark-text font-bold">
                                       Finder: {item.finder_phone}
                                     </p>
-                                    <p className="text-[9px] text-stone-500">
+                                    <p className="text-[11px] text-brand-muted-text">
                                       Reputation: {item.reputation.rejected_reports} rejected / {item.reputation.total_reports} total
                                     </p>
                                     {item.reputation.autoFlag && (
-                                      <div className="flex flex-col gap-1 mt-1">
-                                        <span className="bg-red-100 text-red-800 text-[9px] font-black px-2 py-0.5 rounded-full inline-block uppercase text-center w-fit">
-                                          Poor Reputation Block
-                                        </span>
-                                        <button
+                                      <div className="flex flex-col gap-1 mt-1 items-start">
+                                        <Badge variant="danger">Poor Reputation Block</Badge>
+                                        <Button
                                           type="button"
+                                          variant="ghost"
+                                          size="sm"
                                           disabled={adminActionProcessing}
+                                          loading={adminActionProcessing}
                                           onClick={(e) => {
                                             e.stopPropagation();
                                             handleClearReputation(item.finder_phone);
                                           }}
-                                          className="text-[9px] text-primary-green hover:underline font-bold text-left cursor-pointer disabled:opacity-50 flex items-center space-x-1"
                                         >
-                                          {adminActionProcessing ? (
-                                            <Loader2 className="animate-spin" size={10} />
-                                          ) : (
-                                            <span>Clear Reputation Block</span>
-                                          )}
-                                        </button>
+                                          <span>Clear Reputation Block</span>
+                                        </Button>
                                       </div>
                                     )}
                                   </div>
                                 )}
                               </div>
                             </div>
-                            <button
-                              onClick={() => startReview(item)}
-                              className="w-full bg-stone-900 hover:bg-stone-800 text-white text-xs font-bold py-2 rounded-xl transition cursor-pointer"
-                            >
+                            <Button variant="outline" onClick={() => startReview(item)} className="w-full">
                               Review Item details
-                            </button>
+                            </Button>
                           </div>
                         ))}
                     </div>
@@ -3306,56 +3372,43 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
           {/* TAB CONTENT 6: CATEGORIES & PRICING MANAGEMENT */}
           {activeTab === 'categories' && (
             <div className="space-y-6">
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-stone-100 pb-4">
-                <div className="space-y-1">
-                  <h2 className="text-lg font-bold text-primary-green">Kategoria na Bei / Categories & Pricing</h2>
-                  <p className="text-stone-500 text-xs">Dhibiti kategoria za bidhaa, bei, na migao ya malipo. / Manage document categories, fees, and disbursement splits.</p>
-                </div>
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-brand-border pb-4">
+                <p className="text-xs text-brand-muted-text max-w-2xl">
+                  Dhibiti kategoria za bidhaa, bei, na migao ya malipo. / Manage document categories, fees, and disbursement splits.
+                </p>
                 {!showCategoryForm && (
-                  <button
-                    onClick={() => resetCategoryForm('create')}
-                    className="bg-stone-900 hover:bg-stone-800 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition cursor-pointer flex items-center space-x-1"
-                  >
+                  <Button variant="primary" size="sm" onClick={() => resetCategoryForm('create')} className="shrink-0">
                     <span>+ Add New Category (Weka Kategoria Mpya)</span>
-                  </button>
+                  </Button>
                 )}
               </div>
 
               {showCategoryForm ? (
-                <div className="bg-white border border-stone-200 rounded-2xl p-6 md:p-8 shadow-md space-y-6 max-w-2xl mx-auto">
-                  <div className="flex justify-between items-center border-b border-stone-100 pb-3">
-                    <h3 className="font-extrabold text-stone-900">
+                <div className="bg-white border border-brand-border rounded-2xl p-6 md:p-8 shadow-sm space-y-6 max-w-2xl mx-auto">
+                  <div className="flex justify-between items-center gap-3 border-b border-brand-border pb-3">
+                    <h3 className="font-extrabold text-brand-dark-text">
                       {showCategoryForm === 'create' ? 'Create New Category' : `Editing Category: ${catFormId}`}
                     </h3>
-                    <button
-                      onClick={() => setShowCategoryForm(null)}
-                      className="text-stone-400 hover:text-stone-600 text-xs font-bold"
-                    >
+                    <Button variant="ghost" size="sm" onClick={() => setShowCategoryForm(null)}>
                       Cancel / Ghairi
-                    </button>
+                    </Button>
                   </div>
 
                   <form onSubmit={handleSaveCategory} className="space-y-4">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {/* ID (only editable in create mode) */}
-                      <div className="space-y-1">
-                        <label htmlFor="cat-form-id" className="block text-xs font-bold text-stone-700 uppercase tracking-wider">
-                          ID / Msimbo (lowercase-kebab-case)
-                        </label>
-                        <input
-                          id="cat-form-id"
-                          type="text"
-                          value={catFormId}
-                          onChange={(e) => setCatFormId(e.target.value)}
-                          placeholder="e.g. driving-license"
-                          className="w-full border border-stone-200 rounded-xl px-3 py-2 text-xs font-semibold bg-white disabled:bg-stone-50 disabled:text-stone-400 font-mono"
-                          disabled={showCategoryForm === 'edit'}
-                          required
-                        />
-                        {showCategoryForm === 'create' && (
-                          <p className="text-[10px] text-stone-400 font-medium">Must be unique, letters, numbers and hyphens only.</p>
-                        )}
-                      </div>
+                      <Input
+                        label="ID / Msimbo (lowercase-kebab-case)"
+                        id="cat-form-id"
+                        type="text"
+                        value={catFormId}
+                        onChange={(e) => setCatFormId(e.target.value)}
+                        placeholder="e.g. driving-license"
+                        className="font-mono"
+                        disabled={showCategoryForm === 'edit'}
+                        hint={showCategoryForm === 'create' ? 'Must be unique, letters, numbers and hyphens only.' : undefined}
+                        required
+                      />
 
                       {/* Is Sensitive Document */}
                       <div className="space-y-1 flex flex-col justify-end pb-2">
@@ -3367,7 +3420,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                             onChange={(e) => setCatFormIsSensitive(e.target.checked)}
                             className="rounded text-primary-green focus:ring-primary-green h-4 w-4"
                           />
-                          <label htmlFor="catFormIsSensitive" className="text-xs font-bold text-stone-700">
+                          <label htmlFor="catFormIsSensitive" className="text-xs font-bold text-brand-dark-text">
                             Is Sensitive Document? (Inahitaji OCR/ID ya mmliki)
                           </label>
                         </div>
@@ -3383,7 +3436,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                             onChange={(e) => setCatFormElevatedReview(e.target.checked)}
                             className="rounded text-red-600 focus:ring-red-500 h-4 w-4"
                           />
-                          <label htmlFor="catFormElevatedReview" className="text-xs font-bold text-stone-700">
+                          <label htmlFor="catFormElevatedReview" className="text-xs font-bold text-brand-dark-text">
                             Elevated Review — force admin approval before this category's items go public
                           </label>
                         </div>
@@ -3393,26 +3446,20 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                           category's document-number clue is masked in public posts (see
                           services/publicRecognition.ts). The option VALUES are the canonical
                           enum values the server validates against; only the labels differ. */}
-                      <div className="col-span-3 space-y-1">
-                        <label htmlFor="catFormPublicClueStyle" className="text-xs font-bold text-stone-700">
-                          Public Recognition — document-number clue style
-                        </label>
-                        <select
-                          id="catFormPublicClueStyle"
-                          value={catFormPublicClueStyle}
-                          onChange={(e) => setCatFormPublicClueStyle(e.target.value)}
-                          className="w-full border border-stone-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:border-primary-green"
-                        >
-                          {PUBLIC_CLUE_STYLES.map((style) => (
-                            <option key={style} value={style}>
-                              {PUBLIC_CLUE_STYLE_LABELS[style] ?? style}
-                            </option>
-                          ))}
-                        </select>
-                        <p className="text-[10px] text-stone-500">
-                          Applies to public/social recognition posts only. "None" never publishes a document-number clue for this category.
-                        </p>
-                      </div>
+                      <Select
+                        className="col-span-3"
+                        label="Public Recognition — document-number clue style"
+                        id="catFormPublicClueStyle"
+                        value={catFormPublicClueStyle}
+                        onChange={(e) => setCatFormPublicClueStyle(e.target.value)}
+                        hint={'Applies to public/social recognition posts only. "None" never publishes a document-number clue for this category.'}
+                      >
+                        {PUBLIC_CLUE_STYLES.map((style) => (
+                          <option key={style} value={style}>
+                            {PUBLIC_CLUE_STYLE_LABELS[style] ?? style}
+                          </option>
+                        ))}
+                      </Select>
 
                       {/* Flat fee override toggle — decides whether total_fee/finder_share/
                           agent_share/platform_share below win outright (ignoring the Recovery
@@ -3437,104 +3484,74 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                       </div>
 
                       {/* Name EN */}
-                      <div className="space-y-1">
-                        <label htmlFor="cat-form-name-en" className="block text-xs font-bold text-stone-700 uppercase tracking-wider">
-                          Name (English) / Jina la Kiingereza
-                        </label>
-                        <input
-                          id="cat-form-name-en"
-                          type="text"
-                          value={catFormNameEn}
-                          onChange={(e) => setCatFormNameEn(e.target.value)}
-                          placeholder="e.g. Driving License"
-                          className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-xs font-semibold"
-                          required
-                        />
-                      </div>
+                      <Input
+                        label="Name (English) / Jina la Kiingereza"
+                        id="cat-form-name-en"
+                        type="text"
+                        value={catFormNameEn}
+                        onChange={(e) => setCatFormNameEn(e.target.value)}
+                        placeholder="e.g. Driving License"
+                        required
+                      />
 
                       {/* Name SW */}
-                      <div className="space-y-1">
-                        <label htmlFor="cat-form-name-sw" className="block text-xs font-bold text-stone-700 uppercase tracking-wider">
-                          Name (Swahili) / Jina la Kiswahili
-                        </label>
-                        <input
-                          id="cat-form-name-sw"
-                          type="text"
-                          value={catFormNameSw}
-                          onChange={(e) => setCatFormNameSw(e.target.value)}
-                          placeholder="e.g. Leseni ya Udereva"
-                          className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-xs font-semibold"
-                          required
-                        />
-                      </div>
+                      <Input
+                        label="Name (Swahili) / Jina la Kiswahili"
+                        id="cat-form-name-sw"
+                        type="text"
+                        value={catFormNameSw}
+                        onChange={(e) => setCatFormNameSw(e.target.value)}
+                        placeholder="e.g. Leseni ya Udereva"
+                        required
+                      />
 
                       {/* Total Fee */}
-                      <div className="space-y-1">
-                        <label htmlFor="cat-form-total-fee" className="block text-xs font-bold text-stone-700 uppercase tracking-wider">
-                          Total Fee (KES) / Ada ya Jumla
-                        </label>
-                        <input
-                          id="cat-form-total-fee"
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          value={catFormTotalFee}
-                          onChange={(e) => setCatFormTotalFee(parseFloat(e.target.value) || 0)}
-                          className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-xs font-semibold"
-                          required
-                        />
-                      </div>
+                      <Input
+                        label="Total Fee (KES) / Ada ya Jumla"
+                        id="cat-form-total-fee"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={catFormTotalFee}
+                        onChange={(e) => setCatFormTotalFee(parseFloat(e.target.value) || 0)}
+                        required
+                      />
 
                       {/* Finder Share */}
-                      <div className="space-y-1">
-                        <label htmlFor="cat-form-finder-share" className="block text-xs font-bold text-stone-700 uppercase tracking-wider">
-                          Finder Reward (KES) / Mgao wa Aliyepata
-                        </label>
-                        <input
-                          id="cat-form-finder-share"
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          value={catFormFinderShare}
-                          onChange={(e) => setCatFormFinderShare(parseFloat(e.target.value) || 0)}
-                          className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-xs font-semibold"
-                          required
-                        />
-                      </div>
+                      <Input
+                        label="Finder Reward (KES) / Mgao wa Aliyepata"
+                        id="cat-form-finder-share"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={catFormFinderShare}
+                        onChange={(e) => setCatFormFinderShare(parseFloat(e.target.value) || 0)}
+                        required
+                      />
 
                       {/* Agent Share */}
-                      <div className="space-y-1">
-                        <label htmlFor="cat-form-agent-share" className="block text-xs font-bold text-stone-700 uppercase tracking-wider">
-                          Agent Commission (KES) / Mgao wa Wakala
-                        </label>
-                        <input
-                          id="cat-form-agent-share"
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          value={catFormAgentShare}
-                          onChange={(e) => setCatFormAgentShare(parseFloat(e.target.value) || 0)}
-                          className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-xs font-semibold"
-                          required
-                        />
-                      </div>
+                      <Input
+                        label="Agent Commission (KES) / Mgao wa Wakala"
+                        id="cat-form-agent-share"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={catFormAgentShare}
+                        onChange={(e) => setCatFormAgentShare(parseFloat(e.target.value) || 0)}
+                        required
+                      />
 
                       {/* Platform Share */}
-                      <div className="space-y-1">
-                        <label htmlFor="cat-form-platform-share" className="block text-xs font-bold text-stone-700 uppercase tracking-wider">
-                          Platform Fee (KES) / Mgao wa Return4me
-                        </label>
-                        <input
-                          id="cat-form-platform-share"
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          value={catFormPlatformShare}
-                          onChange={(e) => setCatFormPlatformShare(parseFloat(e.target.value) || 0)}
-                          className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-xs font-semibold"
-                          required
-                        />
-                      </div>
+                      <Input
+                        label="Platform Fee (KES) / Mgao wa Return4me"
+                        id="cat-form-platform-share"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={catFormPlatformShare}
+                        onChange={(e) => setCatFormPlatformShare(parseFloat(e.target.value) || 0)}
+                        required
+                      />
                     </div>
 
                     {/* Math verification helper */}
@@ -3543,12 +3560,12 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                       const difference = parseFloat((catFormTotalFee - totalSum).toFixed(2));
                       const isMatch = totalSum === parseFloat(Number(catFormTotalFee).toFixed(2));
                       return (
-                        <div className={`p-3.5 rounded-xl text-xs font-bold ${isMatch ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
-                          <div className="flex justify-between items-center">
+                        <Banner kind={isMatch ? 'success' : 'error'} className="font-bold">
+                          <div className="flex justify-between items-center gap-3 flex-wrap">
                             <span>Splits Sum / Jumla ya Mgao: KES {totalSum}</span>
                             <span>Target / Lengo: KES {catFormTotalFee}</span>
                           </div>
-                          <div className="text-[10px] mt-1 font-semibold">
+                          <div className="text-xs mt-1 font-semibold">
                             {isMatch ? (
                               <span className="flex items-center space-x-1">
                                 <span>Perfect match! Payout split equations balance successfully.</span>
@@ -3559,7 +3576,7 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                               </span>
                             )}
                           </div>
-                        </div>
+                        </Banner>
                       );
                     })()}
 
@@ -3570,121 +3587,206 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                         platform shares above are just a preview of what the engine
                         would compute with no declared value — the real fee for an
                         item is computed fresh at report time from these inputs. */}
-                    <div className={`border rounded-xl p-4 space-y-3 ${catFormIsAdminModified ? 'border-stone-200 bg-stone-100 opacity-60' : 'border-stone-200 bg-stone-50'}`}>
-                      <p className="text-[11px] font-extrabold text-stone-700 uppercase tracking-wider">
+                    <div className={`border rounded-xl p-4 space-y-3 ${catFormIsAdminModified ? 'border-brand-border bg-canvas-muted opacity-60' : 'border-brand-border bg-canvas-sunken'}`}>
+                      <p className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-wider">
                         Recovery Fee Engine Config
                       </p>
                       {catFormIsAdminModified && (
-                        <p className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                        <Banner kind="warning">
                           Inactive — "Use flat fee override" is checked above, so this category ignores everything below and uses the flat Total/Finder/Agent/Platform fee instead.
-                        </p>
+                        </Banner>
                       )}
-                      <p className="text-[10px] text-stone-500 leading-tight">
+                      <p className="text-xs text-brand-muted-text leading-tight">
                         rawFee = Base + Complexity + Delay. If a finder gives a declared value, the fee is capped at Ceiling % of that value (never raised above rawFee). Split % applies to the resulting fee, not the item's value.
                       </p>
                       <div className="grid grid-cols-3 gap-3">
-                        <div className="space-y-1">
-                          <label htmlFor="cat-form-base-fee" className="block text-[10px] font-bold text-stone-600 uppercase">Base Fee (KES)</label>
-                          <input id="cat-form-base-fee" type="number" step="0.01" min="0" value={catFormBaseFee}
-                            onChange={(e) => setCatFormBaseFee(parseFloat(e.target.value) || 0)}
-                            className="w-full border border-stone-200 rounded-lg px-2 py-2 text-xs font-semibold" />
-                        </div>
-                        <div className="space-y-1">
-                          <label htmlFor="cat-form-complexity-fee" className="block text-[10px] font-bold text-stone-600 uppercase">Complexity Fee (KES)</label>
-                          <input id="cat-form-complexity-fee" type="number" step="0.01" min="0" value={catFormComplexityFee}
-                            onChange={(e) => setCatFormComplexityFee(parseFloat(e.target.value) || 0)}
-                            className="w-full border border-stone-200 rounded-lg px-2 py-2 text-xs font-semibold" />
-                        </div>
-                        <div className="space-y-1">
-                          <label htmlFor="cat-form-delay-fee" className="block text-[10px] font-bold text-stone-600 uppercase">Delay Fee (KES)</label>
-                          <input id="cat-form-delay-fee" type="number" step="0.01" min="0" value={catFormDelayFee}
-                            onChange={(e) => setCatFormDelayFee(parseFloat(e.target.value) || 0)}
-                            className="w-full border border-stone-200 rounded-lg px-2 py-2 text-xs font-semibold" />
-                        </div>
+                        <Input
+                          label="Base Fee (KES)"
+                          id="cat-form-base-fee"
+                          type="number" step="0.01" min="0"
+                          value={catFormBaseFee}
+                          onChange={(e) => setCatFormBaseFee(parseFloat(e.target.value) || 0)}
+                        />
+                        <Input
+                          label="Complexity Fee (KES)"
+                          id="cat-form-complexity-fee"
+                          type="number" step="0.01" min="0"
+                          value={catFormComplexityFee}
+                          onChange={(e) => setCatFormComplexityFee(parseFloat(e.target.value) || 0)}
+                        />
+                        <Input
+                          label="Delay Fee (KES)"
+                          id="cat-form-delay-fee"
+                          type="number" step="0.01" min="0"
+                          value={catFormDelayFee}
+                          onChange={(e) => setCatFormDelayFee(parseFloat(e.target.value) || 0)}
+                        />
                       </div>
                       <div className="grid grid-cols-2 gap-3">
-                        <div className="space-y-1">
-                          <label htmlFor="cat-form-ceiling-pct" className="block text-[10px] font-bold text-stone-600 uppercase">Ceiling % of Declared Value</label>
-                          <input id="cat-form-ceiling-pct" type="number" step="0.5" min="0" max="100" value={catFormCeilingPercent}
-                            onChange={(e) => setCatFormCeilingPercent(parseFloat(e.target.value) || 0)}
-                            className="w-full border border-stone-200 rounded-lg px-2 py-2 text-xs font-semibold" />
-                        </div>
-                        <div className="space-y-1">
-                          <label htmlFor="cat-form-finder-cap" className="block text-[10px] font-bold text-stone-600 uppercase">Finder Reward Cap (KES, optional)</label>
-                          <input id="cat-form-finder-cap" type="number" step="0.01" min="0" value={catFormFinderRewardCap}
-                            onChange={(e) => setCatFormFinderRewardCap(e.target.value)}
-                            placeholder="No cap"
-                            className="w-full border border-stone-200 rounded-lg px-2 py-2 text-xs font-semibold" />
-                        </div>
+                        <Input
+                          label="Ceiling % of Declared Value"
+                          id="cat-form-ceiling-pct"
+                          type="number" step="0.5" min="0" max="100"
+                          value={catFormCeilingPercent}
+                          onChange={(e) => setCatFormCeilingPercent(parseFloat(e.target.value) || 0)}
+                        />
+                        <Input
+                          label="Finder Reward Cap (KES, optional)"
+                          id="cat-form-finder-cap"
+                          type="number" step="0.01" min="0"
+                          value={catFormFinderRewardCap}
+                          onChange={(e) => setCatFormFinderRewardCap(e.target.value)}
+                          placeholder="No cap"
+                        />
                       </div>
                       <div className="grid grid-cols-3 gap-3">
-                        <div className="space-y-1">
-                          <label htmlFor="cat-form-finder-pct" className="block text-[10px] font-bold text-stone-600 uppercase">Finder %</label>
-                          <input id="cat-form-finder-pct" type="number" step="0.5" min="0" max="100" value={catFormFinderPct}
-                            onChange={(e) => setCatFormFinderPct(parseFloat(e.target.value) || 0)}
-                            className="w-full border border-stone-200 rounded-lg px-2 py-2 text-xs font-semibold" />
-                        </div>
-                        <div className="space-y-1">
-                          <label htmlFor="cat-form-agent-pct" className="block text-[10px] font-bold text-stone-600 uppercase">Agent %</label>
-                          <input id="cat-form-agent-pct" type="number" step="0.5" min="0" max="100" value={catFormAgentPct}
-                            onChange={(e) => setCatFormAgentPct(parseFloat(e.target.value) || 0)}
-                            className="w-full border border-stone-200 rounded-lg px-2 py-2 text-xs font-semibold" />
-                        </div>
-                        <div className="space-y-1">
-                          <label htmlFor="cat-form-platform-pct" className="block text-[10px] font-bold text-stone-600 uppercase">Platform %</label>
-                          <input id="cat-form-platform-pct" type="number" step="0.5" min="0" max="100" value={catFormPlatformPct}
-                            onChange={(e) => setCatFormPlatformPct(parseFloat(e.target.value) || 0)}
-                            className="w-full border border-stone-200 rounded-lg px-2 py-2 text-xs font-semibold" />
-                        </div>
+                        <Input
+                          label="Finder %"
+                          id="cat-form-finder-pct"
+                          type="number" step="0.5" min="0" max="100"
+                          value={catFormFinderPct}
+                          onChange={(e) => setCatFormFinderPct(parseFloat(e.target.value) || 0)}
+                        />
+                        <Input
+                          label="Agent %"
+                          id="cat-form-agent-pct"
+                          type="number" step="0.5" min="0" max="100"
+                          value={catFormAgentPct}
+                          onChange={(e) => setCatFormAgentPct(parseFloat(e.target.value) || 0)}
+                        />
+                        <Input
+                          label="Platform %"
+                          id="cat-form-platform-pct"
+                          type="number" step="0.5" min="0" max="100"
+                          value={catFormPlatformPct}
+                          onChange={(e) => setCatFormPlatformPct(parseFloat(e.target.value) || 0)}
+                        />
                       </div>
                       {parseFloat((Number(catFormFinderPct) + Number(catFormAgentPct) + Number(catFormPlatformPct)).toFixed(2)) !== 100 && (
-                        <p className="text-[10px] font-bold text-red-700">
+                        <p className="text-xs font-bold text-status-danger">
                           Finder % + Agent % + Platform % = {(Number(catFormFinderPct) + Number(catFormAgentPct) + Number(catFormPlatformPct)).toFixed(2)}%, not 100%. The platform share absorbs the difference at settlement time, but percentages should sum to 100 for clarity.
                         </p>
                       )}
+
+                      {/* PART C — THE CALCULATED SPLIT.
+                          The admin enters the amount and the percentages; this
+                          shows what those percentages actually pay out. Computed
+                          by the SAME `computeRecoveryFee()` the server prices a
+                          real claim with, so the preview cannot drift from the
+                          authoritative calculation. The platform share is the
+                          engine's RESIDUAL, so the three rows always reconcile
+                          to the claim fee. */}
+                      <div className="rounded-xl border border-brand-border bg-white p-3 space-y-2">
+                        {catFormAmountEntered ? (
+                        <>
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <span className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-wider">
+                            Calculated split
+                          </span>
+                          <span className="text-xs text-brand-muted-text">
+                            Claim fee{' '}
+                            <span className="font-extrabold text-brand-dark-text">{kes(enginePreview.totalFee)}</span>
+                          </span>
+                        </div>
+
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="text-brand-muted-text uppercase tracking-wider">
+                              <th scope="col" className="text-left font-extrabold py-1">Share</th>
+                              <th scope="col" className="text-right font-extrabold py-1">Rate</th>
+                              <th scope="col" className="text-right font-extrabold py-1">Amount</th>
+                            </tr>
+                          </thead>
+                          <tbody className="text-brand-dark-text">
+                            <tr className="border-t border-brand-border">
+                              <th scope="row" className="text-left font-semibold py-1">Finder</th>
+                              <td className="text-right py-1">{Number(catFormFinderPct) || 0}%</td>
+                              <td className="text-right py-1 font-bold">{kes(enginePreview.finderAmount)}</td>
+                            </tr>
+                            <tr className="border-t border-brand-border">
+                              <th scope="row" className="text-left font-semibold py-1">Agent</th>
+                              <td className="text-right py-1">{Number(catFormAgentPct) || 0}%</td>
+                              <td className="text-right py-1 font-bold">{kes(enginePreview.agentAmount)}</td>
+                            </tr>
+                            <tr className="border-t border-brand-border">
+                              <th scope="row" className="text-left font-semibold py-1">Platform</th>
+                              <td className="text-right py-1">{Number(catFormPlatformPct) || 0}%</td>
+                              <td className="text-right py-1 font-bold">{kes(enginePreview.platformAmount)}</td>
+                            </tr>
+                          </tbody>
+                          <tfoot>
+                            <tr className="border-t border-brand-border text-brand-dark-text">
+                              <th scope="row" className="text-left font-extrabold py-1">Total</th>
+                              <td />
+                              <td className="text-right py-1 font-extrabold">{kes(enginePreviewSplitTotal)}</td>
+                            </tr>
+                          </tfoot>
+                        </table>
+
+                        {enginePreview.finderCapApplied && (
+                          <p className="text-xs font-bold text-status-warning bg-status-warning-surface border border-status-warning-border rounded-lg px-2 py-1">
+                            Finder reward cap applied — the finder share was trimmed to the cap and the platform share absorbed the difference.
+                          </p>
+                        )}
+                        {enginePreviewSplitTotal !== enginePreview.totalFee && (
+                          <p className="text-xs font-bold text-status-danger">
+                            The three shares do not reconcile to the claim fee — check the configured percentages before saving.
+                          </p>
+                        )}
+                        {catFormIsAdminModified && (
+                          <p className="text-xs font-bold text-status-warning bg-status-warning-surface border border-status-warning-border rounded-lg px-2 py-1 leading-tight">
+                            Informational only — the "Use flat fee override" option is checked above, so these engine values are NOT what will be saved. Saving this category persists the flat Total/Finder/Agent/Platform fee instead.
+                          </p>
+                        )}
+                        <p className="text-xs text-brand-muted-text leading-tight">
+                          Preview only, with no declared value — so it prices at Base + Complexity + Delay. A finder's declared replacement value can only pull the fee DOWN at the Ceiling % above, never up. The server recomputes this for every real claim; the browser is never the financial authority.
+                        </p>
+                        </>
+                        ) : (
+                          <p className="text-xs text-brand-muted-text leading-tight">
+                            Enter an amount (Base, Complexity or Delay fee) to see the calculated split — not yet calculable at KES 0.
+                          </p>
+                        )}
+                      </div>
                     </div>
 
                     <div className="flex gap-2 pt-2">
-                      <button
+                      <Button
                         type="submit"
-                        disabled={catSaving || !splitsMatch}
-                        className="flex-1 bg-stone-900 hover:bg-stone-800 text-white py-3 rounded-xl font-bold text-xs transition flex items-center justify-center space-x-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                        variant="primary"
+                        disabled={!splitsMatch}
+                        loading={catSaving}
+                        className="flex-1"
                       >
-                        {catSaving ? (
-                          <Loader2 className="animate-spin" size={16} />
-                        ) : (
-                          <>
-                            <span>Save Category / Hifadhi</span>
-                            <ArrowRight size={16} />
-                          </>
-                        )}
-                      </button>
-                      <button
+                        <span>Save Category / Hifadhi</span>
+                        <ArrowRight size={16} aria-hidden="true" />
+                      </Button>
+                      <Button
                         type="button"
+                        variant="ghost"
                         onClick={() => setShowCategoryForm(null)}
-                        className="bg-stone-100 hover:bg-stone-200 text-stone-700 px-4 py-3 rounded-xl font-bold text-xs transition cursor-pointer"
                       >
                         Cancel / Ghairi
-                      </button>
+                      </Button>
                     </div>
                   </form>
                 </div>
               ) : (
-                <div className="bg-white border border-stone-100 rounded-2xl overflow-hidden shadow-sm">
+                <div className="bg-white border border-brand-border rounded-2xl overflow-hidden shadow-sm">
                   {adminCategoriesLoading ? (
                     <div className="flex flex-col items-center justify-center py-12 space-y-2">
-                      <Loader2 className="animate-spin text-primary-green w-6 h-6" />
-                      <p className="text-stone-400 text-[10px] font-bold uppercase tracking-wider font-semibold">Loading categories...</p>
+                      <Loader2 className="animate-spin text-primary-green w-6 h-6" aria-hidden="true" />
+                      <p className="text-brand-muted-text text-xs font-bold uppercase tracking-wider">Loading categories...</p>
                     </div>
                   ) : adminCategories.length === 0 ? (
-                    <div className="p-12 text-center text-stone-400 text-xs font-semibold">
-                      No categories found on the server.
+                    <div className="p-4">
+                      <EmptyState icon={Package} title="No categories found on the server." />
                     </div>
                   ) : (
                     <div className="overflow-x-auto font-sans">
                       <table className="w-full text-left border-collapse text-xs">
                         <thead>
-                          <tr className="bg-stone-50 border-b border-stone-100 text-stone-400 uppercase tracking-wider font-extrabold text-[10px]">
+                          <tr className="bg-brand-light-gray border-b border-brand-border text-brand-muted-text uppercase tracking-wider font-extrabold text-xs">
                             <th className="py-3.5 px-4 font-bold">ID</th>
                             <th className="py-3.5 px-4 font-bold">Name (English / Kiswahili)</th>
                             <th className="py-3.5 px-4 text-right font-bold">Total Fee</th>
@@ -3696,53 +3798,52 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                             <th className="py-3.5 px-4 text-center font-bold">Actions</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-stone-100 font-sans">
+                        <tbody className="divide-y divide-brand-border font-sans">
                           {adminCategories.map((cat) => (
-                            <tr key={cat.id} className="hover:bg-stone-50 transition">
-                              <td className="py-3 px-4 font-mono font-bold text-stone-900">{cat.id}</td>
+                            <tr key={cat.id} className="hover:bg-brand-beige/50 transition">
+                              <td className="py-3 px-4 font-mono font-bold text-brand-dark-text">{cat.id}</td>
                               <td className="py-3 px-4">
-                                <div className="flex items-center space-x-2">
-                                  <p className="font-extrabold text-stone-900">{cat.name_en}</p>
+                                <div className="flex items-center flex-wrap gap-1.5">
+                                  <p className="font-extrabold text-brand-dark-text">{cat.name_en}</p>
                                   {cat.is_admin_modified && (
-                                    <span className="bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded border border-amber-200 text-[9px] font-extrabold uppercase">
-                                      Customized
-                                    </span>
+                                    <Badge variant="warning">Customized</Badge>
                                   )}
                                 </div>
-                                <p className="text-stone-400 text-[10px]">{cat.name_sw}</p>
+                                <p className="text-brand-muted-text text-xs">{cat.name_sw}</p>
                               </td>
-                              <td className="py-3 px-4 text-right font-bold text-stone-900">KES {cat.total_fee}</td>
-                              <td className="py-3 px-4 text-right text-stone-600">KES {cat.finder_share}</td>
-                              <td className="py-3 px-4 text-right text-stone-600">KES {cat.agent_share}</td>
-                              <td className="py-3 px-4 text-right text-stone-600">KES {cat.platform_share}</td>
+                              <td className="py-3 px-4 text-right font-bold text-brand-dark-text">KES {cat.total_fee}</td>
+                              <td className="py-3 px-4 text-right text-brand-muted-text">KES {cat.finder_share}</td>
+                              <td className="py-3 px-4 text-right text-brand-muted-text">KES {cat.agent_share}</td>
+                              <td className="py-3 px-4 text-right text-brand-muted-text">KES {cat.platform_share}</td>
                               <td className="py-3 px-4 text-center">
-                                {cat.is_sensitive_document ? (
-                                  <span className="bg-red-50 text-red-700 px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase">Yes</span>
-                                ) : (
-                                  <span className="bg-stone-100 text-stone-500 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase">No</span>
-                                )}
+                                <Badge variant={cat.is_sensitive_document ? 'danger' : 'neutral'}>
+                                  {cat.is_sensitive_document ? 'Yes' : 'No'}
+                                </Badge>
                               </td>
-                              <td className="py-3 px-4 text-center font-bold">
-                                <span className={`px-2.5 py-0.5 rounded-full text-[10px] ${cat.item_count > 0 ? 'bg-emerald-50 text-emerald-700 font-bold' : 'bg-stone-100 text-stone-400'}`}>
+                              <td className="py-3 px-4 text-center">
+                                <Badge variant={cat.item_count > 0 ? 'success' : 'neutral'}>
                                   {cat.item_count} items
-                                </span>
+                                </Badge>
                               </td>
-                              <td className="py-3 px-4 text-center space-x-1.5 whitespace-nowrap">
-                                <button
-                                  onClick={() => resetCategoryForm('edit', cat)}
-                                  className="text-[10px] font-bold text-stone-900 hover:underline cursor-pointer"
-                                >
-                                  Edit / Hariri
-                                </button>
-                                <span className="text-stone-200">|</span>
-                                <button
-                                  disabled={cat.item_count > 0}
-                                  onClick={() => handleDeleteCategory(cat.id, cat.name_en)}
-                                  className={`text-[10px] font-bold cursor-pointer ${cat.item_count > 0 ? 'text-stone-300 cursor-not-allowed' : 'text-red-600 hover:underline'}`}
-                                  title={cat.item_count > 0 ? `Cannot delete category because ${cat.item_count} item(s) are currently categorized under it.` : 'Delete Category'}
-                                >
-                                  Delete / Futa
-                                </button>
+                              <td className="py-3 px-4 whitespace-nowrap">
+                                <div className="flex items-center justify-center gap-1.5">
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => resetCategoryForm('edit', cat)}
+                                  >
+                                    Edit / Hariri
+                                  </Button>
+                                  <Button
+                                    variant="danger"
+                                    size="sm"
+                                    disabled={cat.item_count > 0}
+                                    onClick={() => handleDeleteCategory(cat.id, cat.name_en)}
+                                    title={cat.item_count > 0 ? `Cannot delete category because ${cat.item_count} item(s) are currently categorized under it.` : 'Delete Category'}
+                                  >
+                                    Delete / Futa
+                                  </Button>
+                                </div>
                               </td>
                             </tr>
                           ))}
@@ -3758,81 +3859,77 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
           {activeTab === 'strikes' && (
             <div className="space-y-6">
               <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                <div>
-                  <h2 className="text-xl font-extrabold text-stone-900">User Payment Strikes</h2>
-                  <p className="text-stone-500 text-xs mt-0.5">Manage users who failed to pay within the 15-minute viewing verification window.</p>
-                </div>
-                <button
+                <p className="text-xs text-brand-muted-text max-w-2xl">
+                  Manage users who failed to pay within the 15-minute viewing verification window.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  loading={paymentStrikesLoading}
                   onClick={fetchPaymentStrikes}
-                  disabled={paymentStrikesLoading}
-                  className="bg-stone-900 hover:bg-stone-800 text-white font-extrabold px-4 py-2 rounded-xl text-xs flex items-center space-x-1.5 transition cursor-pointer disabled:opacity-50 fade-in"
+                  className="shrink-0"
                 >
-                  {paymentStrikesLoading ? <Loader2 className="animate-spin" size={14} /> : <RefreshCw size={14} />}
+                  {!paymentStrikesLoading && <RefreshCw size={14} aria-hidden="true" />}
                   <span>Reload list</span>
-                </button>
+                </Button>
               </div>
 
-              <div className="bg-white border border-stone-100 rounded-2xl overflow-hidden shadow-sm">
+              <div className="bg-white border border-brand-border rounded-2xl overflow-hidden shadow-sm">
                 {paymentStrikesLoading ? (
                   <div className="flex flex-col items-center justify-center py-12 space-y-2">
-                    <Loader2 className="animate-spin text-primary-green w-6 h-6" />
-                    <p className="text-stone-400 text-[10px] font-bold uppercase tracking-wider font-semibold">Loading strikes...</p>
+                    <Loader2 className="animate-spin text-primary-green w-6 h-6" aria-hidden="true" />
+                    <p className="text-brand-muted-text text-xs font-bold uppercase tracking-wider">Loading strikes...</p>
                   </div>
                 ) : paymentStrikes.length === 0 ? (
-                  <div className="p-12 text-center text-stone-400 text-xs font-semibold">
-                    No active payment strikes recorded on the platform.
+                  <div className="p-4">
+                    <EmptyState icon={ShieldCheck} title="No active payment strikes recorded on the platform." />
                   </div>
                 ) : (
                   <div className="overflow-x-auto font-sans">
                     <table className="w-full text-left border-collapse text-xs">
                       <thead>
-                        <tr className="bg-stone-50 border-b border-stone-100 text-stone-400 uppercase tracking-wider font-extrabold text-[10px]">
+                        <tr className="bg-brand-light-gray border-b border-brand-border text-brand-muted-text uppercase tracking-wider font-extrabold text-xs">
                           <th className="py-3.5 px-4 font-bold">User Phone Number</th>
                           <th className="py-3.5 px-4 text-center font-bold">Active Strikes Count</th>
                           <th className="py-3.5 px-4 text-center font-bold">Status Limit</th>
                           <th className="py-3.5 px-4 text-center font-bold">Action</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-stone-100 font-sans">
+                      <tbody className="divide-y divide-brand-border font-sans">
                         {paymentStrikes.map((strike) => (
-                          <tr key={strike.phone} className="hover:bg-stone-50 transition">
-                            <td className="py-3.5 px-4 font-mono font-bold text-stone-900">{strike.phone}</td>
+                          <tr key={strike.phone} className="hover:bg-brand-beige/50 transition">
+                            <td className="py-3.5 px-4 font-mono font-bold text-brand-dark-text">{strike.phone}</td>
                             <td className="py-3.5 px-4 text-center">
-                              <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                                strike.count >= 3 ? 'bg-red-100 text-red-800' :
-                                strike.count >= 2 ? 'bg-orange-100 text-orange-800' :
-                                'bg-amber-100 text-amber-800'
-                              }`}>
+                              {/* The 3-strike escalation thresholds are unchanged
+                                  (>=3 blocked, >=2 escalated); only the palette
+                                  moved to the shared semantic status variants. */}
+                              <Badge
+                                variant={
+                                  strike.count >= 3 ? 'danger' :
+                                    strike.count >= 2 ? 'warning' : 'neutral'
+                                }
+                              >
                                 {strike.count} Strike(s)
-                              </span>
+                              </Badge>
                             </td>
                             <td className="py-3.5 px-4 text-center">
                               {strike.count >= 3 ? (
-                                <span className="bg-red-50 text-red-700 px-2 py-0.5 rounded border border-red-200 text-[9px] font-extrabold uppercase">
-                                  Blocked from claims
-                                </span>
+                                <Badge variant="danger">Blocked from claims</Badge>
                               ) : strike.count > 0 ? (
-                                <span className="bg-amber-50 text-amber-700 px-2 py-0.5 rounded border border-amber-200 text-[9px] font-extrabold uppercase">
-                                  Warning active
-                                </span>
+                                <Badge variant="warning">Warning active</Badge>
                               ) : (
-                                <span className="bg-stone-100 text-stone-500 px-2 py-0.5 rounded border border-stone-200 text-[9px] font-bold uppercase">
-                                  Clear
-                                </span>
+                                <Badge variant="neutral">Clear</Badge>
                               )}
                             </td>
                             <td className="py-3.5 px-4 text-center whitespace-nowrap">
-                              <button
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                loading={adminActionProcessing}
                                 onClick={() => handleClearStrikes(strike.phone)}
-                                disabled={adminActionProcessing}
-                                className="bg-emerald-500 hover:bg-emerald-600 text-white font-extrabold px-3 py-1.5 rounded-lg text-[10px] transition cursor-pointer flex items-center justify-center space-x-1.5 mx-auto disabled:opacity-50"
                               >
-                                {adminActionProcessing ? (
-                                  <Loader2 className="animate-spin" size={10} />
-                                ) : (
-                                  <span>Clear Strikes</span>
-                                )}
-                              </button>
+                                <span>Clear Strikes</span>
+                              </Button>
                             </td>
                           </tr>
                         ))}

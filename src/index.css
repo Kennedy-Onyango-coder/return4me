@@ -253,6 +253,44 @@ body {
   }
 }
 
+/* ADMIN CONSOLE NAVIGATION — shared polish.
+   Additive only: these rules refine affordances and states over the markup that
+   already exists. No section, data, permission or navigation behaviour changes,
+   and the active state remains "never colour alone" (accent bar + tint +
+   weight). Keyboard focus is made explicit here because this tab strip is the
+   console's primary navigation.
+
+   The focus outline uses primary-green rather than the brand orange: measured
+   against white the orange is ~2.8:1, below the 3:1 non-text contrast a focus
+   indicator needs (the same finding recorded on the accent tokens above). */
+.r4m-admin-nav > button {
+  border-radius: 0.5rem;
+  min-height: 44px;
+  letter-spacing: 0.01em;
+  transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
+}
+
+.r4m-admin-nav > button:focus-visible {
+  outline: 2px solid var(--color-primary-green);
+  outline-offset: 2px;
+}
+
+.r4m-admin-nav > button[aria-current='page'] {
+  font-weight: 800;
+}
+
+/* Below lg the strip scrolls horizontally. Keep the scrollbar from eating the
+   strip's height, and leave the overflow intentional rather than clipping a
+   section off the edge with no affordance. */
+@media (max-width: 1023px) {
+  .r4m-admin-nav {
+    scrollbar-width: none;
+  }
+  .r4m-admin-nav::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 /* SUBTLE MOTION POLICY (Phase 2A)
    The design system intentionally ships no entrance/parallax animation.
    The one existing decorative animation (.fade-in page entrance) is
