@@ -216,19 +216,20 @@ function PickupDetailsPanel({
   }
 
   if (state.status === 'ineligible') {
-    return <p className="text-ink-muted text-xs">{pickupIneligibleMessage(lang)}</p>;
+    return <p className="rounded-xl border border-line-subtle bg-canvas-muted px-3 py-2 text-ink-muted text-xs">{pickupIneligibleMessage(lang)}</p>;
   }
 
   if (state.status === 'error') {
     return (
       <div className="space-y-2">
-        <p className="text-ink-muted text-xs">{pickupErrorMessage(lang)}</p>
+        <p className="rounded-xl border border-status-danger-border bg-status-danger-surface px-3 py-2 text-status-danger text-xs">{pickupErrorMessage(lang)}</p>
         {state.retryable && (
           <Button
             type="button"
             variant="outline"
             size="sm"
             onClick={onRetry}
+            className="min-h-11"
           >
             <RefreshCw size={12} aria-hidden="true" />
             {lang === 'en' ? 'Try again' : 'Jaribu tena'}
@@ -241,7 +242,7 @@ function PickupDetailsPanel({
   // Ready: a null agent is a deliberate "no hub assigned yet" answer from the
   // server, not a failure — and never a cue to keep showing older details.
   if (!state.agent) {
-    return <p className="text-ink-muted text-xs">{pickupNoHubMessage(lang)}</p>;
+    return <p className="rounded-xl border border-line-subtle bg-canvas-muted px-3 py-2 text-ink-muted text-xs">{pickupNoHubMessage(lang)}</p>;
   }
 
   return <HubDetails agent={state.agent} lang={lang} showDirections={showDirections} />;
@@ -941,8 +942,8 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           
           {/* Headline & Track Claim Action */}
           <div className="text-center space-y-3">
-            <h1 className="text-3xl font-extrabold text-primary-green mb-2">{t.ownerTitle}</h1>
-            <p className="text-ink-muted text-sm max-w-xl mx-auto">{t.ownerSubtitle}</p>
+            <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-primary-green mb-2">{t.ownerTitle}</h1>
+            <p className="text-ink-muted text-sm sm:text-base max-w-xl mx-auto leading-relaxed">{t.ownerSubtitle}</p>
             <button
               ref={trackModalTriggerRef}
               type="button"
@@ -951,7 +952,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 setTrackError('');
                 setTrackResult(null);
               }}
-              className="inline-flex items-center space-x-2 bg-emerald-50 hover:bg-emerald-100 text-primary-green border border-emerald-200 px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer"
+              className="inline-flex items-center gap-2 min-h-11 bg-primary-green/5 hover:bg-primary-green/10 text-primary-green border border-primary-green/20 px-4 rounded-xl text-xs font-bold transition cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange/40"
             >
               <Clock size={14} className="text-accent-orange" />
               <span>{lang === 'sw' ? 'Fuatilia Ombi Lako' : 'Track My Existing Claim'}</span>
@@ -981,7 +982,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             </p>
 
             <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <div className="rounded-2xl border border-emerald-200 bg-emerald-50/50 p-4 sm:p-5 flex flex-col">
+              <div className="rounded-2xl border border-primary-green/20 bg-primary-green/5 p-4 sm:p-5 flex flex-col">
                 <h3 className="text-sm font-extrabold text-ink">
                   {lang === 'sw' ? 'Sijaripoti bado — nataka kuripoti' : 'I have lost it — I want to report it'}
                 </h3>
@@ -1015,7 +1016,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           </section>
 
           {errorMsg && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-2xl flex items-center space-x-2.5 text-sm">
+            <div className="bg-status-danger-surface border border-status-danger-border text-status-danger px-4 py-3 rounded-2xl flex items-center gap-2.5 text-sm">
               <AlertCircle size={18} className="shrink-0" />
               <span>{errorMsg}</span>
             </div>
@@ -1031,7 +1032,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder={t.searchPlaceholder}
                   aria-label={t.searchPlaceholder}
-                  className="w-full border border-line-subtle rounded-2xl pl-10 pr-4 py-3 text-sm focus:border-accent-orange focus:outline-none bg-brand-beige"
+                  className="w-full border border-line-subtle rounded-2xl pl-10 pr-4 py-3 text-sm focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30 focus:outline-none bg-brand-beige"
                 />
                 <Search className="absolute left-3.5 top-3.5 text-ink-muted" size={18} />
               </div>
@@ -1040,7 +1041,8 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               <select
                 value={selectedCat}
                 onChange={(e) => setSelectedCat(e.target.value)}
-                className="border border-line-subtle rounded-2xl px-3 py-3 text-sm bg-white focus:outline-none focus:border-accent-orange disabled:bg-stone-50 disabled:text-stone-400"
+                aria-label={lang === 'en' ? 'Filter by category' : 'Chuja kwa kategoria'}
+                className="border border-line-subtle rounded-2xl px-3 py-3 text-sm bg-white focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30 disabled:bg-brand-light-gray disabled:text-brand-muted-text"
                 disabled={categoriesLoading || categoriesError}
               >
                 {categoriesLoading ? (
@@ -1070,7 +1072,8 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               <select
                 value={selectedArea}
                 onChange={(e) => setSelectedArea(e.target.value)}
-                className="border border-line-subtle rounded-2xl px-3 py-3 text-sm bg-white focus:outline-none focus:border-accent-orange disabled:bg-stone-50 disabled:text-stone-400"
+                aria-label={lang === 'en' ? 'Filter by area' : 'Chuja kwa eneo'}
+                className="border border-line-subtle rounded-2xl px-3 py-3 text-sm bg-white focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30 disabled:bg-brand-light-gray disabled:text-brand-muted-text"
                 disabled={regionsLoading || regionsError}
               >
                 {regionsLoading ? (
@@ -1102,7 +1105,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           </form>
 
           {/* Privacy masking badge info */}
-          <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 flex items-start space-x-3 text-xs text-primary-green">
+          <div className="bg-status-info-surface border border-status-info-border rounded-2xl p-4 flex items-start gap-3 text-xs text-status-info">
             <ShieldAlert size={18} className="text-accent-orange shrink-0 mt-0.5" />
             <div>
               <span className="font-bold block mb-0.5">Kenyan Privacy Shield Activated</span>
@@ -1128,10 +1131,10 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 <span className="text-sm font-medium">{lang === 'en' ? 'Searching the secure registry...' : 'Kutafuta kwenye rejesta salama...'}</span>
               </div>
             ) : errorMsg ? (
-              <div className="bg-red-50 border border-red-200 text-red-700 px-6 py-8 rounded-2xl text-center text-sm space-y-2">
-                <AlertCircle size={28} className="mx-auto text-red-500" />
+              <div className="bg-status-danger-surface border border-status-danger-border text-status-danger px-6 py-8 rounded-2xl text-center text-sm space-y-2">
+                <AlertCircle size={28} className="mx-auto text-status-danger" />
                 <p className="font-bold">{lang === 'en' ? 'Search Failed' : 'Utafutaji Umeshindwa'}</p>
-                <p className="text-xs text-red-600">{errorMsg}</p>
+                <p className="text-xs text-status-danger">{errorMsg}</p>
               </div>
             ) : searchResults.length === 0 ? (
               <div className="bg-white border border-line-subtle rounded-2xl p-12 text-center text-ink-muted text-sm space-y-3">
@@ -1163,7 +1166,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                       {/* Document photo */}
                       <div className="w-20 h-20 bg-brand-beige rounded-2xl overflow-hidden shrink-0 border border-line-subtle flex items-center justify-center">
                         {item.is_sensitive_document ? (
-                          <div className="flex flex-col items-center justify-center p-2 text-center h-full w-full bg-stone-100 text-ink-muted">
+                          <div className="flex flex-col items-center justify-center p-2 text-center h-full w-full bg-brand-light-gray text-brand-muted-text">
                             <Lock size={18} className="text-ink-muted mb-1 shrink-0" />
                             <span className="text-caption font-bold leading-tight text-ink-muted">Photo hidden for privacy</span>
                           </div>
@@ -1175,7 +1178,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                       {/* Info block */}
                       <div className="flex-1 space-y-1.5 min-w-0">
                         <div className="flex items-center justify-between">
-                          <span className="bg-emerald-50 text-emerald-800 text-caption font-extrabold px-2.5 py-1 rounded-full uppercase">
+                          <span className="bg-status-success-surface text-status-success text-caption font-extrabold px-2.5 py-1 rounded-full uppercase">
                             {lang === 'en' ? cat?.name_en : cat?.name_sw}
                           </span>
                           <span className="text-caption text-ink-muted font-mono font-medium">
@@ -1263,7 +1266,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             <div className="flex gap-4">
               <div className="w-16 h-16 rounded-xl bg-stone-50 border border-line-subtle overflow-hidden shrink-0 flex items-center justify-center">
                 {selectedItem.is_sensitive_document ? (
-                  <div className="flex flex-col items-center justify-center p-1 text-center h-full w-full bg-stone-100 text-ink-muted">
+                  <div className="flex flex-col items-center justify-center p-1 text-center h-full w-full bg-brand-light-gray text-brand-muted-text">
                     <Lock size={14} className="text-ink-muted mb-0.5 shrink-0" />
                     <span className="text-caption font-bold leading-tight text-ink-muted">{lang === 'en' ? 'Photo hidden for privacy' : 'Picha imefichwa kwa faragha'}</span>
                   </div>
@@ -1361,7 +1364,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             <button
               type="button"
               onClick={() => setVerificationStep('search')}
-              className="flex-1 bg-stone-100 hover:bg-stone-200 text-ink-muted py-3 rounded-xl font-bold transition text-xs"
+              className="flex-1 bg-brand-light-gray hover:bg-brand-light-gray/70 text-brand-muted-text py-3 rounded-xl font-bold transition text-xs"
             >
               Back
             </button>
@@ -1408,7 +1411,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           </div>
 
           {errorMsg && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-2.5 rounded-xl text-xs flex items-center justify-center space-x-2">
+            <div className="bg-status-danger-surface border border-status-danger-border text-status-danger px-4 py-2.5 rounded-xl text-xs flex items-center justify-center gap-2">
               <AlertCircle size={16} />
               <span>{errorMsg}</span>
             </div>
@@ -1451,7 +1454,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
       {/* Payment step */}
       {verificationStep === 'payment' && (
         <div className="bg-white rounded-2xl border border-line-subtle p-6 md:p-8 shadow-sm max-w-xl mx-auto space-y-6 text-center fade-in">
-          <div className="w-14 h-14 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
+          <div className="w-14 h-14 bg-status-success-surface text-status-success rounded-full flex items-center justify-center mx-auto">
             <Coins size={28} />
           </div>
           <div>
@@ -1460,14 +1463,14 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           </div>
 
           {strikeWarning && (
-            <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-2xl text-xs text-left flex items-start space-x-2">
+            <div className="bg-status-warning-surface border border-status-warning-border text-status-warning px-4 py-3 rounded-2xl text-xs text-left flex items-start gap-2">
               <AlertTriangle size={18} className="shrink-0 mt-0.5" />
               <span>{strikeWarning}</span>
             </div>
           )}
 
           {timeLeft !== null && (
-            <div className={`p-4 rounded-2xl border text-xs text-left flex items-start space-x-3 ${timeLeft < 180 ? 'bg-red-50 border-red-100 text-red-700 font-bold animate-pulse' : 'bg-amber-50 border-amber-100 text-amber-800'}`}>
+            <div className={`p-4 rounded-2xl border text-xs text-left flex items-start space-x-3 ${timeLeft < 180 ? 'bg-status-danger-surface border-status-danger-border text-status-danger font-bold animate-pulse' : 'bg-status-warning-surface border-status-warning-border text-status-warning'}`}>
               <Clock size={18} className="shrink-0 mt-0.5 text-accent-orange" />
               <div>
                 <span className="font-bold block mb-0.5 text-primary-green">
@@ -1511,7 +1514,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             if (!noteEn) return null;
 
             return (
-              <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-left text-xs flex items-start space-x-3 text-primary-green">
+              <div className="bg-status-success-surface border border-status-success-border rounded-2xl p-4 text-left text-xs flex items-start gap-3 text-status-success">
                 <AlertCircle size={18} className="text-accent-orange shrink-0 mt-0.5" />
                 <div>
                   <span className="font-bold block mb-1">
@@ -1602,7 +1605,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 value={payerPhone || ownerPhone}
                 onChange={(e) => setPayerPhone(e.target.value)}
                 placeholder="e.g. 0712 345 678"
-                className="w-full border border-stone-300 rounded-xl px-3 py-3 text-base font-mono bg-white focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30"
+                className="w-full border border-line-subtle rounded-xl px-3 py-3 text-base font-mono bg-white focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30"
                 aria-invalid={(payerPhone || ownerPhone).trim() !== '' && !isValidKenyanPhoneForPayer(payerPhone || ownerPhone)}
               />
               <p className="text-ink-muted text-xs">
@@ -1621,14 +1624,14 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 }
                 if (!isValidKenyanPhoneForPayer(candidate)) {
                   return (
-                    <p className="text-red-600 text-xs font-medium flex items-center space-x-1" role="alert">
+                    <p className="text-status-danger text-xs font-medium flex items-center gap-1" role="alert">
                       <AlertCircle size={14} className="shrink-0" />
                       <span>{lang === 'en' ? 'Enter a valid Kenyan M-Pesa number.' : 'Wea nambari halali ya M-Pesa ya Kenya.'}</span>
                     </p>
                   );
                 }
                 return (
-                  <p className="text-emerald-600 text-xs flex items-center space-x-1">
+                  <p className="text-status-success text-xs flex items-center gap-1">
                     <CheckCircle size={14} className="shrink-0" />
                     <span>
                       {lang === 'en'
@@ -1641,7 +1644,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             </div>
 
             {errorMsg && (
-              <div className="bg-red-50 border border-red-100 text-red-700 text-xs rounded-2xl p-4 flex items-start space-x-2 text-left">
+              <div className="bg-status-danger-surface border border-status-danger-border text-status-danger text-xs rounded-2xl p-4 flex items-start gap-2 text-left">
                 <AlertCircle size={16} className="shrink-0 mt-0.5" />
                 <span>{errorMsg}</span>
               </div>
@@ -1700,7 +1703,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           </div>
 
           {errorMsg && (
-            <div className="bg-red-50 border border-red-100 text-red-700 text-xs rounded-2xl p-4 flex items-start space-x-2 text-left">
+            <div className="bg-status-danger-surface border border-status-danger-border text-status-danger text-xs rounded-2xl p-4 flex items-start gap-2 text-left">
               <AlertCircle size={16} className="shrink-0 mt-0.5" />
               <span>{errorMsg}</span>
             </div>
@@ -1718,7 +1721,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             <button
               onClick={triggerEscrowPayment}
               disabled={isPaying}
-              className="w-full bg-stone-100 hover:bg-stone-200 text-ink-muted py-3 rounded-2xl font-bold text-xs transition cursor-pointer disabled:opacity-50"
+              className="w-full bg-brand-light-gray hover:bg-brand-light-gray/70 text-brand-muted-text py-3 rounded-2xl font-bold text-xs transition cursor-pointer disabled:opacity-50"
             >
               {isPaying ? (
                 <div className="flex items-center justify-center space-x-2">
@@ -1734,7 +1737,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               <button
                 onClick={simulatePaymentSuccess}
                 disabled={isPaying}
-                className="w-full bg-amber-100 hover:bg-amber-200 text-amber-800 py-3 rounded-2xl font-bold text-xs transition cursor-pointer disabled:opacity-50 border border-dashed border-amber-300"
+                className="w-full bg-status-warning-surface hover:bg-status-warning-surface/70 text-status-warning py-3 rounded-2xl font-bold text-xs transition cursor-pointer disabled:opacity-50 border border-dashed border-status-warning-border"
               >
                 {lang === 'en' ? 'Simulate Payment Success (test mode only)' : 'Iga Malipo Yaliyofaulu (hali ya majaribio)'}
               </button>
@@ -1746,7 +1749,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
       {/* Physical pickup handover success */}
       {verificationStep === 'handover_success' && (
         <div className="bg-white rounded-2xl border border-line-subtle p-6 md:p-8 shadow-sm max-w-xl mx-auto text-center space-y-6 fade-in">
-          <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
+          <div className="w-16 h-16 bg-status-success-surface text-status-success rounded-full flex items-center justify-center mx-auto">
             <CheckCircle size={36} />
           </div>
           <div>
@@ -1803,19 +1806,19 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           </div>
 
           {simulatedPickupCode && (
-            <div className="bg-amber-50 border border-dashed border-amber-300 text-amber-800 p-3 rounded-xl text-caption font-bold">
+            <div className="bg-status-warning-surface border border-dashed border-status-warning-border text-status-warning p-3 rounded-xl text-caption font-bold">
               {lang === 'sw' ? 'Hali ya majaribio: msimbo huu umeonyeshwa hapa kwa sababu SMS/barua pepe halisi haitumwi wakati wa majaribio ya ndani.' : 'Test mode: this code is shown here because real SMS/email isn\'t sent during local testing.'}
             </div>
           )}
 
           {/* Save-this-code warning */}
-          <div className="bg-amber-50 border border-amber-300 text-amber-900 p-4 rounded-2xl text-left flex items-start space-x-3">
-            <AlertTriangle size={20} className="shrink-0 mt-0.5 text-amber-600" />
+          <div className="bg-status-warning-surface border border-status-warning-border text-status-warning p-4 rounded-2xl text-left flex items-start gap-3">
+            <AlertTriangle size={20} className="shrink-0 mt-0.5 text-status-warning" />
             <div className="text-xs space-y-1">
               <p className="font-extrabold">
                 {lang === 'sw' ? 'MUHIMU: Andika au piga picha ya msimbo huu sasa.' : 'IMPORTANT: Write down or screenshot this code now.'}
               </p>
-              <p className="text-amber-800">
+              <p className="text-status-warning">
                 {lang === 'sw'
                   ? 'Lazima umpe wakala msimbo huu wa siri ili kuchukua bidhaa yako physically. Kuupoteza kunaweza kuchelewesha kuchukua kwako — angalia SMS/barua pepe yako tena ikiwa unahitaji kuupata tena.'
                   : 'You must give this exact secret code to the agent in person to collect your item. Losing it may delay your pickup — check your SMS/email again if you need to retrieve it.'}
@@ -1827,7 +1830,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           <div className="border-t border-line-subtle pt-5 space-y-3">
             <h4 className="text-xs font-extrabold text-primary-green uppercase tracking-wider">{t.rateAgentLabel}</h4>
             {ratingSubmitted ? (
-              <span className="text-xs text-emerald-600 font-bold block">Thank you for supporting community trust in Kenya!</span>
+              <span className="text-xs text-status-success font-bold block">Thank you for supporting community trust in Kenya!</span>
             ) : (
               <div className="flex items-center justify-center space-x-2">
                 {[1, 2, 3, 4, 5].map((star) => (
@@ -1835,7 +1838,8 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                     key={star}
                     type="button"
                     onClick={() => submitRating(star)}
-                    className="text-stone-300 hover:text-accent-orange transition"
+                    aria-label={lang === 'en' ? ('Rate ' + star + ' out of 5') : ('Toa ' + star + ' kati ya 5')}
+                    className="min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-stone-300 hover:text-accent-orange transition rounded-lg cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange/40"
                   >
                     <div
                       className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-extrabold ${userRating && userRating >= star ? 'bg-accent-strong text-white' : 'bg-line-subtle text-ink-muted'}`}
@@ -1861,7 +1865,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               setIsConfident(false);
               handleSearch(); // Refresh lists
             }}
-            className="w-full bg-stone-100 hover:bg-stone-200 text-ink-muted py-3 rounded-2xl font-bold transition text-xs"
+            className="w-full bg-brand-light-gray hover:bg-brand-light-gray/70 text-brand-muted-text py-3 rounded-2xl font-bold transition text-xs"
           >
             Go Back to Search
           </button>
@@ -1871,7 +1875,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
       {/* Awaiting agent in-person verification step */}
       {verificationStep === 'awaiting_agent_confirmation' && (
         <div className="bg-white rounded-2xl border border-line-subtle p-6 md:p-8 shadow-sm max-w-xl mx-auto space-y-6 text-center fade-in">
-          <div className="w-14 h-14 bg-amber-50 text-amber-500 rounded-full flex items-center justify-center mx-auto animate-pulse">
+          <div className="w-14 h-14 bg-status-warning-surface text-status-warning rounded-full flex items-center justify-center mx-auto animate-pulse">
             <Eye size={28} />
           </div>
           <div>
@@ -1887,7 +1891,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
           {/* Render strike warning if present */}
           {strikeWarning && (
-            <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-2xl text-xs text-left flex items-start space-x-2">
+            <div className="bg-status-warning-surface border border-status-warning-border text-status-warning px-4 py-3 rounded-2xl text-xs text-left flex items-start gap-2">
               <AlertTriangle size={18} className="shrink-0 mt-0.5" />
               <span>{strikeWarning}</span>
             </div>
@@ -1898,7 +1902,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               (throttled) poller looked identical to a healthy waiting one. */}
           {errorMsg && (
             <div
-              className="bg-red-50 border border-red-100 text-red-700 text-xs rounded-2xl p-4 flex items-start space-x-2 text-left"
+              className="bg-status-danger-surface border border-status-danger-border text-status-danger text-xs rounded-2xl p-4 flex items-start gap-2 text-left"
               role="alert"
             >
               <AlertCircle size={16} className="shrink-0 mt-0.5" />
@@ -1935,11 +1939,11 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
       {/* Payment window expired step */}
       {verificationStep === 'payment_window_expired' && (
         <div className="bg-white rounded-2xl border border-line-subtle p-6 md:p-8 shadow-sm max-w-xl mx-auto space-y-6 text-center fade-in">
-          <div className="w-14 h-14 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto">
+          <div className="w-14 h-14 bg-status-danger-surface text-status-danger rounded-full flex items-center justify-center mx-auto">
             <XCircle size={28} />
           </div>
           <div>
-            <h2 className="text-xl font-extrabold text-red-600 mb-1">
+            <h2 className="text-xl font-extrabold text-status-danger mb-1">
               {lang === 'en' ? 'Payment Window Expired' : 'Muda wa Kulipa Umeisha'}
             </h2>
             <p className="text-ink-muted text-xs">
@@ -1961,7 +1965,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               setOwnerIdentifyingDetails('');
               setIsConfident(false);
             }}
-            className="w-full bg-stone-100 hover:bg-stone-200 text-ink-muted py-3 rounded-xl font-bold transition text-xs"
+            className="w-full bg-brand-light-gray hover:bg-brand-light-gray/70 text-brand-muted-text py-3 rounded-xl font-bold transition text-xs"
           >
             {lang === 'en' ? 'Back to Search' : 'Rudi kwenye Kutafuta'}
           </button>
@@ -1992,7 +1996,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               <button
                 type="button"
                 onClick={() => setShowTrackModal(false)}
-                className="text-ink-muted hover:text-stone-600 font-bold text-lg cursor-pointer px-2 py-1 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg hover:bg-stone-100"
+                className="text-ink-muted hover:text-brand-dark-text font-bold text-lg cursor-pointer px-2 py-1 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg hover:bg-brand-light-gray"
                 aria-label={lang === 'sw' ? 'Funga' : 'Close'}
               >
                 <X size={18} aria-hidden="true" />
@@ -2000,7 +2004,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             </div>
 
             {trackError && (
-              <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-xs flex items-center gap-2">
+              <div className="bg-status-danger-surface border border-status-danger-border text-status-danger px-4 py-3 rounded-xl text-xs flex items-center gap-2">
                 <AlertCircle size={16} className="shrink-0" />
                 <span>{trackError}</span>
               </div>
@@ -2104,8 +2108,8 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 )}
 
                 {trackResult.claim.collection_code && (
-                  <div className="bg-emerald-100 border border-emerald-200 p-3 rounded-xl text-center">
-                    <p className="text-caption text-emerald-800 uppercase font-bold tracking-widest">Collection Verification Code</p>
+                  <div className="bg-status-success-surface border border-status-success-border p-3 rounded-xl text-center">
+                    <p className="text-caption text-status-success uppercase font-bold tracking-widest">Collection Verification Code</p>
                     <p className="text-2xl font-mono font-black text-primary-green tracking-widest mt-0.5">{trackResult.claim.collection_code}</p>
                   </div>
                 )}
