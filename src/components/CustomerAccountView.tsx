@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Loader2 } from 'lucide-react';
 import CustomerDashboard from './CustomerDashboard';
+import { Banner, Button, Input, Spinner } from './ui';
 
 interface Props {
   lang: 'en' | 'sw';
@@ -223,7 +223,11 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
   if (checking) {
     return (
       <div className="flex-grow flex items-center justify-center w-full py-24">
-        <Loader2 className="animate-spin text-primary-green" size={26} />
+        <Spinner
+          size={26}
+          label={t('Checking your session', 'Inathibitisha kipindi chako')}
+          className="text-primary-green"
+        />
       </div>
     );
   }
@@ -243,124 +247,127 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
     );
   }
 
-  const inputClass =
-    'mt-1.5 w-full h-11 px-3 rounded-lg border border-brand-border bg-white text-sm text-brand-dark-text focus:outline-none focus:ring-2 focus:ring-primary-green/40 focus:border-primary-green';
-  const primaryButtonClass =
-    'w-full h-11 rounded-lg bg-primary-green text-white text-sm font-semibold disabled:opacity-60 disabled:cursor-not-allowed transition-colors hover:opacity-90';
+  // The two mode controls are the only hand-styled controls left on this
+  // surface: they are a segmented switch rather than a Button, and they keep
+  // their existing tablist semantics. 44px tall so they meet the same
+  // touch-target floor as every other control in the account journey.
   const tabClass = (active: boolean) =>
-    'py-2 text-sm font-semibold rounded-md transition-colors cursor-pointer ' +
+    'min-h-11 inline-flex items-center justify-center py-2 text-sm font-bold rounded-lg transition-colors cursor-pointer ' +
     (active ? 'bg-white text-brand-dark-text shadow-sm' : 'text-brand-muted-text hover:text-brand-dark-text');
 
   return (
-    <div className="w-full flex-grow flex items-start justify-center px-4 py-8 sm:py-14">
-      <div className="w-full max-w-md">
-        <div className="mb-5">
-          <h1 className="text-xl sm:text-2xl font-bold text-brand-dark-text">
+    <div className="w-full flex-grow flex items-start justify-center px-4 py-8 sm:py-12">
+      <div className="w-full max-w-md space-y-4">
+        {/* ACCOUNT ENTRY CARD - eyebrow, one clear heading and the explanation
+            of why a session is needed, then the SAME register/sign-in flow this
+            surface already ran: the same modes, the same two steps, the same
+            endpoints, the same validation and the same messages. Only the
+            presentation moved onto the shared primitives. */}
+        <div className="bg-white border border-brand-border rounded-2xl p-5 sm:p-6">
+          <p className="text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">
+            {t('Return4me account', 'Akaunti ya Return4me')}
+          </p>
+          <h1 className="mt-1 text-xl sm:text-2xl font-extrabold tracking-tight text-brand-dark-text">
             {t('Your Return4me account', 'Akaunti yako ya Return4me')}
           </h1>
-          <p className="mt-1 text-sm text-brand-muted-text leading-relaxed">
+          <p className="mt-1.5 text-sm text-brand-muted-text leading-relaxed">
             {t(
               'A Return4me account is your persistent identity. It is separate from the ownership evidence you provide for a specific claim.',
               'Akaunti ya Return4me ni utambulisho wako wa kudumu. Ni tofauti na ushahidi wa umiliki unaotoa kwa claim mahususi.'
             )}
           </p>
-        </div>
 
-        <div className="bg-white border border-brand-border rounded-lg">
-            <div className="p-5 sm:p-6">
-              <div className="grid grid-cols-2 gap-1 p-1 bg-brand-light-gray rounded-lg" role="tablist">
-                <button type="button" role="tab" aria-selected={mode === 'register'} onClick={() => switchMode('register')} className={tabClass(mode === 'register')}>
-                  {t('Register', 'Sajili')}
-                </button>
-                <button type="button" role="tab" aria-selected={mode === 'login'} onClick={() => switchMode('login')} className={tabClass(mode === 'login')}>
-                  {t('Sign in', 'Ingia')}
-                </button>
-              </div>
+          <div className="mt-5 grid grid-cols-2 gap-1 p-1 bg-brand-light-gray rounded-xl" role="tablist">
+            <button type="button" role="tab" aria-selected={mode === 'register'} onClick={() => switchMode('register')} className={tabClass(mode === 'register')}>
+              {t('Register', 'Sajili')}
+            </button>
+            <button type="button" role="tab" aria-selected={mode === 'login'} onClick={() => switchMode('login')} className={tabClass(mode === 'login')}>
+              {t('Sign in', 'Ingia')}
+            </button>
+          </div>
 
-              {step === 'details' ? (
-                <form onSubmit={requestCode} className="mt-5 space-y-4" noValidate>
-                  {mode === 'register' && (
-                    <div>
-                      <label htmlFor="customer-name" className="block text-sm font-semibold text-brand-dark-text">
-                        {t('Full name', 'Jina kamili')}
-                      </label>
-                      <input id="customer-name" type="text" value={fullName} onChange={(e) => setFullName(e.target.value)}
-                        autoComplete="name" maxLength={120} className={inputClass}
-                        placeholder={t('e.g. Wanjiku Kamau', 'k.m. Wanjiku Kamau')} />
-                    </div>
-                  )}
-
-                  <div>
-                    <label htmlFor="customer-phone" className="block text-sm font-semibold text-brand-dark-text">
-                      {t('M-Pesa phone number', 'Nambari ya simu ya M-Pesa')}
-                    </label>
-                    <input id="customer-phone" type="tel" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)}
-                      autoComplete="tel" maxLength={16} className={inputClass} placeholder="07XX XXX XXX" />
-                    <p className="mt-1.5 text-xs text-brand-muted-text leading-relaxed">
-                      {t(
-                        "We'll text a one-time verification code to this number.",
-                        'Tutatuma msimbo wa uthibitisho wa mara moja kwa nambari hii kwa SMS.'
-                      )}
-                    </p>
-                  </div>
-
-                  {notice && <InlineMessage kind="info" text={notice} />}
-                  {error && <InlineMessage kind="error" text={error} />}
-
-                  <button type="submit" disabled={busy} className={primaryButtonClass}>
-                    {busy
-                      ? t('Sending code…', 'Inatuma msimbo…')
-                      : t('Send verification code', 'Tuma msimbo wa uthibitisho')}
-                  </button>
-                </form>
-              ) : (
-                <form onSubmit={verifyCode} className="mt-5 space-y-4" noValidate>
-                  {notice && <InlineMessage kind="info" text={notice} />}
-
-                  <div>
-                    <label htmlFor="customer-code" className="block text-sm font-semibold text-brand-dark-text">
-                      {t('Verification code', 'Msimbo wa uthibitisho')}
-                    </label>
-                    <input id="customer-code" type="text" inputMode="numeric" value={code}
-                      onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
-                      autoComplete="one-time-code" maxLength={6} className={inputClass} placeholder="123456" />
-                    <p className="mt-1.5 text-xs text-brand-muted-text leading-relaxed">
-                      {t('We sent it to', 'Tuliituma kwa')} {formatPhoneForDisplay(phone)}
-                    </p>
-                  </div>
-
-                  {error && <InlineMessage kind="error" text={error} />}
-
-                  <button type="submit" disabled={busy} className={primaryButtonClass}>
-                    {busy
-                      ? t('Verifying…', 'Inathibitisha…')
-                      : t('Verify and continue', 'Thibitisha na uendelee')}
-                  </button>
-
-                  <button type="button" onClick={() => { setStep('details'); setCode(''); resetMessages(); }}
-                    className="w-full text-xs font-semibold text-brand-muted-text hover:text-brand-dark-text cursor-pointer">
-                    {t('Use a different number', 'Tumia nambari nyingine')}
-                  </button>
-                </form>
+          {step === 'details' ? (
+            <form onSubmit={requestCode} className="mt-5 space-y-4" noValidate>
+              {mode === 'register' && (
+                <Input
+                  id="customer-name"
+                  label={t('Full name', 'Jina kamili')}
+                  type="text"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  autoComplete="name"
+                  maxLength={120}
+                  placeholder={t('e.g. Wanjiku Kamau', 'k.m. Wanjiku Kamau')}
+                />
               )}
-            </div>
+
+              <Input
+                id="customer-phone"
+                label={t('M-Pesa phone number', 'Nambari ya simu ya M-Pesa')}
+                type="tel"
+                inputMode="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                autoComplete="tel"
+                maxLength={16}
+                placeholder="07XX XXX XXX"
+                hint={t(
+                  "We'll text a one-time verification code to this number.",
+                  'Tutatuma msimbo wa uthibitisho wa mara moja kwa nambari hii kwa SMS.'
+                )}
+              />
+
+              {notice && <Banner kind="info">{notice}</Banner>}
+              {error && <Banner kind="error">{error}</Banner>}
+
+              <Button type="submit" variant="primary" size="lg" loading={busy} className="w-full">
+                {busy
+                  ? t('Sending code…', 'Inatuma msimbo…')
+                  : t('Send verification code', 'Tuma msimbo wa uthibitisho')}
+              </Button>
+            </form>
+          ) : (
+            <form onSubmit={verifyCode} className="mt-5 space-y-4" noValidate>
+              {notice && <Banner kind="info">{notice}</Banner>}
+
+              <Input
+                id="customer-code"
+                label={t('Verification code', 'Msimbo wa uthibitisho')}
+                type="text"
+                inputMode="numeric"
+                value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+                autoComplete="one-time-code"
+                maxLength={6}
+                placeholder="123456"
+                hint={t('We sent it to', 'Tuliituma kwa') + ' ' + formatPhoneForDisplay(phone)}
+              />
+
+              {error && <Banner kind="error">{error}</Banner>}
+
+              <Button type="submit" variant="primary" size="lg" loading={busy} className="w-full">
+                {busy
+                  ? t('Verifying…', 'Inathibitisha…')
+                  : t('Verify and continue', 'Thibitisha na uendelee')}
+              </Button>
+
+              <Button
+                type="button"
+                variant="ghost"
+                size="md"
+                onClick={() => { setStep('details'); setCode(''); resetMessages(); }}
+                className="w-full"
+              >
+                {t('Use a different number', 'Tumia nambari nyingine')}
+              </Button>
+            </form>
+          )}
         </div>
 
-        <button type="button" onClick={onExit} className="mt-4 text-xs font-semibold text-primary-green hover:underline cursor-pointer">
+        <Button type="button" variant="ghost" size="md" onClick={onExit} className="w-full sm:w-auto">
           {t('Back to Return4me', 'Rudi Return4me')}
-        </button>
+        </Button>
       </div>
-    </div>
-  );
-}
-
-function InlineMessage({ kind, text }: { kind: 'error' | 'info'; text: string }) {
-  const cls = kind === 'error'
-    ? 'border-red-200 bg-red-50 text-red-700'
-    : 'border-brand-border bg-brand-light-gray text-brand-dark-text';
-  return (
-    <div className={`mt-4 rounded-md border px-3 py-2 text-xs leading-relaxed ${cls}`} role={kind === 'error' ? 'alert' : 'status'}>
-      {text}
     </div>
   );
 }

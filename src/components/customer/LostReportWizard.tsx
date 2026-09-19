@@ -311,7 +311,7 @@ export default function LostReportWizard({
   const isLastStep = step === LOST_REPORT_WIZARD_STEPS.length - 1;
 
   return (
-    <form onSubmit={handleSubmit} noValidate className="space-y-6">
+    <form onSubmit={handleSubmit} noValidate className="space-y-6" aria-busy={submitting}>
       <Stepper
         steps={stepperSteps}
         currentStep={step}
@@ -325,7 +325,7 @@ export default function LostReportWizard({
       {step === 0 && (
         <div className="space-y-5">
           <div>
-            <h3 className="text-sm font-extrabold text-brand-dark-text">
+            <h3 className="text-base sm:text-lg font-extrabold tracking-tight text-brand-dark-text">
               {t('What did you lose?', 'Ulipoteza nini?')}
             </h3>
             <p className="mt-1 text-xs text-brand-muted-text leading-relaxed">
@@ -405,7 +405,7 @@ export default function LostReportWizard({
       {step === 1 && (
         <div className="space-y-5">
           <div>
-            <h3 className="text-sm font-extrabold text-brand-dark-text">
+            <h3 className="text-base sm:text-lg font-extrabold tracking-tight text-brand-dark-text">
               {t('Describe the item', 'Eleza kitu')}
             </h3>
             <p className="mt-1 text-xs text-brand-muted-text leading-relaxed">
@@ -415,6 +415,13 @@ export default function LostReportWizard({
               )}
             </p>
           </div>
+
+          {/* Named clusters so the step reads as groups of related questions.
+              The fields, their order, their labels and their validation are
+              unchanged - only the grouping labels are new. */}
+          <p className="text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">
+            {t('Item details', 'Maelezo ya kitu')}
+          </p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input
@@ -451,6 +458,10 @@ export default function LostReportWizard({
             />
           </div>
 
+          <p className="text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">
+            {t('Notes', 'Maelezo ya ziada')}
+          </p>
+
           <Textarea
             label={t('Description (optional)', 'Maelezo (si lazima)')}
             value={form.description}
@@ -486,7 +497,7 @@ export default function LostReportWizard({
       {step === 2 && (
         <div className="space-y-5">
           <div>
-            <h3 className="text-sm font-extrabold text-brand-dark-text">
+            <h3 className="text-base sm:text-lg font-extrabold tracking-tight text-brand-dark-text">
               {t('Where and when did you lose it?', 'Ulipopoteza na lini?')}
             </h3>
             <p className="mt-1 text-xs text-brand-muted-text leading-relaxed">
@@ -496,6 +507,10 @@ export default function LostReportWizard({
               )}
             </p>
           </div>
+
+          <p className="text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">
+            {t('Where you lost it', 'Palipopotea')}
+          </p>
 
           <Select
             label={t('County', 'Kaunti')}
@@ -546,6 +561,10 @@ export default function LostReportWizard({
             placeholder={t('e.g. near Sarit Centre', 'mfano karibu na Sarit Centre')}
           />
 
+          <p className="text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">
+            {t('When you lost it', 'Ilipotea lini')}
+          </p>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input
               label={t('Lost from', 'Ilipotea kuanzia')}
@@ -589,7 +608,7 @@ export default function LostReportWizard({
       {step === 3 && (
         <div className="space-y-5">
           <div>
-            <h3 className="text-sm font-extrabold text-brand-dark-text">
+            <h3 className="text-base sm:text-lg font-extrabold tracking-tight text-brand-dark-text">
               {t('Check your report', 'Hakiki ripoti yako')}
             </h3>
             <p className="mt-1 text-xs text-brand-muted-text leading-relaxed">
