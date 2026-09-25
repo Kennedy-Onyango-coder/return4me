@@ -72,3 +72,88 @@ describe('backend source under src/ is not exposed via the /src static route', (
     expect(codeOnly).not.toContain('path.join(process.cwd(), req.path)');
   });
 });
+
+// ---------------------------------------------------------------------------
+// SEC-2B-04 — '/src/routes/' must be in the denylist
+// ---------------------------------------------------------------------------
+// The six backend-only route modules (adminClaims, adminDisputes,
+// adminLostReports, customerClaims, lostReports, publicItems) live under
+// src/routes/ and were NOT covered by the four original prefixes. They are
+// imported only by server.ts and referenced by no frontend file, so no browser
+// sourcemap can ever need them — the same test the comment above applies to
+// src/db/ and src/services/. Without the entry, production served
+// GET /src/routes/adminClaims.ts (admin API shape + permission-guard wiring)
+// as plain text.
+//
+// These assertions read the SHIPPED ARRAY and apply the SHIPPED predicate to
+// real request paths, enumerating the real files on disk — so a future route
+// module cannot be added outside the denylist without failing here. The
+// predicate itself is pinned to the middleware that applies it, so the data
+// assertions describe real behaviour rather than a re-implementation.
+describe('SEC-2B-04: backend route modules are denied by the production static denylist', () => {
+  const repoRoot = path.resolve(__dirname, '../..');
+  const routesDir = path.join(repoRoot, 'src', 'routes');
+
+  /** The denylist array exactly as it ships, parsed from server.ts. */
+  function denylistPrefixes(): string[] {
+    const start = serverTs.indexOf('const srcBackendPathPrefixes = [');
+    expect(start, 'srcBackendPathPrefixes declaration not found').toBeGreaterThan(-1);
+    const end = serverTs.indexOf('];', start);
+    expect(end).toBeGreaterThan(start);
+    const literal = serverTs.slice(start, end + 2);
+    return [...literal.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  }
+
+  /** The comparison the shipped middleware performs. */
+  function isDenied(requestPath: string, prefixes: string[]): boolean {
+    return prefixes.some((prefix) => requestPath === prefix || requestPath.startsWith(prefix));
+  }
+
+  it('the shipped middleware applies exactly the predicate these assertions model', () => {
+    const start = serverTs.indexOf("app.use('/src', (req, res, next) => {");
+    expect(start).toBeGreaterThan(-1);
+    const body = serverTs.slice(start, start + 400);
+    expect(body).toMatch(
+      /srcBackendPathPrefixes\.some\(prefix => req\.path === prefix \|\| req\.path\.startsWith\(prefix\)\)/,
+    );
+    // 404, not 403 — the response must not confirm a backend layer exists.
+    expect(body).toMatch(/res\.status\(404\)\.send\('Not Found'\)/);
+  });
+
+  it('every module actually present in src/routes/ is denied', () => {
+    const prefixes = denylistPrefixes();
+    expect(prefixes, "'/src/routes/' must be in the denylist").toContain('/src/routes/');
+
+    const modules = fs.readdirSync(routesDir).filter((f) => f.endsWith('.ts'));
+    expect(modules.length, 'src/routes/ must contain route modules').toBeGreaterThan(0);
+    for (const file of modules) {
+      expect(isDenied(`/src/routes/${file}`, prefixes), `${file} must be denied`).toBe(true);
+    }
+  });
+
+  it('the representative backend route paths named by the audit are all denied', () => {
+    const prefixes = denylistPrefixes();
+    const audited = [
+      '/src/routes/adminClaims.ts',
+      '/src/routes/adminDisputes.ts',
+      '/src/routes/adminLostReports.ts',
+      '/src/routes/customerClaims.ts',
+      '/src/routes/lostReports.ts',
+      '/src/routes/publicItems.ts',
+    ];
+    for (const requestPath of audited) {
+      expect(isDenied(requestPath, prefixes), `${requestPath} must be denied`).toBe(true);
+    }
+    // The four pre-existing prefixes must not have been dropped in the process.
+    for (const preExisting of ['/src/server.ts', '/src/db/schema.ts', '/src/services/auth.ts', '/src/__tests__/setup.testEnv.ts']) {
+      expect(isDenied(preExisting, prefixes), `${preExisting} must still be denied`).toBe(true);
+    }
+  });
+
+  it('frontend source stays reachable — only the backend directory was closed', () => {
+    const prefixes = denylistPrefixes();
+    for (const frontend of ['/src/App.tsx', '/src/main.tsx', '/src/types.ts', '/src/components/Navbar.tsx']) {
+      expect(isDenied(frontend, prefixes), `${frontend} must remain served`).toBe(false);
+    }
+  });
+});

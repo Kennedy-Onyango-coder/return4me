@@ -65,7 +65,12 @@ describe('GET /api/claims/:id/status is a minimal, public-safe status DTO', () =
       // PHASE 16 — /lookup now resolves the customer session FIRST; the
       // discrete limiter is unchanged and still applied behind that boundary.
       "app.post('/api/claims/lookup', requireCustomerAuth, claimGuessLimiter,",
-      "app.post('/api/claims/:id/rate', claimGuessLimiter,",
+      // PHASE 16.1 Batch 2A — /rate gained the same customer authentication
+      // boundary as /lookup (it is the other owner-journey claim route, and it
+      // writes to a real agent's public reputation, so it must not be reachable
+      // anonymously). The pinned contract is untouched: the discrete limiter is
+      // still applied to this route, now behind that boundary.
+      "app.post('/api/claims/:id/rate', requireCustomerAuth, claimGuessLimiter,",
     ];
     for (const route of discreteRoutes) {
       expect(serverTs, `discrete limit removed from ${route}`).toContain(route);

@@ -264,15 +264,18 @@ describe('no className pairs text-white with an unreadable Return4me background'
   });
 });
 
-describe('the shared Button primitive uses the text-safe accent', () => {
+describe('the shared Button primitive uses text-safe semantic accents', () => {
   const buttonTsx = fs.readFileSync(path.resolve(repoRoot, 'src/components/ui/Button.tsx'), 'utf8');
+  const css = fs.readFileSync(path.resolve(repoRoot, 'src/index.css'), 'utf8');
 
-  it('the accent variant no longer paints white text on brand orange', () => {
-    const accentLine = buttonTsx.split('\n').find((line) => line.includes('bg-accent-'));
-    expect(accentLine, 'no accent button variant found in Button.tsx').toBeTruthy();
-    expect(accentLine).toContain('bg-accent-strong');
-    expect(accentLine).toContain('hover:bg-accent-strong-hover');
-    expect(accentLine).not.toContain('bg-accent-orange');
-    expect(accentLine).not.toContain('hover:bg-accent-hover');
+  it('uses appearance accent/foreground pairs in both light and dark scopes', () => {
+    const accentLine = buttonTsx.split('\n').find((line) => line.includes('bg-[var(--appearance-accent)]'));
+    expect(accentLine, 'no semantic accent button variant found in Button.tsx').toBeTruthy();
+    expect(accentLine).toContain('text-[var(--appearance-accent-foreground)]');
+    expect(accentLine).not.toContain('text-white');
+    expect(css).toContain('--appearance-accent: #B35A00');
+    expect(css).toContain('--appearance-accent-foreground: #FFFFFF');
+    expect(css).toContain('--appearance-accent: #F0A44A');
+    expect(css).toContain('--appearance-accent-foreground: #211305');
   });
 });

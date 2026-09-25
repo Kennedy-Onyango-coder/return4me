@@ -27,7 +27,15 @@ describe('POST /api/claims/:id/rate is rate-limited, status-gated, and dedup-gua
   const body = routeBody('post', '/api/claims/:id/rate');
 
   it('is rate-limited with claimGuessLimiter', () => {
-    expect(serverTs).toMatch(/app\.post\('\/api\/claims\/:id\/rate',\s*claimGuessLimiter,/);
+    // PHASE 16.1 Batch 2A — the pinned CONTRACT is unchanged: this route still
+    // carries the discrete claimGuessLimiter. What changed is that the customer
+    // authentication boundary (requireCustomerAuth — the same middleware
+    // /api/claims/lookup uses, resolving the same httpOnly cookie session) is
+    // now mounted AHEAD of the limiter, so the registration prefix necessarily
+    // moved. The assertion below was updated for that reason only; the limiter
+    // is still applied rather than replaced, which the second assertion pins.
+    expect(serverTs).toMatch(/app\.post\('\/api\/claims\/:id\/rate',\s*requireCustomerAuth,\s*claimGuessLimiter,/);
+    expect(serverTs).toMatch(/app\.post\('\/api\/claims\/:id\/rate',[^\n]*claimGuessLimiter,/);
   });
 
   it('requires the claim status to indicate handover has actually occurred', () => {

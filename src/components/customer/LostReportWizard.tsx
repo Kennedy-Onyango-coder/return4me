@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { AlertCircle, Check, MapPin, Package } from 'lucide-react';
 import { Banner, Button, Input, Select, Stepper, Textarea } from '../ui';
 import { countiesByUxGroup } from '../../config/kenyaCounties';
+import { administrativeUnitsForCounty } from '../../config/kenyaAdministrativeUnits';
 import {
   LOST_REPORT_FIELD_LIMITS,
   LOST_REPORT_FIELD_MINIMUMS,
@@ -63,6 +64,7 @@ interface FormState {
   description: string;
   distinctiveMarks: string;
   county: string;
+  administrativeUnitId: string;
   locationArea: string;
   locationLandmark: string;
   lostAtFrom: string;
@@ -80,6 +82,7 @@ const EMPTY_FORM: FormState = {
   description: '',
   distinctiveMarks: '',
   county: '',
+  administrativeUnitId: '',
   locationArea: '',
   locationLandmark: '',
   lostAtFrom: '',
@@ -132,6 +135,9 @@ function validateStep(step: number, form: FormState, t: (en: string, sw: string)
   if (step === 2) {
     if (!form.county) {
       return t('Please choose the county where you lost it.', 'Tafadhali chagua kaunti ulipopoteza.');
+    }
+    if (!form.administrativeUnitId) {
+      return t('Please choose the sub-county where you lost it.', 'Tafadhali chagua kaunti ndogo ulipopoteza.');
     }
     const area = form.locationArea.trim();
     if (area.length < LOST_REPORT_FIELD_MINIMUMS.locationArea) {
@@ -280,6 +286,7 @@ export default function LostReportWizard({
     const payload: LostReportCreatePayload = {
       categoryId: form.categoryId,
       county: form.county,
+      administrativeUnitId: form.administrativeUnitId,
       locationArea: form.locationArea.trim(),
       locationLandmark: form.locationLandmark.trim() || null,
       lostAtFrom: localInputToIso(form.lostAtFrom) as string,
@@ -308,6 +315,7 @@ export default function LostReportWizard({
   const stepperSteps = LOST_REPORT_WIZARD_STEPS.map((s) => ({ label: sw ? s.sw : s.en }));
   const nowLocal = toLocalInputValue(new Date());
   const minLocal = toLocalInputValue(MIN_LOST_AT);
+  const administrativeUnits = administrativeUnitsForCounty(form.county);
   const isLastStep = step === LOST_REPORT_WIZARD_STEPS.length - 1;
 
   return (
@@ -516,7 +524,10 @@ export default function LostReportWizard({
             label={t('County', 'Kaunti')}
             required
             value={form.county}
-            onChange={(e) => set('county', e.target.value)}
+            onChange={(e) => {
+              set('county', e.target.value);
+              set('administrativeUnitId', '');
+            }}
             disabled={submitting}
           >
             <option value="">{t('Select a county', 'Chagua kaunti')}</option>
@@ -528,6 +539,20 @@ export default function LostReportWizard({
                   </option>
                 ))}
               </optgroup>
+            ))}
+          </Select>
+
+          <Select
+            label={t('Sub-county', 'Kaunti ndogo')}
+            required
+            value={form.administrativeUnitId}
+            onChange={(e) => set('administrativeUnitId', e.target.value)}
+            disabled={submitting || !form.county}
+            hint={t('Select county first, then choose its sub-county.', 'Chagua kaunti kwanza, kisha chagua kaunti ndogo yake.')}
+          >
+            <option value="">{form.county ? t('Select a sub-county', 'Chagua kaunti ndogo') : t('Select county first', 'Chagua kaunti kwanza')}</option>
+            {administrativeUnits.map((unit) => (
+              <option key={unit.id} value={unit.id}>{unit.name}</option>
             ))}
           </Select>
 
@@ -656,7 +681,7 @@ export default function LostReportWizard({
             <SummaryRow
               icon={MapPin}
               label={t('Where you lost it', 'Palipopotea')}
-              value={[form.locationArea.trim(), form.locationLandmark.trim(), form.county]
+              value={[form.locationArea.trim(), form.locationLandmark.trim(), administrativeUnits.find((unit) => unit.id === form.administrativeUnitId)?.name, form.county]
                 .filter(Boolean)
                 .join(', ')}
             />

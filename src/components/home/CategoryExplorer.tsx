@@ -99,17 +99,29 @@ export default function CategoryExplorer({ categories, lang, onReportLost, onRep
         </div>
       </div>
 
-      {/* Live region: the result count is announced as the query changes. */}
+      {/* Live region: the result count is announced as the query changes.
+          PHASE 16.1 BATCH 1C — when the disclosure is hiding groups, the summary
+          now says so, so the announced totals and the rendered content agree (it
+          previously announced all groups while only the first four were in the
+          DOM). The clause is added ONLY when something is actually hidden, and it
+          names the button by its own label ("Show all …" / "Onyesha makundi
+          yote …") so the instruction points at the real control. */}
       <p id="category-explorer-summary" aria-live="polite" className="mt-3 text-small text-ink-muted">
         {isSearching
           ? (en
             ? `${totalCategories} matching ${totalCategories === 1 ? 'category' : 'categories'} in ${groups.length} ${groups.length === 1 ? 'group' : 'groups'}.`
             : `Kategoria ${totalCategories} zinazolingana katika makundi ${groups.length}.`)
           : (en
-            ? `${totalCategories} item types across ${groups.length} groups.`
-            : `Aina ${totalCategories} za vitu katika makundi ${groups.length}.`)}
+            ? `${totalCategories} item types across ${groups.length} groups.${hiddenGroupCount > 0 ? ` ${visibleGroups.length} of ${groups.length} groups shown — use Show all to see the rest.` : ''}`
+            : `Aina ${totalCategories} za vitu katika makundi ${groups.length}.${hiddenGroupCount > 0 ? ` Makundi ${visibleGroups.length} kati ya ${groups.length} yameonyeshwa — tumia Onyesha makundi yote kuona mengine.` : ''}`)}
       </p>
 
+      {/* PHASE 16.1 BATCH 1C — the region the "Show all" disclosure controls.
+          It carries a stable id (same `category-explorer-*` convention as the
+          search input and the live region) so the button's `aria-controls`
+          resolves to a real element. Hidden groups remain OMITTED from the DOM —
+          no CSS-only hiding and no aria-hidden — so this id always points at the
+          list that is actually rendered. */}
       {groups.length === 0 ? (
         <div className="mt-6 rounded-xl border border-line-subtle bg-white p-6 text-center">
           <p className="text-sm text-ink-muted">
@@ -120,7 +132,7 @@ export default function CategoryExplorer({ categories, lang, onReportLost, onRep
           </Button>
         </div>
       ) : (
-        <ul className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <ul id="category-explorer-groups" className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
           {visibleGroups.map((group) => {
             const Icon = GROUP_ICONS[group.key] ?? Package;
             return (
@@ -154,7 +166,19 @@ export default function CategoryExplorer({ categories, lang, onReportLost, onRep
 
       {hiddenGroupCount > 0 && (
         <div className="mt-5">
-          <Button variant="outline" size="md" onClick={() => setShowAll(true)}>
+          {/* PHASE 16.1 BATCH 1C — the disclosure's state is now announced.
+              `aria-expanded` reflects `showAll` and `aria-controls` points at the
+              group list above, so a screen-reader user learns both that more
+              groups exist and whether they have been revealed. No focus
+              management is added: activating this simply renders the remaining
+              groups, which is the existing behaviour. */}
+          <Button
+            variant="outline"
+            size="md"
+            onClick={() => setShowAll(true)}
+            aria-expanded={showAll}
+            aria-controls="category-explorer-groups"
+          >
             {en ? `Show all ${groups.length} groups` : `Onyesha makundi yote ${groups.length}`}
             <ChevronDown size={16} aria-hidden={true} />
           </Button>

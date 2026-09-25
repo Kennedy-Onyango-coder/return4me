@@ -48,6 +48,22 @@ interface AdminViewProps {
   lang: 'en' | 'sw';
   token: string | null;
   setToken: (token: string | null) => void;
+  /**
+   * PHASE 16.1 BATCH 1A — invoked AFTER a category lifecycle mutation actually
+   * succeeds (create, update, activate/deactivate, delete).
+   *
+   * WHY: the public/reference category list lives in App (it feeds the homepage
+   * explorer and the Finder/Owner selects) and App fetches it once per mount.
+   * Without this callback an administrator could create a category, return to
+   * the homepage, and still see the pre-creation list until a full page reload.
+   *
+   * The console keeps its OWN local category state (needed for admin item
+   * correction) and continues to refresh that directly; this callback exists only
+   * to synchronise the App-level list, so no global store is introduced. It is
+   * fired only on a successful mutation — never on a failed one — and is never
+   * fired for an unrelated admin operation.
+   */
+  onCategoriesChanged?: () => void;
 }
 
 // Presentational panel for ONE claimant in a dispute.
@@ -204,7 +220,7 @@ const CONSOLE_SECTIONS: Record<ConsoleSectionKey, { en: ConsoleSectionCopy; sw: 
   },
 };
 
-export default function AdminView({ lang, token, setToken }: AdminViewProps) {
+export default function AdminView({ lang, token, setToken, onCategoriesChanged }: AdminViewProps) {
   const t = translations[lang];
 
   // §10 — the active administrator, derived from the session on every render so
@@ -658,6 +674,10 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
       const catRes = await fetch('/api/categories');
       const catData = await catRes.json();
       setCategories(catData);
+      // PHASE 16.1 BATCH 1A — create OR update succeeded, so the App-level
+      // (public/reference) list is now stale: refresh it. Fired only here, after
+      // the server confirmed the mutation, so a failed save never triggers it.
+      onCategoriesChanged?.();
     } catch (e: any) {
       setDataError(e.message);
     } finally {
@@ -695,11 +715,72 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
           const catRes = await fetch('/api/categories');
           const catData = await catRes.json();
           setCategories(catData);
+          // PHASE 16.1 BATCH 1A — the delete succeeded; the App-level list must
+          // drop the removed category. Only reached after res.ok.
+          onCategoriesChanged?.();
         } catch (e: any) {
           setDataError(e.message);
         }
       }
     });
+  };
+
+  /**
+   * CAT-04 (Phase 16.1 Batch 2) — activate / deactivate a category.
+   *
+   * A one-click LIFECYCLE action against
+   * PUT /api/admin/categories/:id/active. The SERVER is the authority — this
+   * never hides anything client-side — and the endpoint writes exactly one
+   * column, so deactivating a category can never disturb its names, fees or any
+   * other setting an admin has configured.
+   *
+   * The public category list is refreshed afterwards because it is active-only:
+   * a deactivated category disappears from every "choose a category" surface
+   * (Finder, Owner, lost reports, Agent verification) while every historical
+   * record that references it stays exactly as it is.
+   */
+  const handleToggleCategoryActive = async (id: string, nameEn: string, nextActive: boolean) => {
+    setActionSuccess('');
+    setActionWarning('');
+    setDataError('');
+    setCatSaving(true);
+    try {
+      const res = await fetch(`/api/admin/categories/${id}/active`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ is_active: nextActive }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to update the category lifecycle state.');
+      }
+
+      setActionSuccess(nextActive
+        ? (lang === 'en' ? `"${nameEn}" is now active.` : `"${nameEn}" sasa inatumika.`)
+        : (lang === 'en'
+            ? `"${nameEn}" is now inactive — it can no longer be chosen for new reports. Existing records are unaffected.`
+            : `"${nameEn}" haitumiki tena — haiwezi kuchaguliwa kwa ripoti mpya. Rekodi zilizopo hazibadiliki.`));
+
+      fetchAdminCategories();
+      // Keep the (active-only) public list in step.
+      const catRes = await fetch('/api/categories');
+      const catData = await catRes.json();
+      setCategories(catData);
+      // PHASE 16.1 BATCH 1A — deactivation/reactivation changed which categories
+      // are actually selectable, so the App-level list must be refreshed too;
+      // otherwise a deactivated category would keep appearing in the homepage
+      // explorer and the Finder/Owner selects until a reload. Only reached after
+      // res.ok.
+      onCategoriesChanged?.();
+    } catch (e: any) {
+      setDataError(e.message);
+    } finally {
+      setCatSaving(false);
+    }
   };
 
   useEffect(() => {
@@ -1622,9 +1703,12 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
       {!token && (
         <div className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm max-w-md mx-auto space-y-6">
           <div className="text-center space-y-2">
-            <div className="w-12 h-12 bg-stone-900 text-white rounded-full flex items-center justify-center mx-auto">
-              <ShieldCheck size={24} />
-            </div>
+            <img
+              src="/assets/logo_wordmark_transparent.png"
+              alt="Return4me"
+              className="mx-auto h-12 w-auto max-w-full object-contain sm:h-14"
+              referrerPolicy="no-referrer"
+            />
             <h1 className="text-2xl font-extrabold text-stone-950">Admin Authentication</h1>
             <p className="text-stone-500 text-xs max-w-sm mx-auto">Access restricted strictly to platform executives and vetted managers.</p>
           </div>
@@ -3168,22 +3252,45 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                         id="review-category"
                         value={reviewCategoryId}
                         onChange={(e) => setReviewCategoryId(e.target.value)}
-                        disabled={categoriesLoading}
+                        disabled={adminCategoriesLoading}
                       >
-                          {categoriesLoading ? (
+                          {adminCategoriesLoading ? (
                             <option value="">Loading categories...</option>
                           ) : (
                             (() => {
-                              const validCategories = categories.filter(cat => cat.name_en && cat.name_sw);
-                              const invalidCount = categories.length - validCategories.length;
+                              // CAT-04 / F-5 — this selector must be driven by the ADMIN
+                              // category dataset (every category, active or inactive), not
+                              // by the public active-only list. The review endpoint
+                              // deliberately accepts an inactive category so a legacy item
+                              // can be preserved, and the panel must be able to show that
+                              // category. Sourcing it from the public list left an inactive
+                              // current category with no matching <option>: the browser then
+                              // rendered the control blank while the form still submitted
+                              // the (correct) state value — a display/state mismatch.
+                              const selectable = adminCategories.filter(cat => cat.name_en && cat.name_sw);
+                              const invalidCount = adminCategories.length - selectable.length;
                               if (invalidCount > 0) {
                                 console.warn(`[AdminView] Filtered out ${invalidCount} incomplete categories from rendering.`);
                               }
-                              return validCategories.map(cat => (
-                                <option key={cat.id} value={cat.id}>
-                                  {cat.name_en}
-                                </option>
-                              ));
+                              // Belt and braces: if the item's current category is not in
+                              // the fetched list at all, still render it so the control can
+                              // never misrepresent what is about to be submitted.
+                              const currentMissing = reviewCategoryId
+                                && !selectable.some((cat: any) => cat.id === reviewCategoryId);
+                              return (
+                                <>
+                                  {currentMissing && (
+                                    <option key={reviewCategoryId} value={reviewCategoryId}>
+                                      {`${reviewCategoryId} — not in the category list`}
+                                    </option>
+                                  )}
+                                  {selectable.map(cat => (
+                                    <option key={cat.id} value={cat.id}>
+                                      {cat.is_active === false ? `${cat.name_en} — Inactive` : cat.name_en}
+                                    </option>
+                                  ))}
+                                </>
+                              );
                             })()
                           )}
                       </Select>
@@ -3912,6 +4019,11 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                                   {cat.is_admin_modified && (
                                     <Badge variant="warning">Customized</Badge>
                                   )}
+                                  {/* CAT-04 — an administrator must be able to IDENTIFY a
+                                      deactivated category at a glance. */}
+                                  {!cat.is_active && (
+                                    <Badge variant="neutral">{lang === 'en' ? 'Inactive' : 'Haitumiki'}</Badge>
+                                  )}
                                 </div>
                                 <p className="text-brand-muted-text text-xs">{cat.name_sw}</p>
                               </td>
@@ -3938,15 +4050,36 @@ export default function AdminView({ lang, token, setToken }: AdminViewProps) {
                                   >
                                     Edit / Hariri
                                   </Button>
-                                  <Button
-                                    variant="danger"
-                                    size="sm"
-                                    disabled={cat.item_count > 0}
-                                    onClick={() => handleDeleteCategory(cat.id, cat.name_en)}
-                                    title={cat.item_count > 0 ? `Cannot delete category because ${cat.item_count} item(s) are currently categorized under it.` : 'Delete Category'}
-                                  >
-                                    Delete / Futa
-                                  </Button>
+                                  {/* CAT-06 — the lifecycle action depends on the kind of
+                                      category. A canonical seeded category can never be
+                                      physically deleted (the server refuses it with a 409),
+                                      so the console offers the action that is actually
+                                      legal for it: deactivate/reactivate. A custom
+                                      category keeps the existing delete, still guarded by
+                                      the server's reference check. */}
+                                  {cat.is_canonical ? (
+                                    <Button
+                                      variant={cat.is_active ? 'outline' : 'primary'}
+                                      size="sm"
+                                      disabled={catSaving}
+                                      onClick={() => handleToggleCategoryActive(cat.id, cat.name_en, !cat.is_active)}
+                                      title={cat.is_active
+                                        ? 'Canonical category — it can be deactivated but never deleted. Deactivating keeps every existing record valid while removing it from all new-report selectors.'
+                                        : 'Reactivate this canonical category so it can be chosen for new reports again.'}
+                                    >
+                                      {cat.is_active ? 'Deactivate / Zima' : 'Reactivate / Washa'}
+                                    </Button>
+                                  ) : (
+                                    <Button
+                                      variant="danger"
+                                      size="sm"
+                                      disabled={cat.item_count > 0}
+                                      onClick={() => handleDeleteCategory(cat.id, cat.name_en)}
+                                      title={cat.item_count > 0 ? `Cannot delete category because ${cat.item_count} item(s) are currently categorized under it.` : 'Delete Category'}
+                                    >
+                                      Delete / Futa
+                                    </Button>
+                                  )}
                                 </div>
                               </td>
                             </tr>

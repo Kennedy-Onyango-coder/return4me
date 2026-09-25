@@ -20,7 +20,7 @@ const server = http.createServer((req, res) => {
   if (url.pathname.startsWith('/api/')) {
     res.setHeader('Content-Type', 'application/json');
     const responses = {
-      '/api/categories': categories, '/api/regions': ['Nairobi'],
+      '/api/categories': categories,
       '/api/stats': { activeAgentsCount: 0 }, '/api/items/search': [],
       '/api/dev/test-mode': { testModeEnabled: false },
       // PHASE 16 — Track My Claim is now a customer-authenticated action, so

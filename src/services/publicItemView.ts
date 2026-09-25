@@ -1,4 +1,6 @@
-// Hand-built PUBLIC DTO for a found item.
+import { administrativeUnitById } from '../config/kenyaAdministrativeUnits';
+
+// Hand-built, whitelisted DTO for a found item.
 //
 // WHY THIS EXISTS (Phase 7B): the public item-detail page (/item/:id) needs the
 // exact same "recognition clues only" representation the masked Owner search
@@ -15,6 +17,11 @@
 // latitude, longitude, locked_*_fee, declared_value, assigned_agent_id,
 // rejection_reason, verification/audit columns — and, for sensitive documents,
 // the photo and any free-text description.
+//
+// WHAT IS PRESENT AT COUNTY LEVEL (Phase 16.1 / GEO-16-03): `found_county` — the
+// canonical county the Finder chose. It is the COARSEST geography the product
+// models and carries no sub-county, city, ward, coordinates or address detail;
+// adding it does not widen the whitelist to any finer location fact.
 //
 // NOTE: this is the PUBLIC (unauthenticated) surface. It is intentionally
 // narrower than toOwnerSafeItemView in ownerSafeViews.ts, which additionally
@@ -61,6 +68,15 @@ export function toPublicItemView(item: any, agent?: any | null): any {
     document_name_fuzzy: item.isDescriptionOnly
       ? 'Bidhaa ya Maelezo'
       : item.document_name_fuzzy || (isSensitive ? 'Mwenye ID' : 'Bidhaa Bila Hati'),
+    // PHASE 16.1 (GEO-16-03): the FINER-grain-free canonical county — the
+    // county-level fact the Finder selected and the API boundary canonicalised.
+    // It is deliberately the county ONLY: no sub-county, no city, no ward, no
+    // coordinates, and no finer geographic detail than the level the product
+    // actually models. A row that has none (legacy, pre-Phase-9D) publishes
+    // null rather than a guessed county.
+    found_county: item.found_county ?? null,
+    administrative_unit_id: item.administrative_unit_id ?? null,
+    administrative_unit_name: administrativeUnitById(item.administrative_unit_id)?.name ?? null,
     location_description: item.location_description ?? null,
     description: (item.isDescriptionOnly || !isSensitive) ? (item.description ?? null) : null,
     isDescriptionOnly: !!item.isDescriptionOnly,

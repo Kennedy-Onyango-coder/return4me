@@ -14,12 +14,12 @@ interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
 // `neutral` is the quiet surface badge; `code` renders JetBrains Mono for
 // claim IDs / collection codes / till numbers (the app's mono language).
 const variantClasses: Record<BadgeVariant, string> = {
-  success: 'bg-status-success-surface text-status-success border-status-success-border',
-  warning: 'bg-status-warning-surface text-status-warning border-status-warning-border',
-  danger: 'bg-status-danger-surface text-status-danger border-status-danger-border',
-  info: 'bg-status-info-surface text-status-info border-status-info-border',
-  neutral: 'bg-brand-light-gray text-brand-dark-text border-brand-border',
-  code: 'bg-brand-light-gray text-brand-dark-text border-brand-border font-mono tracking-wide',
+  success: 'bg-[var(--appearance-surface-muted)] text-[var(--appearance-success)] border-[var(--appearance-success)]',
+  warning: 'bg-[var(--appearance-surface-muted)] text-[var(--appearance-warning)] border-[var(--appearance-warning)]',
+  danger: 'bg-[var(--appearance-surface-muted)] text-[var(--appearance-danger)] border-[var(--appearance-danger)]',
+  info: 'bg-[var(--appearance-surface-muted)] text-[var(--appearance-text-secondary)] border-[var(--appearance-border-strong)]',
+  neutral: 'bg-[var(--appearance-surface-muted)] text-[var(--appearance-text-primary)] border-[var(--appearance-border)]',
+  code: 'bg-[var(--appearance-surface-muted)] text-[var(--appearance-text-primary)] border-[var(--appearance-border)] font-mono tracking-wide',
 };
 
 // Status variants always include their semantic icon so meaning is never

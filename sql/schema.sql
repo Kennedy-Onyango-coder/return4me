@@ -34,6 +34,21 @@ CREATE TABLE categories (
     -- Public-recognition document-number masking policy — see matching
     -- comment in src/db/schema.ts.
     public_clue_style VARCHAR(30) NOT NULL DEFAULT 'generic',
+    -- CANONICAL DISPLAY ORDER (Phase 16.1 Batch 1 — CAT-03). Assigned from the
+    -- canonical seed's array position by syncDefaultCategories() ("highest + 1"
+    -- for an admin-created category) and enforced by ORDER BY in getCategories().
+    -- NOT NULL DEFAULT 0 so pre-existing rows receive a valid value without a
+    -- NULL window; the boot sync then writes each seeded category's position.
+    -- Not admin-editable; there is no reorder endpoint in this batch.
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    -- LIFECYCLE STATE (Phase 16.1 Batch 2 — CAT-04). Not a visibility flag: an
+    -- inactive category is not selectable for NEW work (it is absent from the
+    -- public category list and refused by the report/verification boundaries)
+    -- while historical items and lost reports referencing it stay fully valid
+    -- and searchable. Deactivating is the safe alternative to deleting a
+    -- canonical category (CAT-06).
+    -- DEFAULT TRUE so every pre-existing row stays active through the upgrade.
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
     CONSTRAINT chk_fee_shares_sum CHECK (total_fee = finder_share + agent_share + platform_share)
 );
 
@@ -87,6 +102,8 @@ CREATE TABLE items (
     -- see the longer rationale on this column in src/db/schema.ts and the
     -- matching comment in src/services/lostReportMatching.ts.
     found_county VARCHAR(50),
+    -- Structured supplied-baseline second-level geography; exact place remains separate.
+    administrative_unit_id VARCHAR(50),
     finder_phone VARCHAR(15) NOT NULL, -- Finder payout target (never shown to owners)
     assigned_agent_id VARCHAR(50) REFERENCES agents(id),
     -- suspected_stolen: claim flow blocked pending admin/legal review.
@@ -353,6 +370,8 @@ CREATE TABLE lost_reports (
     status VARCHAR(30) NOT NULL DEFAULT 'active'
         CHECK (status IN ('active', 'match_review', 'resolved', 'cancelled', 'lapsed')),
     county VARCHAR(50) NOT NULL,
+    -- Nullable for historical reports; exact place is not stored here.
+    administrative_unit_id VARCHAR(50),
     location_area VARCHAR(120) NOT NULL,
     location_landmark VARCHAR(160),
     lost_at_from TIMESTAMP WITH TIME ZONE NOT NULL,

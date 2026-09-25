@@ -373,7 +373,7 @@ function ReportCard({
   const summary = lostReportSummary(report);
   const category = categoryLabel(categories, report.category_id, lang);
   const window = formatWindow(report.lost_at_from, report.lost_at_to, lang);
-  const place = [report.location_area, report.county].filter(Boolean).join(', ');
+  const place = [report.administrative_unit_name, report.location_area, report.county].filter(Boolean).join(', ');
 
   // Whether candidates exist is known only after a lookup; the badge states that
   // honestly ("Not checked yet") instead of implying there are none.

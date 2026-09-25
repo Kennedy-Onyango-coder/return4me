@@ -37,6 +37,7 @@ import { db } from '../db/database.ts';
 import { requireCustomerAuth } from '../services/customerAuth.ts';
 import { hashDocument } from '../services/documentHash.ts';
 import { resolveCountyName } from '../config/kenyaCounties.ts';
+import { resolveAdministrativeUnitId } from '../config/kenyaAdministrativeUnits.ts';
 import { DEFAULT_LOST_REPORT_STATUS } from '../config/lostReportStatuses.ts';
 import { generateLostReportReference, isLostReportReference } from '../services/lostReportReference.ts';
 import { toCustomerSafeLostReportView, toLostReportCreationResponse } from '../services/lostReportView.ts';
@@ -93,6 +94,8 @@ const MESSAGES = {
   categoryInvalid: 'Aina ya kitu haikubaliki. / That item category is not valid.',
   countyRequired: 'Tafadhali chagua kaunti. / Please choose a county.',
   countyInvalid: 'Kaunti haikubaliki. / That county is not a recognised Kenyan county.',
+  administrativeUnitRequired: 'Tafadhali chagua kaunti ndogo. / Please choose a sub-county.',
+  administrativeUnitInvalid: 'Kaunti ndogo haikubaliki kwa kaunti hiyo. / That sub-county does not belong to the selected county.',
   lostAtFromRequired: 'Tafadhali weka wakati uliopotea. / Please provide when the item was lost.',
   lostAtFromInvalid: 'Wakati uliopotea si sahihi. / The lost time is not a valid date.',
   lostAtRangeInvalid: 'Kipindi cha muda si sahihi. / The lost time window is not valid.',
@@ -146,6 +149,7 @@ function parseDateInput(raw: any): Date | null {
 export interface LostReportDraft {
   category_id: string;
   county: string;
+  administrative_unit_id: string;
   location_area: string;
   location_landmark: string | null;
   lost_at_from: string;
@@ -174,8 +178,11 @@ export interface LostReportValidation {
  * Server-side validation for a lost-report payload. Every field a client can
  * influence is checked HERE — the frontend is never trusted.
  *
- * `categories` is the live category list (from db.getCategories()) so a report
- * can only reference a category that actually exists, matching the FK.
+ * `categories` is the live SELECTABLE category list — the caller supplies
+ * `db.getActiveCategories()` (Phase 16.1 Batch 2 / CAT-04) — so a report can only
+ * reference a category that exists AND is currently active, matching the FK.
+ * Deactivated categories are therefore refused for new reports while remaining
+ * fully valid for the reports that already reference them.
  */
 export function validateLostReportPayload(body: any, categories: Array<{ id: string }>): LostReportValidation {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
@@ -200,6 +207,11 @@ export function validateLostReportPayload(body: any, categories: Array<{ id: str
   if (typeof body.county !== 'string') return { ok: false, error: MESSAGES.countyInvalid };
   const county = resolveCountyName(body.county);
   if (!county) return { ok: false, error: MESSAGES.countyInvalid };
+  if (body.administrativeUnitId === undefined || body.administrativeUnitId === null || body.administrativeUnitId === '') {
+    return { ok: false, error: MESSAGES.administrativeUnitRequired };
+  }
+  const administrativeUnitId = resolveAdministrativeUnitId(county, body.administrativeUnitId);
+  if (!administrativeUnitId) return { ok: false, error: MESSAGES.administrativeUnitInvalid };
 
   // P14C-3A — copy-only: this label is interpolated into the user-facing
   // tooShort/tooLong messages. The REQUEST FIELD is still `locationArea` and the
@@ -277,6 +289,7 @@ export function validateLostReportPayload(body: any, categories: Array<{ id: str
     draft: {
       category_id: categoryId,
       county,
+      administrative_unit_id: administrativeUnitId,
       location_area: locationArea.value as string,
       location_landmark: locationLandmark.value,
       lost_at_from: from.toISOString(),
@@ -367,7 +380,12 @@ export function registerLostReportRoutes(app: any, deps: LostReportRouteDeps): v
   // ---------------------------------------------------------------------------
   app.post('/api/lost-reports', ipLimiter, requireCustomerAuth, customerLimiter, async (req: any, res: any) => {
     try {
-      const categories = await db.getCategories();
+      // PHASE 16.1 BATCH 2 (CAT-04) — ACTIVE categories only: a deactivated
+      // category must not be selectable for a NEW lost report. This is the
+      // authoritative boundary, so a client that replays an inactive id is
+      // refused here regardless of what the wizard offered. Historical reports
+      // that already reference a deactivated category are untouched.
+      const categories = await db.getActiveCategories();
       const validation = validateLostReportPayload(req.body, categories);
       if (!validation.ok) {
         return res.status(400).json({ error: validation.error });

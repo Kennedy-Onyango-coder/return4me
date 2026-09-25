@@ -31,6 +31,7 @@ function stripComments(source: string): string {
 
 const FINDER = stripComments(read('src/components/FinderView.tsx'));
 const WIZARD = stripComments(read('src/components/customer/LostReportWizard.tsx'));
+const OWNER = stripComments(read('src/components/OwnerView.tsx'));
 const LOST_ROUTES = stripComments(read('src/routes/lostReports.ts'));
 const TYPES_TS = read('src/types.ts');
 
@@ -118,11 +119,25 @@ describe('P14C-3A — every real county selector consumes the ONE canonical sour
     expect(WIZARD).not.toContain('KENYA_COUNTY_NAMES');
   });
 
+  it('the Owner search county selector consumes the ONE canonical source too', () => {
+    // Phase 16.1 (GEO-16-01): the Owner's old "Area Quick Selector" was fed by
+    // GET /api/regions — counties, towns and estates mixed — and is now a county
+    // select built from the same canonical dataset as the Finder's and the
+    // wizard's.
+    expect(OWNER).toContain('countiesByUxGroup');
+    expect(OWNER).toContain('COUNTY_GROUPS.map');
+    expect(OWNER).toContain('group.counties.map');
+    expect(OWNER).toMatch(/value=\{county\.name\}/);
+    expect(OWNER).not.toContain("fetch('/api/regions')");
+  });
+
   it('there is no second hardcoded county list in application source', () => {
-    // A file that quotes >= 5 distinct canonical county names is either the ONE
-    // source, or the /api/regions fallback (an AREA/TOWN list that merely shares
-    // names with 7 counties — it also contains non-counties such as 'Kilimani').
-    // Any other file would be a duplicate county dataset, which must fail here.
+    // src/config/kenyaCounties.ts is the ONE canonical county dataset. No other
+    // application source file may maintain a second county-shaped vocabulary:
+    // the old /api/regions mixed area/town list was retired in Phase 16.1
+    // (GEO-16-07), together with its endpoint and its data-layer method.
+    // A file quoting five or more distinct canonical county names is therefore
+    // either the ONE source or an offender, and this test expects NONE.
     const walk = (dir: string): string[] =>
       fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
         const full = path.join(dir, entry.name);
@@ -142,13 +157,12 @@ describe('P14C-3A — every real county selector consumes the ONE canonical sour
     }
 
     expect(offenders, `unexpected hardcoded county list(s): ${offenders.join(', ')}`)
-      .toEqual(['src/db/database.ts']);
+      .toEqual([]);
 
-    // …and the one permitted hit is provably the regions fallback, not a county list.
+    // …and there is genuinely no permitted hit any more: Phase 16.1 (GEO-16-07) retired the /api/regions fallback (a 30-entry AREA/TOWN list that mainly held non-counties) together with the endpoint, so no application file may keep a second county-shaped vocabulary.
     const database = stripComments(read('src/db/database.ts'));
-    expect(database).toContain('getDistinctRegions');
-    expect(database).toContain('"Kilimani"');
-    expect(database).toContain('"Nairobi CBD"');
+    expect(database).not.toContain('getDistinctRegions');
+    expect(database).not.toContain('fallbackRegions');
   });
 });
 

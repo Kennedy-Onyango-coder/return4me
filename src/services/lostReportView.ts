@@ -17,6 +17,7 @@
 // the authenticated owner — it is their own data and the customer-private
 // bucket of the privacy model. It is never part of any public/finder DTO, and
 // no public lost-report discovery endpoint exists in this phase.
+import { administrativeUnitById } from '../config/kenyaAdministrativeUnits';
 
 function toIso(value: any): string | null {
   if (!value) return null;
@@ -54,6 +55,8 @@ export function toCustomerSafeLostReportView(report: any): any {
     status: report.status,
     category_id: report.category_id,
     county: report.county,
+    administrative_unit_id: report.administrative_unit_id ?? null,
+    administrative_unit_name: administrativeUnitById(report.administrative_unit_id)?.name ?? null,
     location_area: report.location_area,
     location_landmark: report.location_landmark ?? null,
     lost_at_from: toIso(report.lost_at_from),
@@ -111,6 +114,8 @@ export function toAdminSafeLostReportView(report: any, possibleMatchCount?: numb
     status: report.status,
     category_id: report.category_id,
     county: report.county,
+    administrative_unit_id: report.administrative_unit_id ?? null,
+    administrative_unit_name: administrativeUnitById(report.administrative_unit_id)?.name ?? null,
     location_area: report.location_area,
     location_landmark: report.location_landmark ?? null,
     lost_at_from: toIso(report.lost_at_from),

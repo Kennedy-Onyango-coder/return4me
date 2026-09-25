@@ -25,7 +25,7 @@ export default function Skeleton({ shape = 'text', className = '' }: SkeletonPro
   return (
     <div
       aria-hidden="true"
-      className={`bg-brand-light-gray animate-pulse ${shapeClasses[shape]} ${className}`}
+      className={`bg-[var(--appearance-surface-muted)] animate-pulse ${shapeClasses[shape]} ${className}`}
     />
   );
 }

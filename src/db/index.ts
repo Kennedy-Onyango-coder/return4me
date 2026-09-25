@@ -1019,6 +1019,19 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     `ALTER TABLE items DROP CONSTRAINT IF EXISTS items_verification_status_check`,
     `ALTER TABLE items ADD CONSTRAINT items_verification_status_check CHECK (verification_status IN ('pending', 'confirmed_as_reported', 'corrected', 'rejected'))`,
     `ALTER TABLE categories ADD COLUMN IF NOT EXISTS public_clue_style VARCHAR(30) NOT NULL DEFAULT 'generic'`,
+    // PHASE 16.1 BATCH 1 (CAT-03) — canonical category display order. Must be in
+    // THIS incremental path (not just schema.ts / sql/schema.sql) so an
+    // already-running database picks it up. Added NOT NULL DEFAULT 0 so every
+    // existing row immediately has a valid value rather than a NULL window;
+    // syncDefaultCategories() then writes each seeded category's real position
+    // from the canonical seed's array order.
+    `ALTER TABLE categories ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0`,
+    // PHASE 16.1 BATCH 2 (CAT-04) — category lifecycle state. Added NOT NULL
+    // DEFAULT true so every existing category stays active through the upgrade
+    // (purely additive: nothing that was visible becomes hidden). Must be in
+    // THIS incremental path (not just schema.ts / sql/schema.sql) so an
+    // already-running database picks it up.
+    `ALTER TABLE categories ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true`,
     // Short-lived, single-use claim-payment authorization — see matching
     // comment on claim_payment_auth in schema.ts. Same class of gap as the
     // other tables above: must exist in this incremental path, not just
@@ -1048,6 +1061,7 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     // NO DEFAULT: existing rows keep found_county = NULL, which the matcher
     // reads as "county unknown" — see the column comment in schema.ts.
     `ALTER TABLE items ADD COLUMN IF NOT EXISTS found_county VARCHAR(50)`,
+    `ALTER TABLE items ADD COLUMN IF NOT EXISTS administrative_unit_id VARCHAR(50)`,
     // Session-revocation mechanism for admin accounts — see the matching
     // comment on admin_users.token_version in schema.ts. Must exist here,
     // not just schema.ts, for an already-running database to pick it up.
@@ -1176,6 +1190,7 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     `CREATE INDEX IF NOT EXISTS idx_lost_reports_status ON lost_reports(status)`,
     `CREATE INDEX IF NOT EXISTS idx_lost_reports_document_hash ON lost_reports(document_number_hash)`,
     `CREATE INDEX IF NOT EXISTS idx_lost_reports_county ON lost_reports(county)`,
+    `ALTER TABLE lost_reports ADD COLUMN IF NOT EXISTS administrative_unit_id VARCHAR(50)`,
   ];
   let migrationFailureCount = 0;
   for (const sql of statements) {

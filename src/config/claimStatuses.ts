@@ -201,3 +201,34 @@ export function isAllowedClaimTransition(from: string, to: string): boolean {
   const wildcard = CLAIM_ALLOWED_TRANSITIONS['*'];
   return Boolean(wildcard && wildcard.includes(to));
 }
+
+/**
+ * ONE body, used for EVERY claim-ownership failure on the claim-ID-keyed
+ * routes that take the owner's registered phone:
+ *
+ *   POST /api/claims/:id/request-otp
+ *   POST /api/claims/:id/payment-auth
+ *   POST /api/claims/:id/payment-session
+ *   POST /api/claims/:id/pay
+ *
+ * (POST /api/claims/lookup keeps its own local copy of this same wording — see
+ * claimTrackingDisclosure.test.ts, which pins that route's two
+ * `res.status(404).json(claimUnavailable)` branches by name.)
+ *
+ * WHY THIS IS AN EXPORTED CONSTANT (Phase 16.1 Batch 2A)
+ * ------------------------------------------------------
+ * A caller must not be able to distinguish "this claim ID does not exist" from
+ * "this claim ID exists, but the phone number you guessed is not its owner".
+ * Those used to be two DIFFERENT responses (404 with one message vs 403 with a
+ * different one), which turned an unauthenticated, ~900,000-combination
+ * claim-ID space (CLM-100000..CLM-999999) into a claim-EXISTENCE and
+ * owner-phone-confirmation oracle. That is the same defect Phase 7C.7 (R2)
+ * closed on /lookup and F4 closed on POST /api/claims/:id/pickup-details, whose
+ * single-response contract is already pinned by tests.
+ *
+ * Keeping one literal here is what stops the routes drifting apart again: a
+ * future edit cannot make one of them say something subtly different without
+ * changing this shared value.
+ */
+export const CLAIM_UNAVAILABLE_MESSAGE =
+  'Claim haikupatikana au nambari ya simu hailingani. / Claim not found, or the phone number does not match.';

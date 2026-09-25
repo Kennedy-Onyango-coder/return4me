@@ -26,7 +26,14 @@ function routeBody(method: 'get' | 'post', route: string): string {
   const marker = `app.${method}('${route}'`;
   const start = serverTs.indexOf(marker);
   expect(start, `route ${method.toUpperCase()} ${route} not found in server.ts`).toBeGreaterThan(-1);
-  return serverTs.slice(start, start + 2200);
+  // PHASE 16.1 Batch 2A — widened from 2200 to 6000. The pinned CONTRACT below
+  // is unchanged: the phone-match check still runs before the OTP is generated
+  // and sent. This hand-written slice simply has to reach `crypto.randomInt(...)`
+  // at the END of the handler, and this batch added explanatory comments to the
+  // ownership branches ahead of it — which pushed that line past the old window
+  // and made `indexOf` return -1. Nothing about the route's behaviour changed;
+  // the window just has to be big enough to contain the whole handler.
+  return serverTs.slice(start, start + 6000);
 }
 
 describe('claim OTP request route is rate-limited per claim ID, not just per IP', () => {

@@ -6,6 +6,7 @@ import { db } from '../db/database';
 import { generateToken } from '../services/auth';
 import { registerAdminLostReportRoutes } from '../routes/adminLostReports';
 import { ensureTestCategory, testRunId } from '../db/__tests__/ensureTestCategory';
+import { FOUND_COUNTY_MESSAGES } from '../services/foundItemCounty';
 
 // =============================================================================
 // PHASE 11A (WP-2) — ADMIN LOST-REPORT ENDPOINT
@@ -274,6 +275,8 @@ describe('11A admin lost-reports: DTO safety', () => {
     const row = res.body.data.find((r: any) => r.id === id);
 
     expect(Object.keys(row).sort()).toEqual([
+      'administrative_unit_id',
+      'administrative_unit_name',
       'category_id',
       'county',
       'created_at',
@@ -353,6 +356,136 @@ describe('11A admin lost-reports: data correctness', () => {
     const res = await api('GET', '/api/admin/lost-reports?limit=100', adminToken);
     const ids = res.body.data.map((r: any) => r.id);
     expect(ids).toContain(id);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PHASE 16.1 (GEO-16-04) — THE CANONICAL COUNTY FILTER
+// ---------------------------------------------------------------------------
+// Real Express + the real route + the real DB layer over a real socket, so the
+// status code, the canonicalisation and the FILTERED pagination are all
+// exercised rather than asserted from source text.
+//
+// The fixtures use counties no other fixture in this repository uses
+// ('West Pokot', 'Tana River') so the county constraint is isolated from every
+// other suite's data, which may run concurrently.
+describe('16.1 admin lost-reports: canonical county filter', () => {
+  const POKOT = 'West Pokot';
+  const TANA = 'Tana River';
+
+  it('no county parameter keeps the existing unfiltered behaviour', async () => {
+    const pokot = await makeLostReport('county-unfiltered-pokot', { county: POKOT });
+    const tana = await makeLostReport('county-unfiltered-tana', { county: TANA });
+
+    const res = await api('GET', '/api/admin/lost-reports?limit=100', adminToken);
+    expect(res.status).toBe(200);
+    const ids = res.body.data.map((r: any) => r.id);
+    // Both counties appear when nothing is filtered: the parameter is optional
+    // and its absence is not an empty filter.
+    expect(ids).toContain(pokot);
+    expect(ids).toContain(tana);
+  });
+
+  it('a valid county returns ONLY matching reports', async () => {
+    const pokot = await makeLostReport('county-only-pokot', { county: POKOT });
+    const tana = await makeLostReport('county-only-tana', { county: TANA });
+
+    const res = await api('GET', `/api/admin/lost-reports?limit=100&county=${encodeURIComponent(POKOT)}`, adminToken);
+    expect(res.status).toBe(200);
+    const rows = res.body.data as any[];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) expect(row.county).toBe(POKOT);
+    expect(rows.map((r) => r.id)).toContain(pokot);
+    expect(rows.map((r) => r.id)).not.toContain(tana);
+  });
+
+  it('resolves canonical aliases before filtering (the DB only ever sees canonical values)', async () => {
+    // 'nairobi' -> 'Nairobi City' and 'muranga' -> "Murang'a": both are accepted,
+    // and the filter is applied to the CANONICAL name the column stores.
+    const nairobi = await api('GET', '/api/admin/lost-reports?limit=100&county=nairobi', adminToken);
+    expect(nairobi.status).toBe(200);
+    for (const row of nairobi.body.data) expect(row.county).toBe('Nairobi City');
+
+    const muranga = await api('GET', '/api/admin/lost-reports?limit=100&county=muranga', adminToken);
+    expect(muranga.status).toBe(200);
+    for (const row of muranga.body.data) expect(row.county).toBe("Murang'a");
+  });
+
+  it('refuses an invalid county instead of ignoring the filter', async () => {
+    for (const bad of ['Atlantis', 'Westlands', 'Mombasa Road', 'Nairobi CBD', '', '12345']) {
+      const res = await api('GET', `/api/admin/lost-reports?limit=10&county=${encodeURIComponent(bad)}`, adminToken);
+      expect(res.status, `county=${bad}`).toBe(400);
+      expect(res.body.error, `county=${bad}`).toBe(FOUND_COUNTY_MESSAGES.invalid);
+    }
+  });
+
+  it('refuses a repeated county parameter as malformed', async () => {
+    const res = await api('GET', '/api/admin/lost-reports?limit=10&county=Mombasa&county=Kilifi', adminToken);
+    expect(res.status).toBe(400);
+  });
+
+  it('paginates WITHIN the filtered result set (disjoint pages, hasMore from the filter)', async () => {
+    // West Pokot fixtures already exist from the cases above, so at least two
+    // matching rows are guaranteed: `hasMore` must therefore be true for a
+    // one-row page of that county, while the page still holds a single row.
+    const all = await api('GET', `/api/admin/lost-reports?limit=100&county=${encodeURIComponent(POKOT)}`, adminToken);
+    expect(all.status).toBe(200);
+    const allIds = all.body.data.map((r: any) => r.id);
+    expect(allIds.length).toBeGreaterThanOrEqual(2);
+    for (const row of all.body.data) expect(row.county).toBe(POKOT);
+
+    const page1 = await api('GET', `/api/admin/lost-reports?limit=1&offset=0&county=${encodeURIComponent(POKOT)}`, adminToken);
+    expect(page1.status).toBe(200);
+    expect(page1.body.pagination.limit).toBe(1);
+    expect(page1.body.data).toHaveLength(1);
+    expect(page1.body.data[0].county).toBe(POKOT);
+    expect(page1.body.pagination.hasMore).toBe(true);
+
+    const page2 = await api('GET', `/api/admin/lost-reports?limit=1&offset=1&county=${encodeURIComponent(POKOT)}`, adminToken);
+    expect(page2.status).toBe(200);
+    expect(page2.body.data).toHaveLength(1);
+    expect(page2.body.data[0].county).toBe(POKOT);
+    // The two pages are DISJOINT members of the filtered set — pagination is
+    // over the county-filtered rows, not over the unfiltered table.
+    expect(page2.body.data[0].id).not.toBe(page1.body.data[0].id);
+    expect(allIds).toContain(page1.body.data[0].id);
+    expect(allIds).toContain(page2.body.data[0].id);
+
+    // Consequence of the filter being applied to the page query itself: a
+    // two-row page of the county is FILLED from matching rows (not "the two
+    // newest reports overall, filtered down to whatever survives").
+    const two = await api('GET', `/api/admin/lost-reports?limit=2&offset=0&county=${encodeURIComponent(POKOT)}`, adminToken);
+    expect(two.status).toBe(200);
+    expect(two.body.data).toHaveLength(2);
+    for (const row of two.body.data) expect(row.county).toBe(POKOT);
+  });
+
+  it('leaves the existing limit/offset validation untouched', async () => {
+    const badLimit = await api('GET', `/api/admin/lost-reports?limit=abc&county=${encodeURIComponent(POKOT)}`, adminToken);
+    expect(badLimit.status).toBe(400);
+    const badOffset = await api('GET', `/api/admin/lost-reports?limit=10&offset=-1&county=${encodeURIComponent(POKOT)}`, adminToken);
+    expect(badOffset.status).toBe(400);
+  });
+
+  it('clearing the county removes the county constraint', async () => {
+    const tana = await makeLostReport('county-cleared-tana', { county: TANA });
+    const filtered = await api('GET', `/api/admin/lost-reports?limit=100&county=${encodeURIComponent(POKOT)}`, adminToken);
+    expect(filtered.body.data.map((r: any) => r.id)).not.toContain(tana);
+
+    const cleared = await api('GET', '/api/admin/lost-reports?limit=100', adminToken);
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.data.map((r: any) => r.id)).toContain(tana);
+    expect(cleared.body.data.map((r: any) => r.id).length).toBeGreaterThanOrEqual(filtered.body.data.length);
+  });
+
+  it('the data layer skips the WHERE clause entirely when no county is given', async () => {
+    // Behavioural, at the query the route calls: null/undefined/'' must not
+    // become `county = NULL`, which would match nothing.
+    const all = await db.listAdminLostReports({ limit: 5, offset: 0 });
+    const nullCounty = await db.listAdminLostReports({ limit: 5, offset: 0, county: null });
+    const emptyCounty = await db.listAdminLostReports({ limit: 5, offset: 0, county: '' });
+    expect(nullCounty.rows.map((r) => r.id)).toEqual(all.rows.map((r) => r.id));
+    expect(emptyCounty.rows.map((r) => r.id)).toEqual(all.rows.map((r) => r.id));
   });
 });
 

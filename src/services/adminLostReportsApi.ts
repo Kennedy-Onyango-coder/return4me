@@ -26,6 +26,8 @@ export interface AdminLostReportListView {
   status: string;
   category_id: string;
   county: string;
+  administrative_unit_id: string | null;
+  administrative_unit_name: string | null;
   location_area: string;
   location_landmark: string | null;
   lost_at_from: string | null;
@@ -88,14 +90,21 @@ function errorKindForStatus(status: number): AdminLostReportsApiErrorKind {
  * A 401/403 is surfaced as a classified error rather than as an empty list, so
  * the console can fall back to its sign-in gate instead of rendering a
  * misleading "no lost reports".
+ *
+ * PHASE 16.1 (GEO-16-04): `county` is the optional canonical county filter
+ * (e.g. 'Mombasa'). It is omitted from the query string entirely when the
+ * administrator has "All Counties" selected, so the unfiltered request is
+ * byte-for-byte the pre-16.1 request. A cleared filter therefore restores the
+ * unfiltered list rather than asking the server for `county=`.
  */
 export async function fetchAdminLostReports(
   token: string | null,
-  opts: { limit?: number; offset?: number; signal?: AbortSignal } = {},
+  opts: { limit?: number; offset?: number; county?: string | null; signal?: AbortSignal } = {},
 ): Promise<{ items: AdminLostReportListView[]; pagination: AdminLostReportsPagination }> {
   const limit = opts.limit ?? ADMIN_LOST_REPORTS_PAGE_SIZE;
   const offset = opts.offset ?? 0;
-  const url = `${LIST_PATH}?limit=${encodeURIComponent(String(limit))}&offset=${encodeURIComponent(String(offset))}`;
+  let url = `${LIST_PATH}?limit=${encodeURIComponent(String(limit))}&offset=${encodeURIComponent(String(offset))}`;
+  if (opts.county) url += `&county=${encodeURIComponent(opts.county)}`;
 
   let res: Response;
   try {

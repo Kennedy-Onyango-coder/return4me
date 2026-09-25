@@ -58,6 +58,8 @@ export function toOwnerSafeItemView(item: any): any {
     document_name_fuzzy: item.isDescriptionOnly
       ? 'Bidhaa ya Maelezo'
       : item.document_name_fuzzy || (isSensitive ? 'Mwenye ID' : 'Bidhaa Bila Hati'),
+    found_county: item.found_county ?? null,
+    administrative_unit_id: item.administrative_unit_id ?? null,
     location_description: item.location_description,
     description: item.isDescriptionOnly || !isSensitive ? item.description : null,
     isDescriptionOnly: item.isDescriptionOnly,

@@ -1,9 +1,13 @@
 import React from 'react';
-import { Globe, LogOut, ExternalLink, User } from 'lucide-react';
-// BATCH 2 (shell polish) — the shell's own controls now use the shared design
-// system instead of hand-rolled hover/focus styling. Presentation only: every
-// handler, label and aria attribute below is unchanged, and this component
-// still owns no session, token or network logic whatsoever.
+import { LogOut, ExternalLink, User } from 'lucide-react';
+// BATCH 2 (shell polish) — the shell's other controls use the shared design
+// system. Batch C routes the language control through the neutral presentation
+// primitive while this component continues to own no session, token, persistence,
+// or network logic whatsoever.
+import LanguageControl from '../LanguageControl';
+import AppearanceControl from '../AppearanceControl';
+import type { AppearancePreference } from '../../utils/appearancePreference';
+import { translations } from '../../types';
 import Button from '../ui/Button';
 
 // ============================================================================
@@ -44,6 +48,8 @@ export type DashboardSurface = 'account' | 'agent' | 'admin';
 interface DashboardShellProps {
   lang: 'en' | 'sw';
   setLang: (lang: 'en' | 'sw') => void;
+  appearance: AppearancePreference;
+  setAppearance: (appearance: AppearancePreference) => void;
   /** Which authenticated surface is being worked in. Drives the label + icon. */
   surface: DashboardSurface;
   /**
@@ -51,6 +57,19 @@ interface DashboardShellProps {
    * shell must not become a second place that decides identity).
    */
   identityLabel?: string;
+  /**
+   * Whether a live session actually backs this surface. Defaults to true
+   * because the agent and admin dashboards only mount once a token exists.
+   *
+   * PHASE 16 — /account is the one surface that is ALWAYS the account surface,
+   * authenticated or not (App's boundary is decided by the surface, not by a
+   * session, so the gate can render inside it). Without this flag the shell told
+   * a signed-OUT visitor they were signed in: an identity chip reading "My
+   * Account", a working "Sign out" control, and a footer saying "You are signed
+   * in". The surrounding chrome must stay truthful, so those three things are
+   * now conditional. The shell still owns no session logic — App decides.
+   */
+  signedIn?: boolean;
   /** Returns to the public site (home). */
   onExitSite: () => void;
   /** Ends the live session(s). App owns what that means per role. */
@@ -74,17 +93,27 @@ const SURFACE_COPY: Record<DashboardSurface, { en: string; sw: string }> = {
 export default function DashboardShell({
   lang,
   setLang,
+  appearance,
+  setAppearance,
   surface,
   identityLabel,
+  signedIn = true,
   onExitSite,
   onSignOut,
   children,
 }: DashboardShellProps) {
   const copy = SURFACE_COPY[surface];
   const label = lang === 'en' ? copy.en : copy.sw;
+  const t = translations[lang];
+  const appearanceLabels = {
+    appearance: t.appearanceLabel,
+    light: t.appearanceLight,
+    dark: t.appearanceDark,
+    system: t.appearanceSystem,
+  };
 
   return (
-    <div className="min-h-screen bg-brand-light-gray flex flex-col antialiased">
+    <div className="min-h-screen bg-[var(--appearance-background)] text-[var(--appearance-text-primary)] flex flex-col antialiased">
       {/* Dashboard header — a dark brand band (not the public bar), so the
           change of context is unmistakable. PHASE 16: full-bleed, because an
           authenticated workspace is an operations surface rather than a
@@ -128,19 +157,17 @@ export default function DashboardShell({
                 </span>
               )}
 
-              {/* Language — the same two-language contract as the public site.
-                  `inverse` is the design system's dark-surface variant, so these
-                  controls no longer hand-roll their dark styling. size="md"
-                  keeps the previous 44px touch-target floor. */}
-              <Button
-                variant="inverse"
-                size="md"
-                onClick={() => setLang(lang === 'en' ? 'sw' : 'en')}
-                aria-label={lang === 'en' ? 'Badilisha lugha' : 'Switch language'}
-              >
-                <Globe size={14} aria-hidden="true" />
-                <span className="uppercase">{lang === 'en' ? 'SW' : 'EN'}</span>
-              </Button>
+              {/* Language — App-owned, presented through the same shared control as
+                  the public shell. `inverse` preserves this header's dark-surface
+                  treatment while naming both current and target languages. */}
+              <LanguageControl
+                lang={lang}
+                setLang={setLang}
+                layout="toggle"
+                toggleLabel={lang === 'en' ? 'Switch language' : 'Badilisha lugha'}
+                theme="inverse"
+              />
+              <AppearanceControl value={appearance} onChange={setAppearance} labels={appearanceLabels} />
 
               {/* Back to the public site — explicit, never an implicit bar. */}
               <Button
@@ -153,7 +180,10 @@ export default function DashboardShell({
               </Button>
 
               {/* Ends the live session. Still presentation only — the handler is
-                  App's; this shell owns no session logic of its own. */}
+                  App's; this shell owns no session logic of its own. Not rendered
+                  when there is no live session to end (PHASE 16 — the signed-out
+                  /account gate must not advertise a session that does not exist). */}
+              {signedIn && (
               <Button
                 variant="inverse"
                 size="md"
@@ -162,6 +192,7 @@ export default function DashboardShell({
                 <LogOut size={14} aria-hidden="true" />
                 <span>{lang === 'en' ? 'Sign out' : 'Toka'}</span>
               </Button>
+              )}
             </div>
           </div>
         </div>
@@ -172,16 +203,20 @@ export default function DashboardShell({
           band is not squeezed into a centred column. Each surface keeps its own
           INTERNAL max-widths where a form or a reading block needs one — the
           canvas is wide, the content is not stretched. */}
-      <main className="flex-grow w-full px-4 sm:px-6 lg:px-10 py-6">
+      <main className="flex-grow w-full px-4 sm:px-6 lg:px-10 py-6 text-[var(--appearance-text-primary)]">
         {children}
       </main>
 
-      <footer className="border-t border-brand-border bg-white">
+      <footer className="border-t border-[var(--appearance-border)] bg-[var(--appearance-surface)]">
         <div className="w-full px-4 sm:px-6 lg:px-10 py-4">
-          <p className="text-caption text-brand-muted-text">
-            {lang === 'en'
-              ? 'You are signed in. Dashboard actions are recorded against your session.'
-              : 'Umeingia. Vitendo vya dashibodi hurekodiwa dhidi ya kipindi chako.'}
+          <p className="text-caption text-[var(--appearance-text-muted)]">
+            {signedIn
+              ? (lang === 'en'
+                  ? 'You are signed in. Dashboard actions are recorded against your session.'
+                  : 'Umeingia. Vitendo vya dashibodi hurekodiwa dhidi ya kipindi chako.')
+              : (lang === 'en'
+                  ? 'You are not signed in. Nothing on this page is private, and signing in is what unlocks your account.'
+                  : 'Hujaingia. Hakuna kilicho cha faragha kwenye ukurasa huu, na kuingia ndiyo kunafungua akaunti yako.')}
           </p>
         </div>
       </footer>

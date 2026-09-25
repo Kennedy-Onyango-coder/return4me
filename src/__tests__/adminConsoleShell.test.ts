@@ -92,6 +92,24 @@ describe('the console still states who is signed in, truthfully (§10)', () => {
     expect(adminView).toContain('pendingTwoFactorToken');
   });
 
+  it('uses the official Return4me wordmark as the signed-out login brand', () => {
+    const loginBranch = adminView.slice(
+      adminView.indexOf('{!token && ('),
+      adminView.indexOf('{token && dashboardLoading'),
+    );
+
+    expect(loginBranch).toContain('src="/assets/logo_wordmark_transparent.png"');
+    expect(loginBranch).toContain('alt="Return4me"');
+    expect(loginBranch).toMatch(/className="[^"]*w-auto[^"]*object-contain/);
+    // The generic shield is still used functionally elsewhere in the console,
+    // but it must not remain the primary mark on the signed-out login screen.
+    expect(loginBranch).not.toContain('<ShieldCheck');
+    // Branding must not displace the real heading or weaken the 2FA branch.
+    expect(loginBranch).toContain('<h1');
+    expect(loginBranch).toContain('Admin Authentication');
+    expect(loginBranch).toContain('pendingTwoFactorToken');
+  });
+
   it('keeps the emergency-pause controls visible on every section', () => {
     // The safety controls deliberately live outside the section panels, so they
     // travelled with the layout change rather than ending up inside one tab.

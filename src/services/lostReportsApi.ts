@@ -39,6 +39,8 @@ export interface LostReportView {
   status: string;
   category_id: string;
   county: string;
+  administrative_unit_id: string | null;
+  administrative_unit_name: string | null;
   location_area: string;
   location_landmark: string | null;
   lost_at_from: string | null;
@@ -69,6 +71,8 @@ export interface LostReportMatchCandidate {
   photo_url: string | null;
   is_sensitive_document: boolean;
   document_name_fuzzy: string | null;
+  /** Phase 16.1 (GEO-16-03): the canonical county, or null for a legacy item. */
+  found_county: string | null;
   location_description: string | null;
   description: string | null;
   isDescriptionOnly: boolean;
@@ -96,6 +100,7 @@ export interface LostReportCreationResponse {
 export interface LostReportCreatePayload {
   categoryId: string;
   county: string;
+  administrativeUnitId: string;
   locationArea: string;
   locationLandmark?: string | null;
   lostAtFrom: string;

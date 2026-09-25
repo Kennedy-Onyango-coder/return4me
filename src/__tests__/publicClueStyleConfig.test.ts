@@ -36,22 +36,33 @@ function stripComments(source: string): string {
 
 const SERVER_RAW = read('src/server.ts');
 const ADMIN_VIEW = stripComments(read('src/components/AdminView.tsx'));
+// PHASE 16.1 BATCH 1A — POST /api/admin/categories was extracted into
+// routes/categories.ts (handler body moved VERBATIM) so the admin-create →
+// public-read propagation chain can be exercised over real HTTP. PUT and DELETE
+// remain inline in server.ts.
+const CATEGORY_ROUTES_RAW = read('src/routes/categories.ts');
 
 /**
- * The POST and PUT category-route bodies, sliced from the real server source.
+ * The POST and PUT category-route bodies, sliced from their real sources.
  * Anchors are located in the RAW source and comments stripped only from the
  * slice: server.ts contains a stray `/*`-looking token that makes a naive
  * whole-file stripper swallow a whole region of the file.
+ *
+ * The relative-order guarantee is preserved where it still applies: PUT and
+ * DELETE are both still inline in server.ts, so their order is still asserted.
+ * POST is now the LAST route in routes/categories.ts, so its slice runs to the
+ * end of that module; it is asserted to exist there rather than to precede PUT in
+ * server.ts (which would no longer be meaningful).
  */
 function categoryRouteBodies() {
-  const post = SERVER_RAW.indexOf("app.post('/api/admin/categories'");
+  const post = CATEGORY_ROUTES_RAW.indexOf("app.post('/api/admin/categories'");
   const put = SERVER_RAW.indexOf("app.put('/api/admin/categories/:id'");
   const del = SERVER_RAW.indexOf("app.delete('/api/admin/categories/:id'");
-  expect(post, 'POST /api/admin/categories not found').toBeGreaterThan(-1);
-  expect(put, 'PUT /api/admin/categories/:id not found').toBeGreaterThan(post);
+  expect(post, 'POST /api/admin/categories not found in routes/categories.ts').toBeGreaterThan(-1);
+  expect(put, 'PUT /api/admin/categories/:id not found').toBeGreaterThan(-1);
   expect(del, 'DELETE /api/admin/categories/:id not found').toBeGreaterThan(put);
   return {
-    post: stripComments(SERVER_RAW.slice(post, put)),
+    post: stripComments(CATEGORY_ROUTES_RAW.slice(post)),
     put: stripComments(SERVER_RAW.slice(put, del)),
   };
 }

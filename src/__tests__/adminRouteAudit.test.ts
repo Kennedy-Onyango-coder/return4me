@@ -40,6 +40,12 @@ const serverTs = [
   // module above — it is an /api/admin route in its own file, so it must stay
   // inside this audit's scope or its role check would be unguarded by it.
   fs.readFileSync(path.resolve(__dirname, '../routes/adminLostReports.ts'), 'utf8'),
+  // PHASE 16.1 BATCH 1A: the admin category-creation route. Extracted into its
+  // own module so the admin-create → public-read propagation chain can be
+  // exercised over real HTTP — the same reason as the modules above, and the same
+  // consequence applies: it must stay inside this audit's scope or its inline
+  // role check would silently stop being verified.
+  fs.readFileSync(path.resolve(__dirname, '../routes/categories.ts'), 'utf8'),
 ].join('\n');
 
 function findAdminRoutes(source: string): Array<{ method: string; route: string; body: string }> {

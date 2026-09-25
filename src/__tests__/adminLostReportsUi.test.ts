@@ -145,3 +145,42 @@ describe('11A admin lost-reports UI: states and status handling', () => {
     expect(clientTs).toContain('encodeURIComponent');
   });
 });
+
+// ---------------------------------------------------------------------------
+// PHASE 16.1 (GEO-16-04) — THE COUNTY FILTER CONTROL
+// ---------------------------------------------------------------------------
+describe('16.1 admin lost-reports UI: the county filter is canonical', () => {
+  it('builds its county options from the ONE canonical dataset', () => {
+    expect(sectionTsx).toContain("import { countiesByUxGroup } from '../../../config/kenyaCounties'");
+    expect(sectionTsx).toContain('const COUNTY_GROUPS = countiesByUxGroup()');
+    expect(sectionTsx).toContain('COUNTY_GROUPS.map');
+    expect(sectionTsx).toContain('<optgroup');
+    expect(sectionTsx).toContain('value={c.name}');
+    // "All Counties" is the cleared state — the unfiltered request.
+    expect(sectionTsx).toContain("t('All Counties', 'Kaunti Zote')");
+  });
+
+  it('passes the county to the client and omits it entirely when cleared', () => {
+    expect(sectionTsx).toContain('county: county || null');
+    expect(clientTs).toContain('if (opts.county) url += `&county=${encodeURIComponent(opts.county)}`');
+  });
+
+  it('returns to the first page whenever the county changes', () => {
+    expect(sectionTsx).toMatch(/const handleCountyChange[\s\S]{0,120}setCounty\(value\);[\s\S]{0,60}setOffset\(0\)/);
+    // ...and the reload goes through the ONE existing effect.
+    expect(sectionTsx).toMatch(/\[offset, reloadToken, token, county\]/);
+  });
+
+  it('adds no second county list, no second request path and no new dependency', () => {
+    expect(sectionTsx).not.toContain('KENYA_COUNTY_NAMES');
+    expect(sectionTsx).not.toContain('KENYA_COUNTIES');
+    expect(sectionTsx.match(/fetchAdminLostReports\(/g)?.length).toBe(1);
+    expect(clientTs.match(/fetch\(/g)?.length).toBe(1);
+  });
+
+  it('the section stays read-only and still requests only a GET', () => {
+    const raw = stripComments(SRC(CLIENT));
+    expect(raw).toContain("method: 'GET'");
+    expect(raw).not.toMatch(/'POST'|'PUT'|'PATCH'|'DELETE'/);
+  });
+});

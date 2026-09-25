@@ -39,7 +39,7 @@ import {
 // Phase 7C.7 (R1): isPickupEligibleClaimStatus is the canonical pickup-eligibility
 // predicate introduced by Phase 7C.5. /api/claims/lookup now gates its agent
 // disclosure with it so that route cannot drift from routes/publicItems.ts.
-import { INACTIVE_CLAIM_STATUSES, isPickupEligibleClaimStatus } from './config/claimStatuses';
+import { INACTIVE_CLAIM_STATUSES, isPickupEligibleClaimStatus, CLAIM_UNAVAILABLE_MESSAGE } from './config/claimStatuses';
 import { toOwnerSafeAgentView, toOwnerSafeClaimView, toOwnerSafeItemView } from './services/ownerSafeViews';
 // Phase 7B: the shared public (unauthenticated) item read model. getRoughArea
 // moved here from this file so the public search route and the new public
@@ -48,6 +48,10 @@ import { toPublicItemView, getRoughArea } from './services/publicItemView';
 import { toAdminSafeAgentView, toAdminSafeItemView, toAdminSafeDisputeView, toAdminSafeAgentDocumentsView, toAdminSafeLedgerEntry, toAdminSafeAuditLog } from './services/adminSafeViews';
 import { registerCustomerClaimRoutes } from './routes/customerClaims';
 import { registerAdminDisputeRoutes } from './routes/adminDisputes';
+// PHASE 16.1 BATCH 1A — the public category list and the admin category-creation
+// action, extracted so the admin-create → GET /api/categories propagation chain
+// can be exercised over real HTTP (same pattern as routes/adminDisputes.ts).
+import { registerPublicCategoryRoutes, registerAdminCategoryRoutes } from './routes/categories';
 import { registerAdminClaimRoutes } from './routes/adminClaims';
 import { registerAdminLostReportRoutes } from './routes/adminLostReports';
 import { registerPublicItemRoutes } from './routes/publicItems';
@@ -64,12 +68,36 @@ import { hashDocument } from './services/documentHash';
 // handler — the same pattern routes/lostReports.ts uses. It delegates to the
 // ONE canonical resolver (`resolveCountyName` in config/kenyaCounties.ts), so
 // this file needs no county list and no second implementation.
-import { resolveFoundCountyInput } from './services/foundItemCounty';
+import { resolveAdministrativeUnitId } from './config/kenyaAdministrativeUnits';
+import { resolveFoundCountyInput, FOUND_COUNTY_MESSAGES, itemMatchesCanonicalCounty } from './services/foundItemCounty';
+// PHASE 16.1 (GEO-16-01): the ONE canonical county resolver, reused by the
+// public county search filter and the admin lost-report county filter. This
+// file keeps no county list and no alias table of its own.
+import { resolveCountyName } from './config/kenyaCounties';
 // P14A (P14-05): the ONE authoritative vocabulary for
 // `categories.public_clue_style`. The admin category routes validate against
 // this list instead of re-typing it, so the console can configure the masking
 // policy the public-recognition service actually implements.
 import { isPublicClueStyle, PUBLIC_CLUE_STYLES } from './services/publicRecognition';
+// PHASE 16.1 BATCH 1 (CAT-01 / CAT-07 / CAT-19): the ONE category input rule.
+// Validates a category id against the LIVE `db.getCategories()` list before any
+// write or search filter (so an unknown id is a controlled 400, never a
+// foreign-key 500) and parses the numeric Recovery Fee Engine fields an admin
+// may configure. This file keeps no category list of its own.
+import {
+  CATEGORY_MESSAGES,
+  resolveCategoryId,
+  parseCategoryNumber,
+} from './services/categoryValidation';
+// PHASE 16.1 BATCH 2 (CAT-09): the PUBLIC category DTO. `GET /api/categories` is
+// unauthenticated, so it serves an explicit whitelist of the fields the public
+// UX actually reads — never the raw configuration row. The admin console keeps
+// the complete record over `GET /api/admin/categories`.
+//
+// PHASE 16.1 BATCH 1A: that DTO (like `validateCategoryIdFormat` above) is now
+// applied by the category routes in routes/categories.ts, which were extracted so
+// the admin-create → public-read propagation chain can be exercised over real
+// HTTP — so server.ts no longer imports them directly.
 // PHASE 9D: the ONE coordinate validator (finite + in-range, explicit
 // null-handling so a valid 0 is not discarded).
 import { normalizeCoordinateInput } from './services/coordinates';
@@ -1194,29 +1222,29 @@ async function startServer() {
   // --- API ROUTES ---
 
   // 1. CONFIGURATION & PUBLIC METADATA
-  app.get('/api/categories', async (req, res) => {
-    try {
-      const categories = await db.getCategories();
-      res.json(categories);
-    } catch (e: any) {
-      console.error('[API CATEGORIES ENGINE] Failed to fetch categories from database:', e);
-      if (isDatabaseConnectionError(e)) {
-        return res.status(503).json({
-          error: "Huduma haipatikani kwa sasa. Tafadhali jaribu tena baadaye. / Service temporarily unavailable. Please try again shortly."
-        });
-      }
-      sendServerError(res, e, 'CATEGORIES_FETCH_ERROR');
-    }
-  });
+  // PHASE 16.1 BATCH 1A — GET /api/categories now lives in
+  // routes/categories.ts, moved verbatim, so the propagation chain
+  // (admin create → GET /api/categories) can be exercised over real HTTP.
+  // Same extract-for-testability pattern as routes/adminDisputes.ts.
+  registerPublicCategoryRoutes(app, { sendServerError });
 
-  app.get('/api/regions', async (req, res) => {
-    try {
-      const regions = await db.getDistinctRegions();
-      res.json(regions);
-    } catch (e: any) {
-      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
-    }
-  });
+  // PHASE 16.1 (GEO-16-07) — GET /api/regions HAS BEEN RETIRED.
+  //
+  // It used to return the retired distinct-regions list (`getDistinctRegions`):
+  // a flat list built from `items.location_description` plus a hard-coded
+  // 30-entry fallback of Nairobi estates, towns and roads. That list
+  // mixed COUNTIES, towns, estates and arbitrary reporter-typed text into one
+  // "region" vocabulary, was derived from items regardless of whether they were
+  // publicly visible at all, and was therefore the source of the Owner search's
+  // misleading "All Regions" selector — the GEO-16-01 finding.
+  //
+  // The public replacement is the canonical, structured county filter on
+  // GET /api/items/search?county= (see above), whose options come from
+  // config/kenyaCounties.ts (countiesByUxGroup()). Its last production consumer
+  // (OwnerView) now uses that selector, and the endpoint and its DB method were
+  // removed together — no code path can serve mixed area/county text as though
+  // it were a geographic county list any more. Free-text location search
+  // remains available via `q`/`area`.
 
   app.get('/api/stats', async (req, res) => {
     try {
@@ -1682,6 +1710,7 @@ async function startServer() {
       latitude,
       longitude,
       foundCounty,
+      administrativeUnitId,
       finderPhone,
       createAccount,
       termsAccepted,
@@ -1725,6 +1754,10 @@ async function startServer() {
       return res.status(400).json({ error: foundCountyResolution.error });
     }
     const canonicalFoundCounty = foundCountyResolution.county;
+    const canonicalFoundAdministrativeUnit = resolveAdministrativeUnitId(canonicalFoundCounty, administrativeUnitId);
+    if (!canonicalFoundAdministrativeUnit) {
+      return res.status(400).json({ error: 'Tafadhali chagua kaunti ndogo inayohusiana na kaunti uliyochagua. / Please choose a sub-county belonging to the selected county.' });
+    }
 
     // Declared value is an OPTIONAL, unverified estimate the finder can give
     // of what the item would cost to replace. It is never treated as fact —
@@ -1749,7 +1782,13 @@ async function startServer() {
     }
 
     try {
-      const categories = await db.getCategories();
+      // PHASE 16.1 BATCH 2 (CAT-04) — ACTIVE categories only. A deactivated
+      // category must not be selectable for a NEW found-item report, and this is
+      // the authoritative boundary (the browser is never trusted): an inactive
+      // id is refused here even if a client replays it. The lookup itself is
+      // unchanged — only the list it is checked against is narrower — so the
+      // P12-F1 ordering guarantee (reject before any upload/insert) still holds.
+      const categories = await db.getActiveCategories();
 
       // -----------------------------------------------------------------------
       // PHASE 12 (P12-F1): the category is validated BEFORE any side effect.
@@ -1862,6 +1901,7 @@ async function startServer() {
         // wording is never replaced, normalized in place, or overwritten by any
         // provider result (see §8 of the Phase 9D brief).
         found_county: canonicalFoundCounty,
+        administrative_unit_id: canonicalFoundAdministrativeUnit,
         latitude: numericLat,
         longitude: numericLon,
         finder_phone: finderPhone,
@@ -1928,9 +1968,64 @@ async function startServer() {
 
   // 5. OWNER SEARCH: PRIVACY-MASKED RESULTS
   app.get('/api/items/search', async (req, res) => {
-    const { q, categoryId, area } = req.query;
+    const { q, categoryId, area, county } = req.query;
+
+    // PHASE 16.1 (GEO-16-01) — STRUCTURED COUNTY FILTER.
+    //
+    // `county` filters on the item's DECLARED county (`items.found_county`)
+    // alone. It is NOT a synonym for `area`/`q`: those still search free text,
+    // and nothing here ever infers a county from text, coordinates or an agent
+    // address. A request that names a county which is not one of the canonical
+    // 47 is REFUSED rather than silently downgraded to a free-text search —
+    // a typo must never quietly return "everything".
+    //
+    // Absent parameter = no county constraint, so every existing caller (and
+    // every legacy item whose `found_county` is NULL) keeps its current results.
+    let countyFilter: string | null = null;
+    if (county !== undefined) {
+      const canonicalCounty = typeof county === 'string' ? resolveCountyName(county) : null;
+      if (!canonicalCounty) {
+        return res.status(400).json({ error: FOUND_COUNTY_MESSAGES.invalid });
+      }
+      countyFilter = canonicalCounty;
+    }
 
     try {
+      // PHASE 16.1 BATCH 1 (CAT-07) — STRICT CATEGORY FILTER.
+      //
+      // `categoryId` filters on the item's own classification and is a CANONICAL
+      // category ID (the `categories.id` primary key) — never a display name,
+      // never a partial/fuzzy match, never inferred from text. This mirrors the
+      // county contract immediately above: an absent parameter means "no
+      // constraint", and anything present that is not a canonical value is
+      // REFUSED rather than silently downgraded.
+      //
+      // WHY THE OLD BEHAVIOUR WAS WRONG: it compared the raw query value with
+      // `===` and returned whatever fell out. A typo, a category NAME
+      // ("?categoryId=Laptop"), a stale id, a repeated parameter
+      // ("?categoryId=laptop&categoryId=phone", which Express hands over as an
+      // array) and an array-shaped value all produced exactly the same empty
+      // result set as a legitimate "no matches" search — a search that quietly
+      // lies about what it did.
+      //
+      // Resolution happens here, before any query work, and uses the SAME live
+      // list every other category boundary uses (db.getCategories()); this file
+      // still holds no category dataset of its own.
+      //
+      // The value must already BE a canonical category id, verbatim — the
+      // resolved id has to equal the raw parameter. That exactness is not
+      // cosmetic: the filter below compares the item's stored classification
+      // against this same `categoryId` value, so accepting a padded or otherwise
+      // non-identical variant here would accept a request that then matched
+      // nothing — exactly the silent-empty-result behaviour this change exists
+      // to remove.
+      if (categoryId !== undefined) {
+        const resolvedCategory = resolveCategoryId(categoryId, await db.getCategories());
+        if (!resolvedCategory.ok || resolvedCategory.id !== categoryId) {
+          return res.status(400).json({ error: CATEGORY_MESSAGES.invalid });
+        }
+      }
+
       // PERFORMANCE: canCreateClaim() only ever returns allowed:true for
       // status==='at_agent' — every other status (awaiting_dropoff,
       // claimed, expired, rejected, suspected_stolen, legal_hold) always
@@ -1957,7 +2052,10 @@ async function startServer() {
       const claimabilityChecks = await Promise.all(allItems.map(async item => ({ item, result: await canCreateClaim(item, disputesByItem.get(item.id) ?? []) })));
       let items = claimabilityChecks.filter(c => c.result.allowed).map(c => c.item);
 
-      // Filter by category
+      // Filter by category — CAT-07: `categoryId` here is the canonical id the
+      // boundary above already resolved against the live list, so this remains a
+      // plain equality against the item's stored classification and can never
+      // silently compare an array/undefined/unknown value.
       if (categoryId) {
         items = items.filter(item => item.category_id === categoryId);
       }
@@ -1966,6 +2064,15 @@ async function startServer() {
       if (area) {
         const areaLower = (area as string).toLowerCase();
         items = items.filter(item => item.location_description.toLowerCase().includes(areaLower));
+      }
+
+      // PHASE 16.1 (GEO-16-01) — Filter by DECLARED county.
+      // Applied AFTER the claimability/public-visibility filter above, so a
+      // county search can never surface an item the public search would not
+      // otherwise return. Combination with `q` is an AND: "County: Mombasa" +
+      // "Nyali" returns Mombasa-county items whose searchable text says Nyali.
+      if (countyFilter) {
+        items = items.filter(item => itemMatchesCanonicalCounty(item, countyFilter as string));
       }
 
       // If search query is provided
@@ -2312,7 +2419,9 @@ async function startServer() {
     try {
       const claim = await db.getClaim(claimId);
       if (!claim) {
-        return res.status(404).json({ error: 'Claim haikupatikana.' });
+        // One response for BOTH ownership failures (Phase 16.1 Batch 2A) — see
+        // the constant's own comment in config/claimStatuses.ts.
+        return res.status(404).json({ error: CLAIM_UNAVAILABLE_MESSAGE });
       }
 
       // P0: claim ID alone (a guessable, ~900k-combination numeric space)
@@ -2320,12 +2429,17 @@ async function startServer() {
       // owner_phone — no proof the caller was that owner at all. Now
       // requires the same phone-match standard already used by /lookup,
       // /pay, and /payment-auth elsewhere in this file.
+      //
+      // PHASE 16.1 Batch 2A — the failure response is now the SAME status and
+      // the SAME body as the unknown-claim branch above. Previously an
+      // anonymous caller learned whether a guessed claim ID existed (404) and,
+      // for one that did, whether a guessed phone was its registered owner
+      // phone (403 with different wording) — the exact oracle Phase 7C.7 (R2)
+      // removed from /lookup and F4 removed from /pickup-details.
       const normalizedInput = toE164Kenyan(String(phone).replace(/\s+/g, ''));
       const normalizedOwner = toE164Kenyan(String(claim.owner_phone || '').replace(/\s+/g, ''));
       if (normalizedInput !== normalizedOwner) {
-        return res.status(403).json({
-          error: 'Nambari ya simu uliyoweka hailingani na iliyotumiwa kutengeneza claim hii. / The phone number provided does not match the one used to create this claim.'
-        });
+        return res.status(404).json({ error: CLAIM_UNAVAILABLE_MESSAGE });
       }
 
       // SC-1 (companion guard): an OTP is only meaningful for a claim still
@@ -2333,6 +2447,11 @@ async function startServer() {
       // send a real SMS to the owner of an already-paid/handed-over/refunded
       // claim and set up exactly the backward transition the verify-otp guard
       // above now refuses. Returns 409 (a state conflict, not a bad request).
+      //
+      // ORDER IS A SECURITY PROPERTY (same rule as /pickup-details, F9): the
+      // state gate runs only AFTER ownership has been proven above. If it ran
+      // first, a caller with a wrong phone could still tell which state a real
+      // claim is in — a status oracle for a non-owner.
       if (claim.status !== 'pending_verification') {
         return res.status(409).json({
           error: 'Claim hii imeshapitia uthibitisho. Hakuna OTP mpya inayohitajika. / This claim has already passed verification. No new OTP is required.',
@@ -2502,20 +2621,27 @@ async function startServer() {
     try {
       const claim = await db.getClaim(claimId);
       if (!claim) {
-        return res.status(404).json({ error: 'Claim haikupatikana.' });
+        return res.status(404).json({ error: CLAIM_UNAVAILABLE_MESSAGE });
       }
 
-      if (claim.status !== 'pending_payment') {
-        return res.status(400).json({
-          error: 'Lazima kwanza uthibitishwe na wakala kabla ya kuomba idhini ya malipo. / You must be confirmed by the agent in person before requesting payment authorization.'
-        });
-      }
-
+      // ORDER IS A SECURITY PROPERTY (Phase 16.1 Batch 2A). Ownership is proven
+      // BEFORE the claim's state is consulted, and both ownership failures share
+      // ONE status and ONE body. Previously the status gate ran first and the
+      // phone mismatch answered 403 with different wording, so a caller with a
+      // wrong phone could still separate "no such claim" from "a real claim in
+      // pending_payment", and could confirm whether a guessed number was the
+      // registered owner phone. That is the F4/F9 rule /pickup-details already
+      // applies; this route now applies it too.
       const normalizedInput = toE164Kenyan(String(phone).replace(/\s+/g, ''));
       const normalizedOwner = toE164Kenyan(String(claim.owner_phone || '').replace(/\s+/g, ''));
       if (normalizedInput !== normalizedOwner) {
-        return res.status(403).json({
-          error: 'Nambari ya simu uliyoweka hailingani na iliyotumiwa kutengeneza claim hii. / The phone number provided does not match the one used to create this claim.'
+        return res.status(404).json({ error: CLAIM_UNAVAILABLE_MESSAGE });
+      }
+
+      // Ownership is proven. Only NOW may claim state be consulted.
+      if (claim.status !== 'pending_payment') {
+        return res.status(400).json({
+          error: 'Lazima kwanza uthibitishwe na wakala kabla ya kuomba idhini ya malipo. / You must be confirmed by the agent in person before requesting payment authorization.'
         });
       }
 
@@ -2548,30 +2674,37 @@ async function startServer() {
     }
 
     try {
+      if (!phone) {
+        return res.status(400).json({ error: 'Nambari ya simu inahitajika. / Phone number is required.' });
+      }
+
       const claim = await db.getClaim(claimId);
       if (!claim) {
-        return res.status(404).json({ error: 'Claim haikupatikana.' });
+        return res.status(404).json({ error: CLAIM_UNAVAILABLE_MESSAGE });
       }
+
+      // Ownership proof (unchanged security bar): you must know the claim's
+      // registered owner phone to open a session for it. This is NOT the rule
+      // for the payer M-Pesa number — see payerPhone below.
+      //
+      // ORDER IS A SECURITY PROPERTY (Phase 16.1 Batch 2A): the required-field
+      // guard runs BEFORE any database read, ownership is proven BEFORE the
+      // claim's state is consulted, and both ownership failures share ONE
+      // status + ONE body — so a caller who guesses a claim ID learns nothing
+      // about whether it exists, nor whether a guessed number is its owner.
+      const normalizedInput = toE164Kenyan(String(phone).replace(/\s+/g, ''));
+      const normalizedOwner = toE164Kenyan(String(claim.owner_phone || '').replace(/\s+/g, ''));
+      if (normalizedInput !== normalizedOwner) {
+        return res.status(404).json({ error: CLAIM_UNAVAILABLE_MESSAGE });
+      }
+
+      // Ownership is proven. Only NOW may claim state be consulted.
       if (claim.status !== 'pending_payment') {
         return res.status(400).json({ error: 'Lazima kwanza uthibitishwe na wakala kabla ya kulipa. / You must be confirmed by the agent in person before you can pay.' });
       }
       const freshClaim = await checkClaimExpiry(claim);
       if (!freshClaim || freshClaim.status !== 'pending_payment') {
         return res.status(410).json({ error: 'Muda wa malipo umeisha. / The payment window has expired.' });
-      }
-
-      if (!phone) {
-        return res.status(400).json({ error: 'Nambari ya simu inahitajika. / Phone number is required.' });
-      }
-      // Ownership proof (unchanged security bar): you must know the claim's
-      // registered owner phone to open a session for it. This is NOT the rule
-      // for the payer M-Pesa number — see payerPhone below.
-      const normalizedInput = toE164Kenyan(String(phone).replace(/\s+/g, ''));
-      const normalizedOwner = toE164Kenyan(String(claim.owner_phone || '').replace(/\s+/g, ''));
-      if (normalizedInput !== normalizedOwner) {
-        return res.status(403).json({
-          error: 'Nambari ya simu uliyoweka hailingani na iliyotumiwa kutengeneza claim hii. / The phone number provided does not match the one used to create this claim.'
-        });
       }
 
       // Payer M-Pesa number — may differ from owner_phone. Must be a valid
@@ -2647,25 +2780,35 @@ async function startServer() {
     }
 
     try {
-      const claim = await db.getClaim(claimId);
-      if (!claim) {
-        return res.status(404).json({ error: 'Claim haikupatikana.' });
-      }
-      if (claim.status !== 'pending_payment') {
-        return res.status(400).json({ error: 'Lazima kwanza uthibitishwe na wakala kabla ya kulipa. / You must be confirmed by the agent in person before you can pay.' });
-      }
-      const freshClaim = await checkClaimExpiry(claim);
-      if (!freshClaim || freshClaim.status !== 'pending_payment') {
-        return res.status(410).json({ error: 'Muda wa malipo umeisha. / The payment window has expired.' });
-      }
-
       // Authorization to spend: present a valid, unexpired ownership token.
+      //
+      // PHASE 16.1 Batch 2A — ORDER IS A SECURITY PROPERTY. The token is the
+      // ownership proof for this route, so it is validated BEFORE the claim is
+      // even read: an unknown claim ID and an invalid token now produce the
+      // SAME 403 (getClaimPaymentAuthToken returns null for both), and the
+      // claim's state is only consulted once ownership is proven. Previously a
+      // caller with no token at all could still tell "no such claim" from a
+      // real claim in pending_payment / an expired payment window.
       if (!paymentAuthToken) {
         return res.status(403).json({ error: 'Idhini ya malipo imekosekana. Tafadhali omba idhini mpya kabla ya kulipa. / Payment authorization is missing. Please request authorization before paying.' });
       }
       const authRecord = await db.getClaimPaymentAuthToken(claimId);
       if (!authRecord || authRecord.expires_at.getTime() < Date.now() || !timingSafeEqualHex(hashCode(String(paymentAuthToken)), authRecord.token_hash)) {
         return res.status(403).json({ error: 'Idhini ya malipo si sahihi au imeisha muda. Tafadhali omba idhini mpya. / Payment authorization is invalid or has expired. Please request a new authorization.' });
+      }
+
+      const claim = await db.getClaim(claimId);
+      if (!claim) {
+        return res.status(404).json({ error: 'Claim haikupatikana.' });
+      }
+
+      // Ownership is proven. Only NOW may claim state be consulted.
+      if (claim.status !== 'pending_payment') {
+        return res.status(400).json({ error: 'Lazima kwanza uthibitishwe na wakala kabla ya kulipa. / You must be confirmed by the agent in person before you can pay.' });
+      }
+      const freshClaim = await checkClaimExpiry(claim);
+      if (!freshClaim || freshClaim.status !== 'pending_payment') {
+        return res.status(410).json({ error: 'Muda wa malipo umeisha. / The payment window has expired.' });
       }
 
       const session = await db.getPaymentSessionById(sessionId);
@@ -2786,42 +2929,41 @@ async function startServer() {
     }
 
     try {
-      const claim = await db.getClaim(claimId);
-      if (!claim) {
-        return res.status(404).json({ error: 'Claim haikupatikana.' });
-      }
-
-      if (claim.status !== 'pending_payment') {
-        return res.status(400).json({
-          error: "Lazima kwanza uthibitishwe na wakala kabla ya kulipa. / You must be confirmed by the agent in person before you can pay."
-        });
-      }
-
       // SECURITY: this route is deliberately unauthenticated (owners aren't
-      // logged in). It used to accept a bare claim ID as sufficient —
-      // `phone` was only checked if the caller bothered to send it, so
-      // omitting it entirely let anyone who found/guessed a claim ID
-      // trigger an M-Pesa STK push against the claim's real owner_phone
-      // with zero proof of ownership. Now BOTH are required and checked:
-      // `phone` must resolve (E.164-normalized) to the claim's own
-      // owner_phone, exactly as /lookup already requires, AND the caller
-      // must present a valid, unexpired paymentAuthToken minted by
-      // POST /api/claims/:id/payment-auth (which itself required that same
-      // phone match to issue). Knowing the claim ID, or the phone number,
-      // is no longer individually or jointly sufficient without also
-      // holding a token that expires in 20 minutes and was minted for this
-      // specific payment attempt.
+      // logged in at payment time — see claimGuessRateLimit.test.ts). It used to
+      // accept a bare claim ID as sufficient — `phone` was only checked if the
+      // caller bothered to send it, so omitting it entirely let anyone who
+      // found/guessed a claim ID trigger an M-Pesa STK push against the claim's
+      // real owner_phone with zero proof of ownership. BOTH are now required and
+      // checked: `phone` must resolve (E.164-normalized) to the claim's own
+      // owner_phone, exactly as /lookup already requires, AND the caller must
+      // present a valid, unexpired paymentAuthToken minted by
+      // POST /api/claims/:id/payment-auth (which itself required that same phone
+      // match to issue). Knowing the claim ID, or the phone number, is no longer
+      // individually or jointly sufficient without also holding a token that
+      // expires in 20 minutes and was minted for this specific payment attempt.
+      //
+      // PHASE 16.1 Batch 2A — ORDER IS A SECURITY PROPERTY. The required-field
+      // guard runs BEFORE any database read, ownership is proven BEFORE the
+      // claim's state is consulted, and both ownership failures share ONE status
+      // + ONE body (CLAIM_UNAVAILABLE_MESSAGE). Previously a caller with a wrong
+      // phone could still distinguish "no such claim" (404) from "a real claim
+      // in pending_payment" (400) — a claim-existence and owner-phone oracle on
+      // a ~900,000-combination claim-ID space. This is the same F4/F9 rule
+      // /pickup-details already applies.
       if (!phone) {
         return res.status(400).json({
           error: 'Nambari ya simu inahitajika. / Phone number is required.'
         });
       }
+      const claim = await db.getClaim(claimId);
+      if (!claim) {
+        return res.status(404).json({ error: CLAIM_UNAVAILABLE_MESSAGE });
+      }
       const normalizedInput = toE164Kenyan(String(phone).replace(/\s+/g, ''));
       const normalizedOwner = toE164Kenyan(String(claim.owner_phone || '').replace(/\s+/g, ''));
       if (normalizedInput !== normalizedOwner) {
-        return res.status(403).json({
-          error: 'Nambari ya simu uliyoweka hailingani na iliyotumiwa kutengeneza claim hii. / The phone number provided does not match the one used to create this claim.'
-        });
+        return res.status(404).json({ error: CLAIM_UNAVAILABLE_MESSAGE });
       }
 
       if (!paymentAuthToken) {
@@ -2833,6 +2975,14 @@ async function startServer() {
       if (!authRecord || authRecord.expires_at.getTime() < Date.now() || !timingSafeEqualHex(hashCode(String(paymentAuthToken)), authRecord.token_hash)) {
         return res.status(403).json({
           error: 'Idhini ya malipo si sahihi au imeisha muda. Tafadhali omba idhini mpya. / Payment authorization is invalid or has expired. Please request a new authorization.'
+        });
+      }
+
+      // Ownership is proven (phone match + live authorization token). Only NOW
+      // may claim state be consulted.
+      if (claim.status !== 'pending_payment') {
+        return res.status(400).json({
+          error: "Lazima kwanza uthibitishwe na wakala kabla ya kulipa. / You must be confirmed by the agent in person before you can pay."
         });
       }
 
@@ -2857,14 +3007,12 @@ async function startServer() {
         return res.status(404).json({ error: 'Ada ya kategoria haikupatikana.' });
       }
 
-      // Prefer item.locked_total_fee if present and valid (> 0), else fallback to category.total_fee
-      let resolvedFee = category.total_fee;
-      if (item.locked_total_fee !== undefined && item.locked_total_fee !== null) {
-        const lockedVal = typeof item.locked_total_fee === 'string' ? parseFloat(item.locked_total_fee) : item.locked_total_fee;
-        if (!isNaN(lockedVal) && lockedVal > 0) {
-          resolvedFee = lockedVal;
-        }
-      }
+      // Authoritative server-side amount — never taken from the client, and
+      // resolved by the SAME helper the payment-session route uses:
+      // item.locked_total_fee when present and valid (> 0), else
+      // category.total_fee. Sharing one implementation keeps the two
+      // claimant-facing money routes from drifting apart.
+      const resolvedFee = resolveAuthoritativePaymentFee(item, category);
 
       // Trigger IntaSend M-Pesa STK Push
       const paymentResult = await PaymentService.triggerMpesaStkPush(phone || claim.owner_phone, resolvedFee, claimId);
@@ -3018,19 +3166,35 @@ async function startServer() {
   });
 
   // 7b. Submit user rating for an agent from the owner portal
-  // SECURITY: this route is deliberately unauthenticated (owners aren't
-  // logged in), but that used to mean a bare, guessable claim ID (see the
-  // claim-ID-guessing comments elsewhere in this file — 6-digit numeric
-  // space, under 900,000 values) was sufficient to call db.rateAgent() an
-  // unlimited number of times for any claim, with no check that the claim
-  // had even reached handover. rateAgent() is a running average with no
-  // built-in dedup, so this let anyone who found/guessed a claim ID
-  // arbitrarily inflate or tank an agent's reputation score by spamming
-  // this endpoint. Now gated three ways: rate-limited like the other
-  // claim-ID-guessable routes, requires the claim to have actually reached
-  // a post-handover status, and atomically allows at most one rating per
+  // SECURITY: this route used to be unauthenticated AND unguarded, which meant
+  // a bare, guessable claim ID (see the claim-ID-guessing comments elsewhere in
+  // this file — 6-digit numeric space, under 900,000 values) was sufficient to
+  // call db.rateAgent() an unlimited number of times for any claim, with no
+  // check that the claim had even reached handover. rateAgent() is a running
+  // average with no built-in dedup, so this let anyone who found/guessed a
+  // claim ID arbitrarily inflate or tank an agent's reputation score by
+  // spamming this endpoint. That was closed with three gates: rate-limited like
+  // the other claim-ID-guessable routes, requires the claim to have actually
+  // reached a post-handover status, and atomically allows at most one rating per
   // claim ever (db.markClaimRatedIfNotAlready).
-  app.post('/api/claims/:id/rate', claimGuessLimiter, async (req, res) => {
+  //
+  // PHASE 16.1 Batch 2A — THE ANONYMOUS PREMISE IS GONE. The "owners aren't
+  // logged in" justification this route (and the matching note in
+  // db/database.ts) was written against has been falsified by Phase 16: the one
+  // journey that reaches this endpoint, Track My Claim, is now a customer-
+  // authenticated flow (requireCustomerAuth on POST /api/claims/lookup, and the
+  // same boundary in OwnerView). Rating is a state-changing WRITE to a real
+  // business's public reputation — the last owner-journey mutation still
+  // reachable by nothing but a guessed claim ID. It therefore resolves the
+  // customer session FIRST now.
+  //
+  // This is the SAME middleware, resolving the SAME httpOnly r4m_customer_session
+  // cookie, that already guards /api/claims/lookup and every /api/customer route
+  // — no second authentication mechanism, no new token store, and no change to
+  // the request contract (OwnerView already calls this same-origin, so the
+  // cookie is sent). The three gates above are untouched and remain in force
+  // behind the new boundary.
+  app.post('/api/claims/:id/rate', requireCustomerAuth, claimGuessLimiter, async (req, res) => {
     const claimId = req.params.id;
     const { userRating } = req.body;
 
@@ -3566,11 +3730,33 @@ async function startServer() {
         return res.status(400).json({ error: 'Kategoria na eneo lililopatikana ni lazima.' });
       }
 
+      // -----------------------------------------------------------------------
+      // PHASE 16.1 BATCH 1 (CAT-01) — THE CATEGORY MUST EXIST BEFORE ANY WRITE.
+      // -----------------------------------------------------------------------
+      // Before this guard, an unknown `categoryId` was written straight through
+      // as the item's verified classification. Postgres then rejected it on
+      // `items_category_id_fkey`, and `recordItemVerification`'s catch returned
+      // the raw constraint text to the agent. This resolves the value against the
+      // LIVE category list (the same list the Finder and Owner flows use) and
+      // refuses an unknown/malformed one here — before the item update, before
+      // the verification row, before the audit row, so no side effect can have
+      // happened. Nothing is coerced: the canonical id from the live list is what
+      // gets stored.
+      //
+      // PHASE 16.1 BATCH 2 (CAT-04): resolved against the ACTIVE list, so a
+      // deactivated category can no longer be chosen as a NEW verification
+      // classification. This ordering guarantee is unchanged — it still runs
+      // before the item update, the verification row and the audit row.
+      const resolvedCategory = resolveCategoryId(categoryId, await db.getActiveCategories());
+      if (!resolvedCategory.ok) {
+        return res.status(400).json({ error: resolvedCategory.error });
+      }
+
       const result = await db.recordItemVerification(
         dropoffCode,
         req.user.agentId,
         {
-          category_id: categoryId,
+          category_id: resolvedCategory.id as string,
           name: name ?? null,
           document_number: documentNumber ?? null,
           description: description ?? null,
@@ -3730,8 +3916,36 @@ async function startServer() {
       }
 
       // Get updated claim to return
+      //
+      // SEC-2B-02 — EXPLICIT OUTPUT PROJECTION. This used to be
+      // `res.json({ success: true, claim: updatedClaim })`, i.e. the complete
+      // claim row straight from db.getClaim() — which passes through
+      // signClaim() and therefore materialises a live presigned private-storage
+      // URL into `owner_id_proof_url` (the claimant's government-ID image), and
+      // also carries the raw `security_answers`, `owner_phone`, `owner_email`,
+      // `owner_identifying_details`, `payment_reference` and `paid_at`.
+      //
+      // The authenticated agent legitimately needs NONE of that from this
+      // endpoint, and no client reads it (AgentView only reads `data.error` and
+      // `data.message`). Every other surface projects this same data through a
+      // hand-built allowlist — toOwnerSafeClaimView, toCustomerSafeClaimView,
+      // and GET /api/agents/queue's field-by-field associatedClaim (which maps
+      // security_answers through toAgentVerificationEvidence). This route now
+      // does the same, using the same `row ? {...} : null` shape /pay already
+      // uses. Fields are enumerated explicitly — never a spread — so a future
+      // column cannot leak here by default.
       const updatedClaim = await db.getClaim(claimId);
-      res.json({ success: true, claim: updatedClaim });
+      return res.json({
+        success: true,
+        claim: updatedClaim
+          ? {
+              id: updatedClaim.id,
+              status: updatedClaim.status,
+              agent_confirmed_at: updatedClaim.agent_confirmed_at,
+            }
+          : null,
+      });
+
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
@@ -4395,6 +4609,32 @@ async function startServer() {
         return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
       }
 
+      // -----------------------------------------------------------------------
+      // PHASE 16.1 BATCH 1 (CAT-01) — VALIDATE THE CATEGORY BEFORE THE UPDATE.
+      // -----------------------------------------------------------------------
+      // The submitted `categoryId` went straight into `adminUpdateItem()` and
+      // only afterwards hit `items_category_id_fkey`, turning bad admin input
+      // into an unhandled 500. It is resolved against the LIVE category list
+      // here — the first thing that happens after authorization, so no update,
+      // hash or audit write can precede the rejection — and the canonical id is
+      // what gets written. An omitted field is left undefined exactly as before,
+      // so the existing admin-update contract is otherwise unchanged.
+      let validatedCategoryId: string | undefined = categoryId;
+      if (categoryId !== undefined) {
+        // PHASE 16.1 BATCH 2 (CAT-04) — this stays on the COMPLETE list, on
+        // purpose. This is an ADMIN correction of an already-reported item, not a
+        // user choosing a category for new work, so an administrator must still
+        // be able to file a legacy item under a category that has since been
+        // deactivated. Only the public/new-work boundaries are narrowed to the
+        // active list.
+        const resolvedCategory = resolveCategoryId(categoryId, await db.getCategories());
+        if (!resolvedCategory.ok) {
+          return res.status(400).json({ error: resolvedCategory.error });
+        }
+        validatedCategoryId = resolvedCategory.id as string;
+      }
+
+
       // A manual agent (re)assignment must be accountable: who did it,
       // which agent it was moved from/to, and why. Require a reason
       // whenever an agent is actually being assigned here — matches the
@@ -4421,7 +4661,7 @@ async function startServer() {
       }
 
       const updates: any = {
-        category_id: categoryId,
+        category_id: validatedCategoryId,
         ocr_extracted_number: isDescriptionOnly ? null : (ocrExtractedNumber || null),
         ocr_extracted_name: isDescriptionOnly ? null : (ocrExtractedName ? ocrExtractedName.toUpperCase() : null),
         document_number_hash: documentNumberHash,
@@ -4733,97 +4973,12 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/categories', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
-    try {
-      if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
-      }
-
-      const {
-        id, name_en, name_sw, total_fee, finder_share, agent_share, platform_share, is_sensitive_document,
-        base_fee, complexity_fee, delay_fee, ceiling_percent, finder_pct, agent_pct, platform_pct, finder_reward_cap,
-        elevated_review, public_clue_style,
-      } = req.body;
-
-      if (!id || typeof id !== 'string' || !/^[a-z0-9-]+$/.test(id)) {
-        return res.status(400).json({ error: 'ID lazima iwe herufi ndogo na kistari (lowercase-kebab-case) pekee, na isikuwe tupu.' });
-      }
-
-      // P14A (P14-05) — allow-listed public-recognition masking style. An
-      // OMITTED field keeps the existing default ('generic', applied by the DB
-      // column); a supplied but unsupported value is rejected outright rather
-      // than silently coerced.
-      if (public_clue_style !== undefined && public_clue_style !== null && public_clue_style !== '') {
-        if (!isPublicClueStyle(public_clue_style)) {
-          return res.status(400).json({
-            error: `public_clue_style lazima iwe mojawapo ya: ${PUBLIC_CLUE_STYLES.join(', ')}. / public_clue_style must be one of: ${PUBLIC_CLUE_STYLES.join(', ')}.`
-          });
-        }
-      }
-
-      if (!name_en || typeof name_en !== 'string' || name_en.trim() === '' || !name_sw || typeof name_sw !== 'string' || name_sw.trim() === '') {
-        return res.status(400).json({ error: 'Majina ya kategoria (English & Swahili) lazima yajazwe.' });
-      }
-
-      const existing = await db.getCategory(id);
-      if (existing) {
-        return res.status(400).json({ error: 'ID hii ya kategoria tayari ipo. Tafadhali tumia nyingine.' });
-      }
-
-      const numTotal = Number(total_fee);
-      const numFinder = Number(finder_share);
-      const numAgent = Number(agent_share);
-      const numPlatform = Number(platform_share);
-
-      if (isNaN(numTotal) || numTotal < 0 || isNaN(numFinder) || numFinder < 0 || isNaN(numAgent) || numAgent < 0 || isNaN(numPlatform) || numPlatform < 0) {
-        return res.status(400).json({ error: 'Ada na migao yote lazima iwe nambari inayozidi au sawa na sifuri.' });
-      }
-
-      // Check sum exactly to 2 decimal places to avoid standard JS float issues
-      const total = parseFloat(numTotal.toFixed(2));
-      const sumShares = parseFloat((numFinder + numAgent + numPlatform).toFixed(2));
-      if (total !== sumShares) {
-        return res.status(400).json({
-          error: 'Mgao (finder + agent + platform) lazima uwe sawa na jumla ya ada. / Split shares (finder + agent + platform) must sum to total fee exactly.'
-        });
-      }
-
-      const newCat = await db.createCategory({
-        id,
-        name_en: name_en.trim(),
-        name_sw: name_sw.trim(),
-        total_fee: numTotal,
-        finder_share: numFinder,
-        agent_share: numAgent,
-        platform_share: numPlatform,
-        is_sensitive_document: is_sensitive_document !== false,
-        base_fee: base_fee !== undefined ? Number(base_fee) : undefined,
-        complexity_fee: complexity_fee !== undefined ? Number(complexity_fee) : undefined,
-        delay_fee: delay_fee !== undefined ? Number(delay_fee) : undefined,
-        ceiling_percent: ceiling_percent !== undefined ? Number(ceiling_percent) : undefined,
-        finder_pct: finder_pct !== undefined ? Number(finder_pct) : undefined,
-        agent_pct: agent_pct !== undefined ? Number(agent_pct) : undefined,
-        platform_pct: platform_pct !== undefined ? Number(platform_pct) : undefined,
-        finder_reward_cap: finder_reward_cap === null || finder_reward_cap === undefined || finder_reward_cap === '' ? null : Number(finder_reward_cap),
-        elevated_review: !!elevated_review,
-        // Omitted → undefined, so the column's own 'generic' default applies.
-        public_clue_style: public_clue_style === undefined || public_clue_style === null || public_clue_style === ''
-          ? undefined
-          : public_clue_style,
-      });
-
-      const adminUser = req.user?.username || req.user?.userId || 'admin';
-      await db.logAudit(
-        adminUser,
-        'CATEGORY_CREATED',
-        `Admin created category: id=${id}, name=${name_en}, total_fee=${total_fee}, public_clue_style=${newCat?.public_clue_style ?? 'generic'}`
-      );
-
-      res.json({ success: true, category: newCat });
-    } catch (e: any) {
-      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
-    }
-  });
+  // PHASE 16.1 BATCH 1A — POST /api/admin/categories now lives in
+  // routes/categories.ts (moved verbatim, same extract-for-testability pattern as
+  // routes/adminDisputes.ts) so the admin-create → GET /api/categories chain can
+  // be proven over real HTTP. The is_admin_modified create-asymmetry fix is
+  // applied inside that module.
+  registerAdminCategoryRoutes(app, { requireCurrentAdminSession, sendServerError });
 
   app.put('/api/admin/categories/:id', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     const { id } = req.params;
@@ -4840,7 +4995,7 @@ async function startServer() {
       const {
         name_en, name_sw, total_fee, finder_share, agent_share, platform_share, is_sensitive_document,
         base_fee, complexity_fee, delay_fee, ceiling_percent, finder_pct, agent_pct, platform_pct, finder_reward_cap,
-        elevated_review, is_admin_modified, public_clue_style,
+        elevated_review, is_admin_modified, public_clue_style, is_active,
       } = req.body;
 
       // P14A (P14-05) — allow-listed masking style. OMITTED preserves whatever
@@ -4875,6 +5030,50 @@ async function startServer() {
         });
       }
 
+      // -----------------------------------------------------------------------
+      // PHASE 16.1 BATCH 1 (CAT-19) — Recovery Fee Engine fields are validated too.
+      // -----------------------------------------------------------------------
+      // Same gap as POST: these eight were cast with a bare `Number()`, so a bad
+      // value became NaN/Infinity/negative and surfaced to the admin as a
+      // database 500. PUT is also how an admin CLEARS an optional cap, so its
+      // existing shapes are preserved exactly:
+      //   undefined  -> leave the stored value untouched
+      //   null / ''  -> clear. Only `finder_reward_cap` is nullable ("no cap");
+      //                 the other seven are NOT NULL columns with defaults, so an
+      //                 empty field there means "not supplied" and the stored
+      //                 value is preserved rather than silently zeroed.
+      //   a number   -> validated (amounts >= 0, percentages 0 - 100) and stored.
+      let finderRewardCapUpdate: number | null | undefined = undefined;
+      if (finder_reward_cap !== undefined) {
+        if (finder_reward_cap === null || finder_reward_cap === '') {
+          finderRewardCapUpdate = null;
+        } else {
+          const parsedCap = parseCategoryNumber(finder_reward_cap, 'finder_reward_cap', { min: 0 });
+          if (!parsedCap.ok) {
+            return res.status(400).json({ error: parsedCap.error });
+          }
+          finderRewardCapUpdate = parsedCap.value as number;
+        }
+      }
+
+      const engineFeeFields: Array<[string, unknown, { min: number; max?: number }]> = [
+        ['base_fee', base_fee, { min: 0 }],
+        ['complexity_fee', complexity_fee, { min: 0 }],
+        ['delay_fee', delay_fee, { min: 0 }],
+        ['ceiling_percent', ceiling_percent, { min: 0, max: 100 }],
+        ['finder_pct', finder_pct, { min: 0, max: 100 }],
+        ['agent_pct', agent_pct, { min: 0, max: 100 }],
+        ['platform_pct', platform_pct, { min: 0, max: 100 }],
+      ];
+      const engineFees: Record<string, number | undefined> = {};
+      for (const [field, rawValue, rule] of engineFeeFields) {
+        const parsed = parseCategoryNumber(rawValue, field, rule);
+        if (!parsed.ok) {
+          return res.status(400).json({ error: parsed.error });
+        }
+        engineFees[field] = parsed.supplied ? (parsed.value as number) : undefined;
+      }
+
       const updatedCat = await db.updateCategory(id, {
         name_en: name_en.trim(),
         name_sw: name_sw.trim(),
@@ -4894,15 +5093,20 @@ async function startServer() {
         // ceiling" (false). If the request doesn't say, preserve whatever
         // was already set rather than silently flipping it.
         is_admin_modified: typeof is_admin_modified === 'boolean' ? is_admin_modified : existing.is_admin_modified,
-        base_fee: base_fee !== undefined ? Number(base_fee) : undefined,
-        complexity_fee: complexity_fee !== undefined ? Number(complexity_fee) : undefined,
-        delay_fee: delay_fee !== undefined ? Number(delay_fee) : undefined,
-        ceiling_percent: ceiling_percent !== undefined ? Number(ceiling_percent) : undefined,
-        finder_pct: finder_pct !== undefined ? Number(finder_pct) : undefined,
-        agent_pct: agent_pct !== undefined ? Number(agent_pct) : undefined,
-        platform_pct: platform_pct !== undefined ? Number(platform_pct) : undefined,
-        finder_reward_cap: finder_reward_cap === undefined ? undefined : (finder_reward_cap === null || finder_reward_cap === '' ? null : Number(finder_reward_cap)),
+        base_fee: engineFees.base_fee,
+        complexity_fee: engineFees.complexity_fee,
+        delay_fee: engineFees.delay_fee,
+        ceiling_percent: engineFees.ceiling_percent,
+        finder_pct: engineFees.finder_pct,
+        agent_pct: engineFees.agent_pct,
+        platform_pct: engineFees.platform_pct,
+        finder_reward_cap: finderRewardCapUpdate,
         elevated_review: elevated_review !== undefined ? !!elevated_review : undefined,
+        // CAT-04 (Phase 16.1 Batch 2) — an ordinary edit that does not mention
+        // the lifecycle state leaves it untouched (`undefined`). Only a real
+        // boolean flips it, so saving a name or a fee can never accidentally
+        // deactivate or reactivate a category.
+        is_active: typeof is_active === 'boolean' ? is_active : undefined,
         // Omitted → undefined, which updateCategory treats as "leave unchanged".
         public_clue_style: public_clue_style === undefined || public_clue_style === null || public_clue_style === ''
           ? undefined
@@ -4922,6 +5126,62 @@ async function startServer() {
     }
   });
 
+  /**
+   * PHASE 16.1 BATCH 2 (CAT-04) — CATEGORY LIFECYCLE (activate / deactivate).
+   *
+   * A dedicated action rather than a general edit: the console needs to retire or
+   * restore a category with ONE click, and routing that through
+   * PUT /api/admin/categories/:id would mean re-submitting every other field
+   * (names, fees, percentages) — so a stale console tab could silently revert a
+   * concurrent pricing edit. This endpoint writes exactly one column.
+   *
+   * It is the ONLY supported way to retire a CANONICAL seeded category (CAT-06):
+   * deactivating keeps the row, so every historical `items.category_id` /
+   * `lost_reports.category_id` reference stays intact and searchable, while the
+   * category disappears from every "choose a category" surface.
+   *
+   * Admin-only, audited, and validated: `is_active` must be a real boolean.
+   *
+   * Registered as PUT (a full replacement of this sub-resource's state, which is
+   * idempotent) rather than PATCH: the repository's admin-route security audit
+   * (src/__tests__/adminRouteAudit.test.ts) enumerates `get|post|put|delete`
+   * /api/admin routes and asserts each one keeps an inline role check. Using a
+   * verb outside that scan would place a brand-new admin mutation outside the
+   * audit that exists to catch exactly that — so this route deliberately lands
+   * INSIDE it.
+   */
+  app.put('/api/admin/categories/:id/active', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
+    const { id } = req.params;
+    try {
+      if (req.user?.role !== 'admin') {
+        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+      }
+
+      const is_active = req.body?.is_active;
+      if (typeof is_active !== 'boolean') {
+        return res.status(400).json({
+          error: 'is_active lazima iwe true au false. / is_active must be a boolean (true or false).'
+        });
+      }
+
+      const updated = await db.setCategoryActive(id, is_active);
+      if (!updated) {
+        return res.status(404).json({ error: 'Kategoria haikupatikana.' });
+      }
+
+      const adminUser = req.user?.username || req.user?.userId || 'admin';
+      await db.logAudit(
+        adminUser,
+        is_active ? 'CATEGORY_ACTIVATED' : 'CATEGORY_DEACTIVATED',
+        `Admin set category id=${id} is_active=${is_active}`
+      );
+
+      res.json({ success: true, category: updated });
+    } catch (e: any) {
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
+    }
+  });
+
   app.delete('/api/admin/categories/:id', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     const { id } = req.params;
     try {
@@ -4934,11 +5194,43 @@ async function startServer() {
         return res.status(404).json({ error: 'Kategoria haikupatikana.' });
       }
 
-      // Check count of items referencing this category_id
-      const count = await db.getItemsCountForCategory(id);
-      if (count > 0) {
+      // -----------------------------------------------------------------------
+      // PHASE 16.1 BATCH 2 (CAT-06) — A CANONICAL CATEGORY IS NEVER DELETED.
+      // -----------------------------------------------------------------------
+      // The 46 baseline categories are part of the platform's vocabulary: every
+      // historical item, lost report and verification that named one of them
+      // depends on that id continuing to exist, and the boot sync would recreate
+      // a deleted baseline row anyway (insert-only, so it WOULD come back while
+      // the references were still broken in the meantime). Retiring one is a
+      // LIFECYCLE action — deactivate it — not a destructive one.
+      //
+      // The id set is derived from the same canonical seed the sync uses; there
+      // is no second list (see isCanonicalCategoryId in db/database.ts).
+      if (db.isCanonicalCategoryId(id)) {
         return res.status(409).json({
-          error: `Haiwezi kufutwa: bidhaa ${count} zinatumia kategoria hii. / Cannot delete: ${count} items are using this category.`
+          error: 'Kategoria hii ni ya msingi (canonical) na haiwezi kufutwa. Imezimwa (deactivate) badala yake. / This is a canonical category and cannot be deleted. Deactivate it instead.'
+        });
+      }
+
+      // -----------------------------------------------------------------------
+      // PHASE 16.1 BATCH 1 (CAT-05) — EVERY REFERENCE, NOT JUST items.category_id.
+      // -----------------------------------------------------------------------
+      // The old guard counted `items.category_id` only. But `categories` is
+      // referenced by THREE foreign keys, so a category used solely by a lost
+      // report (or only as an agent's `verified_category_id`) sailed past the
+      // guard and then failed inside DELETE on `lost_reports_category_id_fkey` —
+      // a raw 500 for an action the API had just described as safe. The database
+      // must never be the first line of defence for this. `total === 0` is the
+      // only condition under which deletion proceeds, and the message names the
+      // references that actually exist so an admin can act on it.
+      const references = await db.getCategoryReferenceCounts(id);
+      if (references.total > 0) {
+        const parts: string[] = [];
+        if (references.items > 0) parts.push(`bidhaa ${references.items}`);
+        if (references.verifiedItems > 0) parts.push(`bidhaa zilizothibitishwa ${references.verifiedItems}`);
+        if (references.lostReports > 0) parts.push(`ripoti za upotevu ${references.lostReports}`);
+        return res.status(409).json({
+          error: `Haiwezi kufutwa: rekodi ${references.total} zinatumia kategoria hii (${parts.join(', ')}). / Cannot delete: ${references.total} records are using this category (${parts.join(', ')}).`
         });
       }
 
@@ -4985,7 +5277,15 @@ async function startServer() {
     // have no legitimate reason to be reachable over HTTP at all. Denylist
     // checked before the static handler runs, returning a plain 404 (not
     // 403) so the response doesn't even confirm a backend layer exists.
-    const srcBackendPathPrefixes = ['/src/server.ts', '/src/db/', '/src/services/', '/src/__tests__/'];
+    // SEC-2B-04 — '/src/routes/' was missing from this list. The six
+    // backend-only route modules (adminClaims, adminDisputes,
+    // adminLostReports, customerClaims, lostReports, publicItems) live there,
+    // are imported ONLY by server.ts, and are referenced by no frontend file —
+    // so no browser sourcemap can ever need them, which is the same test
+    // applied to the four prefixes above. Without this entry
+    // GET /src/routes/adminClaims.ts returned the admin API's shape and its
+    // permission-guard wiring as plain text in production.
+    const srcBackendPathPrefixes = ['/src/server.ts', '/src/db/', '/src/services/', '/src/__tests__/', '/src/routes/'];
     app.use('/src', (req, res, next) => {
       if (srcBackendPathPrefixes.some(prefix => req.path === prefix || req.path.startsWith(prefix))) {
         return res.status(404).send('Not Found');

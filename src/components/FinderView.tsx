@@ -12,6 +12,7 @@ import { translations } from '../types';
 // offering county names there invited people to type a county where a place was
 // expected. The exact-location field stays free text.
 import { countiesByUxGroup } from '../config/kenyaCounties';
+import { administrativeUnitsForCounty } from '../config/kenyaAdministrativeUnits';
 import { Camera, Upload, AlertCircle, AlertTriangle, MapPin, CheckCircle, Shield, ArrowRight, Loader2, RefreshCw, X } from 'lucide-react';
 
 // Computed once at module scope: the 47 counties, grouped by the UX-only
@@ -49,6 +50,8 @@ export default function FinderView({ lang, categories, categoriesLoading = false
   // optional device coordinates. The server re-validates and canonicalizes it;
   // this state holds exactly what the user chose so the select stays truthful.
   const [foundCounty, setFoundCounty] = useState('');
+  const [foundAdministrativeUnit, setFoundAdministrativeUnit] = useState('');
+  const foundAdministrativeUnits = administrativeUnitsForCounty(foundCounty);
   const [latitude, setLatitude] = useState<number | null>(null);
   const [longitude, setLongitude] = useState<number | null>(null);
   const [gpsLoading, setGpsLoading] = useState(false);
@@ -73,6 +76,28 @@ export default function FinderView({ lang, categories, categoriesLoading = false
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  /**
+   * CAT-11 (Phase 16.1 Batch 1) — is the SELECTED category a sensitive document?
+   *
+   * The single rule for all three call sites in this component. It reads
+   * `is_sensitive_document` off the live category record and nothing else.
+   *
+   * WHAT WAS WRONG: each site also compared the id against a literal 'other',
+   * e.g. `categoryId !== 'other' && isSensitive`. There is no canonical category
+   * called 'other' — the canonical generic categories are 'other-item' and
+   * 'other-document' (src/db/database.ts) — so that comparison was ALWAYS true
+   * and the "don't document-scan a generic, non-document item" behaviour it was
+   * written for never actually applied. No replacement sentinel is needed:
+   * `is_sensitive_document` already draws exactly that line ('other-item' false ->
+   * no scan, 'other-document' true -> scan), and an unrecognised or not-yet-chosen
+   * category still fails closed to sensitive so the scan is offered rather than
+   * silently skipped.
+   */
+  const isSelectedCategorySensitive = (): boolean => {
+    const selectedCat = categories.find((c: any) => c.id === categoryId);
+    return selectedCat ? (selectedCat.is_sensitive_document !== false) : true;
+  };
 
   // Stop camera stream when leaving
   useEffect(() => {
@@ -137,10 +162,10 @@ export default function FinderView({ lang, categories, categoriesLoading = false
         stopCamera();
         setCategoryManuallySet(false);
         
-        // Auto trigger analysis if not "other" category and sensitive
-        const selectedCat = categories.find(c => c.id === categoryId);
-        const isSensitive = selectedCat ? (selectedCat.is_sensitive_document !== false) : (categoryId !== 'other');
-        if (categoryId !== 'other' && isSensitive) {
+        // Auto trigger analysis when the selected category is a sensitive
+        // document — CAT-11: the "is it generic?" question is answered by the
+        // live category's own `is_sensitive_document`, never by an id literal.
+        if (isSelectedCategorySensitive()) {
           analyzePhoto(dataUrl);
         }
       }
@@ -157,10 +182,9 @@ export default function FinderView({ lang, categories, categoriesLoading = false
         setPhotoBase64(result);
         setCategoryManuallySet(false);
         
-        // Auto trigger analysis if not "other" category and sensitive
-        const selectedCat = categories.find(c => c.id === categoryId);
-        const isSensitive = selectedCat ? (selectedCat.is_sensitive_document !== false) : (categoryId !== 'other');
-        if (categoryId !== 'other' && isSensitive) {
+        // Auto trigger analysis when the selected category is a sensitive
+        // document — CAT-11: same single rule as the camera path above.
+        if (isSelectedCategorySensitive()) {
           analyzePhoto(result);
         }
       };
@@ -239,8 +263,8 @@ export default function FinderView({ lang, categories, categoriesLoading = false
     // disabled, so an implicit submission (Enter inside a text field) must not
     // be able to fire a second report.
     if (isSubmitting) return;
-    const selectedCat = categories.find(c => c.id === categoryId);
-    const isSensitive = selectedCat ? (selectedCat.is_sensitive_document !== false) : (categoryId !== 'other');
+    // CAT-11: sensitivity comes from the live category record alone.
+    const isSensitive = isSelectedCategorySensitive();
 
     if (!categoryId || !photoBase64 || !locationDescription || !finderPhone) {
       setErrorMsg(lang === 'en' ? 'Please fill out all required fields and upload/capture a photo.' : 'Tafadhali jaza sehemu zote na uweke picha.');
@@ -253,6 +277,10 @@ export default function FinderView({ lang, categories, categoriesLoading = false
     // never substitutes for that.
     if (!foundCounty) {
       setErrorMsg(lang === 'en' ? 'Please choose the county where you found the item.' : 'Tafadhali chagua kaunti ulipopata kitu.');
+      return;
+    }
+    if (!foundAdministrativeUnit) {
+      setErrorMsg(lang === 'en' ? 'Please choose the sub-county where you found the item.' : 'Tafadhali chagua kaunti ndogo ulipopata kitu.');
       return;
     }
 
@@ -295,6 +323,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
           extractedName,
           locationDescription,
           foundCounty,
+          administrativeUnitId: foundAdministrativeUnit,
           latitude,
           longitude,
           finderPhone,
@@ -419,6 +448,8 @@ export default function FinderView({ lang, categories, categoriesLoading = false
               setExtractedNumber('');
               setExtractedName('');
               setDescription('');
+              setFoundCounty('');
+              setFoundAdministrativeUnit('');
               setLocationDescription('');
               setFinderPhone('');
               setCreateAccount(false);
@@ -596,11 +627,16 @@ export default function FinderView({ lang, categories, categoriesLoading = false
             </div>
 
             {(() => {
-              const selectedCat = categories.find(c => c.id === categoryId);
-              const isSensitive = selectedCat ? (selectedCat.is_sensitive_document !== false) : (categoryId !== 'other');
+              // CAT-11: the sensitivity decision comes from the live category
+              // record alone — see isSelectedCategorySensitive() above.
+              const isSensitive = isSelectedCategorySensitive();
               if (isSensitive) {
-                if (categoryId !== 'other') {
-                  return (
+                // CAT-11: the former inner `if (categoryId !== 'other')` wrapper
+                // was removed. 'other' is not a canonical category id, so the
+                // test was always true and its `else` branch was unreachable
+                // dead code. The reachable behaviour is unchanged: a sensitive
+                // document asks for its document number.
+                return (
                     <div className="space-y-2">
                       <label htmlFor="finder-doc-number" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">{t.docNumberLabel}</label>
                       <input
@@ -613,24 +649,6 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                       />
                     </div>
                   );
-                } else {
-                  return (
-                    <div className="space-y-2">
-                      <label htmlFor="finder-description" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">
-                        {lang === 'en' ? 'Item Description *' : 'Maelezo ya Bidhaa *'}
-                      </label>
-                      <input
-                        id="finder-description"
-                        type="text"
-                        value={description}
-                        onChange={(e) => setDescription(e.target.value)}
-                        className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none"
-                        placeholder={lang === 'en' ? 'What it is, distinguishing features' : 'Ni nini, sifa zake maalum'}
-                        required
-                      />
-                    </div>
-                  );
-                }
               } else {
                 return (
                   <div className="space-y-2">
@@ -653,8 +671,8 @@ export default function FinderView({ lang, categories, categoriesLoading = false
           </div>
 
           {(() => {
-            const selectedCat = categories.find(c => c.id === categoryId);
-            const isSensitive = selectedCat ? (selectedCat.is_sensitive_document !== false) : (categoryId !== 'other');
+            // CAT-11: sensitivity comes from the live category record alone.
+            const isSensitive = isSelectedCategorySensitive();
             if (!isSensitive) {
               return (
                 <div className="space-y-2">
@@ -672,7 +690,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                   />
                 </div>
               );
-            } else if (categoryId !== 'other') {
+            } else {
               return (
                 <div className="space-y-2">
                   <label htmlFor="finder-item-name" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">{t.docNameLabel}</label>
@@ -687,7 +705,6 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                 </div>
               );
             }
-            return null;
           })()}
 
           {/* Analysis results are pre-fill suggestions the finder can correct.
@@ -719,7 +736,10 @@ export default function FinderView({ lang, categories, categoriesLoading = false
               <select
                 id="finder-county"
                 value={foundCounty}
-                onChange={(e) => setFoundCounty(e.target.value)}
+                onChange={(e) => {
+                  setFoundCounty(e.target.value);
+                  setFoundAdministrativeUnit('');
+                }}
                 className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none"
                 required
                 disabled={isSubmitting}
@@ -740,6 +760,29 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                 {lang === 'en'
                   ? 'We use this to compare your report with items lost in the same county.'
                   : 'Tunatumia hii kulinganisha ripoti yako na vitu vilivyopotea katika kaunti moja.'}
+              </span>
+            </div>
+
+            <div className="space-y-1.5">
+              <label htmlFor="finder-administrative-unit" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">
+                {lang === 'en' ? 'Sub-county where you found it' : 'Kaunti ndogo ulipopata kitu'} *
+              </label>
+              <select
+                id="finder-administrative-unit"
+                value={foundAdministrativeUnit}
+                onChange={(e) => setFoundAdministrativeUnit(e.target.value)}
+                className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none disabled:bg-stone-100 disabled:text-stone-500"
+                required
+                disabled={isSubmitting || !foundCounty}
+                aria-describedby="finder-administrative-unit-hint"
+              >
+                <option value="">{foundCounty ? (lang === 'en' ? 'Select a sub-county' : 'Chagua kaunti ndogo') : (lang === 'en' ? 'Select county first' : 'Chagua kaunti kwanza')}</option>
+                {foundAdministrativeUnits.map((unit) => (
+                  <option key={unit.id} value={unit.id}>{unit.name}</option>
+                ))}
+              </select>
+              <span id="finder-administrative-unit-hint" className="text-caption text-ink-muted block leading-tight">
+                {lang === 'en' ? 'This structured selection is separate from the exact place you enter below.' : 'Uteuzi huu tofauti na mahali halisi unayoingia hapa chini.'}
               </span>
             </div>
 

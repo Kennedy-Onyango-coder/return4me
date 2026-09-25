@@ -432,10 +432,19 @@ const FORBIDDEN_KEYS = [
   'finder_phone', 'finder_email', 'ocr_extracted_number', 'ocr_extracted_name',
   'document_number_hash', 'owner_phone', 'phone', 'email', 'latitude', 'longitude',
   'assigned_agent_id', 'agent', 'customer_id', 'score', 'signals', 'verified_document_number',
-  // PHASE 9D — no geographic enrichment may reach this DTO. The found item's
-  // explicit county, any distance, and any geocoding provider/precision/
-  // confidence/provenance metadata are all internal to the server.
-  'found_county', 'distance', 'distance_km', 'provider', 'precision', 'confidence',
+  // PHASE 9D — no geographic ENRICHMENT may reach this DTO. Any distance, and any
+  // geocoding provider/precision/confidence/provenance metadata, is internal to
+  // the server.
+  //
+  // PHASE 16.1 (GEO-16-03): `found_county` was on this list and has been
+  // deliberately REMOVED from it — the batch approves publishing the canonical
+  // county on the public read model (services/publicItemView.ts) and therefore
+  // on every consumer of it, this candidate included. It is strictly coarser
+  // than what this same payload already carries (`location_description`, e.g.
+  // "Westlands, Nairobi"), it is not derived from any geocoding, and it is the
+  // level the product actually models. The positive assertion for it lives in
+  // the allow-list test below; everything else here stays forbidden.
+  'distance', 'distance_km', 'provider', 'precision', 'confidence',
   'provenance', 'geocoding', 'geocoded',
 ];
 
@@ -480,9 +489,21 @@ describe('match candidates leak nothing private', () => {
     for (const match of res.body.matches) {
       expect(Object.keys(match).sort()).toEqual([
         'category_id', 'description', 'document_name_fuzzy', 'found_at',
-        'id', 'isDescriptionOnly', 'is_sensitive_document',
+        'found_county', 'id', 'isDescriptionOnly', 'is_sensitive_document',
         'location_description', 'match_reasons', 'photo_url',
       ]);
+    }
+  });
+
+  it('carries the canonical county (GEO-16-03) and nothing finer', async () => {
+    // ITEM_MATCH declares found_county 'Nairobi City' (see the fixture above).
+    // The county reaches the customer only because the single public read model
+    // publishes it; the candidate adds no geography of its own.
+    const res = await getMatches(TOKEN_A, LR_A_MATCH);
+    const match = res.body.matches.find((m: any) => m.id === ITEM_MATCH);
+    expect(match.found_county).toBe('Nairobi City');
+    for (const finer of ['latitude', 'longitude', 'sub_county', 'city', 'town', 'ward']) {
+      expect(match, `candidate must not expose ${finer}`).not.toHaveProperty(finer);
     }
   });
 });

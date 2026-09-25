@@ -20,14 +20,14 @@ interface EmptyStateProps {
 export default function EmptyState({ icon: Icon, title, description, action, className = '' }: EmptyStateProps) {
   return (
     <div
-      className={`bg-brand-light-gray/60 border border-brand-border rounded-2xl px-6 py-8 text-center space-y-2 ${className}`}
+      className={`bg-[var(--appearance-surface-muted)] border border-[var(--appearance-border)] rounded-2xl px-6 py-8 text-center space-y-2 ${className}`}
     >
       {Icon && (
-        <Icon size={22} aria-hidden="true" className="mx-auto text-brand-muted-text mb-1" />
+        <Icon size={22} aria-hidden="true" className="mx-auto text-[var(--appearance-text-muted)] mb-1" />
       )}
-      <p className="text-sm font-extrabold text-brand-dark-text">{title}</p>
+      <p className="text-sm font-extrabold text-[var(--appearance-text-primary)]">{title}</p>
       {description && (
-        <p className="text-xs text-brand-muted-text max-w-sm mx-auto leading-relaxed">
+        <p className="text-xs text-[var(--appearance-text-muted)] max-w-sm mx-auto leading-relaxed">
           {description}
         </p>
       )}

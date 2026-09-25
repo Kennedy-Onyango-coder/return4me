@@ -102,12 +102,12 @@ export default function Modal({
         aria-modal="true"
         aria-labelledby="r4m-modal-title"
         tabIndex={-1}
-        className={`relative bg-white w-full sm:max-w-lg max-h-[90vh] sm:max-h-[85vh] flex flex-col rounded-t-2xl sm:rounded-2xl border border-brand-border shadow-sm outline-none ${className}`}
+        className={`relative bg-[var(--appearance-surface)] text-[var(--appearance-text-primary)] w-full sm:max-w-lg max-h-[90vh] sm:max-h-[85vh] flex flex-col rounded-t-2xl sm:rounded-2xl border border-[var(--appearance-border)] shadow-sm outline-none ${className}`}
       >
-        <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-brand-border shrink-0">
+        <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-[var(--appearance-border)] shrink-0">
           <h2
             id="r4m-modal-title"
-            className={`text-base font-extrabold text-brand-dark-text ${hideTitle ? 'sr-only' : ''}`}
+            className={`text-base font-extrabold text-[var(--appearance-text-primary)] ${hideTitle ? 'sr-only' : ''}`}
           >
             {title}
           </h2>
@@ -115,14 +115,14 @@ export default function Modal({
             type="button"
             onClick={onClose}
             aria-label={closeLabel ?? 'Close dialog'}
-            className="shrink-0 p-1.5 -m-1.5 cursor-pointer text-brand-muted-text hover:text-brand-dark-text transition-colors rounded-lg"
+            className="shrink-0 p-1.5 -m-1.5 cursor-pointer text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)] transition-colors rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)]"
           >
             <X size={18} aria-hidden="true" />
           </button>
         </div>
-        <div className="px-5 py-4 overflow-y-auto text-sm text-brand-dark-text">{children}</div>
+        <div className="px-5 py-4 overflow-y-auto text-sm text-[var(--appearance-text-primary)]">{children}</div>
         {footer && (
-          <div className="px-5 py-4 border-t border-brand-border shrink-0 bg-white rounded-b-3xl">
+          <div className="px-5 py-4 border-t border-[var(--appearance-border)] shrink-0 bg-[var(--appearance-surface)] rounded-b-3xl">
             {footer}
           </div>
         )}

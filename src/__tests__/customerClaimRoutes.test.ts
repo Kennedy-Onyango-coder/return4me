@@ -417,8 +417,8 @@ describe('customer claims: DTO safety', () => {
     // column's now() default, so it is legitimately absent there while present
     // on real Postgres.
     const allowedItemKeys = [
-      'category_id', 'created_at', 'description', 'document_name_fuzzy',
-      'id', 'isDescriptionOnly', 'is_sensitive_document', 'location_description', 'photo_url',
+      'category_id', 'created_at', 'description', 'document_name_fuzzy', 'found_county',
+      'administrative_unit_id', 'id', 'isDescriptionOnly', 'is_sensitive_document', 'location_description', 'photo_url',
     ];
     for (const key of Object.keys(claim.item)) {
       expect(allowedItemKeys).toContain(key);

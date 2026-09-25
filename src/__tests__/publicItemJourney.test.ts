@@ -61,6 +61,8 @@ const CLAIM_UNKNOWN = `TEST-7B-CLAIM-NONE-${RUN}`;
 
 const PUBLIC_ITEM_KEYS = [
   'id', 'category_id', 'photo_url', 'is_sensitive_document', 'document_name_fuzzy',
+  // Canonical county plus the supplied-baseline structured sub-county. Exact place remains separate.
+  'found_county', 'administrative_unit_id', 'administrative_unit_name',
   'location_description', 'description', 'isDescriptionOnly', 'created_at', 'status', 'agent',
 ];
 const PUBLIC_AGENT_KEYS = ['business_name', 'rough_area'];
@@ -82,8 +84,7 @@ const NEVER_PUBLIC_FIELDS = [
   // for matching consistency. It is deliberately NOT part of the public item
   // read model (PUBLIC_ITEM_KEYS above is the exact allow-list, so adding it
   // would fail that assertion too). Phase 9D added no coordinate, distance,
-  // geocoding-provider, precision or confidence field to any public DTO.
-  'found_county',
+  // geocoding-provider, precision or confidence field to any public DTO. PHASE 16.1 (GEO-16-03) later APPROVED publishing the county at COUNTY LEVEL ONLY, so it now appears in PUBLIC_ITEM_KEYS above (still the exact allow-list) and is no longer named here; no coordinate, distance, geocoding-provider, precision or confidence field has been added to any public DTO.
 ];
 
 function itemRow(id: string, overrides: Record<string, any> = {}) {

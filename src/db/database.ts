@@ -25,7 +25,7 @@ import {
   customer_claim_links as customerClaimLinksTable,
   lost_reports as lostReportsTable,
 } from "./schema.ts";
-import { eq, and, or, isNull, isNotNull, inArray, notInArray, lte, gte, desc, sql } from "drizzle-orm";
+import { eq, and, or, isNull, isNotNull, inArray, notInArray, lte, gte, desc, asc, sql } from "drizzle-orm";
 import { isAllowedClaimTransition, TERMINAL_CLAIM_STATUSES } from "../config/claimStatuses";
 import { getSignedPhotoUrl } from "../services/storage.ts";
 
@@ -70,6 +70,14 @@ export interface Category {
   // it becomes publicly searchable — see feeEngine/schema.ts comments.
   elevated_review: boolean;
   public_clue_style: string;
+  // CANONICAL DISPLAY ORDER (Phase 16.1 Batch 1 — CAT-03). The ONLY ordering
+  // input for getCategories(); see the column comment in schema.ts. Not
+  // admin-editable in this batch.
+  sort_order: number;
+  // LIFECYCLE STATE (Phase 16.1 Batch 2 — CAT-04). True = selectable for new
+  // work; false = historical-only (still resolvable, still searchable, still
+  // visible to admins, but never offered for a new report/verification).
+  is_active: boolean;
 }
 
 export interface Agent {
@@ -114,6 +122,8 @@ export interface FoundItem {
   // field existed). Never inferred, never geocoded. See the column comment in
   // db/schema.ts for why it is nullable and why there is no backfill.
   found_county?: string | null;
+  /** Supplied-baseline second-level administrative identity; null for historical rows. */
+  administrative_unit_id?: string | null;
   finder_phone: string; // Securely stored, never shown
   // Nullable: an item can be awaiting MANUAL agent assignment (see
   // needs_manual_agent_reassignment) when confident automatic matching
@@ -143,13 +153,26 @@ export interface FoundItem {
   fee_ceiling_applied?: boolean;
   // Agent-verified fields — see the schema.ts comment on these columns.
   // Never populated by the Finder; only ever written by
-  // db.recordItemVerification(). Falls back to the original Finder field
-  // (ocr_extracted_name, ocr_extracted_number, description,
-  // location_description) when the Agent hasn't corrected that
-  // particular field — see resolveVerifiedItemFields in
-  // publicRecognition.ts, which is the ONLY place that should read these
-  // with fallback logic; everywhere else, null here genuinely means "not
-  // yet verified."
+  // db.recordItemVerification(), which populates EVERY one of them on a
+  // successful verification (a field the Agent did not correct keeps the
+  // Finder's original value, and a field with no value at all is stored as
+  // null — which is itself the final answer, not a "not yet verified" signal;
+  // `verification_status` is what says whether verification has happened).
+  //
+  // There is no shared "resolve verified fields with fallback" helper. The two
+  // production consumers read these columns differently, on purpose:
+  //   - services/publicRecognition.ts (buildSafePublicClues) reads
+  //     verified_name / verified_document_number / verified_found_area /
+  //     verified_description and does NOT fall back to the raw Finder fields —
+  //     it refuses outright unless verification_status is
+  //     'confirmed_as_reported' or 'corrected'.
+  //   - services/lostReportMatching.ts reads verified_category_id /
+  //     verified_found_area / verified_description / verified_name, each
+  //     preferring the verified value and falling back to the Finder/reported
+  //     field (verified_category_id -> category_id, verified_found_area ->
+  //     location_description, verified_description -> description,
+  //     verified_name -> document_name_fuzzy).
+  // No other code should read these with fallback logic.
   verified_category_id?: string | null;
   verified_name?: string | null;
   verified_document_number?: string | null;
@@ -539,7 +562,38 @@ function parseCategory(row: any): Category {
     finder_reward_cap: row.finder_reward_cap !== undefined && row.finder_reward_cap !== null ? parseFloat(row.finder_reward_cap) : null,
     elevated_review: !!row.elevated_review,
     public_clue_style: row.public_clue_style || "generic",
+    // CAT-03 — the canonical display position. Legacy/absent values fall back to
+    // 0, which is exactly the column default the migration gives existing rows.
+    sort_order: row.sort_order !== undefined && row.sort_order !== null ? Number(row.sort_order) : 0,
+    // CAT-04 — `!== false` rather than `!!`: a row from a database that predates
+    // the column (or a mock fixture that omits it) must read as ACTIVE, which is
+    // also the column default. Only an explicit false deactivates a category.
+    is_active: row.is_active !== false,
   };
+}
+
+/**
+ * CAT-03 (Phase 16.1 Batch 1) — the canonical category ordering comparator.
+ *
+ * Exactly the ordering `getCategories()` expresses in SQL
+ * (`sort_order` ASC, then `id` ASC), applied in memory so the in-memory mock
+ * query engine — which does not implement ORDER BY — cannot hand back a
+ * different order than Postgres. Total and deterministic: two rows always
+ * compare the same way, and `id` (the primary key) is unique, so the result is
+ * a strict total order with no dependence on insertion sequence.
+ *
+ * The `id` tie-break is a plain UTF-16 code-unit comparison rather than
+ * `localeCompare`: ordering must not change with the host's locale or ICU data,
+ * and it must agree with `Array.prototype.sort()`'s default. In practice this is
+ * moot for real data — every canonical id is lowercase kebab-case and admin
+ * creation enforces the same shape — but a deterministic comparator should not
+ * depend on the machine it runs on.
+ */
+function compareCategoryOrder(a: Category, b: Category): number {
+  const byOrder = (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0);
+  if (byOrder !== 0) return byOrder;
+  if (a.id === b.id) return 0;
+  return a.id < b.id ? -1 : 1;
 }
 
 function parseAgent(row: any): Agent {
@@ -588,6 +642,7 @@ function parseFoundItem(row: any): FoundItem {
     latitude: row.latitude !== null && row.latitude !== undefined ? parseFloat(row.latitude) : null,
     longitude: row.longitude !== null && row.longitude !== undefined ? parseFloat(row.longitude) : null,
     found_county: row.found_county ?? null,
+    administrative_unit_id: row.administrative_unit_id ?? null,
     finder_phone: row.finder_phone || "",
     assigned_agent_id: row.assigned_agent_id ?? null,
     status: row.status as any,
@@ -752,6 +807,7 @@ export interface LostReport {
   category_id: string;
   status: string;
   county: string;
+  administrative_unit_id?: string | null;
   location_area: string;
   location_landmark: string | null;
   lost_at_from: string;
@@ -784,6 +840,7 @@ function parseLostReport(row: any): LostReport {
     category_id: row.category_id,
     status: row.status,
     county: row.county,
+    administrative_unit_id: row.administrative_unit_id ?? null,
     location_area: row.location_area,
     location_landmark: row.location_landmark ?? null,
     lost_at_from: iso(row.lost_at_from) || "",
@@ -801,17 +858,60 @@ function parseLostReport(row: any): LostReport {
   };
 }
 
+/**
+ * The ids of the CANONICAL seeded categories (Phase 16.1 Batch 2 — CAT-08).
+ *
+ * WHY THIS EXISTS: the DELETE policy has to distinguish "this is one of the 46
+ * baseline categories the platform ships with" (which must never be physically
+ * deleted — it is deactivated instead) from "this is an administrator-created
+ * category" (which may be deleted when nothing references it).
+ *
+ * It is derived from — not a copy of — the ONE canonical seed: the seed array is
+ * declared inside syncDefaultCategories() (the single definition of the baseline
+ * category set), and that method publishes the ids here as its first action on
+ * every boot. There is deliberately no second 46-id array anywhere in the
+ * repository, and no config file to drift out of step with the seed.
+ *
+ * FAIL-SAFE: while this is still `null` — i.e. before a sync has run — every id
+ * is treated as canonical, so a category can never be physically deleted merely
+ * because the application does not yet know which ids the seed defines. In a
+ * running deployment syncDefaultCategories() completes during startup, before
+ * the server begins accepting requests, so the real set is always in place.
+ */
+let canonicalCategoryIds: ReadonlySet<string> | null = null;
+
 class DatabaseEngine {
   constructor() {}
 
   // --- QUERY & WRITE FUNCTIONS ---
   
-  // IMPROVEMENT: This startup sync runs on every boot and will upsert the 15 default
-  // categories below, unless they have been modified by an admin (indicated by is_admin_modified = true).
-  // This preserves any manual edits to pricing or names made by administrators across restarts.
-  // Genuinely corrupted or missing default categories will still be self-healed.
-  // FUTURE ENHANCEMENT: A "reset to default" feature could be built in the future to allow
-  // admins to manually trigger a restore of the original hardcoded settings.
+  // PHASE 16.1 BATCH 2 (CAT-02) — DURABLE ADMIN EDITS.
+  //
+  // This startup sync is now INSERT-ONLY for existing rows. An earlier version
+  // reconciled every non-admin-modified row back to the seed on each boot, which
+  // meant an administrator's rename or re-price of a seeded category was
+  // silently reverted the next time the server restarted unless they had also
+  // ticked the flat-fee override. The canonical seed is still the source of:
+  //   * the initial category set,
+  //   * recovery of a genuinely MISSING canonical category, and
+  //   * the baseline defaults used for that insert.
+  // but once a row exists its persisted values belong to the administrator and
+  // are never overwritten by the seed again.
+  //
+  // `is_admin_modified` is deliberately NOT removed and NOT repurposed: it still
+  // means exactly what it always meant for the fee engine (true → use the flat
+  // total_fee/finder_share/... override instead of computing from base/
+  // complexity/delay). Only its use as a boot-reconciliation switch is gone.
+  //
+  // The sort_order restore below is not a value reconciliation: order is not
+  // administrator-editable (there is no reorder UI), so a canonical category's
+  // display position is still maintained from the seed.
+  //
+  // CAT-03 (Phase 16.1 Batch 1): the array order below is ALSO the canonical
+  // display order — each entry's `sort_order` is its 1-based position here, and
+  // getCategories() orders by it. Reordering this list is therefore a
+  // user-visible change, and adding an entry at the end is the correct place for
+  // a new baseline category.
   public async syncDefaultCategories(): Promise<void> {
     const list = [
       {
@@ -1334,19 +1434,42 @@ class DatabaseEngine {
       return 'generic';
     }
 
+    // PHASE 16.1 BATCH 2 (CAT-08) — publish the canonical id set from the seed
+    // array ABOVE, so identity questions are answered from this ONE list rather
+    // than a second copy. Done before the loop so the set is complete even if an
+    // individual category later fails to sync.
+    canonicalCategoryIds = new Set(list.map((cat) => cat.id));
+
     const errors: any[] = [];
-    for (const cat of list) {
+    // CAT-03 — the canonical display order IS this array's order. Each entry's
+    // `sort_order` is its 1-based array position, so the seed stays the single
+    // definition of the sequence (no second, hand-typed order list to drift).
+    for (const [seedIndex, cat] of list.entries()) {
+      const sortOrder = seedIndex + 1;
       try {
-        // Check if category exists and is admin-modified
+        // CAT-02 — INSERT-ONLY. An existing row is NEVER rewritten from the seed:
+        // its names, fees, flags, clue policy and lifecycle state belong to the
+        // administrator from the moment it is created.
         const existing = await drizzleDb.select().from(categoriesTable).where(eq(categoriesTable.id, cat.id)).limit(1);
-        if (existing.length > 0 && existing[0].is_admin_modified) {
-          console.log(`[CATEGORY SYNC] Skipping '${cat.id}' — admin-modified, preserving current values.`);
+        if (existing.length > 0) {
+          // CAT-03: the one field that IS still maintained from the seed is the
+          // canonical DISPLAY position — order is not administrator-editable
+          // (there is no reorder UI), and a row that predates the column (or was
+          // written before this sync) needs a valid position. Written only when
+          // it actually differs, so a steady-state boot issues no update at all.
+          if (Number(existing[0].sort_order ?? 0) !== sortOrder) {
+            await drizzleDb.update(categoriesTable)
+              .set({ sort_order: sortOrder })
+              .where(eq(categoriesTable.id, cat.id));
+          }
           continue;
         }
 
         const engineFields = deriveFeeEngineFields(cat.total_fee, cat.is_sensitive_document);
         const publicClueStyle = derivePublicClueStyle(cat.id);
 
+        // A genuinely MISSING canonical category is (re)created from the seed's
+        // baseline defaults — this is the only remaining write.
         await drizzleDb.insert(categoriesTable)
           .values({
             id: cat.id,
@@ -1368,28 +1491,10 @@ class DatabaseEngine {
             finder_reward_cap: engineFields.finder_reward_cap !== null ? String(engineFields.finder_reward_cap) : null,
             elevated_review: !!(cat as any).elevated_review,
             public_clue_style: publicClueStyle,
-          })
-          .onConflictDoUpdate({
-            target: categoriesTable.id,
-            set: {
-              name_en: cat.name_en,
-              name_sw: cat.name_sw,
-              total_fee: String(cat.total_fee),
-              finder_share: String(engineFields.finder_share),
-              agent_share: String(engineFields.agent_share),
-              platform_share: String(engineFields.platform_share),
-              is_sensitive_document: cat.is_sensitive_document,
-              base_fee: String(engineFields.base_fee),
-              complexity_fee: String(engineFields.complexity_fee),
-              delay_fee: String(engineFields.delay_fee),
-              ceiling_percent: String(engineFields.ceiling_percent),
-              finder_pct: String(engineFields.finder_pct),
-              agent_pct: String(engineFields.agent_pct),
-              platform_pct: String(engineFields.platform_pct),
-              finder_reward_cap: engineFields.finder_reward_cap !== null ? String(engineFields.finder_reward_cap) : null,
-              elevated_review: !!(cat as any).elevated_review,
-              public_clue_style: publicClueStyle,
-            },
+            sort_order: sortOrder,
+            // CAT-04 — a recovered baseline category comes back active, i.e. in
+            // exactly the state a fresh install would have it.
+            is_active: true,
           });
       } catch (err) {
         console.error(`Failed to sync category ${cat.id}:`, err);
@@ -1402,10 +1507,32 @@ class DatabaseEngine {
     console.log('[DATABASE ENGINE] Categories list synced successfully with NTSA/Huduma 2026 Kenyan replacement cost guidelines.');
   }
 
+  /**
+   * THE category read path — every consumer in the app goes through this
+   * (Finder select, Owner lost-report selector, Agent verification select,
+   * admin list, public enumeration, `getCategoriesWithUsage`, fee lookups).
+   *
+   * CAT-03 (Phase 16.1 Batch 1): ordered by the canonical display position.
+   * `sort_order` ASC is the business order (seeded from the baseline array,
+   * "highest + 1" for an admin-created category) and `id` ASC is the
+   * tie-breaker, so the result is fully deterministic even when two rows share
+   * a position.
+   *
+   * WHY THE SORT IS ALSO APPLIED IN JAVASCRIPT: the in-memory mock query engine
+   * used when DATABASE_URL is absent (src/db/index.ts) strips ORDER BY from the
+   * SQL it evaluates and returns rows in insertion order — a documented
+   * limitation of that test double, not of Postgres. Sorting here as well keeps
+   * production and the test double provably identical, and keeps this the ONE
+   * place the order is defined. It adds no second ordering vocabulary: the
+   * comparator reads exactly the same two columns the SQL does.
+   */
   public async getCategories(): Promise<Category[]> {
     try {
-      const rows = await drizzleDb.select().from(categoriesTable);
-      return rows.map(parseCategory);
+      const rows = await drizzleDb
+        .select()
+        .from(categoriesTable)
+        .orderBy(asc(categoriesTable.sort_order), asc(categoriesTable.id));
+      return rows.map(parseCategory).sort(compareCategoryOrder);
     } catch (error) {
       console.error("Database query failed:", error);
       throw new Error("Failed to query categories.", { cause: error });
@@ -1419,6 +1546,75 @@ class DatabaseEngine {
     } catch (error) {
       console.error("Database query failed:", error);
       throw new Error("Failed to query category.", { cause: error });
+    }
+  }
+
+  /**
+   * The ACTIVE categories — the ones that may be SELECTED for new work
+   * (Phase 16.1 Batch 2 — CAT-04).
+   *
+   * This is deliberately a SEPARATE read from getCategories() rather than a
+   * change to it, because the two answer different questions:
+   *
+   *   getCategories()        -> "every category that exists"  (admin console,
+   *                             historical resolution, search validation,
+   *                             fee lookups, legacy records)
+   *   getActiveCategories()  -> "every category a user may CHOOSE right now"
+   *                             (the public category list and every new-report /
+   *                             new-verification boundary)
+   *
+   * Keeping them separate is what lets a deactivated category stay fully valid
+   * for the records that already reference it while disappearing from every
+   * "pick a category" surface. Ordering is inherited from getCategories(), so
+   * CAT-03's determinism holds here too.
+   */
+  public async getActiveCategories(): Promise<Category[]> {
+    const categories = await this.getCategories();
+    return categories.filter((category) => category.is_active !== false);
+  }
+
+  /**
+   * Is this id one of the CANONICAL seeded categories? (Phase 16.1 Batch 2 —
+   * CAT-06/CAT-08.)
+   *
+   * Read from the seed-derived set published by syncDefaultCategories() — the
+   * same array every other part of the seed logic uses. No second id list
+   * exists.
+   *
+   * FAIL-SAFE: before a sync has published the set, this reports `true` for
+   * every id, i.e. "treat it as canonical". The only consequence is that a
+   * physical delete is refused rather than performed, which is the safe
+   * direction: a category can never be destroyed because the application did
+   * not yet know the seed. In a running deployment the sync completes during
+   * startup, so custom categories are correctly identified as deletable.
+   */
+  public isCanonicalCategoryId(id: string): boolean {
+    if (!canonicalCategoryIds) return true;
+    return canonicalCategoryIds.has(id);
+  }
+
+  /**
+   * Sets a category's lifecycle state (Phase 16.1 Batch 2 — CAT-04/CAT-06).
+   *
+   * This is the ONLY supported way to retire a canonical seeded category: the
+   * row (and therefore every historical reference to it) survives, while the
+   * category stops being offered for new work. Writes exactly one column, so it
+   * can never disturb an administrator's names, fees or other settings — the
+   * deliberate opposite of a destructive delete.
+   *
+   * Returns the updated category, or undefined when the id does not exist.
+   */
+  public async setCategoryActive(id: string, isActive: boolean): Promise<Category | undefined> {
+    try {
+      const rows = await drizzleDb
+        .update(categoriesTable)
+        .set({ is_active: isActive })
+        .where(eq(categoriesTable.id, id))
+        .returning();
+      return rows.length > 0 ? parseCategory(rows[0]) : undefined;
+    } catch (error) {
+      console.error("Database write failed:", error);
+      throw new Error("Failed to update category lifecycle state.", { cause: error });
     }
   }
 
@@ -1778,6 +1974,7 @@ class DatabaseEngine {
           // already been canonicalized by resolveCountyName() at the API
           // boundary; null for legacy/unknown.
           found_county: item.found_county || null,
+          administrative_unit_id: item.administrative_unit_id || null,
           finder_phone: item.finder_phone,
           assigned_agent_id: item.assigned_agent_id,
           status: item.status,
@@ -3075,6 +3272,25 @@ class DatabaseEngine {
         }
 
         await tx.update(itemsTable).set({
+          // PHASE 16.1 BATCH 2 (CAT-14) — THE VERIFIED CATEGORY NO LONGER
+          // OVERWRITES THE REPORTED ONE.
+          //
+          // This write used to set BOTH columns to the agent's value, erasing the
+          // finder's original classification and making `category_id` and
+          // `verified_category_id` permanently identical. The two columns answer
+          // different questions and must stay distinct:
+          //
+          //   category_id          = what was REPORTED (the finder's choice)
+          //   verified_category_id = what the agent VERIFIED it to be
+          //
+          // Only the verified column is written here. The correction is still
+          // fully traceable: the item_verification_changes audit rows above
+          // record the original and verified values for `category_id`, and
+          // `verification_status` still becomes 'corrected'.
+          //
+          // NO HISTORICAL MIGRATION: rows written before this change keep
+          // whatever they already hold. The new rule applies to future
+          // verifications only.
           verified_category_id: newValues.category_id,
           verified_name: newValues.name,
           verified_document_number: newValues.document_number,
@@ -3082,7 +3298,6 @@ class DatabaseEngine {
           verified_found_area: newValues.found_area,
           verification_status: changedFields.length > 0 ? 'corrected' : 'confirmed_as_reported',
           physically_verified_at: physicallyVerified ? new Date() : item.physically_verified_at,
-          category_id: newValues.category_id,
         }).where(eq(itemsTable.id, itemId));
 
         await tx.insert(auditLogTable).values({
@@ -3095,8 +3310,17 @@ class DatabaseEngine {
         return { success: true, message: changedFields.length > 0 ? 'Corrections saved.' : 'Confirmed as reported.' };
       });
     } catch (error) {
+      // CAT-01 (Phase 16.1 Batch 1) — NEVER echo the database's own error text to
+      // the caller. The route returns `result.message` straight to the agent, so
+      // the raw Postgres message (constraint name, table, column, the offending
+      // key) used to be disclosed verbatim for what is a client-input problem.
+      // The full detail is still logged here for operators; the caller gets a
+      // fixed, honest, actionable message.
       console.error("Database write failed:", error);
-      return { success: false, message: `Failed to record item verification: ${error instanceof Error ? error.message : String(error)}` };
+      return {
+        success: false,
+        message: 'Imeshindwa kuhifadhi uthibitisho wa bidhaa. Tafadhali jaribu tena. / Could not save the item verification. Please try again.',
+      };
     }
   }
 
@@ -3441,10 +3665,46 @@ class DatabaseEngine {
 
         const settleAt = new Date(Date.now() + disputeWindowMs);
 
-        await tx
+        // -----------------------------------------------------------------
+        // SEC-2B-01 — THE WRITE-TIME COMPARE-AND-SWAP (the real guard)
+        // -----------------------------------------------------------------
+        // The `claim.status !== "escrow_held"` check above is a READ, not a
+        // guard: under PostgreSQL's default READ COMMITTED isolation two
+        // concurrent POST /api/agents/confirm-handover requests can BOTH read
+        // 'escrow_held' before either writes. The previous statement
+        //   .where(eq(claimsTable.id, claimId))
+        // had no status predicate, so the second transaction's UPDATE still
+        // matched after the first committed (id is unchanged) and both callers
+        // went on to book the three payout ledger rows and an audit entry —
+        // leaving duplicate finder_payout/agent_payout/platform_fee rows whose
+        // permanently-'pending' duplicates then made finalizeSettlement()
+        // refuse forever, stranding the claim in 'releasing' with the payout
+        // already disbursed.
+        //
+        // The conditional UPDATE is the atomic guard: only a row still in
+        // 'escrow_held' can be claimed, and .returning() tells THIS caller
+        // whether it was the one that won. Zero rows means another writer
+        // moved the claim first, so this caller must return without booking
+        // ANYTHING. This mirrors the established CAS shape used by
+        // attemptClaimEscrowHold / attemptSettlementRelease /
+        // finalizeClaimRefund / expirePendingPaymentClaim elsewhere in this
+        // file. No new ledger constraint is added as a substitute.
+        const wonSettlementSlot = await tx
           .update(claimsTable)
           .set({ status: "pending_settlement", settle_at: settleAt, updated_at: new Date() })
-          .where(eq(claimsTable.id, claimId));
+          .where(and(eq(claimsTable.id, claimId), eq(claimsTable.status, "escrow_held")))
+          .returning({ id: claimsTable.id });
+
+        if (wonSettlementSlot.length === 0) {
+          // Lost the compare-and-swap: no ledger row and no audit entry is
+          // written by this caller. Deliberately worded differently from the
+          // read-based guard above so the two failure paths stay
+          // distinguishable in tests and in logs.
+          return {
+            success: false,
+            message: "Cannot enter settlement. Claim is no longer in status: escrow_held.",
+          };
+        }
 
         // The item is physically back with its owner now — this is a
         // physical-custody fact, independent of whether the money behind it
@@ -3594,10 +3854,26 @@ class DatabaseEngine {
           return { success: false, message: `Cannot finalize settlement — ${outstandingPayout.type} is still '${outstandingPayout.status}', not confirmed completed.` };
         }
 
-        await tx
+        // SEC-2B-03 — the transition out of 'releasing' is a WRITE-TIME
+        // compare-and-swap, not just the read above. Two concurrent
+        // finalisations (the settlement sweep overlapping an admin
+        // release-settlement, for example) previously both passed the
+        // `claim.status !== "releasing"` read and both wrote `released` and
+        // both inserted a FINALIZE_SETTLEMENT audit row. The conditional
+        // UPDATE makes the second writer match zero rows, so it returns
+        // without a duplicate audit entry and without a second ledger sweep.
+        const releasedRows = await tx
           .update(claimsTable)
           .set({ status: "released", updated_at: new Date() })
-          .where(eq(claimsTable.id, claimId));
+          .where(and(eq(claimsTable.id, claimId), eq(claimsTable.status, "releasing")))
+          .returning({ id: claimsTable.id });
+
+        if (releasedRows.length === 0) {
+          return {
+            success: false,
+            message: "Cannot finalize settlement. Claim is no longer in status: releasing.",
+          };
+        }
 
         // Only the platform_fee row (which never goes through an external
         // payout provider — it's the platform's own retained share) should
@@ -3640,57 +3916,27 @@ class DatabaseEngine {
    * services/payments.ts for the real IntaSend disbursement call.
    */
 
-  public async getDistinctRegions(): Promise<string[]> {
-    const fallbackRegions = [
-      "Kilimani", "Westlands", "Nairobi CBD", "Kileleshwa", "Karen",
-      "Ngong Road", "Mombasa", "Kisumu", "Nakuru", "Eldoret",
-      "Kisii", "Thika", "Machakos", "Nyeri", "Kakamega",
-      "Lavington", "Hurlingham", "South C", "South B", "Langata",
-      "Runda", "Muthaiga", "Gigiri", "Parklands", "Madaraka",
-      "Donholm", "Buruburu", "Eastleigh", "Embakasi", "Ruiru"
-    ];
+  // PHASE 16.1 (GEO-16-07): the old getDistinctRegions() lived here. It built a
+  // flat "region" vocabulary from `items.location_description` (union a hard-coded
+  // 30-entry fallback of estates, towns and roads) and served it to
+  // GET /api/regions, which was the source of the Owner search's misleading
+  // "All Regions" selector. Both the endpoint and this method were retired
+  // together: the public county filter on GET /api/items/search?county= is built
+  // from the canonical 47-county dataset (config/kenyaCounties.ts) instead, and
+  // free-text location search still goes through `q`/`area`. Deleting the method
+  // as well as the route is deliberate — a surviving implementation is exactly
+  // how a retired vocabulary comes back.
 
-    try {
-      const rows = await drizzleDb.select({
-        location_description: itemsTable.location_description
-      }).from(itemsTable);
-
-      if (rows.length === 0) {
-        return fallbackRegions;
-      }
-
-      // Group and count frequency of locations
-      const counts: Record<string, number> = {};
-      for (const row of rows) {
-        if (row.location_description) {
-          const loc = row.location_description.trim();
-          if (loc) {
-            counts[loc] = (counts[loc] || 0) + 1;
-          }
-        }
-      }
-
-      const sortedUnique = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
-
-      // Keep them unique and append fallbacks
-      const resultSet = new Set<string>();
-      for (const item of sortedUnique) {
-        // Simple normalization: title case
-        const normalized = item.charAt(0).toUpperCase() + item.slice(1);
-        resultSet.add(normalized);
-      }
-      for (const r of fallbackRegions) {
-        resultSet.add(r);
-      }
-
-      return Array.from(resultSet);
-    } catch (error) {
-      console.error("Failed to query distinct regions:", error);
-      return fallbackRegions;
-    }
-  }
-
-  public async getCategoriesWithUsage(): Promise<(Category & { item_count: number })[]> {
+  /**
+   * Admin category enumeration (Phase 16.1 Batch 2 — CAT-04/CAT-06).
+   *
+   * Returns EVERY category, active or not: the administration console must be
+   * able to see, edit and reactivate a deactivated one. `is_canonical` is
+   * DERIVED here (never stored) from the seed-derived identity set, and tells the
+   * console which lifecycle action is legal: a canonical category can only be
+   * deactivated, a custom one may also be deleted.
+   */
+  public async getCategoriesWithUsage(): Promise<(Category & { item_count: number; is_canonical: boolean })[]> {
     try {
       const cats = await this.getCategories();
       const allItems = await drizzleDb.select().from(itemsTable);
@@ -3698,7 +3944,8 @@ class DatabaseEngine {
         const count = allItems.filter(item => item.category_id === cat.id).length;
         return {
           ...cat,
-          item_count: count
+          item_count: count,
+          is_canonical: this.isCanonicalCategoryId(cat.id),
         };
       });
     } catch (error) {
@@ -3707,13 +3954,46 @@ class DatabaseEngine {
     }
   }
 
-  public async getItemsCountForCategory(id: string): Promise<number> {
+  /**
+   * CAT-05 (Phase 16.1 Batch 1) — EVERY database reference to a category.
+   *
+   * `categories` is referenced by three foreign keys, not one:
+   *   - `items.category_id`            (the finder's/current classification)
+   *   - `items.verified_category_id`   (the agent's verified classification)
+   *   - `lost_reports.category_id`     (NOT NULL — a lost report always names one)
+   *
+   * The delete route previously counted `items.category_id` ONLY, so a category
+   * referenced solely by a lost report passed the guard and then blew up on
+   * `lost_reports_category_id_fkey` inside the DELETE — a raw 500 for an action
+   * the API had already told the admin was safe. This helper is the single
+   * source the guard consults, so adding a future referencing column means
+   * updating exactly one place.
+   *
+   * Read-only; performs no writes and no cascades.
+   */
+  public async getCategoryReferenceCounts(id: string): Promise<{
+    items: number;
+    verifiedItems: number;
+    lostReports: number;
+    total: number;
+  }> {
     try {
-      const rows = await drizzleDb.select().from(itemsTable).where(eq(itemsTable.category_id, id));
-      return rows.length;
+      const [byCategory, byVerifiedCategory, byLostReport] = await Promise.all([
+        drizzleDb.select().from(itemsTable).where(eq(itemsTable.category_id, id)),
+        drizzleDb.select().from(itemsTable).where(eq(itemsTable.verified_category_id, id)),
+        drizzleDb.select().from(lostReportsTable).where(eq(lostReportsTable.category_id, id)),
+      ]);
+      const items = byCategory.length;
+      const verifiedItems = byVerifiedCategory.length;
+      const lostReports = byLostReport.length;
+      // An item can legitimately match more than one of these columns at once, so
+      // `total` is a SUM of the checks (a conservative upper bound on distinct
+      // rows). It is only ever used as `total > 0`, i.e. "is this category
+      // referenced at all" — never as a precise distinct-row count.
+      return { items, verifiedItems, lostReports, total: items + verifiedItems + lostReports };
     } catch (error) {
       console.error("Database query failed:", error);
-      throw new Error("Failed to query item count for category.", { cause: error });
+      throw new Error("Failed to query category references.", { cause: error });
     }
   }
 
@@ -3726,6 +4006,16 @@ class DatabaseEngine {
     agent_share: number;
     platform_share: number;
     is_sensitive_document: boolean;
+    /**
+     * PHASE 16.1 BATCH 1A — optional. When true, the flat
+     * total_fee/finder_share/agent_share/platform_share on this category are used
+     * verbatim as an admin override instead of being computed by the Recovery Fee
+     * Engine (see the column comment in schema.ts). Omitted means the column
+     * default (`false`) applies, which is what every caller that does not mention
+     * the field already relies on. The PUT path has always accepted it; this makes
+     * creation match.
+     */
+    is_admin_modified?: boolean;
     base_fee?: number;
     complexity_fee?: number;
     delay_fee?: number;
@@ -3736,8 +4026,32 @@ class DatabaseEngine {
     finder_reward_cap?: number | null;
     elevated_review?: boolean;
     public_clue_style?: string;
+    /**
+     * CAT-03 (Phase 16.1 Batch 1) — canonical display position. Optional and
+     * deliberately NOT admin-settable: when omitted (every real caller) the
+     * category is appended after the current highest position, so a new
+     * category is never given an undefined or non-deterministic order. It
+     * exists as a parameter only so a supervised backfill/fixture can place a
+     * row explicitly.
+     */
+    sort_order?: number;
+    /**
+     * CAT-04 (Phase 16.1 Batch 2) — lifecycle state for a newly created
+     * category. Optional; omitted means ACTIVE, which is the column default and
+     * the behaviour every existing caller already relies on.
+     */
+    is_active?: boolean;
   }): Promise<Category> {
     try {
+      // CAT-03 — "highest + 1". Computed from the same ordered read every other
+      // consumer uses, so a newly created category lands at the end of the
+      // canonical order regardless of what the database's physical row order is.
+      let sortOrder = cat.sort_order;
+      if (sortOrder === undefined) {
+        const existing = await this.getCategories();
+        const highest = existing.reduce((max, c) => Math.max(max, Number(c.sort_order) || 0), 0);
+        sortOrder = highest + 1;
+      }
       const rows = await drizzleDb.insert(categoriesTable).values({
         id: cat.id,
         name_en: cat.name_en,
@@ -3747,6 +4061,10 @@ class DatabaseEngine {
         agent_share: String(cat.agent_share),
         platform_share: String(cat.platform_share),
         is_sensitive_document: cat.is_sensitive_document,
+        // PHASE 16.1 BATCH 1A — a real boolean is honoured; anything else is
+        // "not supplied", so the column's own `false` default applies exactly as
+        // it did before this parameter existed.
+        is_admin_modified: cat.is_admin_modified ?? false,
         base_fee: String(cat.base_fee ?? cat.total_fee),
         complexity_fee: String(cat.complexity_fee ?? 0),
         delay_fee: String(cat.delay_fee ?? 0),
@@ -3757,6 +4075,9 @@ class DatabaseEngine {
         finder_reward_cap: cat.finder_reward_cap !== undefined && cat.finder_reward_cap !== null ? String(cat.finder_reward_cap) : null,
         elevated_review: cat.elevated_review ?? false,
         public_clue_style: cat.public_clue_style ?? 'generic',
+        sort_order: sortOrder,
+        // CAT-04 — omitted means active, matching the column default.
+        is_active: cat.is_active ?? true,
       }).returning();
       return parseCategory(rows[0]);
     } catch (error) {
@@ -3786,6 +4107,12 @@ class DatabaseEngine {
       finder_reward_cap?: number | null;
       elevated_review?: boolean;
       public_clue_style?: string;
+      /**
+       * CAT-04 (Phase 16.1 Batch 2) — optional lifecycle change. Omitted means
+       * "leave the current state alone", so an ordinary edit can never
+       * accidentally reactivate or deactivate a category.
+       */
+      is_active?: boolean;
     }
   ): Promise<Category> {
     try {
@@ -3809,6 +4136,7 @@ class DatabaseEngine {
       if (cat.finder_reward_cap !== undefined) setData.finder_reward_cap = cat.finder_reward_cap !== null ? String(cat.finder_reward_cap) : null;
       if (cat.elevated_review !== undefined) setData.elevated_review = cat.elevated_review;
       if (cat.public_clue_style !== undefined) setData.public_clue_style = cat.public_clue_style;
+      if (cat.is_active !== undefined) setData.is_active = cat.is_active;
 
       const rows = await drizzleDb.update(categoriesTable).set(setData).where(eq(categoriesTable.id, id)).returning();
       return parseCategory(rows[0]);
@@ -5352,6 +5680,7 @@ class DatabaseEngine {
           category_id: report.category_id,
           status: report.status,
           county: report.county,
+          administrative_unit_id: report.administrative_unit_id ?? null,
           location_area: report.location_area,
           location_landmark: report.location_landmark ?? null,
           lost_at_from: new Date(report.lost_at_from),
@@ -5441,14 +5770,26 @@ class DatabaseEngine {
    * is applied by the caller through toAdminSafeLostReportView, which omits
    * `document_number_hash` and `customer_id`. Do not hand this result to a
    * client directly.
+   *
+   * PHASE 16.1 (GEO-16-04) — optional `county` filter. The value must already be
+   * a CANONICAL county name (the route validates it with resolveCountyName()
+   * before calling this method; this layer never canonicalises). It becomes a
+   * plain equality on `lost_reports.county`, which is what keeps the existing
+   * `idx_lost_reports_county` index usable — the filter is part of the SAME
+   * bounded, newest-first query, so pagination stays correct: `hasMore` is
+   * derived from the filtered result set, never from an unfiltered one.
    */
-  public async listAdminLostReports(opts: { limit: number; offset: number }): Promise<{ rows: LostReport[]; hasMore: boolean }> {
+  public async listAdminLostReports(opts: { limit: number; offset: number; county?: string | null }): Promise<{ rows: LostReport[]; hasMore: boolean }> {
     try {
       const limit = opts.limit;
       const offset = opts.offset;
+      // An absent/null county means "all counties" — it must not be turned into
+      // `county = NULL`, which would match nothing (or only the legacy rows).
+      const county = typeof opts.county === 'string' && opts.county ? opts.county : null;
       const rows = await drizzleDb
         .select()
         .from(lostReportsTable)
+        .where(county ? eq(lostReportsTable.county, county) : undefined)
         .orderBy(desc(lostReportsTable.created_at), desc(lostReportsTable.id))
         .limit(offset + limit + 1);
 

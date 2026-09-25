@@ -231,7 +231,11 @@ describe('wiring: the failure mode cannot silently return (source-level tripwire
       // discrete limiter is unchanged and still applied to the same route —
       // it was moved behind the boundary, not dropped.
       "app.post('/api/claims/lookup', requireCustomerAuth, claimGuessLimiter,",
-      "app.post('/api/claims/:id/rate', claimGuessLimiter,",
+      // PHASE 16.1 Batch 2A — /rate gained the same customer authentication
+      // boundary (/lookup and /rate are the two owner-journey claim routes;
+      // neither may remain anonymously reachable). The discrete limiter is
+      // unchanged and still applied, now behind that boundary.
+      "app.post('/api/claims/:id/rate', requireCustomerAuth, claimGuessLimiter,",
     ]) {
       expect(serverTs).toContain(route);
     }

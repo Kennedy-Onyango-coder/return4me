@@ -1,9 +1,22 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Return4me | Kenya's Trusted Lost & Found Platform</title>
+    <!-- Resolve the canonical appearance preference before first paint. App remains
+         the runtime owner; this only prevents a light flash and fails closed. -->
+    <script>
+      (() => {
+        let preference = 'light';
+        try { preference = localStorage.getItem('return4me.appearance') || 'light'; } catch {}
+        let effective = preference === 'dark' ? 'dark' : 'light';
+        if (preference === 'system') {
+          try { effective = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; } catch {}
+        }
+        document.documentElement.setAttribute('data-theme', effective);
+      })();
+    </script>
     
     <!-- Speed/Performance Optimization: Preconnect to external font domains -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />

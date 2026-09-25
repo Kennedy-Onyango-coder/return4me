@@ -137,6 +137,66 @@ describe('the agent evidence surface is filtered, not the raw claim', () => {
     expect(queue).not.toMatch(/\.\.\.associatedClaim/);
   });
 });
+// ---------------------------------------------------------------------------
+// SEC-2B-02 — POST /api/agents/claims/:claimId/confirm-viewing
+// ---------------------------------------------------------------------------
+// The handler used to end with `res.json({ success: true, claim: updatedClaim })`
+// — the complete claim row from db.getClaim(), which passes through signClaim()
+// and therefore carries a LIVE PRESIGNED URL in `owner_id_proof_url` (the
+// claimant's government-ID image) plus the raw `security_answers`, owner
+// contact/identity fields and the provider payment reference. The assigned
+// agent needs none of that, and no client reads it (AgentView uses only
+// data.error / data.message). Unlike GET /api/agents/queue — which maps the
+// same data field-by-field and is pinned just above — this route had no output
+// projection at all.
+//
+// Comments are stripped before the field-name assertions below: this block's
+// own documentation names the very fields it forbids (the same reason
+// publicNavigation.test.ts strips comments), so judging the CODE requires it.
+describe('SEC-2B-02: confirm-viewing projects the claim instead of returning the raw row', () => {
+  const marker = "app.post('/api/agents/claims/:claimId/confirm-viewing'";
+  const start = serverTs.indexOf(marker);
+  const after = serverTs.slice(start);
+  const nextRoute = after.indexOf('\n  app.', 10);
+  const rawBody = serverTs.slice(start, nextRoute > -1 ? start + nextRoute : start + 6000);
+  const body = rawBody.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+
+  it('the route exists (guards this test\'s own locator)', () => {
+    expect(start, 'confirm-viewing route not found in server.ts').toBeGreaterThan(-1);
+    expect(rawBody).toContain('/api/agents/claims/:claimId/confirm-viewing');
+  });
+
+  it('returns an explicit allowlist of id / status / agent_confirmed_at', () => {
+    expect(body).toMatch(/success: true/);
+    expect(body).toMatch(/id: updatedClaim\.id/);
+    expect(body).toMatch(/status: updatedClaim\.status/);
+    expect(body).toMatch(/agent_confirmed_at: updatedClaim\.agent_confirmed_at/);
+  });
+
+  it('never returns the raw claim row (no whole-row passthrough, no spread)', () => {
+    // The previous defect, in its exact shape.
+    expect(body).not.toMatch(/claim:\s*updatedClaim\s*[},]/);
+    // ...and no spread that would re-expose every column by default.
+    expect(body).not.toMatch(/\.\.\.updatedClaim/);
+    expect(body).not.toMatch(/\.\.\.claim\b/);
+  });
+
+  it('names no private claim field anywhere in its response', () => {
+    for (const forbidden of [
+      'owner_id_proof_url',
+      'security_answers',
+      'owner_phone',
+      'owner_email',
+      'owner_identifying_details',
+      'payment_reference',
+      'paid_at',
+    ]) {
+      expect(body, `confirm-viewing must not expose ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+});
+
+
 
 describe('server rejects the old sandbox default and requires a real phone', () => {
   it('no sandbox placeholder phone fallback survives in server or OwnerView', () => {

@@ -35,10 +35,10 @@ export default function Stepper({ steps, currentStep, label = 'Progress', classN
       {/* Mobile: compact progress bar + label */}
       <div className="sm:hidden space-y-1.5">
         <div className="flex items-baseline justify-between">
-          <p className="text-xs font-extrabold text-brand-dark-text">
+          <p className="text-xs font-extrabold text-[var(--appearance-text-primary)]">
             {steps[safeIndex].label}
           </p>
-          <p className="text-xs font-bold text-brand-muted-text tabular-nums">
+          <p className="text-xs font-bold text-[var(--appearance-text-muted)] tabular-nums">
             Step {safeIndex + 1} of {steps.length}
           </p>
         </div>
@@ -47,7 +47,7 @@ export default function Stepper({ steps, currentStep, label = 'Progress', classN
             <span
               key={i}
               className={`h-1.5 flex-1 rounded-full transition-colors ${
-                i <= safeIndex ? 'bg-primary-green' : 'bg-brand-border'
+                i <= safeIndex ? 'bg-primary-green' : 'bg-[var(--appearance-border)]'
               }`}
             />
           ))}
@@ -68,8 +68,8 @@ export default function Stepper({ steps, currentStep, label = 'Progress', classN
                     isCompleted
                       ? 'bg-primary-green border-primary-green text-white'
                       : isCurrent
-                        ? 'bg-white border-2 border-primary-green text-primary-green'
-                        : 'bg-white border-brand-border text-brand-muted-text'
+                        ? 'bg-[var(--appearance-surface)] border-2 border-primary-green text-primary-green'
+                        : 'bg-[var(--appearance-surface)] border-[var(--appearance-border)] text-[var(--appearance-text-muted)]'
                   }`}
                 >
                   {isCompleted ? (
@@ -83,13 +83,13 @@ export default function Stepper({ steps, currentStep, label = 'Progress', classN
                 </span>
                 <span
                   className={`text-caption font-bold leading-tight ${
-                    isCurrent ? 'text-primary-green' : isCompleted ? 'text-brand-dark-text' : 'text-brand-muted-text'
+                    isCurrent ? 'text-primary-green' : isCompleted ? 'text-[var(--appearance-text-primary)]' : 'text-[var(--appearance-text-muted)]'
                   }`}
                 >
                   {step.label}
                 </span>
                 {step.description && (
-                  <span className="hidden lg:block text-caption text-brand-muted-text leading-tight">
+                  <span className="hidden lg:block text-caption text-[var(--appearance-text-muted)] leading-tight">
                     {step.description}
                   </span>
                 )}
@@ -98,7 +98,7 @@ export default function Stepper({ steps, currentStep, label = 'Progress', classN
                 <span
                   aria-hidden="true"
                   className={`flex-1 h-0.5 mt-3.5 mx-1 rounded-full transition-colors ${
-                    i < safeIndex ? 'bg-primary-green' : 'bg-brand-border'
+                    i < safeIndex ? 'bg-primary-green' : 'bg-[var(--appearance-border)]'
                   }`}
                 />
               )}

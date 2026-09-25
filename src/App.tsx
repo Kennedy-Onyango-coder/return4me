@@ -8,6 +8,16 @@ import HomeView from './components/HomeView';
 import ErrorBoundary from './components/ErrorBoundary';
 import { translations } from './types';
 import { Loader2 } from 'lucide-react';
+import {
+  applyAppearanceMarker,
+  browserAppearanceStorage,
+  persistAppearance,
+  readStoredAppearance,
+  resolveAppearance,
+  subscribeToSystemAppearance,
+  type AppearancePreference,
+  type EffectiveAppearance,
+} from './utils/appearancePreference';
 // Phase 7B public routing foundation. Pure helpers only — every history/DOM
 // interaction stays in this file. No routing dependency is introduced.
 import {
@@ -72,12 +82,75 @@ function ViewLoadingFallback() {
   );
 }
 
+const LANGUAGE_STORAGE_KEY = 'return4me.language';
+type AppLanguage = 'en' | 'sw';
+
+const isAppLanguage = (value: unknown): value is AppLanguage =>
+  value === 'en' || value === 'sw';
+
+/** Read one trusted language preference, failing closed to English. */
+function browserStorage(): Storage | null {
+  if (typeof window === 'undefined') return null;
+  try { return window.localStorage; } catch { return null; }
+}
+
+export function readStoredLanguage(storage: Pick<Storage, 'getItem' | 'removeItem'> | null | undefined): AppLanguage {
+  if (!storage) return 'en';
+  try {
+    const stored = storage.getItem(LANGUAGE_STORAGE_KEY);
+    if (isAppLanguage(stored)) return stored;
+    if (stored !== null) {
+      try { storage.removeItem(LANGUAGE_STORAGE_KEY); } catch { /* storage cleanup is best-effort */ }
+    }
+  } catch { /* unavailable/restricted storage must never prevent startup */ }
+  return 'en';
+}
+
+/** Persist only the canonical runtime values; failure never affects live switching. */
+export function persistLanguage(storage: Pick<Storage, 'setItem'> | null | undefined, lang: AppLanguage): void {
+  if (!storage || !isAppLanguage(lang)) return;
+  try { storage.setItem(LANGUAGE_STORAGE_KEY, lang); } catch { /* preference persistence is optional */ }
+}
+
 export default function App() {
-  const [lang, setLang] = useState<'en' | 'sw'>('en');
+  const [lang, setLang] = useState<AppLanguage>(() => readStoredLanguage(browserStorage()));
+  const [appearancePreference, setAppearancePreference] = useState<AppearancePreference>(
+    () => readStoredAppearance(browserAppearanceStorage()),
+  );
+  const [effectiveAppearance, setEffectiveAppearance] = useState<EffectiveAppearance>(
+    () => resolveAppearance(appearancePreference),
+  );
   const [currentView, setView] = useState<'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'privacy' | 'terms' | 'signin' | 'becomeAgent'>('home');
+
+  // Language remains one App-owned state. Existing child controls continue to
+  // call this same setter; persistence and document metadata are side effects
+  // at the application boundary, never additional language state.
+  useEffect(() => {
+    if (typeof document !== 'undefined') document.documentElement.lang = lang;
+    persistLanguage(browserStorage(), lang);
+  }, [lang]);
   const [categories, setCategories] = useState<any[]>([]);
   const [categoriesLoading, setCategoriesLoading] = useState<boolean>(true);
   const [categoriesError, setCategoriesError] = useState<boolean>(false);
+
+  // Appearance stores the user's light/dark/system preference, but only the
+  // resolved light/dark value reaches the root. System listeners exist only
+  // while preference is system and are cleaned up when that preference changes.
+  useEffect(() => {
+    persistAppearance(browserAppearanceStorage(), appearancePreference);
+    const updateEffectiveAppearance = () => {
+      setEffectiveAppearance(resolveAppearance(appearancePreference));
+    };
+    updateEffectiveAppearance();
+    return subscribeToSystemAppearance(appearancePreference, updateEffectiveAppearance);
+  }, [appearancePreference]);
+
+  useEffect(() => {
+    applyAppearanceMarker(
+      typeof document === 'undefined' ? null : document.documentElement,
+      effectiveAppearance,
+    );
+  }, [effectiveAppearance]);
   const [activeAgentsCount, setActiveAgentsCount] = useState<number | null>(null);
   const [recentItems, setRecentItems] = useState<any[]>([]);
   const [recentItemsLoading, setRecentItemsLoading] = useState<boolean>(true);
@@ -412,34 +485,54 @@ export default function App() {
     }
   };
 
-  // Categories and the agent-count stat rarely change within a single
-  // visit, so these stay mount-only. Recent items are different — a Finder
-  // report + Agent verification can happen at any point during someone's
-  // visit, and the homepage previously had no way to ever learn about it
-  // (see fetchRecentItems below, and the effects that call it).
-  useEffect(() => {
-    const fetchCategories = async (attempt = 1) => {
-      try {
-        if (attempt === 1) {
-          setCategoriesLoading(true);
-          setCategoriesError(false);
-        }
-        const res = await fetch('/api/categories');
-        if (!res.ok) throw new Error(`Failed to fetch categories (status ${res.status})`);
-        const data = await res.json();
-        setCategories(data);
+  // CATEGORY REFRESH (Phase 16.1 Batch 1A)
+  //
+  // fetchCategories is deliberately a stable useCallback with an empty dependency
+  // array — the same shape fetchRecentItems below already uses — rather than
+  // being redefined inline inside the mount-only effect, because it now needs to
+  // be callable from a SECOND place: after an Admin category
+  // create/update/deactivate/delete succeeds (see onCategoriesChanged on
+  // AdminView further down).
+  //
+  // WHY: it used to be mount-only ("categories rarely change within a single
+  // visit"). That is true of the catalogue itself, but NOT of an administrator's
+  // own edits: creating a category in the console persisted it correctly and
+  // refreshed only the console's own copy, so an admin who then navigated back
+  // to the homepage kept the pre-creation list — the new category was missing
+  // from the homepage explorer and from the Finder/Owner selects until a full
+  // page reload. Recent items had already hit exactly this staleness class and
+  // got a refetch; categories are now brought into line.
+  //
+  // The function body below is UNCHANGED from the mount-only version: same
+  // endpoint, same 4-attempt retry, same loading/error handling, same state.
+  // `/api/categories` remains the single category source — nothing is cached and
+  // no second category list is introduced.
+  const fetchCategories = useCallback(async (attempt = 1) => {
+    try {
+      if (attempt === 1) {
+        setCategoriesLoading(true);
         setCategoriesError(false);
-        setCategoriesLoading(false);
-      } catch (err) {
-        console.error(`[Attempt ${attempt}/4] Failed to load categories:`, err);
-        if (attempt < 4) {
-          setTimeout(() => fetchCategories(attempt + 1), 3000);
-        } else {
-          setCategoriesError(true);
-          setCategoriesLoading(false);
-        }
       }
-    };
+      const res = await fetch('/api/categories');
+      if (!res.ok) throw new Error(`Failed to fetch categories (status ${res.status})`);
+      const data = await res.json();
+      setCategories(data);
+      setCategoriesError(false);
+      setCategoriesLoading(false);
+    } catch (err) {
+      console.error(`[Attempt ${attempt}/4] Failed to load categories:`, err);
+      if (attempt < 4) {
+        setTimeout(() => fetchCategories(attempt + 1), 3000);
+      } else {
+        setCategoriesError(true);
+        setCategoriesLoading(false);
+      }
+    }
+  }, []);
+
+  // The agent-count stat stays mount-only: no action covered by this pass
+  // changes it.
+  useEffect(() => {
     const fetchStats = async () => {
       try {
         const res = await fetch('/api/stats');
@@ -451,7 +544,7 @@ export default function App() {
     };
     fetchCategories();
     fetchStats();
-  }, []);
+  }, [fetchCategories]);
 
   // RECENT ITEMS — fetchRecentItems is deliberately a single stable
   // function (via useCallback with an empty dependency array) rather than
@@ -572,7 +665,12 @@ export default function App() {
   const dashboardIdentityLabel = dashboardSurface === 'admin'
     ? adminIdentityLabel(readAdminSessionIdentity(adminToken))
     : dashboardSurface === 'account'
-      ? (customerSession?.full_name || (lang === 'en' ? 'My Account' : 'Akaunti Yangu'))
+      /* PHASE 16 — no fallback label. /account renders whether or not a session
+         exists (that is how the sign-in gate can live inside it), so a
+         placeholder here made the shell's identity chip read "My Account" to a
+         visitor who has no account session. With no session there is simply no
+         identity to display, and the shell renders none. */
+      ? customerSession?.full_name
       : dashboardSurface === 'agent'
         ? (lang === 'en' ? 'Agent' : 'Wakala')
         : undefined;
@@ -630,8 +728,15 @@ export default function App() {
       <DashboardShell
         lang={lang}
         setLang={setLang}
+        appearance={appearancePreference}
+        setAppearance={setAppearancePreference}
         surface={dashboardSurface}
         identityLabel={dashboardIdentityLabel}
+        /* PHASE 16 — the shell must not advertise a session that does not exist.
+           The agent/admin dashboards only mount with a token, so they are always
+           signed in; /account is the one surface that also renders the signed-out
+           gate, and it passes the real answer. */
+        signedIn={dashboardSurface !== 'account' || Boolean(customerSession)}
         onExitSite={() => navigate('/', 'home')}
         onSignOut={logout}
       >
@@ -639,12 +744,21 @@ export default function App() {
           {dashboardSurface === 'account' && accountSurface}
 
           {dashboardSurface === 'agent' && (
-            <AgentView lang={lang} token={agentToken} setToken={handleSetAgentToken} />
+            /* PHASE 16.1 BATCH 3 (H-1 / M-6) — the App-level category source and
+               its existing refresh callback, so AgentView no longer keeps a
+               second, unrefreshed copy of /api/categories. */
+            <AgentView
+              lang={lang}
+              token={agentToken}
+              setToken={handleSetAgentToken}
+              categories={categories}
+              refreshCategories={fetchCategories}
+            />
           )}
 
           {dashboardSurface === 'admin' && (
             <ErrorBoundary fallbackTitle="Admin Panel Crash">
-              <AdminView lang={lang} token={adminToken} setToken={handleSetAdminToken} />
+              <AdminView lang={lang} token={adminToken} setToken={handleSetAdminToken} onCategoriesChanged={fetchCategories} />
             </ErrorBoundary>
           )}
         </Suspense>
@@ -653,11 +767,13 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-brand-beige flex flex-col antialiased">
+    <div className="min-h-screen bg-[var(--appearance-background)] text-[var(--appearance-text-primary)] flex flex-col antialiased">
       {/* Global Brand Navbar */}
       <Navbar
         lang={lang}
         setLang={setLang}
+        appearance={appearancePreference}
+        setAppearance={setAppearancePreference}
         currentView={currentView}
         setView={setView}
         /* PHASE 11B: an admin session no longer evaporates the moment the
@@ -680,7 +796,7 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <main className="flex-grow flex flex-col md:flex-row max-w-7xl w-full mx-auto border-x border-brand-border bg-white shadow-sm pb-24 md:pb-0">
+      <main className="flex-grow flex flex-col md:flex-row max-w-7xl w-full mx-auto border-x border-[var(--appearance-border)] bg-[var(--appearance-surface)] text-[var(--appearance-text-primary)] shadow-sm pb-24 md:pb-0">
         
         {/* FEATURE WORKSPACE ROUTING */}
         {/* Only one of these views ever renders at a time (mutually exclusive
@@ -796,14 +912,22 @@ export default function App() {
 
           {currentView === 'agent' && (
             <div className="w-full p-4 sm:p-8">
-              <AgentView lang={lang} token={agentToken} setToken={handleSetAgentToken} />
+              {/* PHASE 16.1 BATCH 3 (H-1 / M-6) — same App-level category source
+                  as the dashboard render site above (both sites must agree). */}
+              <AgentView
+                lang={lang}
+                token={agentToken}
+                setToken={handleSetAgentToken}
+                categories={categories}
+                refreshCategories={fetchCategories}
+              />
             </div>
           )}
 
           {currentView === 'admin' && (
             <div className="w-full p-4 sm:p-8">
               <ErrorBoundary fallbackTitle="Admin Panel Crash">
-                <AdminView lang={lang} token={adminToken} setToken={handleSetAdminToken} />
+                <AdminView lang={lang} token={adminToken} setToken={handleSetAdminToken} onCategoriesChanged={fetchCategories} />
               </ErrorBoundary>
             </div>
           )}
@@ -853,28 +977,28 @@ export default function App() {
       </main>
 
       {/* Footer */}
-      <footer className="bg-brand-light-gray border-t border-brand-border px-5 sm:px-12 py-8">
+      <footer className="bg-[var(--appearance-surface-muted)] border-t border-[var(--appearance-border)] px-5 sm:px-12 py-8">
         <div className="mx-auto max-w-7xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
-          <div className="text-xs sm:text-sm text-brand-muted-text leading-relaxed">
-            <p className="font-semibold text-brand-dark-text">
+          <div className="text-xs sm:text-sm text-[var(--appearance-text-muted)] leading-relaxed">
+            <p className="font-semibold text-[var(--appearance-text-primary)]">
               &copy; {new Date().getFullYear()} Return4me. All rights reserved.
             </p>
             <p className="mt-1">Vetted &amp; Physical Handovers only.</p>
             <p className="mt-2">
               Data Protection Officer:{' '}
-              <a href="mailto:dpo@return4me.co.ke" className="font-semibold text-primary-green hover:underline">
+              <a href="mailto:dpo@return4me.co.ke" className="font-semibold text-primary-green hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)]">
                 dpo@return4me.co.ke
               </a>
             </p>
           </div>
           <div className="flex flex-col sm:flex-row gap-2 sm:gap-6">
-            <button onClick={() => setView('privacy')} className="text-xs sm:text-sm font-bold text-primary-green hover:underline cursor-pointer">
+            <button onClick={() => setView('privacy')} className="text-xs sm:text-sm font-bold text-primary-green hover:underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)]">
               Privacy Policy
             </button>
-            <button onClick={() => setView('terms')} className="text-xs sm:text-sm font-bold text-primary-green hover:underline cursor-pointer">
+            <button onClick={() => setView('terms')} className="text-xs sm:text-sm font-bold text-primary-green hover:underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)]">
               Terms of Service
             </button>
-            <span className="text-xs sm:text-sm font-semibold text-brand-muted-text">Fee Schedule</span>
+            <span className="text-xs sm:text-sm font-semibold text-[var(--appearance-text-muted)]">Fee Schedule</span>
           </div>
         </div>
       </footer>

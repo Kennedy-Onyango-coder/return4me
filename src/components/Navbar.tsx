@@ -2,10 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { translations } from '../types';
 import { Globe, User, ShieldCheck, MapPin, Search, Home, Menu, X, LogOut } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import LanguageControl from './LanguageControl';
+import AppearanceControl from './AppearanceControl';
+import type { AppearancePreference } from '../utils/appearancePreference';
 
 interface NavbarProps {
   lang: 'en' | 'sw';
   setLang: (lang: 'en' | 'sw') => void;
+  appearance: AppearancePreference;
+  setAppearance: (appearance: AppearancePreference) => void;
   currentView: 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy' | 'signin' | 'becomeAgent';
   setView: (view: 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy' | 'signin' | 'becomeAgent') => void;
   token: string | null;
@@ -39,8 +44,14 @@ interface NavbarProps {
 // Sign In → Agent. The internal label still exists in translations for
 // non-navigation use, but no public surface renders it as a destination.
 
-export default function Navbar({ lang, setLang, currentView, setView, token, logout, isAccountView = false, accountSignedIn = false, onOpenAccount, onNavigate }: NavbarProps) {
+export default function Navbar({ lang, setLang, appearance, setAppearance, currentView, setView, token, logout, isAccountView = false, accountSignedIn = false, onOpenAccount, onNavigate }: NavbarProps) {
   const t = translations[lang];
+  const appearanceLabels = {
+    appearance: t.appearanceLabel,
+    light: t.appearanceLight,
+    dark: t.appearanceDark,
+    system: t.appearanceSystem,
+  };
   const [isOpen, setIsOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
 
@@ -114,13 +125,13 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
     'relative px-3 py-2 text-sm font-medium transition-colors cursor-pointer rounded-md ' +
     (isAccountView
       ? 'text-primary-green'
-      : 'text-brand-muted-text hover:text-brand-dark-text');
+      : 'text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]');
 
   const navLinkClass = (view) =>
-    'relative px-3 py-2 text-sm font-medium transition-colors cursor-pointer rounded-md ' +
+    'relative px-3 py-2 text-sm font-medium transition-colors cursor-pointer rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)] ' +
     (currentView === view
       ? 'text-primary-green'
-      : 'text-brand-muted-text hover:text-brand-dark-text');
+      : 'text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]');
 
   const navLinkUnderline = (view) =>
     currentView === view ? (
@@ -133,7 +144,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
 
   return (
     <>
-      <header className="bg-white text-brand-dark-text sticky top-0 z-40 h-16 md:h-20 border-b border-brand-border flex items-center">
+      <header className="bg-[var(--appearance-surface)] text-[var(--appearance-text-primary)] sticky top-0 z-40 h-16 md:h-20 border-b border-[var(--appearance-border)] flex items-center">
         <div className="max-w-7xl w-full mx-auto px-4 sm:px-12 flex items-center justify-between">
           {/* Brand Logo Group */}
           <div
@@ -198,25 +209,19 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
           </nav>
 
           <div className="hidden lg:flex items-center gap-3">
-            <button
-              onClick={() => setLang(lang === 'en' ? 'sw' : 'en')}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-brand-muted-text hover:text-brand-dark-text transition-colors cursor-pointer rounded-md"
-              aria-label={t.langToggle}
-            >
-              <Globe size={15} />
-              <span>{lang === 'en' ? 'SW' : 'EN'}</span>
-            </button>
-            <div className="h-5 w-px bg-brand-border" />
+            <LanguageControl lang={lang} setLang={setLang} layout="toggle" toggleLabel={t.langToggle} />
+            <AppearanceControl value={appearance} onChange={setAppearance} labels={appearanceLabels} />
+            <div className="h-5 w-px bg-[var(--appearance-border)]" />
             {signedIn ? (
               <button
                 onClick={logout}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-brand-muted-text hover:text-accent-orange transition-colors cursor-pointer rounded-md"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)] transition-colors cursor-pointer rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)]"
               >
                 <LogOut size={15} />
                 <span>{t.logout}</span>
               </button>
             ) : (
-              <div className="flex items-center gap-1.5 px-2 py-1.5 text-sm font-medium text-brand-muted-text">
+              <div className="flex items-center gap-1.5 px-2 py-1.5 text-sm font-medium text-[var(--appearance-text-muted)]">
                 <User size={15} />
                 <span>{lang === 'en' ? 'Guest' : 'Mgeni'}</span>
               </div>
@@ -224,17 +229,10 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
           </div>
 
           <div className="flex lg:hidden items-center gap-2">
-            <button
-              onClick={() => setLang(lang === 'en' ? 'sw' : 'en')}
-              className="flex items-center gap-1 px-2.5 py-1.5 text-sm font-medium text-brand-muted-text hover:text-brand-dark-text transition-colors cursor-pointer rounded-md"
-              aria-label={t.langToggle}
-            >
-              <Globe size={15} />
-              <span>{lang === 'en' ? 'SW' : 'EN'}</span>
-            </button>
+            <LanguageControl lang={lang} setLang={setLang} layout="toggle" toggleLabel={t.langToggle} />
             <button
               onClick={() => setIsOpen(true)}
-              className="p-2 rounded-md text-brand-dark-text hover:text-primary-green transition-colors cursor-pointer"
+              className="p-2 rounded-md text-[var(--appearance-text-primary)] hover:text-primary-green transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)]"
               aria-label={lang === 'sw' ? 'Fungua menyu' : 'Open menu'}
             >
               <Menu size={22} />
@@ -263,10 +261,10 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
               animate={{ x: 0 }}
               exit={{ x: '100%' }}
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-              className="fixed right-0 top-0 h-full w-[290px] sm:w-[340px] bg-white shadow-2xl z-50 flex flex-col border-l border-brand-border lg:hidden"
+              className="fixed right-0 top-0 h-full w-[290px] sm:w-[340px] bg-[var(--appearance-surface)] text-[var(--appearance-text-primary)] shadow-2xl z-50 flex flex-col border-l border-[var(--appearance-border)] lg:hidden"
             >
               {/* Drawer Header */}
-              <div className="p-5 border-b border-brand-border flex items-center justify-between bg-brand-light-gray/30">
+              <div className="p-5 border-b border-[var(--appearance-border)] flex items-center justify-between bg-[var(--appearance-surface-muted)]">
                 <img 
                   src="/assets/logo_wordmark_transparent.png" 
                   alt="Return4me Logo" 
@@ -275,7 +273,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                 />
                 <button
                   onClick={() => setIsOpen(false)}
-                  className="p-2 rounded-lg bg-white border border-brand-border text-brand-muted-text hover:text-primary-green hover:shadow-xs transition-all cursor-pointer"
+                  className="p-2 rounded-lg bg-[var(--appearance-surface)] border border-[var(--appearance-border)] text-[var(--appearance-text-muted)] hover:text-primary-green hover:shadow-xs transition-all cursor-pointer"
                 >
                   <X size={16} />
                 </button>
@@ -284,7 +282,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
               {/* Drawer Links */}
               <div className="flex-1 overflow-y-auto p-5 space-y-5">
                 <div className="space-y-1.5">
-                  <p className="text-xs font-bold text-brand-muted-text uppercase tracking-widest px-3 mb-2">
+                  <p className="text-xs font-bold text-[var(--appearance-text-muted)] uppercase tracking-widest px-3 mb-2">
                     {lang === 'en' ? 'Main Menu' : 'Menyu Kuu'}
                   </p>
                   
@@ -294,7 +292,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                     className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl text-sm font-bold transition-all text-left cursor-pointer ${
                       currentView === 'home' 
                         ? 'bg-primary-green/10 text-primary-green' 
-                        : 'text-brand-dark-text hover:bg-brand-light-gray'
+                        : 'text-[var(--appearance-text-primary)] hover:bg-[var(--appearance-surface-muted)]'
                     }`}
                   >
                     <Home size={18} />
@@ -307,7 +305,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                     className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl text-sm font-bold transition-all text-left cursor-pointer ${
                       currentView === 'owner' 
                         ? 'bg-primary-green/10 text-primary-green' 
-                        : 'text-brand-dark-text hover:bg-brand-light-gray'
+                        : 'text-[var(--appearance-text-primary)] hover:bg-[var(--appearance-surface-muted)]'
                     }`}
                   >
                     <Search size={18} />
@@ -320,7 +318,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                     className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl text-sm font-bold transition-all text-left cursor-pointer ${
                       currentView === 'finder' 
                         ? 'bg-primary-green/10 text-primary-green' 
-                        : 'text-brand-dark-text hover:bg-brand-light-gray'
+                        : 'text-[var(--appearance-text-primary)] hover:bg-[var(--appearance-surface-muted)]'
                     }`}
                   >
                     <MapPin size={18} />
@@ -335,7 +333,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                     className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl text-sm font-bold transition-all text-left cursor-pointer ${
                       currentView === 'becomeAgent'
                         ? 'bg-primary-green/10 text-primary-green' 
-                        : 'text-brand-dark-text hover:bg-brand-light-gray'
+                        : 'text-[var(--appearance-text-primary)] hover:bg-[var(--appearance-surface-muted)]'
                     }`}
                   >
                     <Globe size={18} />
@@ -346,8 +344,8 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                 </div>
 
                 {/* System Pages */}
-                <div className="space-y-1.5 pt-4 border-t border-brand-border/60">
-                  <p className="text-xs font-bold text-brand-muted-text uppercase tracking-widest px-3 mb-2">
+                <div className="space-y-1.5 pt-4 border-t border-[var(--appearance-border)]/60">
+                  <p className="text-xs font-bold text-[var(--appearance-text-muted)] uppercase tracking-widest px-3 mb-2">
                     {lang === 'en' ? 'Legals & Info' : 'Sheria na Taarifa'}
                   </p>
                   
@@ -357,7 +355,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                     className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl text-sm font-bold transition-all text-left cursor-pointer ${
                       currentView === 'terms' 
                         ? 'bg-primary-green/10 text-primary-green' 
-                        : 'text-brand-dark-text hover:bg-brand-light-gray'
+                        : 'text-[var(--appearance-text-primary)] hover:bg-[var(--appearance-surface-muted)]'
                     }`}
                   >
                     <span>{lang === 'en' ? 'Terms of Service' : 'Masharti ya Matumizi'}</span>
@@ -369,7 +367,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                     className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl text-sm font-bold transition-all text-left cursor-pointer ${
                       currentView === 'privacy' 
                         ? 'bg-primary-green/10 text-primary-green' 
-                        : 'text-brand-dark-text hover:bg-brand-light-gray'
+                        : 'text-[var(--appearance-text-primary)] hover:bg-[var(--appearance-surface-muted)]'
                     }`}
                   >
                     <span>{lang === 'en' ? 'Privacy Policy' : 'Sera ya Faragha'}</span>
@@ -378,31 +376,10 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
               </div>
 
               {/* Drawer Footer Controls */}
-              <div className="p-5 border-t border-brand-border bg-brand-light-gray/30 space-y-4">
+              <div className="p-5 border-t border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] space-y-4">
                 {/* Localized Language Selector */}
-                <div>
-                  <label className="block text-xs font-bold text-brand-muted-text uppercase tracking-widest mb-2 px-1">
-                    {lang === 'en' ? 'Select Language' : 'Chagua Lugha'}
-                  </label>
-                  <div className="grid grid-cols-2 bg-white border border-brand-border p-1 rounded-xl text-xs font-bold shadow-xs">
-                    <button
-                      onClick={() => setLang('en')}
-                      className={`py-2 rounded-lg transition-all cursor-pointer text-center uppercase tracking-wide ${
-                        lang === 'en' ? 'bg-primary-green text-white shadow-sm' : 'text-brand-muted-text hover:text-brand-dark-text'
-                      }`}
-                    >
-                      ENGLISH
-                    </button>
-                    <button
-                      onClick={() => setLang('sw')}
-                      className={`py-2 rounded-lg transition-all cursor-pointer text-center uppercase tracking-wide ${
-                        lang === 'sw' ? 'bg-primary-green text-white shadow-sm' : 'text-brand-muted-text hover:text-brand-dark-text'
-                      }`}
-                    >
-                      KISWAHILI
-                    </button>
-                  </div>
-                </div>
+                <LanguageControl lang={lang} setLang={setLang} layout="choices" toggleLabel={t.langToggle} />
+                <AppearanceControl value={appearance} onChange={setAppearance} labels={appearanceLabels} fullWidth />
 
                 {/* Account (Phase 2) — opens the customer account / dashboard.
                     A single restrained entry point rather than a new section:
@@ -417,7 +394,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                   className={`w-full min-h-[44px] py-3 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center justify-center space-x-2 ${
                     isAccountView || accountSignedIn
                       ? 'bg-primary-green/10 border-primary-green/30 text-primary-green'
-                      : 'bg-white border-brand-border text-brand-dark-text hover:bg-brand-light-gray'
+                      : 'bg-[var(--appearance-surface)] border-[var(--appearance-border)] text-[var(--appearance-text-primary)] hover:bg-[var(--appearance-surface-muted)]'
                   }`}
                 >
                   <User size={14} />
@@ -438,12 +415,12 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
                     <span>{t.logout}</span>
                   </button>
                 ) : (
-                  <div className="py-2.5 px-3 bg-white border border-brand-border rounded-xl flex items-center justify-between">
+                  <div className="py-2.5 px-3 bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-xl flex items-center justify-between">
                     <div className="flex items-center space-x-2">
-                      <div className="w-8 h-8 rounded-full bg-brand-light-gray flex items-center justify-center text-accent-orange">
+                      <div className="w-8 h-8 rounded-full bg-[var(--appearance-surface-muted)] flex items-center justify-center text-accent-orange">
                         <User size={14} />
                       </div>
-                      <span className="text-xs font-bold text-brand-dark-text">
+                      <span className="text-xs font-bold text-[var(--appearance-text-primary)]">
                         {lang === 'en' ? 'Not signed in' : 'Hujaingia'}
                       </span>
                     </div>
@@ -457,11 +434,11 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
       </AnimatePresence>
 
       {/* Mobile Bottom Tab Bar Navigation (Below md) */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-brand-border z-30 py-2 px-4 pb-[max(0.5rem,env(safe-area-inset-bottom))] flex justify-around items-center shadow-[0_-4px_12px_rgba(0,0,0,0.05)]">
+      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-[var(--appearance-surface)] border-t border-[var(--appearance-border)] z-30 py-2 px-4 pb-[max(0.5rem,env(safe-area-inset-bottom))] flex justify-around items-center shadow-[0_-4px_12px_rgba(0,0,0,0.05)]">
         <button
           onClick={() => handleNavClick('home')}
           className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 py-1 transition-all ${
-            currentView === 'home' ? 'text-primary-green' : 'text-brand-muted-text'
+            currentView === 'home' ? 'text-primary-green' : 'text-[var(--appearance-text-muted)]'
           }`}
         >
           <Home size={18} />
@@ -470,7 +447,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
         <button
           onClick={() => handleNavClick('owner')}
           className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 py-1 transition-all ${
-            currentView === 'owner' ? 'text-primary-green' : 'text-brand-muted-text'
+            currentView === 'owner' ? 'text-primary-green' : 'text-[var(--appearance-text-muted)]'
           }`}
         >
           <Search size={18} />
@@ -479,7 +456,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
         <button
           onClick={() => handleNavClick('finder')}
           className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 py-1 transition-all ${
-            currentView === 'finder' ? 'text-primary-green' : 'text-brand-muted-text'
+            currentView === 'finder' ? 'text-primary-green' : 'text-[var(--appearance-text-muted)]'
           }`}
         >
           <MapPin size={18} />
@@ -492,7 +469,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
           onClick={() => (isAccountView || accountSignedIn ? handleAccountClick() : handleNavClick('signin'))}
           aria-current={(isAccountView || currentView === 'signin') ? 'page' : undefined}
           className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 min-h-[44px] py-1 transition-all ${
-            (isAccountView || currentView === 'signin') ? 'text-primary-green' : 'text-brand-muted-text'
+            (isAccountView || currentView === 'signin') ? 'text-primary-green' : 'text-[var(--appearance-text-muted)]'
           }`}
         >
           <User size={18} aria-hidden="true" />
@@ -502,7 +479,7 @@ export default function Navbar({ lang, setLang, currentView, setView, token, log
         <button
           onClick={() => setIsOpen(true)}
           className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 py-1 transition-all ${
-            isOpen ? 'text-primary-green' : 'text-brand-muted-text'
+            isOpen ? 'text-primary-green' : 'text-[var(--appearance-text-muted)]'
           }`}
         >
           <Menu size={18} />

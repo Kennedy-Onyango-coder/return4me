@@ -15,10 +15,10 @@ interface BannerProps extends React.HTMLAttributes<HTMLDivElement> {
 }
 
 const kindClasses: Record<BannerKind, string> = {
-  success: 'bg-status-success-surface border-status-success-border text-status-success',
-  error: 'bg-status-danger-surface border-status-danger-border text-status-danger',
-  warning: 'bg-status-warning-surface border-status-warning-border text-status-warning',
-  info: 'bg-status-info-surface border-status-info-border text-status-info',
+  success: 'bg-[var(--appearance-surface-muted)] border-[var(--appearance-success)] text-[var(--appearance-success)]',
+  error: 'bg-[var(--appearance-surface-muted)] border-[var(--appearance-danger)] text-[var(--appearance-danger)]',
+  warning: 'bg-[var(--appearance-surface-muted)] border-[var(--appearance-warning)] text-[var(--appearance-warning)]',
+  info: 'bg-[var(--appearance-surface-muted)] border-[var(--appearance-border-strong)] text-[var(--appearance-text-secondary)]',
 };
 
 const kindIcons: Record<BannerKind, LucideIcon> = {

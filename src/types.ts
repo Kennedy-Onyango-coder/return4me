@@ -95,6 +95,10 @@ export const translations = {
     becomeAgentBtn: 'Become an Agent',
     signInBtn: 'Sign In',
     langToggle: 'Swahili (Kiswahili)',
+    appearanceLabel: 'Appearance',
+    appearanceLight: 'Light',
+    appearanceDark: 'Dark',
+    appearanceSystem: 'System',
     logout: 'Logout',
     
     // Verification Field Labels
@@ -205,6 +209,28 @@ export const translations = {
     confirmPickBtn: 'Confirm Owner Handover',
     enterDropCode: 'Enter Finder Drop-off Code (e.g., R4M-...)',
     rateAgentLabel: 'How did you rate the handover experience?',
+    // PHASE 16.1 BATCH 4B-1 (B1 / B2 / B5 / B6) - Agent Hub queue
+    // comprehension copy. Every string the batch adds lives here, in both
+    // languages, rather than as an inline English literal in the Hub.
+    agentPendingPaymentNote: 'Payment is pending. This item cannot be handed over until the owner completes payment.',
+    agentNoClaimInfoNote: 'No claim information is attached to this item. If a claim exists, it is not at a stage shown in this queue.',
+    agentQueueRefresh: 'Refresh Queue',
+    agentQueueRefreshing: 'Refreshing your queue...',
+    // PHASE 16.1 BATCH 4B-2 — compact, truthful per-item context.
+    agentItemContextItem: 'Item',
+    agentItemContextCategory: 'Category',
+    agentItemContextLocation: 'Location',
+    agentItemContextReported: 'Reported',
+    agentItemContextUnavailable: 'Location not provided',
+    agentDropoffQueueRole: 'Drop-off expected',
+    agentHandoverQueueRole: 'Pickup / handover',
+    agentDropoffsEmpty: 'No physical drop-offs are pending now.',
+    agentHandoversEmpty: 'No handovers are pending now.',
+    agentWorkflowLabel: 'Next step',
+    agentDropoffWorkflow: 'Review the item when it arrives.',
+    agentReview: 'Review',
+    agentReject: 'Reject',
+    agentCancel: 'Cancel',
 
     // Admin Console
     adminTitle: 'System Administrator Console',
@@ -233,6 +259,10 @@ export const translations = {
     becomeAgentBtn: 'Kuwa Wakala',
     signInBtn: 'Ingia',
     langToggle: 'English',
+    appearanceLabel: 'Mwonekano',
+    appearanceLight: 'Mwanga',
+    appearanceDark: 'Giza',
+    appearanceSystem: 'Mfumo',
     logout: 'Toka',
 
     // Finder Journey
@@ -337,6 +367,26 @@ export const translations = {
     confirmPickBtn: 'Thibitisha Kuwasilisha kwa Mmiliki',
     enterDropCode: 'Weka Msimbo wa Finder kuwasilisha (Mfano R4M-...)',
     rateAgentLabel: 'Je, ulionaje uzoefu wa uwasilishaji huu?',
+    // PHASE 16.1 BATCH 4B-1 (B1 / B2 / B5 / B6) - see the English block above.
+    agentPendingPaymentNote: 'Malipo yanasubiri. Bidhaa hii haiwezi kukabidhiwa hadi mmiliki akamilishe malipo.',
+    agentNoClaimInfoNote: 'Hakuna taarifa ya dai iliyounganishwa na bidhaa hii. Kama dai lipo, haliko katika hatua inayoonyeshwa kwenye orodha hii.',
+    agentQueueRefresh: 'Onyesha Upya Orodha',
+    agentQueueRefreshing: 'Inaonyesha upya orodha yako...',
+    // PHASE 16.1 BATCH 4B-2 — see the English block above.
+    agentItemContextItem: 'Bidhaa',
+    agentItemContextCategory: 'Kategoria',
+    agentItemContextLocation: 'Eneo',
+    agentItemContextReported: 'Iliripotiwa',
+    agentItemContextUnavailable: 'Eneo halijawekwa',
+    agentDropoffQueueRole: 'Inatarajiwa kukabidhiwa',
+    agentHandoverQueueRole: 'Kuchukua / kukabidhi',
+    agentDropoffsEmpty: 'Hakuna vikubidhi vinavyotarajiwa kwa sasa.',
+    agentHandoversEmpty: 'Hakuna vikubidhi vinavyotarajiwa kwa sasa.',
+    agentWorkflowLabel: 'Hatua inayofuata',
+    agentDropoffWorkflow: 'Kagua bidhaa p inapotafika.',
+    agentReview: 'Kagua',
+    agentReject: 'Kataa',
+    agentCancel: 'Ghairi',
 
     // Admin Console
     adminTitle: 'Kituo cha Usimamizi Mkuu',

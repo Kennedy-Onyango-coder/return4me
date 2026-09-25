@@ -78,3 +78,50 @@ export function getClaimStatusDisplay(
     variant: entry.variant,
   };
 }
+
+/**
+ * PHASE 16.1 BATCH 4 — AGENT-SIDE CLAIM BADGE (neutral home).
+ *
+ * Moved here from components/AgentView.tsx so both AgentView and the
+ * extracted components/agent/AgentHub.tsx can consume it WITHOUT a
+ * reverse dependency (AgentHub -> AgentView). Batch 3 (F-4) semantics
+ * preserved verbatim: two agent-actionable statuses keep agent-specific
+ * wording; everything else delegates to the shared map above.
+ */
+export function agentClaimBadge(
+  status: string | null | undefined,
+  lang: 'en' | 'sw'
+): { label: string; className: string } {
+  if (status === 'awaiting_agent_confirmation') {
+    return {
+      label: lang === 'en' ? 'Awaiting Verification' : 'Inasubiri Uthibitisho',
+      className: 'bg-amber-100 text-amber-800 animate-pulse',
+    };
+  }
+  if (status === 'escrow_held') {
+    return {
+      label: lang === 'en' ? 'Escrow Held (Ready)' : 'Malipo Yameshikiliwa (Tayari)',
+      className: 'bg-emerald-100 text-emerald-800',
+    };
+  }
+  // PHASE 16.1 BATCH 4B-1 (B2) — HONEST "NO CLAIM DATA" FALLBACK.
+  //
+  // This branch is reached whenever an item arrives with no `associatedClaim`
+  // at all. "No Claim Yet" ASSERTED an absence the client cannot establish:
+  // GET /api/agents/queue attaches `associatedClaim` only for five statuses
+  // (escrow_held, released, disputed, awaiting_agent_confirmation,
+  // pending_payment), so an absent claim means EITHER that no claim exists OR
+  // that one exists in a status the agent queue deliberately withholds
+  // (e.g. pending_verification, payment_window_expired, rejected, refunded).
+  // The wording below is true in both cases: it reports what the agent's own
+  // queue sent, and asserts nothing about a claim it cannot see. It also stays
+  // inside the `neutral` family, so it never reads as a payment claim.
+  if (!status) {
+    return {
+      label: lang === 'en' ? 'No Claim Information' : 'Hakuna Taarifa ya Dai',
+      className: 'bg-stone-100 text-stone-800',
+    };
+  }
+  const shared = getClaimStatusDisplay(status, lang);
+  return { label: shared.label, className: shared.className };
+}

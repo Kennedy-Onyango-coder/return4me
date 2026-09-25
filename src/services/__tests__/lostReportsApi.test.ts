@@ -229,7 +229,10 @@ function asCustomerB() { cookieHeader = 'r4m_customer_session=' + TOKEN_B; }
 
 /** The only fields a candidate may ever carry (Phase 9B public DTO). */
 const ALLOWED_CANDIDATE_KEYS = [
-  'category_id', 'description', 'document_name_fuzzy', 'found_at', 'id',
+  'category_id', 'description', 'document_name_fuzzy', 'found_at',
+  // PHASE 16.1 (GEO-16-03): the canonical county joined the public DTO, so the
+  // candidate carries it too (it is copied from services/publicItemView.ts).
+  'found_county', 'id',
   'isDescriptionOnly', 'is_sensitive_document', 'location_description',
   'match_reasons', 'photo_url',
 ].sort();
@@ -238,7 +241,8 @@ function validPayload(overrides: Record<string, any> = {}) {
   const now = Date.now();
   return {
     categoryId: 'smartphone',
-    county: 'Nairobi',
+    county: 'Nairobi City',
+    administrativeUnitId: 'KE-47-SC-01',
     locationArea: 'Westlands',
     locationLandmark: 'Near Sarit Centre',
     lostAtFrom: new Date(now - 3 * 60 * 60 * 1000).toISOString(),
@@ -368,8 +372,12 @@ describe('the candidate DTO the UI receives IS the public boundary', () => {
       'finder_phone', 'finder_email', 'ocr_extracted_number', 'ocr_extracted_name',
       'document_number_hash', 'latitude', 'longitude', 'assigned_agent_id',
       'customer_id', 'verified_document_number', 'agent',
-      // PHASE 9D — the found item's explicit county stays server-side.
-      'found_county',
+      // PHASE 9D kept the found item's explicit county server-side. PHASE 16.1
+      // (GEO-16-03) approves publishing the CANONICAL COUNTY on the public read
+      // model, so it is no longer asserted absent here — the assertion that it
+      // IS published (and no finer geography with it) lives in the ALLOWED key
+      // test above. No coordinate, contact, identifier or agent field is
+      // affected by that change.
     ]) {
       expect(raw, `payload exposed ${field}`).not.toContain(field);
     }

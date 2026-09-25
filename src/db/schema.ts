@@ -46,6 +46,46 @@ export const categories = pgTable("categories", {
   // character only). 'none' means never show a document-number clue at
   // all for this category, regardless of what was extracted.
   public_clue_style: varchar("public_clue_style", { length: 30 }).default("generic").notNull(),
+  // CANONICAL DISPLAY ORDER (Phase 16.1 Batch 1 — CAT-03).
+  //
+  // Before this column, `getCategories()` had no ORDER BY at all, so every
+  // consumer (the Finder's category select, the Owner lost-report selector,
+  // the Agent verification select, the admin category list, the public
+  // enumeration) inherited whatever row order the driver happened to return —
+  // unspecified on Postgres, and able to change after an update. The seed
+  // below has always had an intentional sequence; this column makes that
+  // sequence explicit and enforceable in one place.
+  //
+  // Values are assigned from the canonical seed's array position (1-based) by
+  // syncDefaultCategories(), and "highest + 1" for an admin-created category.
+  // It is NOT exposed in the admin console and there is no reorder endpoint in
+  // this batch, so no consumer may treat it as user-editable.
+  //
+  // DEFAULT 0 exists so an already-running database picks the column up
+  // without NULLs (the ALTER TABLE in src/db/index.ts adds it as NOT NULL
+  // DEFAULT 0); the boot sync then writes the real position for every seeded
+  // category. `id` breaks ties deterministically.
+  sort_order: integer("sort_order").default(0).notNull(),
+  // LIFECYCLE STATE (Phase 16.1 Batch 2 — CAT-04).
+  //
+  // A first-class lifecycle state, NOT a frontend visibility flag: it decides
+  // whether a category may be SELECTED for new work. An inactive category:
+  //   - is not offered by the public `GET /api/categories` (so it disappears
+  //     from the Finder, Owner, lost-report and Agent selectors at once);
+  //   - cannot be chosen for a new found-item report, a new lost report or a
+  //     new Agent verification (those boundaries validate against the ACTIVE
+  //     list, so a client cannot bypass the UI);
+  //   - STILL resolves for historical records — `items.category_id` and
+  //     `lost_reports.category_id` keep pointing at it, `getCategories()`
+  //     keeps returning it, public search keeps matching it, and the admin
+  //     console keeps listing it so it can be reactivated.
+  //
+  // DEFAULT true: every pre-existing category stays active through the schema
+  // upgrade (the ALTER TABLE in src/db/index.ts adds it NOT NULL DEFAULT true),
+  // so this is purely additive and hides nothing that was previously visible.
+  // Deactivation is therefore also the SAFE replacement for deleting a
+  // canonical seeded category (CAT-06).
+  is_active: boolean("is_active").default(true).notNull(),
 });
 
 // 2. AGENTS TABLE
@@ -116,6 +156,8 @@ export const items = pgTable("items", {
   // NOT an inferred value: nothing in the codebase derives this from
   // `location_description`, from `latitude`/`longitude`, or from a geocoder.
   found_county: varchar("found_county", { length: 50 }),
+  // Structured second-level geography, kept separate from exact-place text and nullable for history.
+  administrative_unit_id: varchar("administrative_unit_id", { length: 50 }),
   finder_phone: varchar("finder_phone", { length: 15 }).notNull(),
   assigned_agent_id: varchar("assigned_agent_id", { length: 50 }).references(() => agents.id),
   status: varchar("status", { length: 30 }).default("awaiting_dropoff").notNull(),
@@ -124,6 +166,28 @@ export const items = pgTable("items", {
   description: text("description"),
   is_sensitive_document: boolean("is_sensitive_document").default(true).notNull(),
   rejection_reason: text("rejection_reason"),
+  // --- LOCKED FINANCIAL VALUES (Recovery Fee Engine) ---
+  //
+  // These four columns are the item's AUTHORITATIVE money figures, written
+  // ONCE by POST /api/items/report at report time (from the fee engine, or
+  // verbatim from a category whose fee an admin hand-set). Every money path
+  // prefers them: resolveAuthoritativePaymentFee() / the /pay path take
+  // locked_total_fee, and resolvePayoutSplit() takes the three locked shares.
+  //
+  // THE MODERN vs LEGACY DISTINCTION IS IMPLICIT, EXPRESSED ONLY BY NULL.
+  // There is no generation/version marker column, and none is added here.
+  //   - MODERN items (created by the report route as it stands today) always
+  //     have all four values populated — the route validates the category
+  //     before it writes, so a locked fee is always computable.
+  //   - LEGACY / UNLOCKED items are simply those where these columns are
+  //     NULL (they were reported before the locking existed). They are still
+  //     fully usable: the money paths fall back to the shares/fee of the
+  //     item's CURRENT category (`items.category_id`) at settlement, refund
+  //     and reconciliation time.
+  // This comment documents an existing convention. It is NOT a constraint
+  // (the columns stay nullable), NOT a migration, NOT a new column, and it
+  // does not change any fallback semantics — `locked_total_fee IS NULL`
+  // merely remains the way the code recognises the legacy path.
   locked_total_fee: numeric("locked_total_fee", { precision: 10, scale: 2 }),
   locked_finder_share: numeric("locked_finder_share", { precision: 10, scale: 2 }),
   locked_agent_share: numeric("locked_agent_share", { precision: 10, scale: 2 }),
@@ -144,10 +208,29 @@ export const items = pgTable("items", {
   // the original Finder data always remains intact for audit purposes).
   // Every individual field-level change is additionally recorded in
   // item_verification_changes with a reason. These verified_* fields hold
-  // the CURRENT agent-confirmed value (defaulting to the Finder's original
-  // value when the Agent confirms as-reported rather than correcting it),
-  // and are the only source PublicRecognitionService may read from — never
-  // the raw Finder fields directly. See database.ts recordItemVerification.
+  // the CURRENT agent-confirmed value, and db.recordItemVerification()
+  // populates ALL of them on every successful verification (a field the
+  // Agent did not correct keeps the Finder's value; a genuinely absent value
+  // is stored as null, which is the final answer, not a "not yet verified"
+  // signal — `verification_status` is what says whether verification ran).
+  //
+  // WHICH CONSUMER READS WHICH COLUMN (there is no shared resolver helper):
+  //   - verified_name / verified_document_number / verified_found_area /
+  //     verified_description are consumed by PublicRecognitionService
+  //     (services/publicRecognition.ts, buildSafePublicClues). It reads them
+  //     WITHOUT falling back to the raw Finder fields: it refuses to run at
+  //     all unless verification_status is 'confirmed_as_reported' or
+  //     'corrected'.
+  //   - verified_category_id is NOT read by PublicRecognitionService at all.
+  //     Its only production consumer is the lost-report matcher
+  //     (services/lostReportMatching.ts, effectiveItemCategoryId), which
+  //     prefers it over `category_id` for the category-match gate and the
+  //     document-type corroboration signal.
+  //   - the lost-report matcher additionally reads verified_found_area /
+  //     verified_description / verified_name, each preferring the verified
+  //     value and falling back to the Finder field when it is null.
+  // See database.ts recordItemVerification and the comment on the FoundItem
+  // type's verified_* fields.
   verified_category_id: varchar("verified_category_id", { length: 50 }).references(() => categories.id),
   verified_name: varchar("verified_name", { length: 150 }),
   verified_document_number: varchar("verified_document_number", { length: 100 }),
@@ -707,6 +790,8 @@ export const lost_reports = pgTable("lost_reports", {
   category_id: varchar("category_id", { length: 50 }).notNull().references(() => categories.id),
   status: varchar("status", { length: 30 }).default("active").notNull(),
   county: varchar("county", { length: 50 }).notNull(),
+  // Structured second-level geography; nullable so historical reports remain unchanged.
+  administrative_unit_id: varchar("administrative_unit_id", { length: 50 }),
   location_area: varchar("location_area", { length: 120 }).notNull(),
   location_landmark: varchar("location_landmark", { length: 160 }),
   lost_at_from: timestamp("lost_at_from", { withTimezone: true }).notNull(),

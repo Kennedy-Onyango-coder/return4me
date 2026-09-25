@@ -47,7 +47,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
         {label && (
           <label
             htmlFor={inputId}
-            className={`block text-xs font-bold text-brand-dark-text ${hideLabel ? 'sr-only' : ''}`}
+            className={`block text-xs font-bold text-[var(--appearance-text-primary)] ${hideLabel ? 'sr-only' : ''}`}
           >
             {label}
             {required && <span className="text-status-danger" aria-hidden="true"> *</span>}
@@ -60,10 +60,10 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
           disabled={disabled}
           aria-invalid={error ? true : undefined}
           aria-describedby={describedBy}
-          className={`w-full h-11 border rounded-xl px-3 text-sm transition-colors focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30 disabled:opacity-50 disabled:cursor-not-allowed placeholder:text-brand-muted-text/60 ${
+          className={`w-full h-11 border rounded-xl px-3 text-sm text-[var(--appearance-text-primary)] transition-colors focus:outline-none focus:border-[var(--appearance-focus)] focus:ring-2 focus:ring-[var(--appearance-focus)]/30 disabled:opacity-50 disabled:cursor-not-allowed placeholder:text-[var(--appearance-text-muted)] ${
             error
-              ? 'border-status-danger bg-status-danger-surface/40'
-              : 'border-brand-border bg-white'
+              ? 'border-[var(--appearance-danger)] bg-[var(--appearance-surface)]'
+              : 'border-[var(--appearance-border)] bg-[var(--appearance-surface)]'
           }`}
           {...rest}
         />
@@ -77,7 +77,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
             {error}
           </p>
         ) : hint ? (
-          <p id={`${inputId}-hint`} className="text-xs text-brand-muted-text">
+          <p id={`${inputId}-hint`} className="text-xs text-[var(--appearance-text-muted)]">
             {hint}
           </p>
         ) : null}

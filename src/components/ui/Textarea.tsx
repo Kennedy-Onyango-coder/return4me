@@ -55,7 +55,7 @@ const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
         {label && (
           <label
             htmlFor={fieldId}
-            className={`block text-xs font-bold text-brand-dark-text ${hideLabel ? 'sr-only' : ''}`}
+            className={`block text-xs font-bold text-[var(--appearance-text-primary)] ${hideLabel ? 'sr-only' : ''}`}
           >
             {label}
             {required && <span className="text-status-danger" aria-hidden="true"> *</span>}
@@ -69,10 +69,10 @@ const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
           disabled={disabled}
           aria-invalid={error ? true : undefined}
           aria-describedby={describedBy}
-          className={`w-full border rounded-xl px-3 py-2.5 text-sm leading-relaxed transition-colors focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30 disabled:opacity-50 disabled:cursor-not-allowed placeholder:text-brand-muted-text/60 resize-y min-h-[88px] ${
+          className={`w-full border rounded-xl px-3 py-2.5 text-sm leading-relaxed text-[var(--appearance-text-primary)] transition-colors focus:outline-none focus:border-[var(--appearance-focus)] focus:ring-2 focus:ring-[var(--appearance-focus)]/30 disabled:opacity-50 disabled:cursor-not-allowed placeholder:text-[var(--appearance-text-muted)] resize-y min-h-[88px] ${
             error
-              ? 'border-status-danger bg-status-danger-surface/40'
-              : 'border-brand-border bg-white'
+              ? 'border-[var(--appearance-danger)] bg-[var(--appearance-surface)]'
+              : 'border-[var(--appearance-border)] bg-[var(--appearance-surface)]'
           }`}
           {...rest}
         />
@@ -86,7 +86,7 @@ const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
             {error}
           </p>
         ) : hint ? (
-          <p id={`${fieldId}-hint`} className="text-xs text-brand-muted-text">
+          <p id={`${fieldId}-hint`} className="text-xs text-[var(--appearance-text-muted)]">
             {hint}
           </p>
         ) : null}

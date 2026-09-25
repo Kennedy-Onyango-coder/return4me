@@ -110,10 +110,55 @@
   --color-line-subtle: #E8E1D3;
 }
 
+/* APPEARANCE SEMANTIC TOKENS — Batch E foundation.
+   These aliases intentionally do not repaint existing Tailwind utilities. Batch F
+   can migrate individual surfaces to them incrementally. Light values preserve
+   the current Return4me canvas; dark values are a restrained brand-compatible
+   set scoped only to Batch D's canonical resolved root marker. */
+:root {
+  --appearance-background: #FDF8EE;
+  --appearance-surface: #FFFFFF;
+  --appearance-surface-muted: #F4EFE6;
+  --appearance-text-primary: #003820;
+  --appearance-text-secondary: #334B3F;
+  --appearance-text-muted: #605B50;
+  --appearance-border: #E8E1D3;
+  --appearance-border-strong: #C9BEAA;
+  --appearance-accent: #B35A00;
+  --appearance-accent-foreground: #FFFFFF;
+  --appearance-focus: #003820;
+  --appearance-danger: #B91C1C;
+  --appearance-danger-foreground: #FFFFFF;
+  --appearance-success: #15803D;
+  --appearance-success-foreground: #FFFFFF;
+  --appearance-warning: #B45309;
+  --appearance-warning-foreground: #FFFFFF;
+}
+
+html[data-theme='dark'] {
+  --appearance-background: #0B1511;
+  --appearance-surface: #12211A;
+  --appearance-surface-muted: #182B22;
+  --appearance-text-primary: #F1F7F3;
+  --appearance-text-secondary: #C8D6CE;
+  --appearance-text-muted: #9AAF9F;
+  --appearance-border: #31483D;
+  --appearance-border-strong: #587566;
+  --appearance-accent: #F0A44A;
+  --appearance-accent-foreground: #211305;
+  --appearance-focus: #7DD3A8;
+  --appearance-danger: #F87171;
+  --appearance-danger-foreground: #240707;
+  --appearance-success: #4ADE80;
+  --appearance-success-foreground: #052113;
+  --appearance-warning: #FBBF24;
+  --appearance-warning-foreground: #261A02;
+}
+
 body {
-  background-color: var(--color-brand-beige);
+  background-color: var(--appearance-background);
   font-family: var(--font-sans);
-  color: var(--color-brand-dark-text);
+  color: var(--appearance-text-primary);
 }
 
 /* Custom fade transitions and animations */

@@ -271,6 +271,27 @@ export default function PublicItemView({
                 </div>
 
                 <dl className="mt-4 space-y-2 text-xs">
+                  {/* PHASE 16.1 (GEO-16-03): the canonical county, from the same
+                      public DTO. Shown only when the item has one — a legacy row
+                      with no declared county renders exactly what it did before. */}
+                  {item.found_county && (
+                    <div className="flex items-start gap-2">
+                      <dt className="sr-only">{t('County', 'Kaunti')}</dt>
+                      <MapPin size={13} aria-hidden="true" className="mt-0.5 shrink-0 text-accent-orange" />
+                      <dd className="text-brand-muted-text leading-relaxed break-words">
+                        {t('County', 'Kaunti')}: {item.found_county}
+                      </dd>
+                    </div>
+                  )}
+                  {item.administrative_unit_name && (
+                    <div className="flex items-start gap-2">
+                      <dt className="sr-only">{t('Sub-county', 'Kaunti ndogo')}</dt>
+                      <MapPin size={13} aria-hidden="true" className="mt-0.5 shrink-0 text-accent-orange" />
+                      <dd className="text-brand-muted-text leading-relaxed break-words">
+                        {t('Sub-county', 'Kaunti ndogo')}: {item.administrative_unit_name}
+                      </dd>
+                    </div>
+                  )}
                   <div className="flex items-start gap-2">
                     <dt className="sr-only">{t('General area', 'Eneo kwa ujumla')}</dt>
                     <MapPin size={13} aria-hidden="true" className="mt-0.5 shrink-0 text-accent-orange" />

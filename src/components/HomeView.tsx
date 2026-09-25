@@ -3,8 +3,7 @@ import { translations } from '../types';
 import {
   Search, MapPin, ShieldCheck, Lock, Package,
   Users, CreditCard, ChevronLeft, ChevronRight,
-  PhoneCall, Key, Car, Wallet, Luggage, Laptop,
-  Gem, ScanLine, Smartphone, CheckCircle, ArrowRight, Clock, Monitor, Store
+  ScanLine, Smartphone, CheckCircle, ArrowRight, Clock, Monitor, Store
 } from 'lucide-react';
 import Button from './ui/Button';
 import Badge from './ui/Badge';
@@ -223,37 +222,6 @@ export default function HomeView(props: HomeViewProps) {
         : 'Chukua kitu chako kutoka kwa wakala aliyeidhinishwa — au kipokee kutoka mpataji.',
     },
   ];
-
-  // Category icon mapping for visual consistency
-  const getCategoryIcon = (categoryId: string) => {
-    switch (categoryId) {
-      case 'national-id':
-      case 'driving-licence':
-        return Key;
-      case 'vehicle-logbook':
-      case 'number-plate':
-        return Car;
-      case 'phone':
-      case 'smartphone':
-        return PhoneCall;
-      case 'wallet':
-      case 'cash':
-        return Wallet;
-      case 'laptop':
-      case 'tablet':
-        return Laptop;
-      case 'bag':
-      case 'luggage':
-        return Luggage;
-      case 'keys':
-        return Key;
-      case 'jewellery':
-      case 'watch':
-        return Gem;
-      default:
-        return Package;
-    }
-  };
 
   return (
     <div className="w-full">

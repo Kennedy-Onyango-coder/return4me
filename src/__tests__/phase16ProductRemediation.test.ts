@@ -136,6 +136,21 @@ describe('16-B: the authenticated shell uses official Return4me branding', () =>
     // The role is still stated in words, so it is never image-only.
     expect(shellTsx).toContain('SURFACE_COPY');
   });
+
+  it('does not advertise a session that does not exist (the signed-out /account gate)', () => {
+    // /account is the one surface that renders with no session, so the shell
+    // takes the truth from App instead of assuming, and withholds the three
+    // things that claimed otherwise: the identity chip is only rendered when
+    // there IS a label, the Sign out control is conditional, and the footer
+    // copy says plainly that the visitor is not signed in.
+    expect(shellCode).toContain('signedIn = true');
+    expect(shellCode).toContain('{signedIn && (');
+    expect(shellCode).toContain('You are not signed in');
+    expect(shellTsx).toContain('Hujaingia.');
+    expect(appCode).toContain("signedIn={dashboardSurface !== 'account' || Boolean(customerSession)}");
+    // ...and App no longer fabricates an identity label for a session-less visitor.
+    expect(appCode).toContain('? customerSession?.full_name');
+  });
 });
 
 describe('16-C: authenticated workspaces use the available width', () => {

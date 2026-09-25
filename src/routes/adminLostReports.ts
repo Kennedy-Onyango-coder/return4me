@@ -42,6 +42,11 @@ import { DEFAULT_LOST_REPORT_STATUS } from '../config/lostReportStatuses.ts';
 // customer would be shown. No second matching algorithm exists.
 import { selectLostReportCandidates } from '../services/lostReportMatching.ts';
 import { loadClaimableItems } from './lostReports.ts';
+// PHASE 16.1 (GEO-16-04): the county filter reuses the ONE canonical resolver
+// and the ONE canonical error message rather than keeping a county list, an
+// alias table or a second set of strings of its own.
+import { resolveCountyName } from '../config/kenyaCounties.ts';
+import { FOUND_COUNTY_MESSAGES } from '../services/foundItemCounty.ts';
 
 export interface AdminLostReportRouteDeps {
   /** The real requireCurrentAdminSession from server.ts (not importable). */
@@ -85,6 +90,31 @@ function boundedInt(raw: unknown, min: number, max: number, fallback: number): {
   return { value: n, error: null };
 }
 
+/**
+ * PHASE 16.1 (GEO-16-04) — the optional county filter.
+ *
+ * `undefined` means "not supplied" -> no county constraint (all 47 counties).
+ * Anything supplied must resolve through the ONE canonical resolver
+ * (`resolveCountyName`), so an alias such as 'nairobi' or 'muranga' reaches the
+ * data layer as its canonical name and the caller cannot invent a value that
+ * will never match a row. A supplied value that is not a Kenyan county —
+ * including a blank one or a repeated parameter — is REFUSED with a 400 rather
+ * than silently ignored, because an ignored filter would show an administrator
+ * reports from counties they did not ask for while looking like a filter that
+ * worked.
+ */
+function countyFilter(raw: unknown): { value: string | null; error: string | null } {
+  if (raw === undefined) return { value: null, error: null };
+  if (typeof raw !== 'string') {
+    return { value: null, error: 'Kigezo kimerudiwa au si sahihi. / Duplicate or malformed parameter.' };
+  }
+  const canonical = resolveCountyName(raw);
+  if (!canonical) {
+    return { value: null, error: FOUND_COUNTY_MESSAGES.invalid };
+  }
+  return { value: canonical, error: null };
+}
+
 export function registerAdminLostReportRoutes(app: Express, deps: AdminLostReportRouteDeps): void {
   const { requireCurrentAdminSession, sendServerError, canCreateClaim } = deps;
 
@@ -108,7 +138,15 @@ export function registerAdminLostReportRoutes(app: Express, deps: AdminLostRepor
       const offset = boundedInt(q.offset, 0, Number.MAX_SAFE_INTEGER, 0);
       if (offset.error) return res.status(400).json({ error: offset.error });
 
-      const { rows, hasMore } = await db.listAdminLostReports({ limit: limit.value, offset: offset.value });
+      // PHASE 16.1 (GEO-16-04): an optional canonical county filter, validated
+      // before the query is built. `county` is a plain equality on the indexed
+      // `lost_reports.county` column (idx_lost_reports_county), applied to the
+      // SAME bounded page query as `limit`/`offset` — so the page, the resulting
+      // `hasMore` and the possible-match counts all describe the filtered set.
+      const county = countyFilter(q.county);
+      if (county.error) return res.status(400).json({ error: county.error });
+
+      const { rows, hasMore } = await db.listAdminLostReports({ limit: limit.value, offset: offset.value, county: county.value });
 
       // POSSIBLE-MATCH COUNTS.
       // Computed only for reports the platform is actually matching (the one

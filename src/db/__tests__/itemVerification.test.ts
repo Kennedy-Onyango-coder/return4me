@@ -132,7 +132,16 @@ describe('recordItemVerification — corrections (tests 3-7)', () => {
     expect(changes.some(c => c.field_name === 'document_number')).toBe(true);
   });
 
-  it('Agent changes category — item.category_id itself updates too, not just verified_category_id', async () => {
+  it('Agent changes category — the REPORTED category is preserved and verified_category_id holds the agent\'s value', async () => {
+    // PHASE 16.1 BATCH 2 (CAT-14) — CONTRACT CHANGE.
+    //
+    // This test previously asserted that an agent's category correction
+    // OVERWROTE `item.category_id`. The product policy is now that the two
+    // columns keep their distinct meanings:
+    //     category_id          = what the finder REPORTED
+    //     verified_category_id = what the agent VERIFIED it to be
+    // so the historical distinction survives, and the correction stays fully
+    // auditable (asserted below).
     const itemId = await makeTestItem({ isSensitive: false, category: 'phone', description: 'Black phone' });
 
     await db.recordItemVerification(
@@ -145,10 +154,11 @@ describe('recordItemVerification — corrections (tests 3-7)', () => {
     );
 
     const item = await db.getItem(itemId);
-    expect(item?.category_id).toBe('laptop');
+    expect(item?.category_id).toBe('phone');
     expect(item?.verified_category_id).toBe('laptop');
+    expect(item?.verification_status).toBe('corrected');
     const changes = await db.getItemVerificationChanges(itemId);
-    expect(changes.some(c => c.field_name === 'category_id' && c.verified_value === 'laptop')).toBe(true);
+    expect(changes.some(c => c.field_name === 'category_id' && c.original_value === 'phone' && c.verified_value === 'laptop')).toBe(true);
   });
 
   it('a correction with no reason is rejected', async () => {

@@ -91,6 +91,10 @@ export function toLostReportMatchCandidateView(item: any, evaluation: any): any 
     photo_url: publicItem.photo_url,
     is_sensitive_document: publicItem.is_sensitive_document,
     document_name_fuzzy: publicItem.document_name_fuzzy,
+    // PHASE 16.1 (GEO-16-03): the canonical county, copied from the same public
+    // read model as every other field here — it lets the customer see that a
+    // candidate was found in the county their own report named.
+    found_county: publicItem.found_county,
     location_description: publicItem.location_description,
     description: publicItem.description,
     isDescriptionOnly: publicItem.isDescriptionOnly,

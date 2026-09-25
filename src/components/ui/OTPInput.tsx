@@ -99,7 +99,7 @@ const OTPInput = forwardRef<HTMLDivElement, OTPInputProps>(
         {label && (
           <label
             id={groupId}
-            className={`block text-xs font-bold text-brand-dark-text mb-1.5 ${hideLabel ? 'sr-only' : ''}`}
+            className={`block text-xs font-bold text-[var(--appearance-text-primary)] mb-1.5 ${hideLabel ? 'sr-only' : ''}`}
           >
             {label}
           </label>
@@ -127,8 +127,8 @@ const OTPInput = forwardRef<HTMLDivElement, OTPInputProps>(
               onPaste={handlePaste}
               aria-label={length > 1 ? `Digit ${i + 1} of ${length}` : label}
               aria-invalid={error ? true : undefined}
-              className={`h-12 w-full text-center text-lg font-extrabold font-mono rounded-xl border px-0 transition-colors focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30 disabled:opacity-50 disabled:cursor-not-allowed ${
-                error ? 'border-status-danger bg-status-danger-surface/40' : 'border-brand-border bg-white'
+              className={`h-12 w-full text-center text-lg font-extrabold font-mono rounded-xl border px-0 text-[var(--appearance-text-primary)] transition-colors focus:outline-none focus:border-[var(--appearance-focus)] focus:ring-2 focus:ring-[var(--appearance-focus)]/30 disabled:opacity-50 disabled:cursor-not-allowed ${
+                error ? 'border-[var(--appearance-danger)] bg-[var(--appearance-surface)]' : 'border-[var(--appearance-border)] bg-[var(--appearance-surface)]'
               }`}
             />
           ))}

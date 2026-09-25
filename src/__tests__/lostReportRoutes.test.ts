@@ -7,6 +7,7 @@ import { hashCode } from '../services/auth';
 import { ensureTestCategory, testRunId } from '../db/__tests__/ensureTestCategory';
 import { registerLostReportRoutes } from '../routes/lostReports';
 import { createLostReportCustomerLimiter } from '../config/lostReportLimiter';
+import { administrativeUnitsForCounty } from '../config/kenyaAdministrativeUnits';
 
 // ---------------------------------------------------------------------------
 // Phase 9A — HTTP INTEGRATION TESTS for POST/GET /api/lost-reports.
@@ -136,9 +137,11 @@ async function api(method: string, urlPath: string, token?: string, body?: any, 
 
 /** A valid creation payload. Individual tests override one field at a time. */
 function validPayload(overrides: Record<string, any> = {}) {
+  const county = overrides.county || 'Nairobi City';
   return {
     categoryId: 'national-id',
-    county: 'Nairobi',
+    county,
+    administrativeUnitId: administrativeUnitsForCounty(county)[0]?.id,
     locationArea: 'Westlands',
     locationLandmark: 'Near Sarit Centre',
     lostAtFrom: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString(),
@@ -148,7 +151,7 @@ function validPayload(overrides: Record<string, any> = {}) {
     distinctiveMarks: 'Small tear on the left seam',
     documentType: 'national-id',
     ...overrides,
-  };
+    };
 }
 
 function reportsFor(customerId: string) {
@@ -220,7 +223,7 @@ describe('POST /api/lost-reports: creation', () => {
   });
 
   it('canonicalizes an alias county to its official name', async () => {
-    const res = await api('POST', '/api/lost-reports', TOKEN_A, validPayload({ county: 'nairobi' }));
+    const res = await api('POST', '/api/lost-reports', TOKEN_A, validPayload({ county: 'nairobi', administrativeUnitId: 'KE-47-SC-01' }));
     expect(res.status).toBe(201);
     const stored = (await reportsFor(CUSTOMER_A)).find((r) => r.id === res.body.reference)!;
     expect(stored.county).toBe('Nairobi City');

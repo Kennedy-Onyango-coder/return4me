@@ -7,6 +7,9 @@ import EmptyState from '../../ui/EmptyState';
 import SectionHeading from '../../ui/SectionHeading';
 import Skeleton from '../../ui/Skeleton';
 import { getLostReportStatusDisplay } from '../../../config/lostReportPresentation';
+// PHASE 16.1 (GEO-16-04): the county filter's 47 options come from the ONE
+// canonical county source. This component keeps no county list of its own.
+import { countiesByUxGroup } from '../../../config/kenyaCounties';
 import {
   ADMIN_LOST_REPORTS_PAGE_SIZE,
   AdminLostReportsApiError,
@@ -52,6 +55,9 @@ function formatWindow(from: string | null, to: string | null, lang: 'en' | 'sw')
   return b && b !== a ? `${a} — ${b}` : a;
 }
 
+/** The 47 canonical counties, grouped for display. Read once — the dataset is static. */
+const COUNTY_GROUPS = countiesByUxGroup();
+
 export default function LostReportsAdministration({ lang, token }: { lang: 'en' | 'sw'; token: string | null }) {
   const sw = lang === 'sw';
   const t = (en: string, swText: string) => (sw ? swText : en);
@@ -67,6 +73,9 @@ export default function LostReportsAdministration({ lang, token }: { lang: 'en' 
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const [categories, setCategories] = useState<any[]>([]);
+  // PHASE 16.1 (GEO-16-04): the canonical county filter. '' means "All
+  // Counties" — the parameter is then omitted from the request entirely.
+  const [county, setCounty] = useState<string>('');
 
   // Only the newest request may commit its result.
   const requestId = useRef(0);
@@ -85,6 +94,9 @@ export default function LostReportsAdministration({ lang, token }: { lang: 'en' 
         const page = await fetchAdminLostReports(token, {
           limit: ADMIN_LOST_REPORTS_PAGE_SIZE,
           offset: nextOffset,
+          // '' (All Counties) is passed through as null so no county parameter
+          // is sent at all — the pre-16.1 request shape.
+          county: county || null,
           signal: controller.signal,
         });
         if (id !== requestId.current) return; // superseded — stay silent
@@ -103,13 +115,24 @@ export default function LostReportsAdministration({ lang, token }: { lang: 'en' 
         if (id === requestId.current) setLoading(false);
       }
     },
-    [token, lang],
+    [token, lang, county],
   );
 
   useEffect(() => {
     load(offset);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [offset, reloadToken, token]);
+  }, [offset, reloadToken, token, county]);
+
+  /**
+   * PHASE 16.1 (GEO-16-04): changing the county is a change of RESULT SET, so
+   * the view returns to the first page before reloading. Clearing the filter
+   * ('') restores the unfiltered list. Both paths go through the effect above —
+   * there is no second fetch path to drift.
+   */
+  const handleCountyChange = (value: string) => {
+    setCounty(value);
+    setOffset(0);
+  };
 
   // Category names are cosmetic here (the raw category id is shown otherwise),
   // so a failure is silently tolerated — exactly as the customer section does.
@@ -161,6 +184,34 @@ export default function LostReportsAdministration({ lang, token }: { lang: 'en' 
         </Button>
       </div>
 
+      {/* PHASE 16.1 (GEO-16-04) — CANONICAL COUNTY FILTER.
+          A select, not free text, over the ONE canonical 47-county dataset
+          (config/kenyaCounties.ts): the admin value must be exactly the value
+          stored in `lost_reports.county`, and the server re-validates it with
+          resolveCountyName() regardless of what this control sends. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <label htmlFor="admin-lost-county" className="text-xs font-extrabold uppercase tracking-wider text-stone-500">
+          {t('County', 'Kaunti')}
+        </label>
+        <select
+          id="admin-lost-county"
+          value={county}
+          onChange={(e) => handleCountyChange(e.target.value)}
+          className="border border-stone-300 rounded-xl px-3 py-2 text-xs bg-white focus:outline-none focus:border-accent-orange"
+        >
+          <option value="">{t('All Counties', 'Kaunti Zote')}</option>
+          {COUNTY_GROUPS.map((group) => (
+            <optgroup key={group.group} label={group.group}>
+              {group.counties.map((c) => (
+                <option key={c.code} value={c.name}>
+                  {c.name}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      </div>
+
       {error && <Banner kind="error">{error}</Banner>}
 
       {loading ? (
@@ -172,11 +223,18 @@ export default function LostReportsAdministration({ lang, token }: { lang: 'en' 
       ) : rows.length === 0 ? (
         <EmptyState
           icon={SearchX}
-          title={t('No lost reports yet', 'Hakuna ripoti bado')}
-          description={t(
-            'When a customer reports something lost, it appears here with its county, area and any possible matches.',
-            'Mteja anaporipoti kitu kilichopotea, kitaonekana hapa na kaunti, eneo na mechi zinazowezekana.'
-          )}
+          title={county
+            ? t('No lost reports in this county', 'Hakuna ripoti katika kaunti hii')
+            : t('No lost reports yet', 'Hakuna ripoti bado')}
+          description={county
+            ? t(
+                `Nothing has been reported in ${county}. Choose "All Counties" to see every report.`,
+                `Hakuna kilichoripotiwa katika ${county}. Chagua "Kaunti Zote" kuona ripoti zote.`,
+              )
+            : t(
+                'When a customer reports something lost, it appears here with its county, area and any possible matches.',
+                'Mteja anaporipoti kitu kilichopotea, kitaonekana hapa na kaunti, eneo na mechi zinazowezekana.'
+              )}
         />
       ) : (
         <ReportsTable lang={lang} rows={rows} categoryName={categoryName} thClass={thClass} tdClass={tdClass} />
@@ -238,6 +296,7 @@ function ReportsTable({
             <th scope="col" className={thClass}>{t('Lost Report', 'Ripoti')}</th>
             <th scope="col" className={thClass}>{t('Category', 'Aina')}</th>
             <th scope="col" className={thClass}>{t('County', 'Kaunti')}</th>
+            <th scope="col" className={thClass}>{t('Sub-county', 'Kaunti ndogo')}</th>
             <th scope="col" className={thClass}>{t('Exact place', 'Mahali halisi')}</th>
             <th scope="col" className={thClass}>{t('Lost Date/Time', 'Muda Uliopotea')}</th>
             <th scope="col" className={thClass}>{t('Created', 'Iliundwa')}</th>
@@ -266,6 +325,7 @@ function ReportsTable({
                 </td>
                 <td className={`${tdClass} font-bold text-stone-900`}>{categoryName(report.category_id)}</td>
                 <td className={tdClass}>{report.county}</td>
+                <td className={tdClass}>{report.administrative_unit_name || <span className="text-stone-400">-</span>}</td>
                 <td className={tdClass}>{place || <span className="text-stone-400">-</span>}</td>
                 <td className={tdClass}>{formatWindow(report.lost_at_from, report.lost_at_to, lang)}</td>
                 <td className={tdClass}>{formatDateTime(report.created_at, lang)}</td>

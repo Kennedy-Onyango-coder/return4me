@@ -128,6 +128,18 @@ function MatchCandidateCard({
           )}
 
           <dl className="space-y-1.5 text-xs text-brand-muted-text">
+            {/* PHASE 16.1 (GEO-16-03): the canonical county of the candidate,
+                taken from the same public DTO. It helps the customer see WHY a
+                candidate is plausible without revealing anything finer. */}
+            {candidate.found_county && (
+              <div className="flex items-start gap-2">
+                <dt className="sr-only">{t('County', 'Kaunti')}</dt>
+                <MapPin size={13} aria-hidden="true" className="mt-0.5 shrink-0 text-accent-orange" />
+                <dd className="leading-relaxed break-words">
+                  {t('County', 'Kaunti')}: {candidate.found_county}
+                </dd>
+              </div>
+            )}
             {candidate.location_description && (
               <div className="flex items-start gap-2">
                 <dt className="sr-only">{t('Where it was recorded', 'Ilipowekwa kumbukumbu')}</dt>

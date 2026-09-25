@@ -20,13 +20,13 @@ export default function SectionHeading({ eyebrow, title, description, className 
   return (
     <div className={`space-y-1.5 ${className}`}>
       {eyebrow && (
-        <p className="text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">
+        <p className="text-[11px] font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">
           {eyebrow}
         </p>
       )}
-      <h2 className="text-lg font-extrabold tracking-tight text-primary-green">{title}</h2>
+      <h2 className="text-lg font-extrabold tracking-tight text-[var(--appearance-text-primary)]">{title}</h2>
       {description && (
-        <p className="text-sm text-brand-muted-text leading-relaxed max-w-2xl">{description}</p>
+        <p className="text-sm text-[var(--appearance-text-muted)] leading-relaxed max-w-2xl">{description}</p>
       )}
     </div>
   );

@@ -14,6 +14,12 @@ import { Search, AlertCircle, ShieldAlert, CheckCircle, Smartphone, ArrowRight, 
 import { getClaimStatusDisplay } from './claimStatus';
 import Stepper from './ui/Stepper';
 import Button from './ui/Button';
+// PHASE 16.1 (GEO-16-01): the ONE canonical 47-county dataset, imported — never
+// re-typed here. The same source the Finder and the lost-report wizard use.
+import { countiesByUxGroup } from '../config/kenyaCounties';
+
+/** The 47 canonical counties, grouped for display. Static data — read once. */
+const COUNTY_GROUPS = countiesByUxGroup();
 
 // PHASE 8.2 — CLAIM PROGRESS MODEL (presentation only)
 // ====================================================
@@ -281,7 +287,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
   // Search States
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCat, setSelectedCat] = useState('');
-  const [selectedArea, setSelectedArea] = useState('');
+  const [selectedCounty, setSelectedCounty] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -289,29 +295,15 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
   const [testModeEnabled, setTestModeEnabled] = useState(false);
   const [simulatedPickupCode, setSimulatedPickupCode] = useState<string | null>(null);
 
-  // Regions Dynamic List
-  const [regions, setRegions] = useState<string[]>([]);
-  const [regionsLoading, setRegionsLoading] = useState<boolean>(true);
-  const [regionsError, setRegionsError] = useState<boolean>(false);
+  // PHASE 16.1 (GEO-16-01) — the county filter is NOT fetched.
+  // It used to call GET /api/regions, which returned a mixed vocabulary of
+  // counties, towns, estates and arbitrary reporter-typed location text (with a
+  // 30-entry hard-coded fallback), and presented it as "Regions". That endpoint
+  // and its DB method are retired. The options below come from the ONE canonical
+  // 47-county dataset (config/kenyaCounties.ts), so there is nothing to load,
+  // nothing to fail, and no second geography to drift.
 
   useEffect(() => {
-    const fetchRegions = async () => {
-      try {
-        setRegionsLoading(true);
-        setRegionsError(false);
-        const res = await fetch('/api/regions');
-        if (!res.ok) throw new Error('Failed to fetch regions');
-        const data = await res.json();
-        setRegions(data);
-      } catch (err) {
-        console.error('Failed to load regions:', err);
-        setRegionsError(true);
-      } finally {
-        setRegionsLoading(false);
-      }
-    };
-    fetchRegions();
-
     // Check whether dev/test conveniences (like a payment simulator) are
     // available — only ever true off-production with mock OTP bypass on.
     fetch('/api/dev/test-mode')
@@ -601,7 +593,12 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
       const params = new URLSearchParams();
       if (searchQuery) params.append('q', searchQuery);
       if (selectedCat) params.append('categoryId', selectedCat);
-      if (selectedArea) params.append('area', selectedArea);
+      // PHASE 16.1 (GEO-16-01): a STRUCTURED canonical county filter. Omitted
+      // entirely when no county is selected, so an unfiltered search is the
+      // pre-16.1 request and legacy items with no county stay searchable.
+      // `q` above remains the free-text "Exact place" search — the two
+      // combine (county AND text), and neither is inferred from the other.
+      if (selectedCounty) params.append('county', selectedCounty);
 
       const response = await fetch(`/api/items/search?${params.toString()}`);
       const data = await response.json();
@@ -625,14 +622,14 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
   const isInitialMount = useRef(true);
 
-  // Auto-trigger search when category or area filter changes
+  // Auto-trigger search when category or county filter changes
   useEffect(() => {
     if (isInitialMount.current) {
       isInitialMount.current = false;
       return;
     }
     handleSearch();
-  }, [selectedCat, selectedArea]);
+  }, [selectedCat, selectedCounty]);
 
   // Submit Tier 1 Security answers — collected by the category-specific
   // VerificationForm (field keys are defined in verificationProfiles.ts).
@@ -1124,26 +1121,29 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 )}
               </select>
 
-              {/* Area Quick Selector */}
+              {/* PHASE 16.1 (GEO-16-01) — CANONICAL COUNTY FILTER.
+                  Replaces the old "Area Quick Selector", which was fed by
+                  GET /api/regions and mixed counties, towns, estates and
+                  arbitrary reporter-typed text in one list. This is a select
+                  over the ONE canonical 47-county dataset, the same pattern the
+                  Finder and the lost-report wizard already use, so a household
+                  searching for its item is choosing a real county — never an
+                  area string that merely looks like one.
+                  The "Exact place" text stays free text in the search box. */}
               <select
-                value={selectedArea}
-                onChange={(e) => setSelectedArea(e.target.value)}
-                aria-label={lang === 'en' ? 'Filter by area' : 'Chuja kwa eneo'}
-                className="border border-line-subtle rounded-2xl px-3 py-3 text-sm bg-white focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30 disabled:bg-brand-light-gray disabled:text-brand-muted-text"
-                disabled={regionsLoading || regionsError}
+                value={selectedCounty}
+                onChange={(e) => setSelectedCounty(e.target.value)}
+                aria-label={lang === 'en' ? 'Filter by county' : 'Chuja kwa kaunti'}
+                className="border border-line-subtle rounded-2xl px-3 py-3 text-sm bg-white focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30"
               >
-                {regionsLoading ? (
-                  <option value="">{lang === 'en' ? 'Loading regions...' : 'Inapakia maeneo...'}</option>
-                ) : regionsError ? (
-                  <option value="">{lang === 'en' ? 'Regions unavailable — please refresh' : 'Maeneo hayapatikani - tafadhali pakia upya'}</option>
-                ) : (
-                  [
-                    <option key="all-regions" value="">{lang === 'en' ? '-- All Regions --' : '-- Maeneo Yote --'}</option>,
-                    ...regions.map(r => (
-                      <option key={r} value={r}>{r}</option>
-                    ))
-                  ]
-                )}
+                <option value="">{lang === 'en' ? '-- All Counties --' : '-- Kaunti Zote --'}</option>
+                {COUNTY_GROUPS.map(group => (
+                  <optgroup key={group.group} label={group.group}>
+                    {group.counties.map(county => (
+                      <option key={county.code} value={county.name}>{county.name}</option>
+                    ))}
+                  </optgroup>
+                ))}
               </select>
 
               <button
@@ -1202,8 +1202,8 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                     onClick={() => {
                       setSearchQuery('');
                       setSelectedCat('');
-                      setSelectedArea('');
-                      if (selectedCat === '' && selectedArea === '') {
+                      setSelectedCounty('');
+                      if (selectedCat === '' && selectedCounty === '') {
                         handleSearch();
                       }
                     }}
@@ -1266,6 +1266,22 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                           )}
                         </h3>
 
+                        {/* PHASE 16.1 (GEO-16-03): the canonical COUNTY, read
+                            straight from the public DTO field — a recognition
+                            clue the claimant can judge, and coarser than
+                            anything private. An item with no declared county
+                            (a legacy row) simply renders no county line. */}
+                        {item.found_county && (
+                          <p className="text-caption font-extrabold text-ink-muted uppercase tracking-widest">
+                            {lang === 'en' ? 'County' : 'Kaunti'}: {item.found_county}
+                          </p>
+                        )}
+
+                        {item.administrative_unit_name && (
+                          <p className="text-caption text-ink-muted">
+                            {lang === 'en' ? 'Sub-county' : 'Kaunti ndogo'}: {item.administrative_unit_name}
+                          </p>
+                        )}
                         <p className="text-ink-muted text-xs line-clamp-2">
                           <MapPin size={10} className="inline mr-1 text-accent-orange" />
                           {item.location_description}

@@ -176,6 +176,8 @@ export function toAdminSafeItemView(
     photo_url: item.photo_url,
     ocr_extracted_number: item.ocr_extracted_number ?? null,
     ocr_extracted_name: item.ocr_extracted_name ?? null,
+    found_county: item.found_county ?? null,
+    administrative_unit_id: item.administrative_unit_id ?? null,
     location_description: item.location_description,
     latitude: item.latitude,
     longitude: item.longitude,

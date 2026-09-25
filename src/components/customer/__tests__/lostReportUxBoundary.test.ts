@@ -179,10 +179,20 @@ describe('the customer-visible layer names no private field', () => {
     'finder_phone', 'finder_email', 'ocr_extracted_number', 'ocr_extracted_name',
     'document_number_hash', 'assigned_agent_id', 'verified_document_number',
     'latitude', 'longitude', 'customer_id',
-    // PHASE 9D — internal geographic data. The customer-visible lost-report
-    // layer must not read or mention the found item's county: it is used for
-    // matching consistency on the server, not shown to a customer.
-    'found_county',
+    // PHASE 9D — internal geographic ENRICHMENT. The customer-visible
+    // lost-report layer must not read or mention any of it: it is used for
+    // matching/consistency on the server, not shown to a customer.
+    'distance', 'distance_km', 'precision', 'confidence', 'provenance',
+    'geocoding', 'geocoded', 'provider',
+    //
+    // PHASE 16.1 (GEO-16-03): 'found_county' was on this list and is
+    // deliberately no longer — the batch APPROVES displaying the canonical county
+    // on the public read model, so the customer layer reads it from the one
+    // public DTO field (`candidate.found_county`). That replacement assertion —
+    // the county must come from the DTO and never be derived from free text —
+    // lives in src/__tests__/countyAwareSearchAndSurfacing.test.ts. Everything
+    // else above (contacts, identifiers, coordinates, agent identity, internal
+    // customer id, any geocoding metadata) remains forbidden here.
   ];
 
   it('never reads or mentions one', () => {
