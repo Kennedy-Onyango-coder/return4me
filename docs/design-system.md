@@ -244,7 +244,7 @@ These pockets are known, classified, and deliberately **not** touched by UX-01.
 | --- | --- | --- | --- |
 | AdminView | 63 × 9/10/11px text, 61 × `stone-*`, 60 hand-built `<button>`, 30 `<input>`, one `window.prompt()` at the reject-reason step | MIGRATE LATER | UX-15 / UX-16 |
 | AgentView + agent/* | 51 × `stone-*`, 19 hand-built buttons, hand-rolled panels | MIGRATE LATER | UX-12 / UX-13 / UX-16 |
-| FinderView | 12 × `focus:outline-none`, `stone-*` fields | MIGRATE LATER | UX-05 / UX-16 |
+| FinderView | UX-05 put the five-stage journey on the shared foundation (`Stepper` + `Input`/`Select`/`Button`) with the reviewed chrome on the appearance tokens. Still legacy: the category `<select>`, the photograph controls, the two GPS boxes and the legacy submit button | MIGRATE LATER | UX-16 |
 | OwnerView | 11 × `focus:outline-none`, 7 × `focus:ring-*`, `stone-*` | MIGRATE LATER | UX-04 / UX-09 / UX-16 |
 | HomeView / PublicItemView | hand-built buttons where the shared Button applies | MIGRATE LATER | UX-02 / UX-03 |
 | PrivacyView / TermsView | 88 / 11 × `stone-*`, ad-hoc headings | MIGRATE LATER | UX-17 |

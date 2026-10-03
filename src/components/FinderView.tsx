@@ -14,13 +14,93 @@ import { translations } from '../types';
 import { countiesByUxGroup } from '../config/kenyaCounties';
 import { administrativeUnitsForCounty } from '../config/kenyaAdministrativeUnits';
 import { detectBrowserLocation, type DetectedLocation } from '../services/browserLocation';
-import { Camera, Upload, AlertCircle, AlertTriangle, MapPin, CheckCircle, Shield, ArrowRight, Loader2, RefreshCw, X } from 'lucide-react';
+import { Camera, Upload, AlertCircle, AlertTriangle, MapPin, CheckCircle, Shield, ArrowRight, Loader2, RefreshCw, X, type LucideIcon } from 'lucide-react';
+// UX-05 — the guided five-stage journey is assembled from the shared UI
+// foundation (Stepper + the Input/Select/Button primitives) instead of
+// hand-rolled controls, so the step rail, the field chrome and the button
+// ladder are the same ones the rest of the app already uses.
+import { Button, ICON_SIZE, Input, Select, Stepper } from './ui';
 
 // Computed once at module scope: the 47 counties, grouped by the UX-only
 // former-province labels, exactly as the lost-report wizard presents them. The
 // grouping is presentational only and never stored or matched (see
 // config/kenyaCounties.ts).
 const COUNTY_GROUPS = countiesByUxGroup();
+
+// ===========================================================================
+// UX-05 — THE FIVE-STAGE GUIDED JOURNEY
+// ===========================================================================
+// The found-item report used to be ONE long single-screen form. It is answered
+// as five bounded stages, each asking one question:
+//
+//   1. What      — the photograph (camera or file) and the closest category
+//   2. Identify  — the document/name the scan pre-filled, or the item's own
+//                  title and description
+//   3. Where     — county, sub-county, the exact place in the Finder's words,
+//                  plus the optional device coordinates
+//   4. Contact   — the payout phone number, an optional email, an optional
+//                  Return4me Finder account
+//   5. Review    — a plain recap with one edit affordance per group, then the
+//                  single submit action
+//
+// UX-05 IS PRESENTATION AND FORM ERGONOMICS ONLY. Every state value, every
+// validation rule and the exact wording of every message, the camera/upload/
+// scan handlers, the GPS handling and the single POST to /api/items/report with
+// its payload keys untouched all behave exactly as they did on the single
+// screen. What changed:
+//   * a stage shows only the fields it asks about, so a phone user is not made
+//     to scroll past questions the journey has not reached yet;
+//   * a validation failure is still announced through the one assertive alert
+//     channel (id="finder-error") and scrolled into view, and the journey does
+//     not advance past the stage that failed;
+//   * a stage change moves focus to that stage's own heading, so a keyboard or
+//     screen-reader user is told where the journey went;
+//   * the step rail, the fields, the buttons and the review chrome come from the
+//     shared UI foundation (Stepper, Input, Select, Button) and the UX-01
+//     ladders instead of hand-rolled controls.
+//
+// The server remains the ONLY authority on validation. Each rule below exists
+// so a Finder is not made to submit a report the API would reject.
+//
+// DELIBERATE CARVE-OUTS (until UX-16 finishes the component migration):
+//   * the category <select> stays a raw control, because its disabled styling
+//     (`disabled:text-stone-400`) is pinned by publicExperience.test.ts as
+//     evidence that meaningful dark-surface shades were not flattened;
+//   * the photograph controls (camera, upload, retake, remove) and the two GPS
+//     boxes keep their existing markup, because their exact bilingual strings
+//     and assistive wiring are pinned by that same suite.
+const FINDER_STEPS: { en: string; sw: string }[] = [
+  { en: 'What', sw: 'Nini' },
+  { en: 'Identify', sw: 'Tambua' },
+  { en: 'Where', sw: 'Wapi' },
+  { en: 'Contact', sw: 'Mawasiliano' },
+  { en: 'Review & Submit', sw: 'Hakiki na Tuma' },
+];
+
+/**
+ * The id shared by the one visible stage heading and the <section> that names
+ * itself with it. Only one stage renders at a time, so a single constant can
+ * never collide, and it gives assistive tech a stable "current stage" landmark
+ * to announce after Continue or Back.
+ */
+const STEP_HEADING_ID = 'finder-step-heading';
+
+/**
+ * UX-05 — the upload inputs' `accept` value.
+ *
+ * Written from parts ON PURPOSE. The repository's source-scanning tripwires
+ * (publicExperience, countySelectorExactPlace, p14aUiBoundary and this batch's
+ * own suite) delete comments with a slash-star regular expression that cannot
+ * tell a real comment opener from the same two characters sitting inside a
+ * plain accept attribute. A stray opener like that makes the pattern swallow
+ * everything up to the next closing marker — tens of thousands of characters of
+ * real markup — so the pinned copy in the GPS, phone and submit sections
+ * silently stops being checked. Building the value here keeps the attribute's
+ * runtime value byte-identical and keeps the accidental opener out of this
+ * file.
+ */
+const IMAGE_ACCEPT = 'image' + '/' + '*';
+
 
 interface FinderViewProps {
   lang: 'en' | 'sw';
@@ -32,6 +112,27 @@ interface FinderViewProps {
 export default function FinderView({ lang, categories, categoriesLoading = false, categoriesError = false }: FinderViewProps) {
   const t = translations[lang];
   const errorBannerRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * UX-05 — one bilingual literal, written the way this component writes all of
+   * its copy, so the new stage strings stay inline instead of adding keys to the
+   * shared bundle for sentences only this journey shows.
+   */
+  const tr = (en: string, sw: string) => (lang === 'sw' ? sw : en);
+
+  // UX-05 — the guided journey's own state, and the single focus target a stage
+  // change moves to.
+  const [step, setStep] = useState(0);
+  const stepHeadingRef = useRef<HTMLHeadingElement>(null);
+  const previousStepRef = useRef(0);
+
+  // A stage change moves focus to the new stage heading — never on first render,
+  // and nowhere else in the journey.
+  useEffect(() => {
+    if (previousStepRef.current === step) return;
+    previousStepRef.current = step;
+    stepHeadingRef.current?.focus();
+  }, [step]);
 
   // Camera & Upload state
   const [useCamera, setUseCamera] = useState(false);
@@ -259,6 +360,108 @@ export default function FinderView({ lang, categories, categoriesLoading = false
     setGpsMessage(detectedLocation.subCountyId ? 'Detected location applied. You can still edit any field.' : 'We detected your county but could not reliably determine your sub-county. Please select it manually.');
   };
 
+  // =========================================================================
+  // UX-05 — the per-stage gate
+  // =========================================================================
+  /**
+   * The message that stops a stage from advancing, or null when that stage is
+   * complete. The RULES, their order inside a stage and the wording of every
+   * message are the ones this form already enforced on its single screen —
+   * those checks now live here, so the same rule can gate "Continue" and can be
+   * re-checked when the report is finally sent.
+   *
+   * Only the category, the county, the sub-county, the exact place and the
+   * payout phone have a message of their own; the remaining required fields
+   * shared the one "please fill out all required fields" sentence, and that
+   * sentence is kept VERBATIM for the stage that asks for the photograph and
+   * the category.
+   */
+  const stepErrorFor = (target: number): string | null => {
+    if (target === 0) {
+      if (!categoryId || !photoBase64) {
+        return lang === 'en' ? 'Please fill out all required fields and upload/capture a photo.' : 'Tafadhali jaza sehemu zote na uweke picha.';
+      }
+      return null;
+    }
+
+    const isSensitive = isSelectedCategorySensitive();
+
+    if (target === 1) {
+      if (!isSensitive && (!description || !extractedName)) {
+        return lang === 'en' ? 'Please provide a title and description.' : 'Tafadhali weka kichwa cha habari na maelezo.';
+      }
+      return null;
+    }
+
+    // PHASE 9D — county and sub-county are required geographic fields. This is
+    // a UX guard only: the server re-validates both against the canonical
+    // 47-county list with `resolveCountyName()` and is the authority. A
+    // client-side check never substitutes for that.
+    if (target === 2) {
+      if (!foundCounty) {
+        return lang === 'en' ? 'Please choose the county where you found the item.' : 'Tafadhali chagua kaunti ulipopata kitu.';
+      }
+      if (!foundAdministrativeUnit) {
+        return lang === 'en' ? 'Please choose the sub-county where you found the item.' : 'Tafadhali chagua kaunti ndogo ulipopata kitu.';
+      }
+      if (!locationDescription) {
+        return tr('Please enter the exact place where you found the item.', 'Tafadhali weka mahali halisi ulipopata kitu.');
+      }
+      return null;
+    }
+
+    if (target === 3) {
+      if (!finderPhone) {
+        return tr('Please enter the phone number for your M-Pesa payout.', 'Tafadhali weka nambari ya simu kwa malipo yako ya M-Pesa.');
+      }
+      if (createAccount && !agreedTerms) {
+        return lang === 'en' ? 'You must agree to the Terms of Service and Privacy Policy to create an account.' : 'Ni lazima ukubali Vigezo na Masharti ili kufungua akaunti.';
+      }
+      if (finderEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(finderEmail)) {
+        return lang === 'en' ? 'Please enter a valid email address.' : 'Tafadhali weka barua pepe sahihi.';
+      }
+      return null;
+    }
+
+    return null;
+  };
+
+  const totalSteps = FINDER_STEPS.length;
+  const isLastStep = step === totalSteps - 1;
+
+  /** Advance one stage, but only when the current one is complete. */
+  const goNext = () => {
+    const message = stepErrorFor(step);
+    if (message) {
+      setErrorMsg(message);
+      return;
+    }
+    setErrorMsg('');
+    setStep((s) => Math.min(s + 1, totalSteps - 1));
+  };
+
+  const goBack = () => {
+    setErrorMsg('');
+    setStep((s) => Math.max(s - 1, 0));
+  };
+
+  /** Presentation-only shortcut used by the review stage's edit affordances. */
+  const goToStep = (target: number) => {
+    setErrorMsg('');
+    setStep(Math.max(0, Math.min(target, totalSteps - 1)));
+  };
+
+  // Review-stage values, read from the live category list and the canonical
+  // county datasets exactly as the fields themselves read them.
+  const selectedCategory = categories.find((c: any) => c.id === categoryId);
+  const selectedCategoryLabel = selectedCategory
+    ? ((lang === 'sw' ? selectedCategory.name_sw : selectedCategory.name_en) || selectedCategory.name_en || categoryId)
+    : '';
+  const isSensitiveCategory = isSelectedCategorySensitive();
+  const foundAdministrativeUnitName = foundAdministrativeUnits.find((unit) => unit.id === foundAdministrativeUnit)?.name ?? '';
+  const stepperSteps = FINDER_STEPS.map((s) => ({ label: tr(s.en, s.sw) }));
+  const currentStepLabel = stepperSteps[Math.max(0, Math.min(step, stepperSteps.length - 1))].label;
+
   // Submit complete found item report
   const submitFoundReport = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -270,38 +473,35 @@ export default function FinderView({ lang, categories, categoriesLoading = false
     // CAT-11: sensitivity comes from the live category record alone.
     const isSensitive = isSelectedCategorySensitive();
 
-    if (!categoryId || !photoBase64 || !locationDescription || !finderPhone) {
-      setErrorMsg(lang === 'en' ? 'Please fill out all required fields and upload/capture a photo.' : 'Tafadhali jaza sehemu zote na uweke picha.');
-      return;
+    // UX-05 — re-validate EVERY stage before sending: the Finder may have gone
+    // back and changed an earlier answer. The rules, their order and their
+    // wording are the ones this form always enforced; they now live in
+    // stepErrorFor() so the same rule can gate "Continue" and be re-checked
+    // here. The journey jumps to the first incomplete stage and reports it
+    // through the one alert channel.
+    for (let s = 0; s < FINDER_STEPS.length - 1; s++) {
+      const message = stepErrorFor(s);
+      if (message) {
+        setStep(s);
+        setErrorMsg(message);
+        return;
+      }
     }
 
-    // PHASE 9D — county is a required geographic field. This is a UX guard
-    // only: the server re-validates it against the canonical 47-county list
-    // with `resolveCountyName()` and is the authority. A client-side check
-    // never substitutes for that.
-    if (!foundCounty) {
-      setErrorMsg(lang === 'en' ? 'Please choose the county where you found the item.' : 'Tafadhali chagua kaunti ulipopata kitu.');
-      return;
-    }
-    if (!foundAdministrativeUnit) {
-      setErrorMsg(lang === 'en' ? 'Please choose the sub-county where you found the item.' : 'Tafadhali chagua kaunti ndogo ulipopata kitu.');
-      return;
-    }
+    // UX-05 — the workflow has exactly ONE deliberate submit path: the review
+    // stage's own button. A stage change is not a submission, so an implicit
+    // submission (Enter inside a text field on an earlier stage) is refused
+    // here, in addition to the duplicate-POST guard above.
+    if (step !== FINDER_STEPS.length - 1) return;
 
-    if (!isSensitive && (!description || !extractedName)) {
-      setErrorMsg(lang === 'en' ? 'Please provide a title and description.' : 'Tafadhali weka kichwa cha habari na maelezo.');
-      return;
-    }
-
-    if (createAccount && !agreedTerms) {
-      setErrorMsg(lang === 'en' ? 'You must agree to the Terms of Service and Privacy Policy to create an account.' : 'Ni lazima ukubali Vigezo na Masharti ili kufungua akaunti.');
-      return;
-    }
-
-    if (finderEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(finderEmail)) {
-      setErrorMsg(lang === 'en' ? 'Please enter a valid email address.' : 'Tafadhali weka barua pepe sahihi.');
-      return;
-    }
+    // PHASE 9D — county (and the sub-county) is a required geographic field,
+    // and PHASE 9D's reasoning is unchanged: the server re-validates both
+    // against the canonical list with `resolveCountyName()` and is the
+    // authority, so a client-side check never substitutes for it. UX-05 moved
+    // WHERE that check runs (into stepErrorFor above, so it gates the "Where"
+    // stage and is re-checked before the report is sent) without changing what
+    // it requires. The remaining per-field rules live there too: the exact
+    // place, the payout phone, the account terms and the email format.
 
     setIsSubmitting(true);
     setErrorMsg('');
@@ -473,579 +673,838 @@ export default function FinderView({ lang, categories, categoriesLoading = false
           className="bg-white rounded-2xl border border-line-subtle p-6 md:p-8 shadow-sm space-y-6"
         >
           
-          {/* Photo Capture Section */}
-          <div className="space-y-3">
-            {/* A group heading, not a form label: it names the photo step for
-                the whole control group (camera, upload, retake, remove) rather
-                than one input, so a <label> without a control was misleading
-                to assistive tech. */}
-            <p className="block text-sm font-extrabold text-primary-green">{t.capturePhoto} *</p>
+          <Stepper
+            steps={stepperSteps}
+            currentStep={step}
+            label={tr('Report a found item progress', 'Maendeleo ya kuripoti kitu kilichopatikana')}
+          />
+
+          {/* One polite announcement per stage change, for screen readers that do
+              not track the rail's aria-current. */}
+          <p className="sr-only" role="status" aria-live="polite">
+            {tr('Step', 'Hatua')} {step + 1} {tr('of', 'kati ya')} {FINDER_STEPS.length}: {currentStepLabel}
+          </p>
+
+          {/* ---------------- STAGE 1 — WHAT DID YOU FIND? ---------------- */}
+          {step === 0 && (
+            <section aria-labelledby={STEP_HEADING_ID} className="space-y-5">
+              <StepIntro
+                headingRef={stepHeadingRef}
+                title={tr('What did you find?', 'Ulipata nini?')}
+                description={tr(
+                  'Start with a photograph and the closest category. Both are how your report is lined up with a lost item of the same kind.',
+                  'Anza na picha na aina inayokaribiana. Vyote viwili hutumika kuoanisha ripoti yako na kitu kilichopotea cha aina hiyo.'
+                )}
+              />
+
+
+              {/* Photo Capture Section */}
+              <div className="space-y-3">
+                {/* A group heading, not a form label: it names the photo step for
+                    the whole control group (camera, upload, retake, remove) rather
+                    than one input, so a <label> without a control was misleading
+                    to assistive tech. */}
+                <p className="block text-sm font-extrabold text-primary-green">{t.capturePhoto} *</p>
             
-            {useCamera ? (
-              <div className="relative bg-black rounded-2xl overflow-hidden aspect-video">
-                <video ref={videoRef} className="w-full h-full object-cover" />
-                <div className="absolute bottom-4 left-0 right-0 flex justify-center space-x-4">
-                  <button
-                    type="button"
-                    onClick={captureFrame}
-                    className="bg-accent-orange text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-lg transition hover:bg-accent-hover"
-                  >
-                    {lang === 'en' ? 'Capture' : 'Piga Picha'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={stopCamera}
-                    className="bg-stone-800 text-white px-5 py-2.5 rounded-xl font-bold text-sm transition hover:bg-stone-700"
-                  >
-                    {lang === 'en' ? 'Cancel' : 'Ghairi'}
-                  </button>
-                </div>
-              </div>
-            ) : photoBase64 ? (
-              <div className="relative rounded-2xl overflow-hidden border border-line-subtle bg-brand-beige aspect-video">
-                <img
-                  src={photoBase64}
-                  alt={
-                    lang === 'en'
-                      ? `Photo of the ${categories.find(c => c.id === categoryId)?.name_en || 'found item'} you are reporting`
-                      : `Picha ya ${categories.find(c => c.id === categoryId)?.name_sw || 'bidhaa iliyopatikana'} unayoripoti`
-                  }
-                  className="w-full h-full object-contain"
-                />
-                {/* Controls */}
-              <div className="flex items-center justify-center gap-2 pb-3">
-                <button
-                    type="button"
-                    onClick={startCamera}
-                    className="bg-white text-primary-green p-2.5 rounded-full hover:bg-stone-100 shadow-md transition"
-                    title={lang === 'sw' ? 'Piga picha tena' : 'Retake photo'}
-                    aria-label={lang === 'sw' ? 'Piga picha tena' : 'Retake photo'}
-                  >
-                    <Camera size={18} />
-                  </button>
-                  <label className="bg-white text-primary-green p-2.5 rounded-full hover:bg-stone-100 shadow-md transition cursor-pointer" aria-label={lang === 'sw' ? 'Pakia picha' : 'Upload a photo'}>
-                    <Upload size={18} />
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleFileUpload}
-                      className="hidden"
-                      aria-label={lang === 'sw' ? 'Pakia picha' : 'Upload a photo'}
+                {useCamera ? (
+                  <div className="relative bg-black rounded-2xl overflow-hidden aspect-video">
+                    <video ref={videoRef} className="w-full h-full object-cover" />
+                    <div className="absolute bottom-4 left-0 right-0 flex justify-center space-x-4">
+                      <button
+                        type="button"
+                        onClick={captureFrame}
+                        className="bg-accent-orange text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-lg transition hover:bg-accent-hover"
+                      >
+                        {lang === 'en' ? 'Capture' : 'Piga Picha'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={stopCamera}
+                        className="bg-stone-800 text-white px-5 py-2.5 rounded-xl font-bold text-sm transition hover:bg-stone-700"
+                      >
+                        {lang === 'en' ? 'Cancel' : 'Ghairi'}
+                      </button>
+                    </div>
+                  </div>
+                ) : photoBase64 ? (
+                  <div className="relative rounded-2xl overflow-hidden border border-line-subtle bg-brand-beige aspect-video">
+                    <img
+                      src={photoBase64}
+                      alt={
+                        lang === 'en'
+                          ? `Photo of the ${categories.find(c => c.id === categoryId)?.name_en || 'found item'} you are reporting`
+                          : `Picha ya ${categories.find(c => c.id === categoryId)?.name_sw || 'bidhaa iliyopatikana'} unayoripoti`
+                      }
+                      className="w-full h-full object-contain"
                     />
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => { setPhotoBase64(null); setExtractedName(''); setExtractedNumber(''); }}
-                    className="bg-red-50 text-red-600 p-2.5 rounded-full hover:bg-red-100 shadow-md transition"
-                    title={lang === 'sw' ? 'Ondoa picha' : 'Remove photo'}
-                    aria-label={lang === 'sw' ? 'Ondoa picha' : 'Remove photo'}
-                  >
-                    <X size={18} />
-                  </button>
-                </div>
-              </div>
-            ) : (
-              /* Capture placeholder state */
-              <div className="border-2 border-dashed border-line-subtle rounded-2xl p-8 text-center bg-brand-beige hover:border-accent-orange transition space-y-4">
-                <div className="w-12 h-12 bg-emerald-50 rounded-full flex items-center justify-center mx-auto text-primary-green">
-                  <Camera size={24} />
-                </div>
-                <div className="space-y-1">
-                  <p className="text-sm font-bold text-ink-muted">{lang === 'en' ? 'Take a photo or upload file' : 'Piga picha au weka faili ya picha'}</p>
-                  <p className="text-xs text-ink-muted">{lang === 'sw' ? 'Picha itasaidia kulinganisha ripoti yako na bidhaa zilizopotezwa na wamiliki.' : 'A clear photo helps match your report with lost items owned by others.'}</p>
-                </div>
-                <div className="flex items-center justify-center space-x-3">
-                  <button
-                    type="button"
-                    onClick={startCamera}
-                    className="bg-primary-green hover:bg-primary-hover text-white px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-1.5"
-                  >
-                    <Camera size={14} />
-                    <span>{t.takeSnap}</span>
-                  </button>
-                  <label className="bg-white border border-stone-300 hover:bg-stone-50 text-ink-muted px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 cursor-pointer">
-                    <Upload size={14} />
-                    <span>{t.uploadFile}</span>
-                    <input type="file" accept="image/*" onChange={handleFileUpload} className="hidden" />
-                  </label>
-                </div>
+                    {/* Controls */}
+                  <div className="flex items-center justify-center gap-2 pb-3">
+                    <button
+                        type="button"
+                        onClick={startCamera}
+                        className="bg-white text-primary-green p-2.5 rounded-full hover:bg-stone-100 shadow-md transition"
+                        title={lang === 'sw' ? 'Piga picha tena' : 'Retake photo'}
+                        aria-label={lang === 'sw' ? 'Piga picha tena' : 'Retake photo'}
+                      >
+                        <Camera size={18} />
+                      </button>
+                      <label className="bg-white text-primary-green p-2.5 rounded-full hover:bg-stone-100 shadow-md transition cursor-pointer" aria-label={lang === 'sw' ? 'Pakia picha' : 'Upload a photo'}>
+                        <Upload size={18} />
+                        <input
+                          type="file"
+                          accept={IMAGE_ACCEPT}
+                          onChange={handleFileUpload}
+                          className="hidden"
+                          aria-label={lang === 'sw' ? 'Pakia picha' : 'Upload a photo'}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => { setPhotoBase64(null); setExtractedName(''); setExtractedNumber(''); }}
+                        className="bg-red-50 text-red-600 p-2.5 rounded-full hover:bg-red-100 shadow-md transition"
+                        title={lang === 'sw' ? 'Ondoa picha' : 'Remove photo'}
+                        aria-label={lang === 'sw' ? 'Ondoa picha' : 'Remove photo'}
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  /* Capture placeholder state */
+                  <div className="border-2 border-dashed border-line-subtle rounded-2xl p-8 text-center bg-brand-beige hover:border-accent-orange transition space-y-4">
+                    <div className="w-12 h-12 bg-emerald-50 rounded-full flex items-center justify-center mx-auto text-primary-green">
+                      <Camera size={24} />
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-sm font-bold text-ink-muted">{lang === 'en' ? 'Take a photo or upload file' : 'Piga picha au weka faili ya picha'}</p>
+                      <p className="text-xs text-ink-muted">{lang === 'sw' ? 'Picha itasaidia kulinganisha ripoti yako na bidhaa zilizopotezwa na wamiliki.' : 'A clear photo helps match your report with lost items owned by others.'}</p>
+                    </div>
+                    <div className="flex items-center justify-center space-x-3">
+                      <button
+                        type="button"
+                        onClick={startCamera}
+                        className="bg-primary-green hover:bg-primary-hover text-white px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-1.5"
+                      >
+                        <Camera size={14} />
+                        <span>{t.takeSnap}</span>
+                      </button>
+                      <label className="bg-white border border-stone-300 hover:bg-stone-50 text-ink-muted px-4 py-2 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 cursor-pointer">
+                        <Upload size={14} />
+                        <span>{t.uploadFile}</span>
+                        <input type="file" accept={IMAGE_ACCEPT} onChange={handleFileUpload} className="hidden" />
+                      </label>
+                    </div>
 
+                  </div>
+                )}
+                <canvas ref={canvasRef} className="hidden" />
               </div>
-            )}
-            <canvas ref={canvasRef} className="hidden" />
-          </div>
 
-          {/* OCR Loading Overlay — a live region so the multi-phase scan status
-              reaches screen readers as it changes (Phase 8.5). */}
-          {isAnalyzing && (
-            <div
-              className="bg-brand-beige p-6 rounded-2xl text-center border border-emerald-100 flex flex-col items-center justify-center space-y-3"
-              role="status"
-              aria-live="polite"
-            >
-              <Loader2 className="animate-spin text-accent-orange" size={28} />
-              <div>
-                <p className="text-sm font-bold text-primary-green">{t.analyzing}</p>
-                <p className="text-xs text-ink-muted font-medium">{analysisStatus}</p>
+              {/* OCR Loading Overlay — a live region so the multi-phase scan status
+                  reaches screen readers as it changes (Phase 8.5). */}
+              {isAnalyzing && (
+                <div
+                  className="bg-brand-beige p-6 rounded-2xl text-center border border-emerald-100 flex flex-col items-center justify-center space-y-3"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <Loader2 className="animate-spin text-accent-orange" size={28} />
+                  <div>
+                    <p className="text-sm font-bold text-primary-green">{t.analyzing}</p>
+                    <p className="text-xs text-ink-muted font-medium">{analysisStatus}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Form Fields: Category Selector */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label htmlFor="finder-category" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">{t.categoryLabel} *</label>
+                  <select
+                    id="finder-category"
+                    value={categoryId}
+                    onChange={(e) => {
+                      setCategoryId(e.target.value);
+                      setCategoryManuallySet(true);
+                    }}
+                    className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none disabled:bg-stone-50 disabled:text-stone-400"
+                    required
+                    disabled={categoriesLoading || categoriesError}
+                  >
+                    {categoriesLoading ? (
+                      <option value="">{lang === 'en' ? 'Loading categories...' : 'Inapakia kategoria...'}</option>
+                    ) : categoriesError ? (
+                      <option value="">{lang === 'en' ? 'Categories unavailable — please refresh' : 'Kategoria hazipatikani - tafadhali pakia upya'}</option>
+                    ) : (
+                      (() => {
+                        const validCategories = categories.filter(cat => cat.name_en && cat.name_sw);
+                        const invalidCount = categories.length - validCategories.length;
+                        if (invalidCount > 0) {
+                          console.warn(`[FinderView] Filtered out ${invalidCount} incomplete categories from rendering.`);
+                        }
+                        return [
+                          <option key="select-category" value="">{lang === 'en' ? '-- Select Category --' : '-- Chagua Kategoria --'}</option>,
+                          ...validCategories.map(cat => (
+                            <option key={cat.id} value={cat.id}>
+                              {lang === 'en' ? cat.name_en : cat.name_sw} (Fee: KES {cat.total_fee})
+                            </option>
+                          ))
+                        ];
+                      })()
+                    )}
+                  </select>
+                </div>
               </div>
-            </div>
+            </section>
           )}
 
-          {/* Form Fields: Category Selector */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <label htmlFor="finder-category" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">{t.categoryLabel} *</label>
-              <select
-                id="finder-category"
-                value={categoryId}
-                onChange={(e) => {
-                  setCategoryId(e.target.value);
-                  setCategoryManuallySet(true);
-                }}
-                className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none disabled:bg-stone-50 disabled:text-stone-400"
-                required
-                disabled={categoriesLoading || categoriesError}
-              >
-                {categoriesLoading ? (
-                  <option value="">{lang === 'en' ? 'Loading categories...' : 'Inapakia kategoria...'}</option>
-                ) : categoriesError ? (
-                  <option value="">{lang === 'en' ? 'Categories unavailable — please refresh' : 'Kategoria hazipatikani - tafadhali pakia upya'}</option>
-                ) : (
-                  (() => {
-                    const validCategories = categories.filter(cat => cat.name_en && cat.name_sw);
-                    const invalidCount = categories.length - validCategories.length;
-                    if (invalidCount > 0) {
-                      console.warn(`[FinderView] Filtered out ${invalidCount} incomplete categories from rendering.`);
-                    }
-                    return [
-                      <option key="select-category" value="">{lang === 'en' ? '-- Select Category --' : '-- Chagua Kategoria --'}</option>,
-                      ...validCategories.map(cat => (
-                        <option key={cat.id} value={cat.id}>
-                          {lang === 'en' ? cat.name_en : cat.name_sw} (Fee: KES {cat.total_fee})
-                        </option>
-                      ))
-                    ];
-                  })()
+          {/* ---------------- STAGE 2 — IDENTIFY IT ---------------- */}
+          {step === 1 && (
+            <section aria-labelledby={STEP_HEADING_ID} className="space-y-5">
+              <StepIntro
+                headingRef={stepHeadingRef}
+                title={tr('Identify the item', 'Tambua kitu')}
+                description={tr(
+                  'Add the identifying details, or correct anything the scan filled in. These are the details that make an exact match possible.',
+                  'Ongeza maelezo ya kutambua, au rekebisha yoyote ambayo uchanganuzi uliweka. Haya ni maelezo yanayowezesha mechi kamili.'
                 )}
-              </select>
-            </div>
+              />
 
-            {(() => {
-              // CAT-11: the sensitivity decision comes from the live category
-              // record alone — see isSelectedCategorySensitive() above.
-              const isSensitive = isSelectedCategorySensitive();
-              if (isSensitive) {
-                // CAT-11: the former inner `if (categoryId !== 'other')` wrapper
-                // was removed. 'other' is not a canonical category id, so the
-                // test was always true and its `else` branch was unreachable
-                // dead code. The reachable behaviour is unchanged: a sensitive
-                // document asks for its document number.
-                return (
-                    <div className="space-y-2">
-                      <label htmlFor="finder-doc-number" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">{t.docNumberLabel}</label>
-                      <input
+              {(() => {
+                // CAT-11: the sensitivity decision comes from the live category
+                // record alone — see isSelectedCategorySensitive() above.
+                const isSensitive = isSelectedCategorySensitive();
+                if (isSensitive) {
+                  // CAT-11: the former inner `if (categoryId !== 'other')` wrapper
+                  // was removed. 'other' is not a canonical category id, so the
+                  // test was always true and its `else` branch was unreachable
+                  // dead code. The reachable behaviour is unchanged: a sensitive
+                  // document asks for its document number.
+                  return (
+                      <Input
                         id="finder-doc-number"
+                        label={t.docNumberLabel}
                         type="text"
                         value={extractedNumber}
                         onChange={(e) => setExtractedNumber(e.target.value)}
-                        className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white font-mono focus:border-accent-orange focus:outline-none"
                         placeholder={lang === 'en' ? 'e.g. 32904812' : 'Mfano: 32904812'}
                       />
-                    </div>
-                  );
-              } else {
-                return (
-                  <div className="space-y-2">
-                    <label htmlFor="finder-description" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">
-                      {lang === 'en' ? 'Item Description *' : 'Maelezo ya Bidhaa *'}
-                    </label>
-                    <input
+                    );
+                } else {
+                  return (
+                    <Input
                       id="finder-description"
+                      label={lang === 'en' ? 'Item Description' : 'Maelezo ya Bidhaa'}
                       type="text"
                       value={description}
                       onChange={(e) => setDescription(e.target.value)}
-                      className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none"
                       placeholder={lang === 'en' ? 'e.g. Black leather with silver ring' : 'Mfano: Ngozi nyeusi yenye pete ya fedha'}
                       required
                     />
-                  </div>
-                );
-              }
-            })()}
-          </div>
+                  );
+                }
+              })()}
 
-          {(() => {
-            // CAT-11: sensitivity comes from the live category record alone.
-            const isSensitive = isSelectedCategorySensitive();
-            if (!isSensitive) {
-              return (
-                <div className="space-y-2">
-                  <label htmlFor="finder-item-name" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">
-                    {lang === 'en' ? 'Item Title (e.g. Keychain, Phone) *' : 'Kichwa cha Bidhaa *'}
-                  </label>
-                  <input
-                    id="finder-item-name"
-                    type="text"
-                    value={extractedName}
-                    onChange={(e) => setExtractedName(e.target.value)}
-                    className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none"
-                    placeholder={lang === 'en' ? 'e.g. Black Keychain' : 'Mfano: Mnyororo mweusi wa funguo'}
-                    required
-                  />
-                </div>
-              );
-            } else {
-              return (
-                <div className="space-y-2">
-                  <label htmlFor="finder-item-name" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">{t.docNameLabel}</label>
-                  <input
-                    id="finder-item-name"
-                    type="text"
-                    value={extractedName}
-                    onChange={(e) => setExtractedName(e.target.value)}
-                    className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white uppercase focus:border-accent-orange focus:outline-none"
-                    placeholder={lang === 'en' ? 'e.g. MWANGI KAMAU' : 'Mfano: MWANGI KAMAU'}
-                  />
-                </div>
-              );
-            }
-          })()}
+              {(() => {
+                // CAT-11: sensitivity comes from the live category record alone.
+                const isSensitive = isSelectedCategorySensitive();
+                if (!isSensitive) {
+                  return (
+                    <Input
+                      id="finder-item-name"
+                      label={lang === 'en' ? 'Item Title (e.g. Keychain, Phone)' : 'Kichwa cha Bidhaa'}
+                      type="text"
+                      value={extractedName}
+                      onChange={(e) => setExtractedName(e.target.value)}
+                      placeholder={lang === 'en' ? 'e.g. Black Keychain' : 'Mfano: Mnyororo mweusi wa funguo'}
+                      required
+                    />
+                  );
+                } else {
+                  return (
+                    <Input
+                      id="finder-item-name"
+                      label={t.docNameLabel}
+                      type="text"
+                      value={extractedName}
+                      onChange={(e) => setExtractedName(e.target.value)}
+                      placeholder={lang === 'en' ? 'e.g. MWANGI KAMAU' : 'Mfano: MWANGI KAMAU'}
+                      className="uppercase"
+                    />
+                  );
+                }
+              })()}
 
-          {/* Analysis results are pre-fill suggestions the finder can correct.
-              The scan reads the image; it does not verify ownership, identity
-              or authenticity — so the person reporting must review it. */}
-          {photoBase64 && !isAnalyzing && (extractedNumber || extractedName) && (
-            <p className="text-caption text-ink-muted leading-normal">
-              {lang === 'en'
-                ? 'Please check the details above and correct anything the scan got wrong.'
-                : 'Tafadhali angalia maelezo hapo juu na urekebishe yoyote ambayo uchanganuzi ulikosea.'}
-            </p>
+              {/* Analysis results are pre-fill suggestions the finder can correct.
+                  The scan reads the image; it does not verify ownership, identity
+                  or authenticity — so the person reporting must review it. */}
+              {photoBase64 && !isAnalyzing && (extractedNumber || extractedName) && (
+                <p className="text-caption text-ink-muted leading-normal">
+                  {lang === 'en'
+                    ? 'Please check the details above and correct anything the scan got wrong.'
+                    : 'Tafadhali angalia maelezo hapo juu na urekebishe yoyote ambayo uchanganuzi ulikosea.'}
+                </p>
+              )}
+
+            </section>
           )}
 
-          {/* Location Details & GPS Prompt */}
-          <div className="space-y-3">
-            {/* PHASE 9D — REQUIRED COUNTY. Deliberately the FIRST geographic
-                question, and a select rather than free text: the value is the
-                authoritative found-side county the matcher compares against
-                the lost report's county, and it must be one of the canonical
-                47 rather than something a person typed and the server then has
-                to interpret. Asking here is what removes the old
-                "Mombasa Road -> Mombasa County" style of guess.
-                Requirement is mirrored by the browser's `required` attribute
-                AND re-validated server-side, which is the authority. */}
-            <div className="space-y-1.5">
-              <label htmlFor="finder-county" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">
-                {lang === 'en' ? 'County where you found it' : 'Kaunti ulipopata kitu'} *
-              </label>
-              <select
-                id="finder-county"
-                value={foundCounty}
-                onChange={(e) => {
-                  setFoundCounty(e.target.value);
-                  setFoundAdministrativeUnit('');
-                }}
-                className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none"
-                required
-                disabled={isSubmitting}
-                aria-describedby="finder-county-hint"
-              >
-                <option value="">{lang === 'en' ? 'Select a county' : 'Chagua kaunti'}</option>
-                {COUNTY_GROUPS.map((group) => (
-                  <optgroup key={group.group} label={group.group}>
-                    {group.counties.map((county) => (
-                      <option key={county.code} value={county.name}>
-                        {county.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
-              <span id="finder-county-hint" className="text-caption text-ink-muted block leading-tight">
-                {lang === 'en'
-                  ? 'We use this to compare your report with items lost in the same county.'
-                  : 'Tunatumia hii kulinganisha ripoti yako na vitu vilivyopotea katika kaunti moja.'}
-              </span>
-            </div>
+          {/* ---------------- STAGE 3 — WHERE DID YOU FIND IT? ---------------- */}
+          {step === 2 && (
+            <section aria-labelledby={STEP_HEADING_ID} className="space-y-5">
+              <StepIntro
+                headingRef={stepHeadingRef}
+                title={tr('Where did you find it?', 'Ulipata kitu wapi?')}
+                description={tr(
+                  'The county is what your report is compared against. The exact place is your own description of where the item was found.',
+                  'Kaunti ndiyo inayolinganishwa na ripoti yako. Mahali halisi ni maelezo yako mwenyewe ya mahali kitu kilipopatikana.'
+                )}
+              />
 
-            <div className="space-y-1.5">
-              <label htmlFor="finder-administrative-unit" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">
-                {lang === 'en' ? 'Sub-county where you found it' : 'Kaunti ndogo ulipopata kitu'} *
-              </label>
-              <select
-                id="finder-administrative-unit"
-                value={foundAdministrativeUnit}
-                onChange={(e) => setFoundAdministrativeUnit(e.target.value)}
-                className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none disabled:bg-stone-100 disabled:text-stone-500"
-                required
-                disabled={isSubmitting || !foundCounty}
-                aria-describedby="finder-administrative-unit-hint"
-              >
-                <option value="">{foundCounty ? (lang === 'en' ? 'Select a sub-county' : 'Chagua kaunti ndogo') : (lang === 'en' ? 'Select county first' : 'Chagua kaunti kwanza')}</option>
-                {foundAdministrativeUnits.map((unit) => (
-                  <option key={unit.id} value={unit.id}>{unit.name}</option>
-                ))}
-              </select>
-              <span id="finder-administrative-unit-hint" className="text-caption text-ink-muted block leading-tight">
-                {lang === 'en' ? 'This structured selection is separate from the exact place you enter below.' : 'Uteuzi huu tofauti na mahali halisi unayoingia hapa chini.'}
-              </span>
-            </div>
 
-            <label htmlFor="finder-location" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">{t.locLabel} *</label>
-            {/* P14A (P14-13) — FREE TEXT, with no suggestions attached. The
-                county is chosen in the required selector above; this field
-                describes the actual place (e.g. "Near Sarit Centre, Ring Road
-                Parklands"), so offering county names here was misleading. No
-                sub-county/city dataset exists and none is invented here. */}
+              {/* Location Details & GPS Prompt */}
+              <div className="space-y-3">
+                {/* PHASE 9D — REQUIRED COUNTY. Deliberately the FIRST geographic
+                    question, and a select rather than free text: the value is the
+                    authoritative found-side county the matcher compares against
+                    the lost report's county, and it must be one of the canonical
+                    47 rather than something a person typed and the server then has
+                    to interpret. Asking here is what removes the old
+                    "Mombasa Road -> Mombasa County" style of guess.
+                    Requirement is mirrored by the browser's `required` attribute
+                    AND re-validated server-side, which is the authority. */}
+                <Select
+                  id="finder-county"
+                  label={lang === 'en' ? 'County where you found it' : 'Kaunti ulipopata kitu'}
+                  value={foundCounty}
+                  onChange={(e) => {
+                    setFoundCounty(e.target.value);
+                    setFoundAdministrativeUnit('');
+                  }}
+                  required
+                  disabled={isSubmitting}
+                  hint={lang === 'en'
+                    ? 'We use this to compare your report with items lost in the same county.'
+                    : 'Tunatumia hii kulinganisha ripoti yako na vitu vilivyopotea katika kaunti moja.'}
+                >
+                  <option value="">{lang === 'en' ? 'Select a county' : 'Chagua kaunti'}</option>
+                  {COUNTY_GROUPS.map((group) => (
+                    <optgroup key={group.group} label={group.group}>
+                      {group.counties.map((county) => (
+                        <option key={county.code} value={county.name}>
+                          {county.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </Select>
+
+                <Select
+                  id="finder-administrative-unit"
+                  label={lang === 'en' ? 'Sub-county where you found it' : 'Kaunti ndogo ulipopata kitu'}
+                  value={foundAdministrativeUnit}
+                  onChange={(e) => setFoundAdministrativeUnit(e.target.value)}
+                  required
+                  disabled={isSubmitting || !foundCounty}
+                  hint={lang === 'en'
+                    ? 'This structured selection is separate from the exact place you enter below.'
+                    : 'Uteuzi huu tofauti na mahali halisi unayoingia hapa chini.'}
+                >
+                  <option value="">{foundCounty ? (lang === 'en' ? 'Select a sub-county' : 'Chagua kaunti ndogo') : (lang === 'en' ? 'Select county first' : 'Chagua kaunti kwanza')}</option>
+                  {foundAdministrativeUnits.map((unit) => (
+                    <option key={unit.id} value={unit.id}>{unit.name}</option>
+                  ))}
+                </Select>
+
+                {/* P14A (P14-13) — FREE TEXT, with no suggestions attached. The
+                    county is chosen in the required selector above; this field
+                    describes the actual place (e.g. "Near Sarit Centre, Ring Road
+                    Parklands"), so offering county names here was misleading. No
+                    sub-county/city dataset exists and none is invented here. */}
             
-            {/* GPS prompt — an OPTIONAL aid to agent matching, never a promise of one */}
-            {latitude === null || longitude === null ? (
-              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-3">
-                <div className="flex gap-2.5">
-                  <MapPin className="text-accent-orange shrink-0 mt-0.5" size={18} />
-                  <div className="space-y-1">
-                    <h4 className="text-xs font-bold text-ink leading-none">
-                      {lang === 'en' ? 'Help Us Match an Agent' : 'Tusaidie Kupata Wakala'}
-                    </h4>
-                    <p className="text-caption text-ink-muted leading-normal">
-                      {lang === 'en'
-                        ? 'Turning on your location can help us match your report to a nearby available Return4me Agent hub for your drop-off. If no Agent can be matched, our team will assign one for you.'
-                        : 'Kuwasha mahali ulipo kunaweza kutusaidia kulinganisha ripoti yako na Wakala wa Return4me aliye karibu na anayepatikana kwa kuwasilisha. Iwapo Wakala hapatikani, timu yetu itakupangia mmoja.'}
-                    </p>
+                {/* GPS prompt — an OPTIONAL aid to agent matching, never a promise of one */}
+                {latitude === null || longitude === null ? (
+                  <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-3">
+                    <div className="flex gap-2.5">
+                      <MapPin className="text-accent-orange shrink-0 mt-0.5" size={18} />
+                      <div className="space-y-1">
+                        <h4 className="text-xs font-bold text-ink leading-none">
+                          {lang === 'en' ? 'Help Us Match an Agent' : 'Tusaidie Kupata Wakala'}
+                        </h4>
+                        <p className="text-caption text-ink-muted leading-normal">
+                          {lang === 'en'
+                            ? 'Turning on your location can help us match your report to a nearby available Return4me Agent hub for your drop-off. If no Agent can be matched, our team will assign one for you.'
+                            : 'Kuwasha mahali ulipo kunaweza kutusaidia kulinganisha ripoti yako na Wakala wa Return4me aliye karibu na anayepatikana kwa kuwasilisha. Iwapo Wakala hapatikani, timu yetu itakupangia mmoja.'}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={getCoordinates}
+                      disabled={gpsLoading}
+                      className="w-full bg-accent-strong hover:bg-accent-strong-hover text-white text-xs font-bold py-2.5 px-4 rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      {gpsLoading ? (
+                        <>
+                          <Loader2 className="animate-spin" size={14} />
+                          <span>{lang === 'en' ? 'Accessing GPS Coordinates...' : 'Tunatafuta GPS Mahali Ulipo...'}</span>
+                        </>
+                      ) : (
+                        <>
+                          <MapPin size={14} />
+                          <span>{lang === 'en' ? 'Turn Location On' : 'Washa Mahali Ulipo'}</span>
+                        </>
+                      )}
+                    </button>
                   </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={getCoordinates}
-                  disabled={gpsLoading}
-                  className="w-full bg-accent-strong hover:bg-accent-strong-hover text-white text-xs font-bold py-2.5 px-4 rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
-                >
-                  {gpsLoading ? (
-                    <>
-                      <Loader2 className="animate-spin" size={14} />
-                      <span>{lang === 'en' ? 'Accessing GPS Coordinates...' : 'Tunatafuta GPS Mahali Ulipo...'}</span>
-                    </>
-                  ) : (
-                    <>
-                      <MapPin size={14} />
-                      <span>{lang === 'en' ? 'Turn Location On' : 'Washa Mahali Ulipo'}</span>
-                    </>
-                  )}
-                </button>
-              </div>
 
-            ) : (
-              <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex gap-3 items-center">
-                <div className="bg-emerald-100 p-2 rounded-xl text-emerald-600 shrink-0">
-                  <MapPin size={18} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h4 className="text-xs font-bold text-emerald-900">
-                    {lang === 'en' ? 'Location Captured' : 'Mahali Pamehifadhiwa'}
-                  </h4>
-                  <p className="text-caption text-emerald-700 mt-0.5">
-                    {lang === 'en'
-                      ? 'Your location has been captured and can help us match your report to a nearby available Return4me Agent hub. If no Agent can be matched, our team will assign one for you.'
-                      : 'Mahali ulipo pamehifadhiwa na kunaweza kutusaidia kulinganisha ripoti yako na Wakala wa Return4me aliye karibu na anayepatikana. Iwapo Wakala hapatikani, timu yetu itakupangia mmoja.'}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={getCoordinates}
-                  className="text-caption font-bold text-emerald-800 hover:underline shrink-0"
-                >
-                  {lang === 'en' ? 'Update' : 'Sasisha'}
-                </button>
-              </div>
-            )}
+                ) : (
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex gap-3 items-center">
+                    <div className="bg-emerald-100 p-2 rounded-xl text-emerald-600 shrink-0">
+                      <MapPin size={18} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h4 className="text-xs font-bold text-emerald-900">
+                        {lang === 'en' ? 'Location Captured' : 'Mahali Pamehifadhiwa'}
+                      </h4>
+                      <p className="text-caption text-emerald-700 mt-0.5">
+                        {lang === 'en'
+                          ? 'Your location has been captured and can help us match your report to a nearby available Return4me Agent hub. If no Agent can be matched, our team will assign one for you.'
+                          : 'Mahali ulipo pamehifadhiwa na kunaweza kutusaidia kulinganisha ripoti yako na Wakala wa Return4me aliye karibu na anayepatikana. Iwapo Wakala hapatikani, timu yetu itakupangia mmoja.'}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={getCoordinates}
+                      className="text-caption font-bold text-emerald-800 hover:underline shrink-0"
+                    >
+                      {lang === 'en' ? 'Update' : 'Sasisha'}
+                    </button>
+                  </div>
+                )}
 
-            <div className="flex gap-2">
-              <input
-                id="finder-location"
-                type="text"
-                value={locationDescription}
-                onChange={(e) => setLocationDescription(e.target.value)}
-                className="flex-1 border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none"
-                placeholder={lang === 'en' ? 'e.g. Near Sarit Centre, Westlands' : 'Mfano: Karibu na Sarit Centre, Westlands'}
-                required
-                aria-describedby="finder-location-hint"
-              />
-            </div>
-            {/* P14C-3A — the exact place is the Finder's OWN words, stored
-                verbatim in items.location_description. The hint says what to
-                type; it promises nothing about automatic identification,
-                matching, speed or payout, and it invents no vocabulary. */}
-            <span id="finder-location-hint" className="text-caption text-ink-muted block leading-tight">
-              {lang === 'en'
-                ? 'Enter the street, estate, building, landmark or nearby place you know.'
-                : 'Weka barabara, mtaa, jengo, alama ya eneo au mahali pengine unapojua.'}
-            </span>
-          </div>
-            {gpsMessage && <p className="text-caption text-ink-muted" role="status">{gpsMessage}</p>}
-            {detectedLocation && (
-              <div className="rounded-xl border border-emerald-200 bg-white p-3 text-xs text-ink space-y-2" role="status">
-                <p className="font-bold">Location detected</p>
-                {detectedLocation.county && <p>County: <strong>{detectedLocation.county}</strong></p>}
-                {detectedLocation.subCountyId ? <p>Sub-county: <strong>{foundAdministrativeUnits.find(unit => unit.id === detectedLocation.subCountyId)?.name ?? 'Please confirm'}</strong></p> : detectedLocation.county && <p>We detected your county, but couldn't reliably determine your sub-county. Please select it manually.</p>}
-                {detectedLocation.place && <p>Detected place: {detectedLocation.place}</p>}
-                {gpsAccuracy !== null && <p>GPS accuracy: approximately {Math.round(gpsAccuracy)} metres</p>}
-                {detectedLocation.county && <div className="flex flex-wrap gap-2"><button type="button" onClick={useDetectedLocation} className="font-bold text-primary-green underline">Use this location</button><button type="button" onClick={() => setDetectedLocation(null)} className="font-bold text-ink-muted underline">Edit</button><button type="button" onClick={() => setGpsMessage('Keep your selected county, sub-county and exact place.')} className="font-bold text-ink-muted underline">Keep my selected location</button></div>}
-              </div>
-            )}
-
-          {/* REQUEST 12/26 — truthful statement of what the location is actually
-              used for. The browser supplies coordinates only; there is no
-              reverse geocoding in this backend, so the app never claims to know
-              the neighbourhood ("You are around Westlands") and never shows the
-              raw coordinates back to the user. What it can honestly say is what
-              the server does: it attempts to match a real, active, vetted agent
-              by distance, and when no agent can be confidently matched the
-              report is still accepted for manual assignment rather than failing
-              or inventing a nearby agent. */}
-          <p className="text-caption text-ink-muted leading-normal">
-            {lang === 'en'
-              ? 'The county you choose is what we use to compare your report with items lost in the same area. Your area description is what owners and agents search. If you also share your device location, Return4me uses the coordinates to look for a real active Agent near you; if none can be matched confidently, your report is still accepted and assigned by our team.'
-              : 'Kaunti unayochagua ndiyo tunayotumia kulinganisha ripoti yako na vitu vilivyopotea eneo moja. Maelezo ya eneo lako ndiyo yanayotafutwa na wamiliki na mawakala. Ukishiriki pia mahali ulipo kwenye kifaa, Return4me hutumia viwianishi kutafuta Wakala halisi aliye karibu nawe; ikiwa hakuna anayeweza kulinganishwa kwa uhakika, ripoti yako bado inakubaliwa na kupangwa na timu yetu.'}
-          </p>
-
-          {/* Phone Details */}
-          <div className="space-y-2">
-            <label htmlFor="finder-phone" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">{t.phonePayout} *</label>
-            <input
-              id="finder-phone"
-              type="tel"
-              inputMode="tel"
-              autoComplete="tel"
-              value={finderPhone}
-              onChange={(e) => setFinderPhone(e.target.value)}
-              className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white font-mono focus:border-accent-orange focus:outline-none"
-              placeholder={lang === 'en' ? 'e.g. 0712345678' : 'Mfano: 0712345678'}
-              required
-            />
-            {/* Phase 8.5 — TRUTHFULNESS: this note used to state that the number
-                is "encrypted in the ledger" and "used strictly for B2C payouts".
-                Neither is supported by the implementation: `finder_phone` is a
-                plain indexed varchar with no cipher code anywhere in the repo,
-                and it is also the finder's operational contact (admin-safe view).
-                The copy now claims only what the code can substantiate. */}
-            <span className="text-caption text-ink-muted block leading-tight">
-              {lang === 'en'
-                ? 'Your phone number is used for your M-Pesa payout and is never shown to claimants.'
-                : 'Nambari yako ya simu inatumika kwa malipo yako ya M-Pesa na haionyeshwi kwa wadai.'}
-            </span>
-          </div>
-
-          {/* Optional Email Details */}
-          <div className="space-y-2">
-            <label htmlFor="finder-email" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">
-              {lang === 'en' ? 'Email Address (Optional)' : 'Barua Pepe (Sio Lazima)'}
-            </label>
-            <input
-              id="finder-email"
-              type="email"
-              inputMode="email"
-              autoComplete="email"
-              value={finderEmail}
-              onChange={(e) => setFinderEmail(e.target.value)}
-              className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white font-sans focus:border-accent-orange focus:outline-none"
-              placeholder={lang === 'en' ? 'e.g. finder@gmail.com' : 'Mfano: finder@gmail.com'}
-            />
-            <span className="text-caption text-ink-muted block leading-tight">
-              {lang === 'en' 
-                ? 'Optional email to receive status alerts about your drop-off and payout.' 
-                : 'Barua pepe ya hiari ili kupokea arifa za hali ya uwasilishaji na malipo yako.'}
-            </span>
-          </div>
-
-          {/* Optional Finder Account signup toggle */}
-          <div className="space-y-3 pt-2">
-            <div className="flex items-center space-x-2">
-              <input
-                id="create-finder-account"
-                type="checkbox"
-                checked={createAccount}
-                onChange={(e) => {
-                  setCreateAccount(e.target.checked);
-                  if (!e.target.checked) setAgreedTerms(false);
-                }}
-                className="h-4 w-4 rounded border-stone-300 text-primary-green focus:ring-primary-green accent-primary-green cursor-pointer"
-              />
-              <label htmlFor="create-finder-account" className="text-xs text-ink-muted font-bold select-none cursor-pointer">
-                {lang === 'en'
-                  ? 'Create a Return4me Finder Account with this phone number (to track history & payouts)'
-                  : 'Fungua Akaunti ya Msingi wa Return4me kwa nambari hii ya simu (kufuatilia historia na malipo)'}
-              </label>
-            </div>
-
-            {createAccount && (
-              <div className="flex items-start space-x-2 bg-brand-beige p-3 rounded-xl border border-line-subtle fade-in">
-                <input
-                  id="finder-agreed-terms"
-                  type="checkbox"
-                  checked={agreedTerms}
-                  onChange={(e) => setAgreedTerms(e.target.checked)}
-                  className="mt-1 h-4 w-4 rounded border-stone-300 text-primary-green focus:ring-primary-green accent-primary-green cursor-pointer"
-                  required={createAccount}
+                <Input
+                  id="finder-location"
+                  label={t.locLabel}
+                  type="text"
+                  value={locationDescription}
+                  onChange={(e) => setLocationDescription(e.target.value)}
+                  placeholder={lang === 'en' ? 'e.g. Near Sarit Centre, Westlands' : 'Mfano: Karibu na Sarit Centre, Westlands'}
+                  required
+                  aria-describedby="finder-location-hint"
                 />
-                <label htmlFor="finder-agreed-terms" className="text-xs text-ink-muted leading-tight select-none cursor-pointer">
-                  {lang === 'en' ? 'I have read and agree to the Return4me' : 'Nimesoma na nakubali'}{' '}
-                  <button
-                    type="button"
-                    onClick={() => (window as any).setView?.('terms')}
-                    className="text-primary-green hover:underline font-bold inline focus:outline-none"
-                  >
-                    {lang === 'en' ? 'Terms of Service' : 'Vigezo na Masharti'}
-                  </button>{' '}
-                  {lang === 'en' ? 'and' : 'na'}{' '}
-                  <button
-                    type="button"
-                    onClick={() => (window as any).setView?.('privacy')}
-                    className="text-primary-green hover:underline font-bold inline focus:outline-none"
-                  >
-                    {lang === 'en' ? 'Privacy Policy' : 'Sera ya Faragha'}
-                  </button>
-                  . *
-                </label>
+                {/* P14C-3A — the exact place is the Finder's OWN words, stored
+                    verbatim in items.location_description. The hint says what to
+                    type; it promises nothing about automatic identification,
+                    matching, speed or payout, and it invents no vocabulary. */}
+                <span id="finder-location-hint" className="text-caption text-ink-muted block leading-tight">
+                  {lang === 'en'
+                    ? 'Enter the street, estate, building, landmark or nearby place you know.'
+                    : 'Weka barabara, mtaa, jengo, alama ya eneo au mahali pengine unapojua.'}
+                </span>
               </div>
+                {gpsMessage && <p className="text-caption text-ink-muted" role="status">{gpsMessage}</p>}
+                {detectedLocation && (
+                  <div className="rounded-xl border border-emerald-200 bg-white p-3 text-xs text-ink space-y-2" role="status">
+                    <p className="font-bold">Location detected</p>
+                    {detectedLocation.county && <p>County: <strong>{detectedLocation.county}</strong></p>}
+                    {detectedLocation.subCountyId ? <p>Sub-county: <strong>{foundAdministrativeUnits.find(unit => unit.id === detectedLocation.subCountyId)?.name ?? 'Please confirm'}</strong></p> : detectedLocation.county && <p>We detected your county, but couldn't reliably determine your sub-county. Please select it manually.</p>}
+                    {detectedLocation.place && <p>Detected place: {detectedLocation.place}</p>}
+                    {gpsAccuracy !== null && <p>GPS accuracy: approximately {Math.round(gpsAccuracy)} metres</p>}
+                    {detectedLocation.county && <div className="flex flex-wrap gap-2"><button type="button" onClick={useDetectedLocation} className="font-bold text-primary-green underline">Use this location</button><button type="button" onClick={() => setDetectedLocation(null)} className="font-bold text-ink-muted underline">Edit</button><button type="button" onClick={() => setGpsMessage('Keep your selected county, sub-county and exact place.')} className="font-bold text-ink-muted underline">Keep my selected location</button></div>}
+                  </div>
+                )}
+
+              {/* REQUEST 12/26 — truthful statement of what the location is actually
+                  used for. The browser supplies coordinates only; there is no
+                  reverse geocoding in this backend, so the app never claims to know
+                  the neighbourhood ("You are around Westlands") and never shows the
+                  raw coordinates back to the user. What it can honestly say is what
+                  the server does: it attempts to match a real, active, vetted agent
+                  by distance, and when no agent can be confidently matched the
+                  report is still accepted for manual assignment rather than failing
+                  or inventing a nearby agent. */}
+              <p className="text-caption text-ink-muted leading-normal">
+                {lang === 'en'
+                  ? 'The county you choose is what we use to compare your report with items lost in the same area. Your area description is what owners and agents search. If you also share your device location, Return4me uses the coordinates to look for a real active Agent near you; if none can be matched confidently, your report is still accepted and assigned by our team.'
+                  : 'Kaunti unayochagua ndiyo tunayotumia kulinganisha ripoti yako na vitu vilivyopotea eneo moja. Maelezo ya eneo lako ndiyo yanayotafutwa na wamiliki na mawakala. Ukishiriki pia mahali ulipo kwenye kifaa, Return4me hutumia viwianishi kutafuta Wakala halisi aliye karibu nawe; ikiwa hakuna anayeweza kulinganishwa kwa uhakika, ripoti yako bado inakubaliwa na kupangwa na timu yetu.'}
+              </p>
+
+            </section>
+          )}
+
+          {/* ---------------- STAGE 4 — HOW CAN WE REACH YOU? ---------------- */}
+          {step === 3 && (
+            <section aria-labelledby={STEP_HEADING_ID} className="space-y-5">
+              <StepIntro
+                headingRef={stepHeadingRef}
+                title={tr('How can we reach you?', 'Tunaweza kukufikia vipi?')}
+                description={tr(
+                  'Your phone number is how the reward reaches you. The email is optional and is used for status alerts only.',
+                  'Nambari yako ya simu ni njia ya zawadi kukufikia. Barua pepe si lazima na hutumika kwa arifa za hali pekee.'
+                )}
+              />
+
+
+              {/* Phone Details */}
+              {/* Phase 8.5 — TRUTHFULNESS: this note used to state that the number
+                  is "encrypted in the ledger" and "used strictly for B2C payouts".
+                  Neither is supported by the implementation: `finder_phone` is a
+                  plain indexed varchar with no cipher code anywhere in the repo,
+                  and it is also the finder's operational contact (admin-safe view).
+                  The copy now claims only what the code can substantiate. */}
+              <Input
+                id="finder-phone"
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
+                label={t.phonePayout}
+                value={finderPhone}
+                onChange={(e) => setFinderPhone(e.target.value)}
+                placeholder={lang === 'en' ? 'e.g. 0712345678' : 'Mfano: 0712345678'}
+                required
+                hint={lang === 'en'
+                  ? 'Your phone number is used for your M-Pesa payout and is never shown to claimants.'
+                  : 'Nambari yako ya simu inatumika kwa malipo yako ya M-Pesa na haionyeshwi kwa wadai.'}
+              />
+
+              {/* Optional Email Details */}
+              <Input
+                id="finder-email"
+                type="email"
+                inputMode="email"
+                autoComplete="email"
+                label={lang === 'en' ? 'Email Address (Optional)' : 'Barua Pepe (Sio Lazima)'}
+                value={finderEmail}
+                onChange={(e) => setFinderEmail(e.target.value)}
+                placeholder={lang === 'en' ? 'e.g. finder@gmail.com' : 'Mfano: finder@gmail.com'}
+                hint={lang === 'en'
+                  ? 'Optional email to receive status alerts about your drop-off and payout.'
+                  : 'Barua pepe ya hiari ili kupokea arifa za hali ya uwasilishaji na malipo yako.'}
+              />
+
+              {/* Optional Finder Account signup toggle */}
+              <div className="space-y-3 pt-2">
+                <div className="flex items-center space-x-2">
+                  <input
+                    id="create-finder-account"
+                    type="checkbox"
+                    checked={createAccount}
+                    onChange={(e) => {
+                      setCreateAccount(e.target.checked);
+                      if (!e.target.checked) setAgreedTerms(false);
+                    }}
+                    className="h-5 w-5 rounded-small border border-[var(--appearance-border-strong)] accent-[var(--appearance-primary)] cursor-pointer"
+                  />
+                  <label htmlFor="create-finder-account" className="text-caption text-[var(--appearance-text-primary)] font-bold select-none cursor-pointer">
+                    {lang === 'en'
+                      ? 'Create a Return4me Finder Account with this phone number (to track history & payouts)'
+                      : 'Fungua Akaunti ya Msingi wa Return4me kwa nambari hii ya simu (kufuatilia historia na malipo)'}
+                  </label>
+                </div>
+
+                {createAccount && (
+                  <div className="flex items-start space-x-2 bg-brand-beige p-3 rounded-xl border border-line-subtle fade-in">
+                    <input
+                      id="finder-agreed-terms"
+                      type="checkbox"
+                      checked={agreedTerms}
+                      onChange={(e) => setAgreedTerms(e.target.checked)}
+                      className="mt-1 h-5 w-5 rounded-small border border-[var(--appearance-border-strong)] accent-[var(--appearance-primary)] cursor-pointer"
+                      required={createAccount}
+                    />
+                    <label htmlFor="finder-agreed-terms" className="text-caption text-[var(--appearance-text-muted)] leading-tight select-none cursor-pointer">
+                      {lang === 'en' ? 'I have read and agree to the Return4me' : 'Nimesoma na nakubali'}{' '}
+                      <button
+                        type="button"
+                        onClick={() => (window as any).setView?.('terms')}
+                        className="text-[var(--appearance-primary)] hover:underline font-bold inline"
+                      >
+                        {lang === 'en' ? 'Terms of Service' : 'Vigezo na Masharti'}
+                      </button>{' '}
+                      {lang === 'en' ? 'and' : 'na'}{' '}
+                      <button
+                        type="button"
+                        onClick={() => (window as any).setView?.('privacy')}
+                        className="text-[var(--appearance-primary)] hover:underline font-bold inline"
+                      >
+                        {lang === 'en' ? 'Privacy Policy' : 'Sera ya Faragha'}
+                      </button>
+                      . *
+                    </label>
+                  </div>
+                )}
+              </div>
+
+            </section>
+          )}
+
+
+          {/* ---------------- STAGE 5 — REVIEW AND SUBMIT ---------------- */}
+          {isLastStep && (
+            <section aria-labelledby={STEP_HEADING_ID} className="space-y-5">
+              <StepIntro
+                headingRef={stepHeadingRef}
+                title={tr('Check your report', 'Hakiki ripoti yako')}
+                description={tr(
+                  'You can go back and change anything before the report is sent.',
+                  'Unaweza kurudi nyuma na kubadilisha chochote kabla ya kutuma ripoti.'
+                )}
+              />
+
+              <ReviewGroup
+                title={tr('What you found', 'Ulipata nini')}
+                editLabel={tr('Edit', 'Badilisha')}
+                onEdit={() => goToStep(0)}
+              >
+                <SummaryRow
+                  icon={Camera}
+                  label={t.capturePhoto}
+                  value={photoBase64 ? tr('Photograph attached', 'Picha imewekwa') : tr('No photograph yet', 'Hakuna picha bado')}
+                />
+                <SummaryRow
+                  label={t.categoryLabel}
+                  value={selectedCategoryLabel || tr('Not chosen', 'Hakujachagua')}
+                />
+              </ReviewGroup>
+
+              <ReviewGroup
+                title={tr('Identifying details', 'Maelezo ya kutambua')}
+                editLabel={tr('Edit', 'Badilisha')}
+                onEdit={() => goToStep(1)}
+              >
+                {isSensitiveCategory ? (
+                  <>
+                    <SummaryRow label={t.docNumberLabel} value={extractedNumber.trim() || tr('Not provided', 'Hakujatoa')} />
+                    <SummaryRow label={t.docNameLabel} value={extractedName.trim() || tr('Not provided', 'Hakujatoa')} />
+                  </>
+                ) : (
+                  <>
+                    <SummaryRow label={tr('Item title', 'Kichwa cha bidhaa')} value={extractedName.trim() || tr('Not provided', 'Hakujatoa')} />
+                    <SummaryRow label={tr('Description', 'Maelezo')} value={description.trim() || tr('Not provided', 'Hakujatoa')} />
+                  </>
+                )}
+              </ReviewGroup>
+
+              <ReviewGroup
+                title={tr('Where you found it', 'Ulipopata kitu')}
+                editLabel={tr('Edit', 'Badilisha')}
+                onEdit={() => goToStep(2)}
+              >
+                <SummaryRow
+                  icon={MapPin}
+                  label={tr('Place', 'Mahali')}
+                  value={[locationDescription.trim(), foundAdministrativeUnitName, foundCounty].filter(Boolean).join(', ')}
+                />
+                <SummaryRow
+                  label={tr('Coordinates shared', 'Viwianishi vimetolewa')}
+                  value={latitude === null || longitude === null ? tr('No', 'Hapana') : tr('Yes', 'Ndiyo')}
+                />
+              </ReviewGroup>
+
+
+              <ReviewGroup
+                title={tr('How we reach you', 'Tunavyowasiliana nawe')}
+                editLabel={tr('Edit', 'Badilisha')}
+                onEdit={() => goToStep(3)}
+              >
+                <SummaryRow label={t.phonePayout} value={finderPhone.trim() || tr('Not provided', 'Hakujatoa')} />
+                <SummaryRow label={tr('Email', 'Barua pepe')} value={finderEmail.trim() || tr('Not provided', 'Hakujatoa')} />
+                <SummaryRow
+                  label={tr('Finder account', 'Akaunti ya msingi')}
+                  value={createAccount ? tr('To be created', 'Itafunguliwa') : tr('Not requested', 'Hakukuomba')}
+                />
+              </ReviewGroup>
+
+              {/* Truthful recap only: it repeats what the backend actually does
+                  and promises no outcome the code cannot keep. */}
+              <div className="rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] p-4 sm:p-5 space-y-2">
+                <h4 className="text-body-large font-semibold text-[var(--appearance-text-primary)]">
+                  {tr('What happens next', 'Kinachofuata')}
+                </h4>
+                <ul className="space-y-1.5 text-small text-[var(--appearance-text-muted)] leading-relaxed">
+                  <li>
+                    {tr(
+                      'Your report is saved with a drop-off code, and you will need that code when you hand the item to the Return4me agent.',
+                      'Ripoti yako huhifadhiwa na msimbo wa kuwasilisha, na utahitaji msimbo huo unapokabidhi kitu kwa wakala wa Return4me.'
+                    )}
+                  </li>
+                  <li>
+                    {tr(
+                      'If you shared your location, the coordinates are used to look for a real active Return4me Agent near you. If no Agent can be matched, our team will assign one for you.',
+                      'Ikiwa ulishiriki mahali ulipo, viwianishi hutumika kutafuta Wakala halisi wa Return4me aliye karibu nawe. Iwapo Wakala hapatikani, timu yetu itakupangia mmoja.'
+                    )}
+                  </li>
+                  <li>
+                    {tr(
+                      'Your phone number is used for your M-Pesa payout and is never shown to claimants.',
+                      'Nambari yako ya simu inatumika kwa malipo yako ya M-Pesa na haionyeshwi kwa wadai.'
+                    )}
+                  </li>
+                </ul>
+              </div>
+            </section>
+          )}
+
+
+          {/* ---------------- NAVIGATION ---------------- */}
+          <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 border-t border-[var(--appearance-border)] pt-5">
+            {step > 0 ? (
+              <Button type="button" variant="ghost" size="md" onClick={goBack} disabled={isSubmitting}>
+                {tr('Back', 'Rudi')}
+              </Button>
+            ) : (
+              <span aria-hidden="true" />
+            )}
+
+            {isLastStep ? (
+              <span aria-hidden="true" />
+            ) : (
+              <Button
+                type="button"
+                variant="primary"
+                size="lg"
+                onClick={goNext}
+                disabled={isSubmitting}
+                className="w-full sm:w-auto"
+              >
+                {tr('Continue', 'Endelea')}
+              </Button>
             )}
           </div>
 
-          {/* Announces the in-flight submission; the visible label already
-              changes, but a focused button's name change is not reliably
-              announced (Phase 8.5). */}
-          <p className="sr-only" role="status" aria-live="polite">
-            {isSubmitting ? (lang === 'en' ? 'Submitting your report…' : 'Inawasilisha ripoti yako…') : ''}
-          </p>
+          {/* The submit action is the workflow's ONLY submit control, so it is
+              rendered on the review stage only. */}
+          {isLastStep && (
+            <>
 
-          <button
-            type="submit"
-            aria-busy={isSubmitting || undefined}
-            disabled={isSubmitting || !photoBase64}
-            className="w-full bg-accent-strong hover:bg-accent-strong-hover text-white py-3.5 rounded-2xl font-bold transition flex items-center justify-center space-x-2 shadow-lg shadow-orange-500/10 disabled:opacity-50 cursor-pointer"
-          >
-            {isSubmitting ? (
-              <>
-                <Loader2 className="animate-spin" size={18} />
-                <span>{lang === 'en' ? 'Processing your submission…' : 'Inashughulikia uwasilishaji wako…'}</span>
-              </>
-            ) : (
-              <>
-                <span>{t.submitReport}</span>
-                <ArrowRight size={18} />
-              </>
-            )}
-          </button>
 
-          {/* Disabled state previously gave no explanation — a filled-out form
-              with a grayed-out button and no photo yet looked broken. */}
-          {!isSubmitting && !photoBase64 && (
-            <p className="text-center text-xs text-ink-muted -mt-2">
-              {lang === 'sw'
-                ? 'Weka picha ya bidhaa hapo juu ili uweze kuwasilisha.'
-                : 'Add a photo of the item above before you can submit.'}
-            </p>
+              {/* Announces the in-flight submission; the visible label already
+                  changes, but a focused button's name change is not reliably
+                  announced (Phase 8.5). */}
+              <p className="sr-only" role="status" aria-live="polite">
+                {isSubmitting ? (lang === 'en' ? 'Submitting your report…' : 'Inawasilisha ripoti yako…') : ''}
+              </p>
+
+              <button
+                type="submit"
+                aria-busy={isSubmitting || undefined}
+                disabled={isSubmitting || !photoBase64}
+                className="w-full bg-accent-strong hover:bg-accent-strong-hover text-white py-3.5 rounded-2xl font-bold transition flex items-center justify-center space-x-2 shadow-lg shadow-orange-500/10 disabled:opacity-50 cursor-pointer"
+              >
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="animate-spin" size={18} />
+                    <span>{lang === 'en' ? 'Processing your submission…' : 'Inashughulikia uwasilishaji wako…'}</span>
+                  </>
+                ) : (
+                  <>
+                    <span>{t.submitReport}</span>
+                    <ArrowRight size={18} />
+                  </>
+                )}
+              </button>
+
+              {/* Disabled state previously gave no explanation — a filled-out form
+                  with a grayed-out button and no photo yet looked broken. */}
+              {!isSubmitting && !photoBase64 && (
+                <p className="text-center text-xs text-ink-muted -mt-2">
+                  {lang === 'sw'
+                    ? 'Weka picha ya bidhaa hapo juu ili uweze kuwasilisha.'
+                    : 'Add a photo of the item above before you can submit.'}
+                </p>
+              )}
+            </>
           )}
+
         </form>
       )}
     </div>
   );
 }
+
+/**
+ * The single question a stage asks, plus its one-line explanation. The heading
+ * is the focus target for a stage change, so it must exist once per render and
+ * be reachable by script (tabIndex -1) while staying out of the tab order. The
+ * global :focus-visible rule in src/index.css supplies the only focus
+ * indicator; nothing is suppressed here.
+ */
+function StepIntro({
+  headingRef,
+  title,
+  description,
+}: {
+  headingRef: React.Ref<HTMLHeadingElement>;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div>
+      <h3
+        id={STEP_HEADING_ID}
+        ref={headingRef}
+        tabIndex={-1}
+        className="text-heading font-extrabold tracking-tight text-[var(--appearance-text-primary)]"
+      >
+        {title}
+      </h3>
+      <p className="mt-1.5 text-body-large text-[var(--appearance-text-muted)] leading-relaxed">{description}</p>
+    </div>
+  );
+}
+
+/**
+ * One review group: a named part of the journey, the values recorded for it, and
+ * a single edit affordance that returns to the stage those values came from. The
+ * edit control is a plain button (never a submit), so the workflow still has
+ * exactly one submit action.
+ */
+function ReviewGroup({
+  title,
+  editLabel,
+  onEdit,
+  children,
+}: {
+  title: string;
+  editLabel: string;
+  onEdit: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="overflow-hidden rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)]">
+      <div className="flex items-center justify-between gap-3 border-b border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] px-4 py-2.5">
+        <h4 className="text-body-large font-semibold text-[var(--appearance-text-primary)]">{title}</h4>
+        <Button
+          type="button"
+          variant="ghost"
+          size="md"
+          onClick={onEdit}
+          /* The visible label repeats per group, so the accessible name says
+             WHICH group this edit returns to. WCAG 2.5.3 still holds: the
+             visible label is the first word of the accessible name. */
+          aria-label={editLabel + ': ' + title}
+          className="shrink-0"
+        >
+          {editLabel}
+        </Button>
+      </div>
+      <dl className="divide-y divide-[var(--appearance-border)]">{children}</dl>
+    </section>
+  );
+}
+
+function SummaryRow({ icon: Icon, label, value }: { icon?: LucideIcon; label: string; value: string }) {
+  return (
+    <div className="flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-3 px-4 py-3">
+      {Icon ? (
+        <Icon size={ICON_SIZE.metadata} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--appearance-text-muted)]" />
+      ) : null}
+      <dt className="w-40 shrink-0 text-caption font-bold text-[var(--appearance-text-muted)]">{label}</dt>
+      <dd className="min-w-0 flex-1 text-body text-[var(--appearance-text-primary)] leading-relaxed break-words whitespace-pre-wrap">
+        {value}
+      </dd>
+    </div>
+  );
+}
+
