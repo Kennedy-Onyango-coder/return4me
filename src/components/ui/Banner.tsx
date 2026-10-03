@@ -1,5 +1,6 @@
 import React from 'react';
 import { AlertCircle, CheckCircle2, Info, AlertTriangle, X, LucideIcon } from 'lucide-react';
+import { ICON_SIZE } from './iconSize';
 
 export type BannerKind = 'success' | 'error' | 'warning' | 'info';
 
@@ -52,10 +53,10 @@ export default function Banner({
     <div
       role={isInterruptive ? 'alert' : 'status'}
       aria-live={isInterruptive ? 'assertive' : 'polite'}
-      className={`border rounded-xl px-4 py-3 text-sm flex items-start gap-2.5 font-medium ${kindClasses[kind]} ${className}`}
+      className={`border rounded-standard px-4 py-3 text-body flex items-start gap-2.5 font-medium ${kindClasses[kind]} ${className}`}
       {...rest}
     >
-      <Icon size={17} aria-hidden="true" className="shrink-0 mt-0.5" />
+      <Icon size={ICON_SIZE.emphasis} aria-hidden="true" className="shrink-0 mt-0.5" />
       <div className="flex-1 min-w-0">{children}</div>
       {onDismiss && (
         <button
@@ -64,7 +65,7 @@ export default function Banner({
           aria-label={dismissLabel ?? 'Dismiss notification'}
           className="shrink-0 cursor-pointer transition-colors hover:opacity-70 focus-visible:opacity-70"
         >
-          <X size={16} aria-hidden="true" />
+          <X size={ICON_SIZE.ui} aria-hidden="true" />
         </button>
       )}
     </div>

@@ -1,5 +1,6 @@
 import React, { forwardRef, useId } from 'react';
 import { AlertCircle, ChevronDown } from 'lucide-react';
+import { ICON_SIZE } from './iconSize';
 
 export interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {
   label?: string;
@@ -41,7 +42,7 @@ const Select = forwardRef<HTMLSelectElement, SelectProps>(
         {label && (
           <label
             htmlFor={selectId}
-            className={`block text-xs font-bold text-[var(--appearance-text-primary)] ${hideLabel ? 'sr-only' : ''}`}
+            className={`block text-caption font-bold text-[var(--appearance-text-primary)] ${hideLabel ? 'sr-only' : ''}`}
           >
             {label}
             {required && <span className="text-status-danger" aria-hidden="true"> *</span>}
@@ -55,7 +56,7 @@ const Select = forwardRef<HTMLSelectElement, SelectProps>(
             disabled={disabled}
             aria-invalid={error ? true : undefined}
             aria-describedby={describedBy}
-            className={`w-full h-11 border rounded-xl pl-3 pr-9 text-sm text-[var(--appearance-text-primary)] transition-colors focus:border-[var(--appearance-focus)] disabled:opacity-50 disabled:cursor-not-allowed appearance-none bg-[var(--appearance-surface)] ${
+            className={`w-full h-11 border rounded-standard pl-3 pr-9 text-body text-[var(--appearance-text-primary)] transition-colors focus:border-[var(--appearance-focus)] disabled:opacity-50 disabled:cursor-not-allowed appearance-none bg-[var(--appearance-surface)] ${
               error ? 'border-[var(--appearance-danger)]' : 'border-[var(--appearance-border)]'
             }`}
             {...rest}
@@ -63,7 +64,7 @@ const Select = forwardRef<HTMLSelectElement, SelectProps>(
             {children}
           </select>
           <ChevronDown
-            size={16}
+            size={ICON_SIZE.ui}
             aria-hidden="true"
             className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[var(--appearance-text-muted)]"
           />
@@ -72,13 +73,13 @@ const Select = forwardRef<HTMLSelectElement, SelectProps>(
           <p
             id={`${selectId}-error`}
             role="alert"
-            className="flex items-center gap-1.5 text-xs font-bold text-status-danger"
+            className="flex items-center gap-1.5 text-caption font-bold text-status-danger"
           >
-            <AlertCircle size={13} aria-hidden="true" />
+            <AlertCircle size={ICON_SIZE.metadata} aria-hidden="true" />
             {error}
           </p>
         ) : hint ? (
-          <p id={`${selectId}-hint`} className="text-xs text-[var(--appearance-text-muted)]">
+          <p id={`${selectId}-hint`} className="text-caption text-[var(--appearance-text-muted)]">
             {hint}
           </p>
         ) : null}

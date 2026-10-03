@@ -1,5 +1,6 @@
 import React from 'react';
 import { Check } from 'lucide-react';
+import { ICON_SIZE } from './iconSize';
 
 export interface Step {
   /** Short label, e.g. "Photo". */
@@ -35,10 +36,10 @@ export default function Stepper({ steps, currentStep, label = 'Progress', classN
       {/* Mobile: compact progress bar + label */}
       <div className="sm:hidden space-y-1.5">
         <div className="flex items-baseline justify-between">
-          <p className="text-xs font-extrabold text-[var(--appearance-text-primary)]">
+          <p className="text-caption font-extrabold text-[var(--appearance-text-primary)]">
             {steps[safeIndex].label}
           </p>
-          <p className="text-xs font-bold text-[var(--appearance-text-muted)] tabular-nums">
+          <p className="text-caption font-bold text-[var(--appearance-text-muted)] tabular-nums">
             Step {safeIndex + 1} of {steps.length}
           </p>
         </div>
@@ -64,7 +65,7 @@ export default function Stepper({ steps, currentStep, label = 'Progress', classN
               <div className="flex flex-col items-center text-center gap-1.5 w-16 shrink-0">
                 <span
                   aria-current={isCurrent ? 'step' : undefined}
-                  className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-extrabold border transition-colors ${
+                  className={`w-7 h-7 rounded-full flex items-center justify-center text-caption font-extrabold border transition-colors ${
                     isCompleted
                       ? 'bg-primary-green border-primary-green text-white'
                       : isCurrent
@@ -74,7 +75,7 @@ export default function Stepper({ steps, currentStep, label = 'Progress', classN
                 >
                   {isCompleted ? (
                     <>
-                      <Check size={13} aria-hidden="true" />
+                      <Check size={ICON_SIZE.metadata} aria-hidden="true" />
                       <span className="sr-only">Completed</span>
                     </>
                   ) : (

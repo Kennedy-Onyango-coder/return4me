@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { trapModalFocus } from '../../utils/modalFocus';
+import { ICON_SIZE } from './iconSize';
 
 interface ModalProps {
   open: boolean;
@@ -94,20 +95,23 @@ export default function Modal({
       }}
     >
       {/* Solid scrim — deliberately NOT blurred (glassmorphism is out of
-          brand, and blur is expensive on low-cost Android devices). */}
-      <div className="absolute inset-0 bg-stone-950/60" aria-hidden="true" />
+          brand, and blur is expensive on low-cost Android devices). The veil
+          colour is the semantic --appearance-scrim role, not a raw palette
+          literal, so the one non-themeable-looking surface in the foundation
+          is still declared in one place per theme. */}
+      <div className="absolute inset-0 bg-[var(--appearance-scrim)]" aria-hidden="true" />
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="r4m-modal-title"
         tabIndex={-1}
-        className={`relative bg-[var(--appearance-surface)] text-[var(--appearance-text-primary)] w-full sm:max-w-lg max-h-[90vh] sm:max-h-[85vh] flex flex-col rounded-t-2xl sm:rounded-2xl border border-[var(--appearance-border)] shadow-sm outline-none ${className}`}
+        className={`relative bg-[var(--appearance-surface)] text-[var(--appearance-text-primary)] w-full sm:max-w-lg max-h-[90vh] sm:max-h-[85vh] flex flex-col rounded-t-panel sm:rounded-panel border border-[var(--appearance-border)] shadow-floating outline-none ${className}`}
       >
         <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-[var(--appearance-border)] shrink-0">
           <h2
             id="r4m-modal-title"
-            className={`text-base font-extrabold text-[var(--appearance-text-primary)] ${hideTitle ? 'sr-only' : ''}`}
+            className={`text-heading font-extrabold text-[var(--appearance-text-primary)] ${hideTitle ? 'sr-only' : ''}`}
           >
             {title}
           </h2>
@@ -115,14 +119,14 @@ export default function Modal({
             type="button"
             onClick={onClose}
             aria-label={closeLabel ?? 'Close dialog'}
-            className="shrink-0 p-1.5 -m-1.5 cursor-pointer text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)] transition-colors rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)]"
+            className="shrink-0 p-1.5 -m-1.5 cursor-pointer text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)] transition-colors rounded-small"
           >
-            <X size={18} aria-hidden="true" />
+            <X size={ICON_SIZE.emphasis} aria-hidden="true" />
           </button>
         </div>
-        <div className="px-5 py-4 overflow-y-auto text-sm text-[var(--appearance-text-primary)]">{children}</div>
+        <div className="px-5 py-4 overflow-y-auto text-body text-[var(--appearance-text-primary)]">{children}</div>
         {footer && (
-          <div className="px-5 py-4 border-t border-[var(--appearance-border)] shrink-0 bg-[var(--appearance-surface)] rounded-b-3xl">
+          <div className="px-5 py-4 border-t border-[var(--appearance-border)] shrink-0 bg-[var(--appearance-surface)] rounded-b-panel">
             {footer}
           </div>
         )}

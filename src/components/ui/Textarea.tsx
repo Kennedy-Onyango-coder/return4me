@@ -1,5 +1,6 @@
 import React, { forwardRef, useId } from 'react';
 import { AlertCircle } from 'lucide-react';
+import { ICON_SIZE } from './iconSize';
 
 export interface TextareaProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {
   /** Visible label; rendered with a proper <label htmlFor> link. */
@@ -55,7 +56,7 @@ const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
         {label && (
           <label
             htmlFor={fieldId}
-            className={`block text-xs font-bold text-[var(--appearance-text-primary)] ${hideLabel ? 'sr-only' : ''}`}
+            className={`block text-caption font-bold text-[var(--appearance-text-primary)] ${hideLabel ? 'sr-only' : ''}`}
           >
             {label}
             {required && <span className="text-status-danger" aria-hidden="true"> *</span>}
@@ -69,7 +70,7 @@ const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
           disabled={disabled}
           aria-invalid={error ? true : undefined}
           aria-describedby={describedBy}
-          className={`w-full border rounded-xl px-3 py-2.5 text-sm leading-relaxed text-[var(--appearance-text-primary)] transition-colors focus:border-[var(--appearance-focus)] disabled:opacity-50 disabled:cursor-not-allowed placeholder:text-[var(--appearance-text-muted)] resize-y min-h-[88px] ${
+          className={`w-full border rounded-standard px-3 py-2.5 text-body leading-relaxed text-[var(--appearance-text-primary)] transition-colors focus:border-[var(--appearance-focus)] disabled:opacity-50 disabled:cursor-not-allowed placeholder:text-[var(--appearance-text-muted)] resize-y min-h-[88px] ${
             error
               ? 'border-[var(--appearance-danger)] bg-[var(--appearance-surface)]'
               : 'border-[var(--appearance-border)] bg-[var(--appearance-surface)]'
@@ -80,13 +81,13 @@ const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
           <p
             id={`${fieldId}-error`}
             role="alert"
-            className="flex items-center gap-1.5 text-xs font-bold text-status-danger"
+            className="flex items-center gap-1.5 text-caption font-bold text-status-danger"
           >
-            <AlertCircle size={13} aria-hidden="true" />
+            <AlertCircle size={ICON_SIZE.metadata} aria-hidden="true" />
             {error}
           </p>
         ) : hint ? (
-          <p id={`${fieldId}-hint`} className="text-xs text-[var(--appearance-text-muted)]">
+          <p id={`${fieldId}-hint`} className="text-caption text-[var(--appearance-text-muted)]">
             {hint}
           </p>
         ) : null}

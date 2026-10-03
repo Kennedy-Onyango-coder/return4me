@@ -8,10 +8,10 @@ interface SkeletonProps {
 }
 
 const shapeClasses: Record<SkeletonShape, string> = {
-  text: 'h-4 rounded-md',
+  text: 'h-4 rounded-compact',
   circle: 'h-10 w-10 rounded-full',
-  rect: 'h-11 rounded-xl',
-  card: 'h-24 rounded-2xl',
+  rect: 'h-11 rounded-standard',
+  card: 'h-24 rounded-panel',
 };
 
 /**

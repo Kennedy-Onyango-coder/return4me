@@ -2,8 +2,8 @@ import React from 'react';
 
 interface SectionHeadingProps {
   /** Small contextual kicker above the title (e.g. "YOUR CLAIMS").
-   *  Readable 11px uppercase — the DS replacement for the app's old
-   *  text-[9px]/[10px] eyebrow labels. */
+   *  Readable 12px uppercase — the caption step of the locked typography scale,
+   *  and the DS replacement for the app's old sub-12px eyebrow labels. */
   eyebrow?: string;
   title: string;
   description?: string;
@@ -24,13 +24,13 @@ export default function SectionHeading({ eyebrow, title, description, titleId, c
   return (
     <div className={`space-y-1.5 ${className}`}>
       {eyebrow && (
-        <p className="text-[11px] font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">
+        <p className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">
           {eyebrow}
         </p>
       )}
-      <h2 id={titleId} className="text-lg font-extrabold tracking-tight text-[var(--appearance-text-primary)]">{title}</h2>
+      <h2 id={titleId} className="text-heading font-extrabold tracking-tight text-[var(--appearance-text-primary)]">{title}</h2>
       {description && (
-        <p className="text-sm text-[var(--appearance-text-muted)] leading-relaxed max-w-2xl">{description}</p>
+        <p className="text-body text-[var(--appearance-text-muted)] leading-relaxed max-w-2xl">{description}</p>
       )}
     </div>
   );

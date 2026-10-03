@@ -40,3 +40,8 @@ export { default as Stepper } from './Stepper';
 export type { Step } from './Stepper';
 
 export { default as OTPInput } from './OTPInput';
+
+// UX-01 — the shared icon ladder. Exported so later UX batches adopt the same
+// five sizes instead of re-deriving them per screen.
+export { ICON_SIZE, ICON_LADDER } from './iconSize';
+export type { IconName } from './iconSize';

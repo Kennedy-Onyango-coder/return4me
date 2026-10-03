@@ -99,7 +99,7 @@ const OTPInput = forwardRef<HTMLDivElement, OTPInputProps>(
         {label && (
           <label
             id={groupId}
-            className={`block text-xs font-bold text-[var(--appearance-text-primary)] mb-1.5 ${hideLabel ? 'sr-only' : ''}`}
+            className={`block text-caption font-bold text-[var(--appearance-text-primary)] mb-1.5 ${hideLabel ? 'sr-only' : ''}`}
           >
             {label}
           </label>
@@ -127,14 +127,14 @@ const OTPInput = forwardRef<HTMLDivElement, OTPInputProps>(
               onPaste={handlePaste}
               aria-label={length > 1 ? `Digit ${i + 1} of ${length}` : label}
               aria-invalid={error ? true : undefined}
-              className={`h-12 w-full text-center text-lg font-extrabold font-mono rounded-xl border px-0 text-[var(--appearance-text-primary)] transition-colors focus:border-[var(--appearance-focus)] disabled:opacity-50 disabled:cursor-not-allowed ${
+              className={`h-12 w-full text-center text-lg font-extrabold font-mono rounded-standard border px-0 text-[var(--appearance-text-primary)] transition-colors focus:border-[var(--appearance-focus)] disabled:opacity-50 disabled:cursor-not-allowed ${
                 error ? 'border-[var(--appearance-danger)] bg-[var(--appearance-surface)]' : 'border-[var(--appearance-border)] bg-[var(--appearance-surface)]'
               }`}
             />
           ))}
         </div>
         {error && (
-          <p role="alert" className="mt-1.5 text-xs font-bold text-status-danger">
+          <p role="alert" className="mt-1.5 text-caption font-bold text-status-danger">
             {error}
           </p>
         )}

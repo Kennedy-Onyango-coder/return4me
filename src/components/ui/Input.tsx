@@ -1,5 +1,6 @@
 import React, { forwardRef, useId } from 'react';
 import { AlertCircle } from 'lucide-react';
+import { ICON_SIZE } from './iconSize';
 
 export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   /** Visible label; rendered with a proper <label htmlFor> link. */
@@ -47,7 +48,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
         {label && (
           <label
             htmlFor={inputId}
-            className={`block text-xs font-bold text-[var(--appearance-text-primary)] ${hideLabel ? 'sr-only' : ''}`}
+            className={`block text-caption font-bold text-[var(--appearance-text-primary)] ${hideLabel ? 'sr-only' : ''}`}
           >
             {label}
             {required && <span className="text-status-danger" aria-hidden="true"> *</span>}
@@ -60,7 +61,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
           disabled={disabled}
           aria-invalid={error ? true : undefined}
           aria-describedby={describedBy}
-          className={`w-full h-11 border rounded-xl px-3 text-sm text-[var(--appearance-text-primary)] transition-colors focus:border-[var(--appearance-focus)] disabled:opacity-50 disabled:cursor-not-allowed placeholder:text-[var(--appearance-text-muted)] ${
+          className={`w-full h-11 border rounded-standard px-3 text-body text-[var(--appearance-text-primary)] transition-colors focus:border-[var(--appearance-focus)] disabled:opacity-50 disabled:cursor-not-allowed placeholder:text-[var(--appearance-text-muted)] ${
             error
               ? 'border-[var(--appearance-danger)] bg-[var(--appearance-surface)]'
               : 'border-[var(--appearance-border)] bg-[var(--appearance-surface)]'
@@ -71,13 +72,13 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
           <p
             id={`${inputId}-error`}
             role="alert"
-            className="flex items-center gap-1.5 text-xs font-bold text-status-danger"
+            className="flex items-center gap-1.5 text-caption font-bold text-status-danger"
           >
-            <AlertCircle size={13} aria-hidden="true" />
+            <AlertCircle size={ICON_SIZE.metadata} aria-hidden="true" />
             {error}
           </p>
         ) : hint ? (
-          <p id={`${inputId}-hint`} className="text-xs text-[var(--appearance-text-muted)]">
+          <p id={`${inputId}-hint`} className="text-caption text-[var(--appearance-text-muted)]">
             {hint}
           </p>
         ) : null}

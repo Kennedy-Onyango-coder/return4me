@@ -70,28 +70,87 @@
   --color-status-info-surface: #F0F9FF;
   --color-status-info-border: #E0F2FE;
 
-  /* RETURN4ME TYPOGRAPHY SCALE (Phase 8.1)
+  /* RETURN4ME TYPOGRAPHY SCALE (UX-01 — the authoritative, locked ladder).
      The UI audit measured 216 arbitrary `text-[Npx]` declarations across the
-     views (7px–13px) with no shared scale, so type hierarchy was improvised
-     per screen. These five named steps are the approved UI sizes; the floor is
-     12px (caption) because nothing smaller is reliably legible — especially on
-     the low-cost Android devices this product targets. Tailwind's default
-     scale (text-sm/base/lg/xl) remains available and is unchanged.
-       caption 12px — labels, eyebrows, metadata, badges
-       small   13px — dense secondary text, helper copy
-       body    14px — default UI text (same size as text-sm)
-       heading 18px — card and section titles (same size as text-lg)
-       display 28px — page/section hero titles */
-  --text-caption: 0.75rem;
+     views (7px–13px) with no shared scale, so type hierarchy was improvised per
+     screen. This is now the single source of truth: ten named steps, floor 12px
+     (caption) because nothing smaller is reliably legible — especially on the
+     low-cost Android devices this product targets. Tailwind's default scale
+     (text-sm/base/lg/xl) remains available and unchanged, but foundation code
+     uses these names so there is exactly one place to change type.
+        name        size/lh  role
+        caption     12 / 16  labels, eyebrows, metadata, badges
+        small       13 / 18  dense secondary text, helper copy
+        body        14 / 20  default UI text (same as text-sm)
+        body-large  16 / 24  long-form body copy
+        heading     18 / 26  card heading
+        subsection  20 / 28  subsection
+        section     24 / 32  section (same as text-2xl)
+        page        32 / 40  page
+        display     40 / 48  display
+        hero        48 / 56  exceptional hero display only
+     WEIGHTS: 400 body · 500 supporting/UI · 600 card headings ·
+              700 buttons / important labels · 800 major headings.
+     RETIRED: the previous `display` step was 28px, which is NOT on the locked
+     ladder. It had zero consumers (verified by repository-wide search before
+     redefining it), so it was moved onto the real 40/48 display step instead of
+     being kept as an off-ladder size.
+     HARD RULE: no normal visible Return4me UI uses 9px, 10px or 11px. */
+  --text-caption: 0.75rem;              /* 12 / 16 */
   --text-caption--line-height: 1rem;
-  --text-small: 0.8125rem;
+  --text-small: 0.8125rem;              /* 13 / 18 */
   --text-small--line-height: 1.125rem;
-  --text-body: 0.875rem;
-  --text-body--line-height: 1.3125rem;
-  --text-heading: 1.125rem;
+  --text-body: 0.875rem;                /* 14 / 20 */
+  --text-body--line-height: 1.25rem;
+  --text-body-large: 1rem;              /* 16 / 24 */
+  --text-body-large--line-height: 1.5rem;
+  --text-heading: 1.125rem;             /* 18 / 26 */
   --text-heading--line-height: 1.625rem;
-  --text-display: 1.75rem;
-  --text-display--line-height: 2.125rem;
+  --text-subsection: 1.25rem;           /* 20 / 28 */
+  --text-subsection--line-height: 1.75rem;
+  --text-section: 1.5rem;               /* 24 / 32 */
+  --text-section--line-height: 2rem;
+  --text-page: 2rem;                    /* 32 / 40 */
+  --text-page--line-height: 2.5rem;
+  --text-display: 2.5rem;               /* 40 / 48 */
+  --text-display--line-height: 3rem;
+  --text-hero: 3rem;                    /* 48 / 56 */
+  --text-hero--line-height: 3.5rem;
+
+  /* RETURN4ME SPACING RHYTHM (UX-01 — the authoritative scale)
+     The rhythm IS Tailwind's 4px base, so the convention is deliberately the
+     numeric utility rather than a second token namespace — a parallel
+     `--spacing-*` scale declared here but consumed nowhere would be a token
+     that lies about being used:
+        1 = 4px    2 = 8px    3 = 12px   4 = 16px   5 = 20px   6 = 24px
+        8 = 32px   10 = 40px  12 = 48px  16 = 64px  20 = 80px
+     Favour the 8-point rhythm (2/4/6/8/10/12/16/20). Never invent an arbitrary
+     spacing value (`p-[13px]`, `gap-[7px]`) — pick the nearest step. */
+
+  /* RETURN4ME RADIUS LADDER (UX-01) — the authoritative five steps.
+        compact   6px  compact controls
+        small     8px  small controls / compact surfaces
+        standard 12px  standard controls and cards  ← the default choice
+        panel    16px  larger cards / workspaces
+        hero     24px  major visual surfaces / hero containers
+     New code uses these names; any other radius is a defect. Each value is
+     byte-identical to the Tailwind default it replaces (md 6 / lg 8 / xl 12 /
+     2xl 16 / 3xl 24), so adopting a token is a rename, never a repaint. */
+  --radius-compact: 6px;
+  --radius-small: 8px;
+  --radius-standard: 12px;
+  --radius-panel: 16px;
+  --radius-hero: 24px;
+
+  /* RETURN4ME ELEVATION (UX-01) — two subtle steps only: a raised surface and a
+     floating (overlay) surface. Borders do the structural separation; a shadow
+     is reinforcement, never decoration, and heavy drop shadows / glassmorphism
+     / decorative gradients are out of brand. The values live in --elevation-*
+     so the SAME utility resolves differently in dark mode (a light shadow reads
+     as a halo on a dark canvas, so the dark steps are deeper and shallower).
+     Hierarchy: flat surface → subtle border → subtle shadow → floating shadow. */
+  --shadow-raised: var(--elevation-raised);
+  --shadow-floating: var(--elevation-floating);
 
   /* SEMANTIC SURFACE / TEXT / BORDER ALIASES (Phase 8.1)
      One obvious name for each surface the product already uses, so new code
@@ -133,6 +192,39 @@
   --appearance-success-foreground: #FFFFFF;
   --appearance-warning: #B45309;
   --appearance-warning-foreground: #FFFFFF;
+
+  /* UX-01 — completing the semantic role set the design system documents:
+     surface-elevated, primary (+hover/foreground), accent-hover, info
+     (+foreground). These are ADDED roles, not a repaint: every pre-existing
+     value above is untouched, and nothing consumes the new names yet — later
+     UX batches migrate consumers onto them instead of inventing per-screen
+     colours. Light values follow the established brand steps (primary is the
+     deep green, accent-hover is the existing text-safe accent hover, info is
+     the existing status info). */
+  --appearance-surface-elevated: #FFFFFF;
+  --appearance-primary: #003820;
+  --appearance-primary-hover: #002414;
+  --appearance-primary-foreground: #FFFFFF;
+  --appearance-accent-hover: #8F4800;
+  --appearance-info: #0369A1;
+  --appearance-info-foreground: #FFFFFF;
+  /* The dialog backdrop. A scrim is a fixed dark veil in BOTH themes (a light
+     veil would be wrong in dark mode), so it is a role with two values rather
+     than a raw palette literal inside the Modal — this removes the last raw
+     palette reference from the shared foundation. */
+  --appearance-scrim: rgba(12, 10, 9, 0.6);
+
+  /* UX-01 — elevation + motion. Motion band: 150–200ms for ordinary
+     interaction, 250–400ms for a deliberate transition; nothing outside it,
+     and every duration is neutralised by the global prefers-reduced-motion
+     policy in the same file. Elevation: see the --shadow-* theme tokens. */
+  --elevation-raised: 0 1px 2px rgba(0, 32, 18, 0.06), 0 1px 3px rgba(0, 32, 18, 0.08);
+  --elevation-floating: 0 8px 24px rgba(0, 32, 18, 0.12), 0 2px 8px rgba(0, 32, 18, 0.08);
+  --motion-quick: 150ms;
+  --motion-standard: 200ms;
+  --motion-deliberate: 300ms;
+  --motion-slow: 400ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
 }
 
 html[data-theme='dark'] {
@@ -153,6 +245,25 @@ html[data-theme='dark'] {
   --appearance-success-foreground: #052113;
   --appearance-warning: #FBBF24;
   --appearance-warning-foreground: #261A02;
+
+  /* UX-01 — the same completed role set in the dark scope (canonical
+     html[data-theme='dark'] marker only). Primary inverts to a light green
+     with a dark ink foreground — the same relationship the accent already uses
+     in this scope — so a primary button stays AA-legible instead of being a
+     dark-green surface on a dark canvas. */
+  --appearance-surface-elevated: #16281F;
+  --appearance-primary: #6FD79B;
+  --appearance-primary-hover: #8AE8B0;
+  --appearance-primary-foreground: #062015;
+  --appearance-accent-hover: #D98B33;
+  --appearance-info: #8CCDF2;
+  --appearance-info-foreground: #07222F;
+  --appearance-scrim: rgba(0, 0, 0, 0.72);
+
+  /* Dark elevation is deeper and shallower: on a dark canvas a light shadow
+     reads as a halo, so these are black-based with lower spread. */
+  --elevation-raised: 0 1px 2px rgba(0, 0, 0, 0.40), 0 1px 3px rgba(0, 0, 0, 0.50);
+  --elevation-floating: 0 10px 28px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.45);
 }
 
 body {
@@ -184,11 +295,18 @@ body {
    visible focus ring for keyboard navigation everywhere, without styling
    mouse clicks (modern browsers only apply :focus-visible to keyboard/
    programmatic focus). Colors: accent-orange ring on cream surfaces,
-   white ring on dark green surfaces — both ≥3:1 against their backdrop. */
+   white ring on dark green surfaces — both ≥3:1 against their backdrop.
+
+   UX-01: this rule no longer sets its own `border-radius`. It used to apply
+   0.25rem, and because an unlayered rule beats every `@layer utilities` rule
+   in the cascade it silently overrode each control's own radius the moment a
+   keyboard user focused it (a 12px input snapped to 4px — an off-ladder radius
+   that was ALSO a visible corner pop). The outline now follows the element's
+   own border-radius, so there is exactly one focus language and the radius
+   ladder is never overridden by focusing. */
 :focus-visible {
   outline: 2px solid var(--color-accent-orange);
   outline-offset: 2px;
-  border-radius: 0.25rem;
 }
 
 .bg-primary-green :focus-visible,
@@ -281,10 +399,10 @@ body {
     justify-content: flex-start;
     border-bottom: 0;
     border-left: 3px solid transparent;
-    border-radius: 0.5rem;
+    border-radius: var(--radius-small);
     padding: 0.625rem 0.75rem;
     margin-bottom: 0;
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
   }
 
   .r4m-admin-nav > button:hover {
@@ -309,10 +427,10 @@ body {
    against white the orange is ~2.8:1, below the 3:1 non-text contrast a focus
    indicator needs (the same finding recorded on the accent tokens above). */
 .r4m-admin-nav > button {
-  border-radius: 0.5rem;
+  border-radius: var(--radius-small);
   min-height: 44px;
   letter-spacing: 0.01em;
-  transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
+  transition: background-color var(--motion-quick) ease, color var(--motion-quick) ease, border-color var(--motion-quick) ease;
 }
 
 .r4m-admin-nav > button:focus-visible {

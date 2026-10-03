@@ -1,5 +1,6 @@
 import React, { forwardRef } from 'react';
 import { Loader2 } from 'lucide-react';
+import { ICON_SIZE } from './iconSize';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'accent' | 'outline' | 'inverse' | 'ghost' | 'danger';
 export type ButtonSize = 'sm' | 'md' | 'lg';
@@ -21,12 +22,14 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 
 // Fixed-height ladder (px ≈): sm 36 / md 44 / lg 52 — md is the default so
 // every standard button already meets the ≥44px touch-target floor on
-// mobile. Font sizes are Tailwind-scale (text-sm / text-xs+), never the
-// tiny arbitrary px sizes the old hand-rolled buttons used.
+// mobile. Type (UX-01) and radius (UX-01) come from the locked ladders
+// declared in index.css — text-body / text-body-large / text-caption and
+// rounded-small / rounded-standard — never the tiny arbitrary px sizes the
+// old hand-rolled buttons used, and never an ad-hoc radius.
 const sizeClasses: Record<ButtonSize, string> = {
-  sm: 'h-9 px-3 text-xs gap-1.5 rounded-lg',
-  md: 'h-11 px-5 text-sm rounded-xl',
-  lg: 'h-12 px-6 text-base rounded-xl',
+  sm: 'h-9 px-3 text-caption gap-1.5 rounded-small',
+  md: 'h-11 px-5 text-body rounded-standard',
+  lg: 'h-12 px-6 text-body-large rounded-standard',
 };
 
 // Each variant is self-contained (no compound selectors) so callers can
@@ -97,7 +100,7 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         {loading && (
           <Loader2
             className="animate-spin shrink-0"
-            size={size === 'sm' ? 14 : 16}
+            size={size === 'sm' ? ICON_SIZE.metadata : ICON_SIZE.ui}
             aria-hidden="true"
           />
         )}

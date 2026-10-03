@@ -1,5 +1,6 @@
 import React from 'react';
 import { LucideIcon } from 'lucide-react';
+import { ICON_SIZE } from './iconSize';
 
 interface StatCardProps {
   label: string;
@@ -23,16 +24,16 @@ interface StatCardProps {
  */
 export default function StatCard({ label, value, icon: Icon, description, status, className = '' }: StatCardProps) {
   return (
-    <div className={`bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-4 sm:p-5 shadow-sm flex items-start justify-between gap-3 ${className}`}>
+    <div className={`bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-panel p-4 sm:p-5 shadow-raised flex items-start justify-between gap-3 ${className}`}>
       <div className="space-y-1 min-w-0">
-        <p className="text-[11px] font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">
+        <p className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">
           {label}
         </p>
-        <p className="text-2xl font-extrabold text-[var(--appearance-text-primary)] tabular-nums tracking-tight leading-tight">
+        <p className="text-section font-extrabold text-[var(--appearance-text-primary)] tabular-nums tracking-tight leading-tight">
           {value}
         </p>
         {description && (
-          <p className="text-xs text-[var(--appearance-text-muted)] leading-snug">{description}</p>
+          <p className="text-caption text-[var(--appearance-text-muted)] leading-snug">{description}</p>
         )}
       </div>
       {(Icon || status) && (
@@ -41,9 +42,9 @@ export default function StatCard({ label, value, icon: Icon, description, status
           {Icon && (
             <span
               aria-hidden="true"
-              className="w-9 h-9 rounded-xl bg-primary-green/10 text-primary-green flex items-center justify-center"
+              className="w-9 h-9 rounded-standard bg-primary-green/10 text-primary-green flex items-center justify-center"
             >
-              <Icon size={17} />
+              <Icon size={ICON_SIZE.emphasis} />
             </span>
           )}
         </div>
