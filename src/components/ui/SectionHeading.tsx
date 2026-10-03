@@ -7,6 +7,10 @@ interface SectionHeadingProps {
   eyebrow?: string;
   title: string;
   description?: string;
+  /** Optional id on the rendered <h2>, so a wrapping <section> can point
+   *  aria-labelledby at a real heading element instead of at a wrapper div.
+   *  Purely additive: omitted here means exactly the previous markup. */
+  titleId?: string;
   className?: string;
 }
 
@@ -16,7 +20,7 @@ interface SectionHeadingProps {
  * views stop hand-rolling their own (currently 5+ slightly different
  * patterns in App.tsx / OwnerView / AgentView / AdminView).
  */
-export default function SectionHeading({ eyebrow, title, description, className = '' }: SectionHeadingProps) {
+export default function SectionHeading({ eyebrow, title, description, titleId, className = '' }: SectionHeadingProps) {
   return (
     <div className={`space-y-1.5 ${className}`}>
       {eyebrow && (
@@ -24,7 +28,7 @@ export default function SectionHeading({ eyebrow, title, description, className 
           {eyebrow}
         </p>
       )}
-      <h2 className="text-lg font-extrabold tracking-tight text-[var(--appearance-text-primary)]">{title}</h2>
+      <h2 id={titleId} className="text-lg font-extrabold tracking-tight text-[var(--appearance-text-primary)]">{title}</h2>
       {description && (
         <p className="text-sm text-[var(--appearance-text-muted)] leading-relaxed max-w-2xl">{description}</p>
       )}

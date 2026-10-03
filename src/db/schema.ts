@@ -1,4 +1,4 @@
-import { pgTable, varchar, text, numeric, integer, timestamp, jsonb, boolean, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, varchar, text, numeric, integer, timestamp, jsonb, boolean, index, uniqueIndex, check } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { CLAIM_SLOT_EXCLUDED_SQL_LIST } from "../config/claimStatuses";
 
@@ -94,6 +94,11 @@ export const agents = pgTable("agents", {
   business_name: varchar("business_name", { length: 150 }).notNull(),
   contact_phone: varchar("contact_phone", { length: 15 }).notNull().unique(),
   location_address: text("location_address").notNull(),
+  // Confirmed service geography. Nullable for historical agents; coordinates alone
+  // never establish county/sub-county service eligibility.
+  county: varchar("county", { length: 50 }),
+  administrative_unit_id: varchar("administrative_unit_id", { length: 50 }),
+  location_accuracy: numeric("location_accuracy", { precision: 10, scale: 2 }),
   latitude: numeric("latitude", { precision: 9, scale: 6 }),
   longitude: numeric("longitude", { precision: 9, scale: 6 }),
   mpesa_till_or_paybill: varchar("mpesa_till_or_paybill", { length: 20 }).notNull(),
@@ -104,6 +109,27 @@ export const agents = pgTable("agents", {
   rating: numeric("rating", { precision: 3, scale: 2 }).default("5.00"),
   rating_count: integer("rating_count").default(0),
   needs_manual_geocoding: boolean("needs_manual_geocoding").default(false).notNull(),
+  // N4 — agent EMAIL ACTIVATION, the second axis alongside `status`.
+  //
+  // `status` remains the BUSINESS APPROVAL axis and is untouched by N4:
+  // 'pending' = awaiting admin approval, 'active' = approved, 'suspended' =
+  // revoked. `email_verified_at` records the independent EMAIL axis, using the
+  // same shape N3 gave customers: NULL = unverified, timestamp = verified.
+  //
+  // A timestamp rather than a boolean, for the reason the customers column uses:
+  // exactly ONE source of truth, and it also records WHEN. It is deliberately
+  // nullable and defaults to NULL — a NULL here means "not verified", which is
+  // the correct default for an unproven claim of ownership.
+  email_verified_at: timestamp("email_verified_at", { withTimezone: true }),
+  // N4 — an agent's contact address. Now REQUIRED for new registrations and
+  // normalized (trim + lowercase) by the single writer, db.createAgent(), so
+  // every stored value is comparable. Nullable because pre-N4 agents
+  // legitimately have none; the grandfather rule in isAgentActionable() keys on
+  // exactly that. Uniqueness is a PARTIAL unique index
+  // (uq_agents_email, WHERE contact_email IS NOT NULL) rather than a column
+  // constraint, so any number of grandfathered NULL rows coexist while two
+  // non-null addresses can never collide — the identical pattern N2/N3 used for
+  // customers.email.
   contact_email: varchar("contact_email", { length: 255 }),
   shop_photo_url: text("shop_photo_url"),
   id_document_photo_url: text("id_document_photo_url"),
@@ -243,6 +269,33 @@ export const items = pgTable("items", {
   // physically_verified_at / status='at_agent' below.
   verification_status: varchar("verification_status", { length: 30 }).default("pending").notNull(),
   physically_verified_at: timestamp("physically_verified_at", { withTimezone: true }),
+  // --- B13: FOUND-ITEM WITHDRAWAL FOUNDATION --------------------------------
+  // Batch 0 adds the audit fields only. No workflow reads them yet.
+  //
+  // WHY THESE EXIST: locked decision B13 requires that a Finder be able to
+  // WITHDRAW a reported item under control — explicitly "withdrawal, not
+  // deletion" — that the reason be recorded simply, that matching stop "where
+  // appropriate", and that affected parties be notified where material. None of
+  // that is expressible today: `status` is a custody lifecycle whose CHECK
+  // constraint means nothing here, and `updated_at` records neither actor nor
+  // reason.
+  //
+  // WHY NO NEW `status` VALUE: B13 deliberately splits withdrawal into cases
+  // (before verification vs after a claim exists), and those cases map onto
+  // DIFFERENT existing statuses or onto an admin/agent decision. Choosing the
+  // vocabulary now would pre-empt that workflow and would require widening the
+  // `items_status_check` constraint in three synchronised places. The audit
+  // fields below are sufficient for the workflow to be built on without
+  // touching that constraint — that change belongs to the batch that actually
+  // implements withdrawal, with its transition rules decided first.
+  //
+  // Same shape and same reasoning as B12 on `lost_reports`: timestamp + actor +
+  // reason, never a broad `deleted` flag. NULL on every historical row, which is
+  // correct because those items were never withdrawn. The row and all
+  // verification/claim history are untouched — this is not an erasure.
+  withdrawn_at: timestamp("withdrawn_at", { withTimezone: true }),
+  withdrawn_by: varchar("withdrawn_by", { length: 100 }),
+  withdrawal_reason: text("withdrawal_reason"),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
 }, (table) => {
   return {
@@ -443,6 +496,127 @@ export const claim_payment_strikes = pgTable("claim_payment_strikes", {
   strike_count: integer("strike_count").default(0).notNull(),
   last_strike_at: timestamp("last_strike_at", { withTimezone: true }),
   is_cleared_by_admin: boolean("is_cleared_by_admin").default(false).notNull(),
+  // --- A1 LEGACY BASELINE (Batch 0A remediation) ------------------------------
+  //
+  // WHY THIS EXISTS — the double-counting problem, stated precisely:
+  //   `strike_count` and `last_strike_at` are BOTH overwritten by every new
+  //   strike. So after one post-migration strike, `strike_count` no longer tells
+  //   you how many strikes were PRE-migration, and `last_strike_at` no longer
+  //   marks when the legacy ones happened. Adding `strike_count` to the count of
+  //   active individual records would therefore count that one strike twice.
+  //   And simply ignoring the aggregate once any individual record exists (the
+  //   earlier XOR attempt) was worse: it made 3 legacy strikes VANISH the moment
+  //   a single new strike was added, which contradicts the locked decision that
+  //   the legacy component survives for its own 5-day window.
+  //
+  // THE SOLUTION — freeze the legacy state once, then leave it alone:
+  //   On the FIRST post-migration strike for a phone, the pre-increment
+  //   `strike_count` and the pre-write `last_strike_at` are copied here. These
+  //   two columns are written exactly ONCE per phone and are never touched again,
+  //   so they are an immutable snapshot of the legacy/transition component. The
+  //   active gate then computes:
+  //
+  //       active = legacyComponent + activeIndividualRecords
+  //
+  //   where legacyComponent is derived from THIS snapshot (never from the
+  //   moving `strike_count`), which makes double-counting impossible rather
+  //   than merely unlikely.
+  //
+  // NULL MEANS "this row was never touched post-migration" — i.e. it is pure
+  // legacy, and `strike_count`/`last_strike_at` are themselves still the
+  // authoritative snapshot. Both states therefore produce a correct legacy
+  // component, so no backfill is required and no historical value is invented.
+  legacy_strike_count: integer("legacy_strike_count"),
+  // Frozen copy of last_strike_at as it stood at the first post-migration
+  // strike. The legacy 5-day window is measured from THIS, never from
+  // `last_strike_at`, which keeps moving as new strikes arrive.
+  legacy_last_strike_at: timestamp("legacy_last_strike_at", { withTimezone: true }),
+  // A1 REMEDIATION — durable legacy-clear marker.
+  //
+  // WHY A NEW COLUMN: `is_cleared_by_admin` alone cannot record that the LEGACY
+  // component was cleared. recordPaymentStrike() must keep that column FALSE for
+  // a phone with no history (so a genuinely-cleared phone is not re-restricted),
+  // but it also needs the aggregate row to stay marked as cleared after an admin
+  // clears a legacy phone and the user later strikes again. Resetting the flag
+  // on every strike silently REACTIVATED a frozen legacy baseline — an admin
+  // clear would be undone by the customer's next strike.
+  //
+  // So the clear is recorded HERE, permanently, separately from the legacy
+  // baseline itself. The baseline columns are frozen and never rewritten; this
+  // marker suppresses them once, forever, and no later strike can clear it.
+  // NULL = never administratively cleared (the normal case).
+  legacy_cleared_at: timestamp("legacy_cleared_at", { withTimezone: true }),
+});
+
+// 9b. CLAIM PAYMENT STRIKE RECORDS (individual, per-strike) — A1
+//
+// WHY THIS TABLE EXISTS
+//   Locked decision A1 requires that each payment strike expire INDIVIDUALLY
+//   five days after it was recorded, that historical strikes remain available
+//   for audit, and that the >=3 restriction eventually count only
+//   active/non-expired strikes.
+//
+//   `claim_payment_strikes` (above) cannot express that. It is an AGGREGATE:
+//   one row per phone holding a running counter plus a single `last_strike_at`.
+//   A counter plus one timestamp cannot tell you WHEN any individual strike
+//   occurred, so it can neither expire strikes one at a time nor answer an
+//   audit question about a specific strike. Decrementing `strike_count` on
+//   expiry would destroy exactly the history A1 requires us to keep.
+//
+// WHAT THIS TABLE IS
+//   The normalized form: one row per strike, each with its own `created_at`
+//   and its own `expires_at`. Rows are never deleted on expiry — expiry is a
+//   property of `expires_at`, so an expired strike is still a full audit
+//   record. Administrator override is representable per strike via
+//   `is_cleared_by_admin`.
+//
+//   THIS TABLE IS ADDITIVE AND UNUSED BY BUSINESS LOGIC IN THIS BATCH.
+//   `recordPaymentStrike()`, `getPaymentStrikeCount()`, `clearPaymentStrikes()`
+//   and the >=3 gate in routes/claims.ts are all UNCHANGED and still read the
+//   aggregate table, so no existing behaviour moves. A later batch wires the
+//   new records in once the gate can count active strikes correctly.
+//
+// HISTORICAL DATA / BACKFILL LIMITATION (documented deliberately)
+//   There is NO backfill from the aggregate table, and that is intentional.
+//   For a legacy row with `strike_count = 3` and `last_strike_at = T`, the
+//   individual timestamps of those three strikes are NOT recoverable: the
+//   aggregate never stored them. Manufacturing three rows — all stamped T, or
+//   spread backwards on an invented cadence — would fabricate audit data and
+//   would silently reinterpret history. Instead:
+//     * the aggregate row is left untouched and remains the record of every
+//       strike that predates this table;
+//     * this table starts empty and holds only strikes recorded after the
+//       migration, each with a genuine `created_at`;
+//     * a later batch must therefore treat pre-migration strikes as
+//       "legacy aggregate" and decide explicitly how they interact with the
+//       5-day rolling window. That decision is a product call, not a schema
+//       call, and is deliberately NOT pre-empted here.
+export const claim_payment_strike_records = pgTable("claim_payment_strike_records", {
+  id: varchar("id", { length: 50 }).primaryKey(),
+  phone_number: varchar("phone_number", { length: 15 }).notNull(),
+  // Genuine per-strike creation time. NEVER backfilled or invented.
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  // A1: individual 5-day expiry, INDEPENDENT of every other strike on the same
+  // phone. NULL means "no automatic expiry" and is used only for rows that
+  // predate the decision or are deliberately exempted. Distinct from
+  // `claim_payment_strikes.last_strike_at` (an aggregate watermark) and from
+  // anything in the payment/claim lifecycle.
+  expires_at: timestamp("expires_at", { withTimezone: true }),
+  // A1: Administrator override, per strike rather than per phone.
+  is_cleared_by_admin: boolean("is_cleared_by_admin").default(false).notNull(),
+  cleared_at: timestamp("cleared_at", { withTimezone: true }),
+  cleared_by_admin: varchar("cleared_by_admin", { length: 100 }),
+  // Provenance: the claim whose payment-window expiry produced this strike,
+  // when known. Nullable — a strike recorded by a sweep that raced another
+  // instance may not resolve one.
+  source_claim_id: varchar("source_claim_id", { length: 50 }),
+}, (table) => {
+  return {
+    // The active-strike count for the >=3 gate will read every unexpired,
+    // uncleared row for one phone, so both columns are indexed.
+    idx_strike_records_phone: index("idx_claim_strike_records_phone").on(table.phone_number),
+    idx_strike_records_expires: index("idx_claim_strike_records_expires").on(table.expires_at),
+  };
 });
 
 // 10. ADMIN USERS TABLE
@@ -643,12 +817,31 @@ export const customers = pgTable("customers", {
   full_name: text("full_name").notNull(),
   phone: varchar("phone", { length: 20 }).notNull(),
   status: varchar("status", { length: 20 }).default("active").notNull(),
+  // N2 — email is NULLABLE AT THE PHYSICAL LEVEL ON PURPOSE: every customer
+  // created before this batch came through the SMS-only registration flow and
+  // has no email. A NOT NULL column would fail the migration or force a
+  // fabricated value into live identity data. Grandfathered rows keep NULL and
+  // stay active; the "new registrations must supply an email" rule is an
+  // APPLICATION-level check in the N3 registration handler, not a constraint.
+  // Normalization contract: the application stores a trimmed, lower-cased
+  // address, which makes the partial unique index below case-insensitive in
+  // practice. See sql/schema.sql and ensureSchemaUpToDate() for the DDL.
+  email: varchar("email", { length: 255 }),
+  // NULL = never verified. Timestamp = verified at that moment. A nullable
+  // timestamp is used rather than a boolean so there is exactly ONE source of
+  // truth and it also records WHEN.
+  email_verified_at: timestamp("email_verified_at", { withTimezone: true }),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 }, (table) => {
   return {
     uq_customers_phone: uniqueIndex("uq_customers_phone").on(table.phone),
     idx_customers_status: index("idx_customers_status").on(table.status),
+    // PARTIAL unique: two accounts may never share a non-null email, while any
+    // number of grandfathered NULL-email accounts remain valid.
+    uq_customers_email: uniqueIndex("uq_customers_email")
+      .on(table.email)
+      .where(sql`${table.email} IS NOT NULL`),
   };
 });
 
@@ -680,13 +873,57 @@ export const customer_sessions = pgTable("customer_sessions", {
   token_hash: varchar("token_hash", { length: 64 }).notNull(),
   expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  // Pre-existing inactivity clock. H10 (inactivity timeout) will build on this
+  // column; it is NOT new in Batch 0 and its semantics are unchanged.
   last_seen_at: timestamp("last_seen_at", { withTimezone: true }),
+  // Pre-existing per-session revocation marker. H9 (individual revoke / sign
+  // out all others) will build on this; NULL means "still valid". Revocation
+  // sets the timestamp rather than deleting the row, so the session's audit
+  // trail survives.
   revoked_at: timestamp("revoked_at", { withTimezone: true }),
+  // --- H9 / H10: SESSION DEVICE + ACTIVITY CONTEXT -------------------------
+  // Batch 0 foundation for the later session-management work (device/session
+  // visibility, last-activity tracking, inactivity timeout, individual
+  // revocation, sign-out-all-other-sessions).
+  //
+  // `last_seen_at` and `revoked_at` ALREADY EXIST above and are what the future
+  // features will actually build on: `last_seen_at` is the inactivity clock and
+  // `revoked_at` is per-session revocation that leaves the row (and therefore
+  // its audit trail) intact. Neither is added or altered here.
+  //
+  // WHAT IS MISSING TODAY, and why it needs one new column:
+  //   A customer-facing "your active sessions" view has to tell the customer
+  //   WHICH device a session belongs to. Without any stored request context,
+  //   the only honest options are to show nothing, or to guess. Neither is
+  //   acceptable, so the raw User-Agent is captured at sign-in.
+  //
+  // PRIVACY CONSTRAINTS (deliberate, and the reason for the shape below):
+  //   - The RAW User-Agent is stored, not a pre-derived "device name". A
+  //     derived label would need a device-parsing table and would be wrong for
+  //     unusual clients; the customer-facing label is derived at READ time in
+  //     the later batch. Storing the raw string keeps that decision reversible.
+  //   - NO IP ADDRESS IS STORED, and no column is reserved for one. The
+  //     codebase already established the rule it wants to keep: rate-limit
+  //     identities are a salted hash precisely so a table does not become a
+  //     record of who connected from where. Session rows get the same
+  //     treatment. If a later decision genuinely needs coarse geography, it
+  //     must arrive as its own decision with its own justification — it is not
+  //     pre-empted by an empty column here.
+  //   - Truncated to 512 chars: long enough for any real client string, short
+  //     enough that the column cannot become an arbitrary payload store.
+  // Nullable because sessions created before this column have none. Existing
+  // authentication semantics are untouched: token hashing, `expires_at`,
+  // `last_seen_at` and `revoked_at` all behave exactly as they did.
+  user_agent: varchar("user_agent", { length: 512 }),
 }, (table) => {
   return {
     idx_customer_sessions_token: index("idx_customer_sessions_token").on(table.token_hash),
     idx_customer_sessions_customer: index("idx_customer_sessions_customer").on(table.customer_id),
     idx_customer_sessions_expires: index("idx_customer_sessions_expires").on(table.expires_at),
+    // H10 inactivity timeout and H9 "revoke every other session" both need
+    // "which of this customer's sessions are still live, and how stale is each".
+    // (customer_id, last_seen_at) serves both without a partial index.
+    idx_customer_sessions_activity: index("idx_customer_sessions_activity").on(table.customer_id, table.last_seen_at),
   };
 });
 
@@ -727,6 +964,489 @@ export const customer_claim_links = pgTable("customer_claim_links", {
     // The one-customer-per-claim invariant. Also serves reverse lookups.
     uq_customer_claim_links_claim: uniqueIndex("uq_customer_claim_links_claim").on(table.claim_id),
   };
+});
+
+// N2. EMAIL ACTIVATION TOKENS (shared by customer and agent accounts).
+//
+// ONE table, not two: the columns that make a token valid are identical for
+// every account kind, and the account_type discriminator is what keeps token
+// ownership unambiguous. A polymorphic account_id deliberately has NO foreign
+// key — it cannot be one, and a wrong FK would be worse than an
+// application-verified reference.
+//
+// SECURITY: only a SHA-256 hash is persisted. The plaintext exists solely in
+// the activation email, so a database leak cannot be replayed into a takeover.
+//
+// Single-use is enforced at redemption by an atomic compare-and-swap UPDATE
+// (consumed_at IS NULL AND expires_at > now()); a "check then update" pair is
+// NOT sufficient, because two concurrent redemptions would both pass the check.
+
+// =============================================================================
+// BATCH 2 — CUSTOMER IDENTITY CHANGES (G3).
+//
+// WHY A TABLE RATHER THAN TWO COLUMNS ON `customers`
+//   An email or phone change must NOT become authoritative until the customer has
+//   proved control of the NEW value. That requires somewhere to hold the claimed
+//   value and its unproven state while the old identifier is still fully
+//   authoritative — a genuinely new need, not a convenience.
+//
+//   Storing it on `customers` (pending_email, pending_phone, …) was rejected: it
+//   spreads an unverified second identity across the row every read touches, and
+//   it makes "is this account verified?" a question with two answers depending on
+//   which column a query happened to look at. A separate row per requested change
+//   keeps the unproven value out of the authoritative record entirely.
+//
+// SECURITY
+//   `code_hash` holds a SHA-256 hash, never the code itself, mirroring
+//   customer_otps and account_activation_tokens. A leaked database cannot be used
+//   to complete an identity change.
+//
+// SINGLE USE AND TIME BOUNDED
+//   Redemption is a compare-and-swap on (id, customer_id, consumed_at IS NULL,
+//   expires_at > now) for the same reason account_activation_tokens uses one:
+//   a check-then-update pair lets two concurrent redemptions both pass.
+// =============================================================================
+export const customer_identity_changes = pgTable(
+  "customer_identity_changes",
+  {
+    id: varchar("id", { length: 50 }).primaryKey(),
+    customer_id: varchar("customer_id", { length: 50 })
+      .notNull()
+      .references(() => customers.id, { onDelete: "cascade" }),
+    // Which identifier this change is for. Mirrored by a CHECK below.
+    kind: varchar("kind", { length: 10 }).notNull(),
+    // The CLAIMED value, stored lower-cased (email) or E.164 (phone) so the
+    // uniqueness check is not defeated by casing or formatting.
+    target_value: varchar("target_value", { length: 255 }).notNull(),
+    // SHA-256 of the one-time code. NEVER the plaintext.
+    code_hash: varchar("code_hash", { length: 64 }).notNull(),
+    expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+    // NULL = not yet verified. Set once, atomically, at redemption.
+    consumed_at: timestamp("consumed_at", { withTimezone: true }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => {
+    return {
+      idx_customer_identity_changes_customer: index(
+        "idx_customer_identity_changes_customer"
+      ).on(table.customer_id, table.kind),
+      // Only live rows matter, and they are a small fraction of the table.
+      idx_customer_identity_changes_expiry: index("idx_customer_identity_changes_expiry").on(
+        table.expires_at
+      ),
+      customer_identity_changes_kind_check: check(
+        "customer_identity_changes_kind_check",
+        sql`${table.kind} IN ('email', 'phone')`
+      ),
+    };
+  }
+);
+
+export const account_activation_tokens = pgTable("account_activation_tokens", {
+  id: varchar("id", { length: 50 }).primaryKey(),
+  account_type: varchar("account_type", { length: 20 }).notNull(),
+  account_id: varchar("account_id", { length: 50 }).notNull(),
+  purpose: varchar("purpose", { length: 32 }).notNull(),
+  token_hash: varchar("token_hash", { length: 64 }).notNull(),
+  expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+  consumed_at: timestamp("consumed_at", { withTimezone: true }),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+}, (table) => {
+  return {
+    // The lookup path: given a presented token, find its hash.
+    idx_account_activation_tokens_hash: index("idx_account_activation_tokens_hash").on(table.token_hash),
+    // "invalidate every outstanding token for this account".
+    idx_account_activation_tokens_account: index("idx_account_activation_tokens_account")
+      .on(table.account_type, table.account_id, table.purpose),
+    // Expiry sweeps.
+    idx_account_activation_tokens_expires: index("idx_account_activation_tokens_expires").on(table.expires_at),
+    // These two whitelists are declared identically in sql/schema.sql and in
+    // ensureSchemaUpToDate(), so Postgres enforces them no matter which path
+    // created the database. They stop a token being filed under an undefined
+    // account type or purpose and later redeemed as something it was never
+    // issued for.
+    account_activation_tokens_purpose_check: check(
+      "account_activation_tokens_purpose_check",
+      sql`${table.purpose} = 'email_activation'`
+    ),
+    account_activation_tokens_account_type_check: check(
+      "account_activation_tokens_account_type_check",
+      sql`${table.account_type} IN ('customer', 'agent')`
+    ),
+  };
+});
+
+// N2. NOTIFICATION EVENTS (durable idempotency + delivery audit).
+//
+// One row per LOGICAL notification, not per provider attempt: a retry reuses
+// the row and bumps attempt_count, which is what distinguishes "same event,
+// retried" from "new event".
+//
+// uq_notification_events_idempotency is the load-bearing constraint. Two
+// concurrent dispatches of one logical notification race to insert; exactly
+// one wins and the other receives a 23505 unique violation it can handle. An
+// application-level check alone cannot survive that race, and an in-memory Map
+// cannot survive a process restart.
+//
+// NEVER stores an OTP, pickup code, activation token, payment secret or session
+// token. recipient_reference holds an opaque handle (masked address or hash),
+// never a credential.
+//
+// sent_at records PROVIDER ACCEPTANCE, not handset/inbox delivery — those are
+// different facts, and conflating them is exactly the false-success this
+// architecture exists to prevent.
+export const notification_events = pgTable("notification_events", {
+  id: varchar("id", { length: 50 }).primaryKey(),
+  event_type: varchar("event_type", { length: 64 }).notNull(),
+  channel: varchar("channel", { length: 20 }).notNull(),
+  provider: varchar("provider", { length: 40 }),
+  idempotency_key: varchar("idempotency_key", { length: 255 }).notNull(),
+  recipient_reference: varchar("recipient_reference", { length: 255 }).notNull(),
+  status: varchar("status", { length: 32 }).default("pending").notNull(),
+  provider_message_id: varchar("provider_message_id", { length: 128 }),
+  attempt_count: integer("attempt_count").default(0).notNull(),
+  last_error: text("last_error"),
+  // ---------------------------------------------------------------------------
+  // N10-D AUDIT: RESERVED, NOT DEAD CODE — DO NOT DELETE WITHOUT A DECISION.
+  //
+  // EVIDENCE (audited repo-wide): this column is declared here, in
+  // sql/schema.sql and in ensureSchemaUpToDate(), and it is written and read
+  // ONLY by src/db/__tests__/notificationSchemaN2.test.ts, which inserts a row
+  // directly and reads the self-reference back. NO production writer sets it and
+  // NO production reader consumes it.
+  //
+  // WHY IT IS RETAINED RATHER THAN REMOVED:
+  //   1. It is part of the N2 schema CONTRACT: a self-referencing FK to
+  //      notification_events(id), declared identically in all three schema
+  //      representations. Removing it is a DDL migration, not a cleanup.
+  //   2. It is asserted by an existing, passing N2 schema test. Deleting the
+  //      column would break that test rather than remove dead code.
+  //   3. It is coherent with the status vocabulary this table already admits
+  //      ('fallback_available', 'fallback_requested', 'fallback_sent'): it is
+  //      the link that would tie a fallback notification back to the delivery
+  //      it replaced. The fallback lifecycle is PARTLY implemented, not
+  //      abandoned.
+  //
+  // IT IS NOT THE SAME COLUMN AS `created_via_fallback` on customer_notifications,
+  // which IS live (written by recordCustomerNotification, read when rendering).
+  // Do not conflate the two when auditing either one.
+  // ---------------------------------------------------------------------------
+  fallback_of: varchar("fallback_of", { length: 50 }),
+  // ---------------------------------------------------------------------------
+  // N9. NOTIFICATION FAILURE RECOVERY.
+  //
+  // Additive and nullable so every historical row stays valid and NOTHING is
+  // backfilled or resent. `attempt_count` above is deliberately NOT repurposed:
+  // it has always meant "successful provider acceptances" (it is only incremented
+  // by markNotificationEventAccepted), and silently redefining it would make
+  // historical values ambiguous.
+  // ---------------------------------------------------------------------------
+  /**
+   * The durable domain identifier this notification was created from — a claim
+   * id, an item id, a customer id or an agent id.
+   *
+   * INTERNAL NON-SENSITIVE: these are already primary keys elsewhere in this
+   * database. It is NOT a recipient and NOT a credential, and it exists so a
+   * retry can re-resolve BOTH the recipient and the content from the
+   * authoritative domain record instead of storing either one here. That is what
+   * lets N9 retry without ever persisting a plaintext address or a rendered
+   * body. NULL for historical rows, which therefore simply are not retryable.
+   */
+  business_reference: varchar("business_reference", { length: 64 }),
+  /**
+   * Retry eligibility, decided by policy in config/notificationEvents.ts and
+   * frozen onto the row at creation.
+   *
+   * 'reconstructable' means every field the template needs can be re-derived
+   * from domain records. 'not_retryable' means the notification carries a
+   * one-time secret (an OTP, a pickup code, an activation token) that is only
+   * ever stored as a hash, so re-sending it is impossible and re-minting it
+   * would invalidate a code the user may be mid-way through typing.
+   */
+  retry_class: varchar("retry_class", { length: 32 }),
+  /**
+   * N9 retry attempts. Counts RETRIES, which is a different fact from
+   * `attempt_count` (successful acceptances). Retries are a separate operation
+   * from the original dispatch, so they get their own counter rather than
+   * overloading the historical one.
+   */
+  retry_attempt_count: integer("retry_attempt_count").default(0).notNull(),
+  /**
+   * When a retryable_failure becomes eligible for another attempt. NULL means
+   * "not scheduled": never failed, terminal, or a historical row — and the
+   * sweep only ever selects rows where this is due, so NULL is what makes
+   * legacy rows permanently safe from automatic dispatch.
+   */
+  next_attempt_at: timestamp("next_attempt_at", { withTimezone: true }),
+  /**
+   * E1 — ACTIVE-NOTIFICATION EXPIRY. Added by Batch 0 as a data foundation
+   * only; nothing reads or writes it yet.
+   *
+   * WHAT IT IS: the locked 5-day window after which a notification stops being
+   * "active" (i.e. no longer something a user-facing Notification History would
+   * show as current).
+   *
+   * WHAT IT IS **NOT**, and must never be conflated with:
+   *   - `next_attempt_at` — RETRY SCHEDULING. That is about when a worker may
+   *     attempt a redelivery. A notification can have a future
+   *     `next_attempt_at` and still be long past its 5-day active window, and
+   *     vice versa. Independent facts, independent reasons to exist.
+   *   - `sent_at` / `status` — DELIVERY OUTCOME. Provider acceptance is not
+   *     receipt, and neither says anything about how long a record stays
+   *     relevant to a user.
+   *   - `updated_at` — row bookkeeping, changed by the retry sweep.
+   *
+   * NULL means "no expiry recorded", which is correct for every row that
+   * predates this column. Such rows are never expired by any future sweep,
+   * which is the safe default: an absent value must not be guessed into a
+   * 5-day lookback that could hide an old record.
+   *
+   * EXPIRY DOES NOT DELETE. A later batch uses this to move a notification out
+   * of the ACTIVE view; the row and its `business_reference` remain as the
+   * audit record required by the retention decision.
+   */
+  expires_at: timestamp("expires_at", { withTimezone: true }),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  sent_at: timestamp("sent_at", { withTimezone: true }),
+}, (table) => {
+  return {
+    uq_notification_events_idempotency: uniqueIndex("uq_notification_events_idempotency").on(table.idempotency_key),
+    idx_notification_events_type: index("idx_notification_events_type").on(table.event_type),
+    idx_notification_events_recipient: index("idx_notification_events_recipient").on(table.recipient_reference),
+    idx_notification_events_status: index("idx_notification_events_status").on(table.status),
+    idx_notification_events_created: index("idx_notification_events_created").on(table.created_at),
+    // N9: the sweep's only access path. A partial index would be smaller, but this
+    // table is tiny and a plain composite index keeps the predicate obvious.
+    idx_notification_events_retry: index("idx_notification_events_retry").on(table.status, table.next_attempt_at),
+    // Declared identically in sql/schema.sql and ensureSchemaUpToDate() so an
+    // unknown channel or an undefined lifecycle state can never be recorded.
+    notification_events_channel_check: check(
+      "notification_events_channel_check",
+      sql`${table.channel} IN ('sms', 'email')`
+    ),
+    // N9 EXTENDED this lifecycle. 'failed' is RETAINED so every historical row
+    // stays valid — it means "failed before N9 existed" and is treated as
+    // terminal. The N9 states are additive:
+    //   sending            — a worker claimed it and is dispatching right now
+    //   retryable_failure  — definite failure, reconstructable, due for retry
+    //   permanent_failure  — definite failure that will never succeed
+    //   unknown            — outcome undeterminable; NEVER auto-retried
+    // The pre-existing fallback_* states are retained for backward compatibility
+    // and remain unused (no provider or channel fallback exists).
+    notification_events_status_check: check(
+      "notification_events_status_check",
+      sql`${table.status} IN ('pending', 'sending', 'sent', 'failed', 'retryable_failure', 'permanent_failure', 'unknown', 'cancelled', 'fallback_available', 'fallback_requested', 'fallback_sent')`
+    ),
+  };
+});
+
+// =============================================================================
+// BATCH 1 — CUSTOMER NOTIFICATION USER LAYER.
+//
+// WHY THIS IS NOT `notification_events`
+//   notification_events is a DELIVERY LEDGER. It has no customer id (only a
+//   masked `recipient_reference`), its channel CHECK admits only sms/email, and
+//   its rows carry provider names, error strings and retry counters. A customer
+//   facing view needs the opposite of all three: customer-keyed rows, an in-app
+//   channel, and no delivery internals. Extending the ledger would have meant
+//   adding a customer column to it, widening a CHECK that N7/N8 depend on, and
+//   projecting around most of every row — so the user layer gets its own tables.
+//   The two are related by (event_type, business_reference) and never duplicate
+//   delivery state.
+//
+// EXPIRY: `expires_at` here means exactly what the column Batch 0 added to
+//   notification_events means — an ACTIVE-WINDOW boundary, never a retry
+//   schedule. Nothing in this layer reads next_attempt_at.
+// =============================================================================
+
+/**
+ * The customer-visible notification.
+ *
+ * PERSISTENT BY CONSTRUCTION (requirement 3): read state is a column here, not
+ * React state or browser storage, so it survives a new session and a new device.
+ *
+ * `title` / `body` are plain-language, pre-rendered customer copy. Storing the
+ * finished sentence is deliberate: history must still read correctly after the
+ * underlying record moves on, and re-deriving wording later could leak a status
+ * token into the UI. What is NEVER stored is a provider name, a payload, an
+ * error string or an infrastructure identifier — the ledger keeps those.
+ */
+export const customer_notifications = pgTable(
+  "customer_notifications",
+  {
+    id: varchar("id", { length: 50 }).primaryKey(),
+    // NOT NULL, and the basis of every read in this layer: a notification is
+    // reachable only through its owner's id, so isolation is enforced by the
+    // query shape rather than by hiding a control in the UI.
+    customer_id: varchar("customer_id", { length: 50 })
+      .notNull()
+      .references(() => customers.id, { onDelete: "cascade" }),
+    // The vocabulary from config/customerNotifications.ts, closed by a CHECK.
+    category: varchar("category", { length: 40 }).notNull(),
+    title: varchar("title", { length: 160 }).notNull(),
+    body: text("body"),
+    // STABLE EXISTING reference (a claim id, an item id, a report id) — the same
+    // opaque domain id notification_events.business_reference already uses. It is
+    // what history shows as the customer's reference and what grouping keys on.
+    // It is never rendered as a raw internal identifier.
+    business_reference: varchar("business_reference", { length: 64 }),
+    // NULL = unread. A timestamp rather than a boolean, so there is one source
+    // of truth and it also records WHEN it was read.
+    read_at: timestamp("read_at", { withTimezone: true }),
+    // ACTIVE-WINDOW boundary. Moves the row out of the active list; does NOT
+    // delete it. Explicitly NOT a retry field.
+    expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+    // True when this row was written because a DELIVERY fell back to in-app,
+    // so the UI can be honest that the message arrived here rather than by text
+    // WITHOUT ever surfacing why the other channel failed.
+    created_via_fallback: boolean("created_via_fallback").default(false).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => {
+    return {
+      // The active list is always "this customer, unexpired, newest first".
+      idx_customer_notifications_active: index("idx_customer_notifications_active").on(
+        table.customer_id,
+        table.expires_at
+      ),
+      idx_customer_notifications_created: index("idx_customer_notifications_created").on(
+        table.customer_id,
+        table.created_at
+      ),
+      // Unread counting. Partial, so it holds only unread rows and shrinks to
+      // nothing as a customer works through their list.
+      idx_customer_notifications_unread: index("idx_customer_notifications_unread")
+        .on(table.customer_id, table.created_at)
+        .where(sql`${table.read_at} IS NULL`),
+      // Mirrored from the closed vocabulary in config/customerNotifications.ts,
+      // so an undefined category cannot be recorded by any path.
+      customer_notifications_category_check: check(
+        "customer_notifications_category_check",
+        sql`${table.category} IN ('claim_status', 'payment_status', 'document_verification', 'lost_report', 'found_item_report', 'account_security', 'terms_service')`
+      ),
+    };
+  }
+);
+
+/**
+ * Per-category, per-channel opt-out (requirement 7).
+ *
+ * One row per (customer, category, channel). ABSENT ROW = that channel is
+ * enabled, which is the safe default: a customer who has never touched
+ * preferences must receive everything, and an essential notification can never
+ * be lost because a row failed to insert.
+ *
+ * An explicit DISABLED row is only ever written for an OPTIONAL category. The
+ * service refuses to create one for an essential category, and a unique index
+ * makes a disabled row unique per customer+category+channel so a concurrent
+ * double-submit cannot produce contradictory state.
+ */
+export const customer_notification_prefs = pgTable(
+  "customer_notification_prefs",
+  {
+    id: varchar("id", { length: 50 }).primaryKey(),
+    customer_id: varchar("customer_id", { length: 50 })
+      .notNull()
+      .references(() => customers.id, { onDelete: "cascade" }),
+    category: varchar("category", { length: 40 }).notNull(),
+    channel: varchar("channel", { length: 20 }).notNull(),
+    // The only stored preference is the opt-out. false means enabled.
+    disabled: boolean("disabled").default(false).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => {
+    return {
+      uq_customer_notification_pref: uniqueIndex("uq_customer_notification_pref").on(
+        table.customer_id,
+        table.category,
+        table.channel
+      ),
+      // Only channels that actually exist. None is offered that the system
+      // cannot deliver on.
+      customer_notification_prefs_channel_check: check(
+        "customer_notification_prefs_channel_check",
+        sql`${table.channel} IN ('sms', 'email', 'in_app')`
+      ),
+      customer_notification_prefs_category_check: check(
+        "customer_notification_prefs_category_check",
+        sql`${table.category} IN ('claim_status', 'payment_status', 'document_verification', 'lost_report', 'found_item_report', 'account_security', 'terms_service')`
+      ),
+    };
+  }
+);
+
+/**
+ * Append-only audit of preference changes (requirements 7 and 8).
+ *
+ * A separate table rather than a column on the pref row, because a pref row is
+ * UPDATED in place: overwriting it would erase what the customer had chosen
+ * before, which is exactly the history an audit must keep. Every change inserts
+ * a row here; none is ever updated or deleted.
+ */
+export const customer_notification_pref_audit = pgTable(
+  "customer_notification_pref_audit",
+  {
+    id: varchar("id", { length: 50 }).primaryKey(),
+    customer_id: varchar("customer_id", { length: 50 })
+      .notNull()
+      .references(() => customers.id, { onDelete: "cascade" }),
+    category: varchar("category", { length: 40 }).notNull(),
+    channel: varchar("channel", { length: 20 }).notNull(),
+    // The value AFTER the change, plus what it was, so the delta is explicit.
+    previous_disabled: boolean("previous_disabled"),
+    new_disabled: boolean("new_disabled").notNull(),
+    // False when the request asked for something not permitted (e.g. disabling an
+    // essential channel) and was refused. Recording refusals is what makes the
+    // audit meaningful — a silent ignore is indistinguishable from a no-op.
+    applied: boolean("applied").default(true).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => {
+    return {
+      idx_customer_notification_pref_audit: index("idx_customer_notification_pref_audit").on(
+        table.customer_id,
+        table.created_at
+      ),
+    };
+  }
+);
+// N6. SMS RATE-LIMIT BUCKETS (durable, true rolling window).
+//
+// WHY A TABLE RATHER THAN express-rate-limit'S DEFAULT STORE
+//   Every limiter in server.ts uses the library's default MemoryStore, which is
+//   a process-local Map. That is fine for generic abuse throttling, but it is
+//   NOT a production guarantee for SMS: a restart empties it, and N instances
+//   behind a load balancer each hold a private counter, so the effective limit
+//   is 3 x N and a rolling restart buys an attacker a fresh budget. N6 requires
+//   a limit that survives both, so the counter has to be durable and shared.
+//
+// WHY THREE TIMESTAMP COLUMNS RATHER THAN A COUNTER
+//   The requirement is a TRUE ROLLING window — "at most 3 in any 10 minutes" —
+//   not a fixed bucket that resets on a clock boundary. A single `count` reset
+//   when `window_start + 10min` passes is a tumbling window: a caller can send 3
+//   at 10:00:01 and 3 more at 10:10:01, i.e. 6 in two seconds. Storing each
+//   hit's own timestamp makes the window genuinely rolling, because a slot frees
+//   the instant its own timestamp ages out, independently of any other hit.
+//
+// WHY THE ADMISSION IS A GUARDED UPDATE AND NOT CHECK-THEN-INSERT
+//   `SELECT count() ... if (count < 3) INSERT` is a textbook race: N concurrent
+//   requests all read 2 and all insert. The admission decision here is made by
+//   ONE statement — an UPDATE whose WHERE clause names the free/stale slot and
+//   whose RETURNING tells the caller whether it won. The database, not the
+//   application, resolves the race, which is the only property that holds across
+//   multiple application instances.
+//
+// bucket_key is a keyed HASH of the identity, never the raw IP, user id or phone
+// number (see buildSmsRateLimitBucketKey). A row therefore supports abuse
+// investigation without turning the table into a log of who visited from where.
+export const sms_rate_limit_buckets = pgTable("sms_rate_limit_buckets", {
+  bucket_key: varchar("bucket_key", { length: 64 }).primaryKey(),
+  slot_1_at: timestamp("slot_1_at", { withTimezone: true }),
+  slot_2_at: timestamp("slot_2_at", { withTimezone: true }),
+  slot_3_at: timestamp("slot_3_at", { withTimezone: true }),
+  updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });
 
 // 9A. LOST-ITEM REPORTS (Phase 9A)
@@ -806,6 +1526,31 @@ export const lost_reports = pgTable("lost_reports", {
   document_number_hash: varchar("document_number_hash", { length: 64 }),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  // --- B12: LOST-REPORT WITHDRAWAL FOUNDATION --------------------------------
+  // Batch 0 adds the audit fields only. No workflow reads them yet.
+  //
+  // WHY THESE EXIST: locked decision B12 requires that a lost-item report can be
+  // CLOSED/WITHDRAWN by its owner, that the operation be reversible in the
+  // sense that the record SURVIVES (B12 "preserve history"), and that it leave
+  // an audit trail. `status` already carries the business lifecycle, and the
+  // existing `updated_at` already records that something changed — neither can
+  // record WHO withdrew it, WHEN they were allowed to, or WHY.
+  //
+  // `withdrawn_at` / `withdrawn_by` are deliberately timestamp-and-actor, NOT a
+  // broad `deleted` boolean:
+  //   - a boolean would lose the when and the who, which is the whole point;
+  //   - it would also imply the row can be erased, and B12 forbids that. The
+  //     report stays; it stops being a live report.
+  //
+  // `withdrawal_reason` is free text because B12 asks for a "simple reason" and
+  // specifying an enum here would pre-empt the workflow that consumes it.
+  //
+  // NULL on every historical row, which is correct: those reports were never
+  // withdrawn, they simply pre-date the capability. Existing rows are untouched
+  // and remain fully readable and matchable.
+  withdrawn_at: timestamp("withdrawn_at", { withTimezone: true }),
+  withdrawn_by: varchar("withdrawn_by", { length: 100 }),
+  withdrawal_reason: text("withdrawal_reason"),
 }, (table) => {
   return {
     // Every owner-scoped read (the only read path that exists) filters on this.

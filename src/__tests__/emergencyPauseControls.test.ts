@@ -15,11 +15,50 @@ import path from 'path';
 
 const serverTs = fs.readFileSync(path.resolve(__dirname, '../server.ts'), 'utf8');
 
+// P2-A3.2: the eight claim payment/status handlers were moved VERBATIM into
+// routes/claimPayments.ts so an HTTP integration test can mount them without
+// importing server.ts (which boots its listener at import time). Anchored
+// lookups below therefore resolve against whichever file owns the anchor.
+// Assertions are unchanged — only the file the route body is read from moved.
+const CLAIM_PAYMENTS_TS = fs.readFileSync(path.resolve(__dirname, '../routes/claimPayments.ts'), 'utf8');
+// Resolves an anchor from whichever file now owns it.
+function sourceFor(marker: string): string {
+  if (serverTs.includes(marker)) return serverTs;
+  if (CLAIM_PAYMENTS_TS.includes(marker)) return CLAIM_PAYMENTS_TS;
+  return serverTs;
+}
+
+// P2-A1: POST /api/items/report and POST /api/items/analyze were extracted
+// VERBATIM from server.ts into routes/finderReport.ts so they can be mounted for
+// real HTTP integration testing. This resolver returns whichever file now OWNS
+// a given route marker, so every assertion below keeps testing the same route
+// body it always tested — only the file it is read from moved. No route body,
+// ordering guarantee or validation is asserted differently.
+const FINDER_REPORT_TS = fs.readFileSync(path.resolve(__dirname, '../routes/finderReport.ts'), 'utf8');
+// P2-A3.1: POST /api/claims/submit was likewise extracted VERBATIM into
+// routes/claims.ts. Same resolver, one more owner file — the pause gate it
+// asserts on is unchanged.
+const CLAIMS_ROUTE_TS = fs.readFileSync(path.resolve(__dirname, '../routes/claims.ts'), 'utf8');
+// P2-A3.4A/4B: all six Agent lifecycle routes now live in routes/agentOps.ts.
+const AGENT_OPS_TS = fs.readFileSync(path.resolve(__dirname, '../routes/agentOps.ts'), 'utf8');
+function routeSourceFor(marker: string): string {
+  if (serverTs.includes(marker)) return serverTs;
+  if (FINDER_REPORT_TS.includes(marker)) return FINDER_REPORT_TS;
+  if (CLAIMS_ROUTE_TS.includes(marker)) return CLAIMS_ROUTE_TS;
+  // P2-A3.2: the claim payment/status handlers moved to routes/claimPayments.ts.
+  if (CLAIM_PAYMENTS_TS.includes(marker)) return CLAIM_PAYMENTS_TS;
+  // P2-A3.4A/4B: all six Agent lifecycle routes moved to routes/agentOps.ts.
+  if (AGENT_OPS_TS.includes(marker)) return AGENT_OPS_TS;
+  throw new Error(`route marker not found in server.ts, routes/finderReport.ts, routes/claims.ts, routes/claimPayments.ts or routes/agentOps.ts: ${marker}`);
+}
+
 function routeBody(method: 'get' | 'post', route: string): string {
   const marker = `app.${method}('${route}'`;
-  const start = serverTs.indexOf(marker);
-  expect(start, `route ${method.toUpperCase()} ${route} not found in server.ts`).toBeGreaterThan(-1);
-  return serverTs.slice(start, start + 2500);
+  // P2-A1 / P2-A3.1: resolve from whichever file now owns the route.
+  const src = routeSourceFor(marker);
+  const start = src.indexOf(marker);
+  expect(start, `route ${method.toUpperCase()} ${route} not found in any route module`).toBeGreaterThan(-1);
+  return src.slice(start, start + 2500);
 }
 
 function functionBody(name: string, windowSize: number = 2500): string {

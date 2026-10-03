@@ -14,7 +14,7 @@ export default function TermsView({ lang, setView }: TermsViewProps) {
           {lang === 'en' ? 'Terms of Service' : 'Vigezo na Masharti'}
         </h1>
         <p className="text-stone-500 text-sm mt-2 font-mono">
-          {lang === 'en' ? 'Last Updated: July 2026' : 'Imesasishwa Mwisho: Julai 2026'} | Return4me (Jamoko Solutions Ltd)
+          {lang === 'en' ? 'Last Updated: July 2026' : 'Imesasishwa Mwisho: Julai 2026'} | Return4me (Elligrace Technologies Limited)
         </p>
       </div>
 
@@ -95,13 +95,13 @@ export default function TermsView({ lang, setView }: TermsViewProps) {
             <span className="text-accent-orange">3.</span> Nature of the Platform
           </h2>
           <p>
-            Return4me is a technology marketplace and coordination service operated by <strong>Jamoko Solutions Ltd</strong> (trading as "Return4me"), a private limited company incorporated under the Companies Act, 2015, operating in Kenya. The Platform connects individual finders who drop off found documents with independent physical agents, who store these items, and owners seeking their return.
+            Return4me is a technology marketplace and coordination service operated by <strong>Elligrace Technologies Limited</strong> (trading as "Return4me"), a private limited company incorporated under the Companies Act, 2015, operating in Kenya. The Platform connects individual finders who drop off found documents with independent physical agents, who store these items, and owners seeking their return.
           </p>
           <p>
-            <strong>Independent Contractor Status:</strong> Return4me Agents operate as independent business entities, not as employees or legal representatives of Jamoko Solutions Ltd. The physical storage and handover of found items occur directly between the physical Agent and the Owner. Jamoko Solutions Ltd's role is strictly limited to matchmaking coordination, verification tools, and escrow facilitation.
+            <strong>Independent Contractor Status:</strong> Return4me Agents operate as independent business entities, not as employees or legal representatives of Elligrace Technologies Limited. The physical storage and handover of found items occur directly between the physical Agent and the Owner. Elligrace Technologies Limited's role is strictly limited to matchmaking coordination, verification tools, and escrow facilitation.
           </p>
           <p>
-            <strong>Fraudulent Handover & Agent Collusion:</strong> Agents are required to photograph every claimant alongside the item at the point of handover, and to compare the claimant's in-person account against the ownership details submitted at the time of claim, before releasing any item or triggering any payout. An Agent who knowingly hands an item to someone they know or reasonably suspect is not its rightful Owner — including through collusion with a claimant — is in material breach of these Terms and their Agent Agreement. Jamoko Solutions Ltd is not liable for losses arising from an Agent's fraudulent or negligent handover; responsibility for such conduct rests with the Agent individually. Confirmed fraud or collusion will result in immediate and permanent suspension of the Agent's account, forfeiture of any commission tied to the fraudulent transaction, and referral to the Directorate of Criminal Investigations (DCI) for prosecution under the Penal Code (Cap 63) and, where applicable, the Computer Misuse and Cybercrimes Act, 2018. Owners and finders who suspect an Agent of fraudulent conduct should report it immediately via the dispute process in Section 8.
+            <strong>Fraudulent Handover & Agent Collusion:</strong> Agents are required to photograph every claimant alongside the item at the point of handover, and to compare the claimant's in-person account against the ownership details submitted at the time of claim, before releasing any item or triggering any payout. An Agent who knowingly hands an item to someone they know or reasonably suspect is not its rightful Owner — including through collusion with a claimant — is in material breach of these Terms and their Agent Agreement. Elligrace Technologies Limited is not liable for losses arising from an Agent's fraudulent or negligent handover; responsibility for such conduct rests with the Agent individually. Confirmed fraud or collusion will result in immediate and permanent suspension of the Agent's account, forfeiture of any commission tied to the fraudulent transaction, and referral to the Directorate of Criminal Investigations (DCI) for prosecution under the Penal Code (Cap 63) and, where applicable, the Computer Misuse and Cybercrimes Act, 2018. Owners and finders who suspect an Agent of fraudulent conduct should report it immediately via the dispute process in Section 8.
           </p>
         </section>
 
@@ -121,7 +121,7 @@ export default function TermsView({ lang, setView }: TermsViewProps) {
             <span className="text-accent-orange">5.</span> Escrow System and Fund Disbursements
           </h2>
           <p>
-            To ensure complete transaction security, all retrieval fees paid by owners are processed by our licensed, CBK-authorized Payment Service Provider (PSP) partner. Jamoko Solutions Ltd does not operate as a financial institution or deposit-taking wallet.
+            To ensure complete transaction security, all retrieval fees paid by owners are processed by our licensed, CBK-authorized Payment Service Provider (PSP) partner. Elligrace Technologies Limited does not operate as a financial institution or deposit-taking wallet.
           </p>
           <p>
             <strong>Release Conditions:</strong> Escrowed funds are held securely in a trust account until:
@@ -142,10 +142,10 @@ export default function TermsView({ lang, setView }: TermsViewProps) {
             <span className="text-accent-orange">6.</span> Limitation of Liability
           </h2>
           <p>
-            While Jamoko Solutions Ltd makes every effort to coordinate secure handovers and vet active physical agents, the physical custody of items remains with independent agents at all times.
+            While Elligrace Technologies Limited makes every effort to coordinate secure handovers and vet active physical agents, the physical custody of items remains with independent agents at all times.
           </p>
           <p>
-            <strong>Statutory Liability Caps:</strong> To the maximum extent permitted under Kenyan law (including the Consumer Protection Act, 2012), Jamoko Solutions Ltd's maximum aggregate liability for any loss, damage, or destruction of an item while in agent custody, or for any claim resulting from a matched handover, is strictly limited to the amount of the retrieval fee paid for that specific item. This limitation does not apply to losses caused by Jamoko Solutions Ltd’s gross negligence or intentional misconduct.
+            <strong>Statutory Liability Caps:</strong> To the maximum extent permitted under Kenyan law (including the Consumer Protection Act, 2012), Elligrace Technologies Limited's maximum aggregate liability for any loss, damage, or destruction of an item while in agent custody, or for any claim resulting from a matched handover, is strictly limited to the amount of the retrieval fee paid for that specific item. This limitation does not apply to losses caused by Elligrace Technologies Limited’s gross negligence or intentional misconduct.
           </p>
         </section>
 
@@ -173,7 +173,7 @@ export default function TermsView({ lang, setView }: TermsViewProps) {
             <span className="text-accent-orange">8.</span> Ownership Disputes
           </h2>
           <p>
-            If multiple parties submit competing claims for the same found document, the matched transaction is immediately frozen and flagged as a "Disputed Match".competing claimants must upload government ID proofs for verification. An administrator will review both files and make a binding platform determination. This decision governs Platform actions only and does not waive or limit either party's rights to seek legal recourse in Kenyan courts.
+            If multiple parties submit competing claims for the same found document, the matched transaction is immediately frozen and flagged as a "Disputed Match". Competing claimants must upload government ID proofs for verification. An administrator will review both files and make a binding platform determination. This decision governs Platform actions only and does not waive or limit either party's rights to seek legal recourse in Kenyan courts.
           </p>
         </section>
 
@@ -251,13 +251,13 @@ export default function TermsView({ lang, setView }: TermsViewProps) {
               English
             </p>
             <p>
-              To ensure absolute transaction security and eliminate wrong matching errors, claimants must physically travel to the assigned Agent station and verify the physical document <strong>prior</strong> to authorizing payment. Payment via M-Pesa is only enabled <strong>after</strong> the physical Agent visually confirms the owner has checked and verified the item.
+              To ensure absolute transaction security and eliminate wrong matching errors, the assigned Agent first confirms that the item is physically present at their station. That confirmation opens a short payment window. The owner completes payment via M-Pesa, and payment is only treated as confirmed once the payment provider confirms it. Once confirmed, a pickup code is issued to the owner, who then visits the Agent station to view and verify the item in person. The Agent records the viewing and later confirms the handover, after which settlement follows the applicable dispute window.
             </p>
             <p>
               <strong>15-Minute Payment Lockout:</strong> Upon physical Agent verification, a secure 15-minute countdown window is triggered. The owner must complete the escrow payment within this 15-minute window. If payment is not received within this time limit, the lock is automatically released, the claim is expired, and the item is returned to the public search database so other competing claimants are not blocked.
             </p>
             <p>
-              <strong>Payment Strikes Policy:</strong> If a claimant triggers an agent verification but fails to make payment within the 15-minute window, a "Payment Strike" is recorded against their phone number. Receiving three (3) active payment strikes will result in an automatic, platform-wide lockout, preventing the user from submitting any further claims until cleared by an Administrator.
+              <strong>Payment Strikes Policy:</strong> If a claimant triggers an agent verification but fails to make payment within the 15-minute window, a "Payment Strike" is recorded against their phone number. Receiving three (3) active payment strikes will result in an automatic restriction on that phone number, preventing the holder from submitting any further claims until the strikes are cleared by an Administrator.
             </p>
           </div>
           <div className="space-y-2 border-t border-stone-100 pt-3">

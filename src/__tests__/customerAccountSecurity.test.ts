@@ -6,6 +6,13 @@ import path from 'path';
 // static-source style as paymentSessionSecurity.test.ts. The runtime DB
 // mechanics are covered by src/db/__tests__/customerAccount.test.ts; this file
 // pins the HTTP-layer guarantees that need the real express route bodies.
+
+// P2-A3.2: the eight claim payment/status handlers moved verbatim into
+// routes/claimPayments.ts (so an HTTP integration test can mount them without
+// importing server.ts, which boots its listener at import time). Route lookups
+// below search the new owner FIRST and fall back to server.ts, so an assertion
+// still fails if a handler disappeared from BOTH. No assertion weakened.
+const CLAIM_PAYMENTS_TS = fs.readFileSync(path.resolve(__dirname, '../routes/claimPayments.ts'), 'utf8');
 const serverTs = fs.readFileSync(path.resolve(__dirname, '../server.ts'), 'utf8');
 // Phase 2 moved the cookie handling and the requireCustomerAuth middleware out
 // of server.ts into services/customerAuth.ts (so the customer claim routes and
@@ -13,18 +20,35 @@ const serverTs = fs.readFileSync(path.resolve(__dirname, '../server.ts'), 'utf8'
 // server.ts, which boots the app at import time). These assertions are
 // unchanged — they just read the file the code now lives in.
 const customerAuthTs = fs.readFileSync(path.resolve(__dirname, '../services/customerAuth.ts'), 'utf8');
+// P2-A1: POST /api/items/report was extracted VERBATIM from server.ts into
+// routes/finderReport.ts so it can be mounted for real HTTP integration testing.
+// routeBody resolves a marker from whichever file now owns it, so every
+// assertion keeps testing the same route body it always tested — only the file
+// the body is read from moved. No behavioural assertion is weakened.
+const finderReportTs = fs.readFileSync(path.resolve(__dirname, '../routes/finderReport.ts'), 'utf8');
+function sourceFor(marker: string): string {
+  if (serverTs.includes(marker)) return serverTs;
+  if (finderReportTs.includes(marker)) return finderReportTs;
+  throw new Error(`marker not found in server.ts or routes/finderReport.ts: ${marker}`);
+}
 
 function routeBody(marker: string, len = 4000): string {
-  const idx = serverTs.indexOf(marker);
+  // P2-A3.2: sourceFor now also resolves routes in routes/claimPayments.ts.
+  const src = sourceFor(marker);
+  const idx = src.indexOf(marker);
   expect(idx, `marker not found: ${marker}`).toBeGreaterThan(-1);
-  const after = serverTs.slice(idx);
+  const after = src.slice(idx);
   const nextRoute = after.indexOf('\n  app.', 10);
   const end = nextRoute > -1 ? idx + nextRoute : idx + len;
-  return serverTs.slice(idx, end);
+  return src.slice(idx, end);
 }
 
 const register = routeBody("app.post('/api/customer/register'");
-const registerVerify = routeBody("app.post('/api/customer/register/verify'");
+// N3: the SMS-based /api/customer/register/verify was replaced by the email
+// activation endpoint. The marker below follows that move; every assertion
+// below it still protects the same property (rate limiting, ownership, CAS
+// single use, hash-only storage, timing-safe compare).
+const registerVerify = routeBody("app.post('/api/customer/activate'");
 const login = routeBody("app.post('/api/customer/login'");
 const loginVerify = routeBody("app.post('/api/customer/login/verify'");
 const logout = routeBody("app.post('/api/customer/logout'");
@@ -35,18 +59,21 @@ const middleware = customerAuthTs.slice(
 );
 
 describe('customer account: API surface', () => {
-  it('exposes register, register/verify, login, login/verify, logout and me', () => {
+  it('exposes register, activate, login, login/verify, logout and me', () => {
     expect(serverTs).toContain("app.post('/api/customer/register',");
-    expect(serverTs).toContain("app.post('/api/customer/register/verify',");
+    // N3: /register/verify (SMS) is replaced by /activate (email token).
+    expect(serverTs).toContain("app.post('/api/customer/activate',");
+    expect(serverTs).not.toContain("app.post('/api/customer/register/verify',");
     expect(serverTs).toContain("app.post('/api/customer/login',");
     expect(serverTs).toContain("app.post('/api/customer/login/verify',");
     expect(serverTs).toContain("app.post('/api/customer/logout',");
     expect(serverTs).toContain("app.get('/api/customer/me',");
   });
 
-  it('rate-limits every customer auth route (unauthenticated SMS senders)', () => {
+  it('rate-limits every customer auth route', () => {
     expect(register).toMatch(/customerAuthLimiter/);
     expect(registerVerify).toMatch(/otpVerifyLimiter/);
+    expect(registerVerify).toMatch(/customerAuthLimiter/);
     expect(login).toMatch(/customerAuthLimiter/);
     expect(loginVerify).toMatch(/otpVerifyLimiter/);
   });
@@ -68,53 +95,54 @@ describe('customer registration: validation and hashing', () => {
     expect(register).toMatch(/\/\^\\\+254\\d\{9\}\$\/\.test\(phone\)/);
   });
 
-  it('never stores the plaintext OTP — only hashCode(code)', () => {
-    expect(register).toMatch(/hashCode\(code\)/);
-    expect(register).toContain("'registration'");
-    expect(register).not.toMatch(/code_hash:\s*code\b/);
+  it('never persists an activation token in plaintext — only hashCode(rawToken)', () => {
+    // N3: registration stopped storing an SMS OTP. The equivalent
+    // hash-only invariant now applies to the activation token.
+    expect(register).toMatch(/hashCode\(rawToken\)/);
+    expect(register).toContain("'email_activation'");
+    expect(register).not.toMatch(/token_hash:\s*rawToken\b/);
   });
 
-  it('returns a generic message that does not reveal whether the phone exists', () => {
-    expect(register).toMatch(/Kama nambari hii inaweza kutumika/);
+  it('returns a generic success that does not reveal whether the phone or email exists', () => {
+    expect(register).toMatch(/Akaunti imeundwa/);
     expect(register).not.toMatch(/already registered/i);
   });
 
-  it('applies a resend throttle before sending a new SMS', () => {
+  it('applies the resend throttle before issuing a new activation token', () => {
     expect(register).toMatch(/customerOtpLastSent/);
     expect(register).toMatch(/CUSTOMER_OTP_RESEND_MS/);
   });
 });
 
-describe('customer registration verify: one-time, purpose-bound, replay-safe', () => {
-  it('reads the challenge for the registration purpose only', () => {
-    expect(registerVerify).toMatch(/getActiveCustomerOtp\(phone, 'registration'\)/);
+describe('customer activation: one-time, purpose-bound, replay-safe', () => {
+  it('reads the token by hash for the email_activation purpose and customer type only', () => {
+    expect(registerVerify).toMatch(/getAccountActivationTokenByHash\(hashCode\(rawToken\)\)/);
+    expect(registerVerify).toMatch(/account_type !== 'customer'/);
+    expect(registerVerify).toMatch(/purpose !== 'email_activation'/);
   });
 
-  it('fails an expired code and burns it', () => {
+  it('refuses an expired token and refuses an already-consumed one', () => {
     expect(registerVerify).toMatch(/expires_at/);
-    expect(registerVerify).toMatch(/consumeCustomerOtp\(otp\.id\)/);
+    expect(registerVerify).toMatch(/consumed_at/);
+    expect(registerVerify).toMatch(/consumeAccountActivationToken\(token\.id\)/);
   });
 
-  it('bounded by the attempt ceiling', () => {
-    expect(registerVerify).toMatch(/CUSTOMER_OTP_MAX_ATTEMPTS/);
-    expect(registerVerify).toMatch(/incrementCustomerOtpAttempts/);
-  });
-
-  it('verifies the code with a timing-safe hash comparison', () => {
-    expect(registerVerify).toMatch(/timingSafeEqualHex\(otp\.code_hash, hashCode\(code\)\)/);
-  });
-
-  it('consumes the challenge before creating the account (one-time use)', () => {
-    const consumeIdx = registerVerify.indexOf('consumeCustomerOtp');
-    const createIdx = registerVerify.indexOf('createCustomer(');
+  it('consumes the token atomically before activating and before any session', () => {
+    const consumeIdx = registerVerify.indexOf('consumeAccountActivationToken');
+    const activateIdx = registerVerify.indexOf('activateCustomerAccount');
+    const sessionIdx = registerVerify.indexOf('createCustomerSession');
     expect(consumeIdx).toBeGreaterThan(-1);
-    expect(createIdx).toBeGreaterThan(-1);
-    expect(consumeIdx).toBeLessThan(createIdx);
+    expect(activateIdx).toBeGreaterThan(consumeIdx);
+    expect(sessionIdx).toBeGreaterThan(activateIdx);
   });
 
-  it('does not accept a client-supplied customer id or status', () => {
-    expect(registerVerify).not.toMatch(/req\.body\.(customerId|id|status)/);
-    expect(registerVerify).toMatch(/generateSecureId\('CUS'\)/);
+  it('returns ONE generic failure for every unusable-token reason (no token oracle)', () => {
+    const generic = (registerVerify.match(/json\(GENERIC\)/g) || []).length;
+    expect(generic).toBeGreaterThanOrEqual(5);
+  });
+
+  it('does not accept a client-supplied customer id, status or token hash', () => {
+    expect(registerVerify).not.toMatch(/req\.body\.(customerId|id|status|token_hash|accountId)/);
   });
 });
 
@@ -182,6 +210,7 @@ describe('customer sessions: server-side, hash-only, revocable', () => {
 describe('customer responses: no internal fields exposed', () => {
   it('/me returns only the safe whitelisted customer shape', () => {
     expect(me).toMatch(/toSafeCustomer\(req\.customer\)/);
+    // P2-A3.2: toSafeCustomer stayed in server.ts (customer auth was not extracted).
     const safe = serverTs.slice(
       serverTs.indexOf('function toSafeCustomer'),
       serverTs.indexOf('// 6-digit, crypto-random OTP')
@@ -204,10 +233,17 @@ describe('customer foundation: regression boundaries', () => {
     // (requireCustomerAuth) before the limiter, because Track My Claim is now
     // an authenticated journey. The route itself, its phone match and its
     // discrete rate limit are all unchanged.
-    expect(serverTs).toContain("app.post('/api/claims/lookup', requireCustomerAuth, claimGuessLimiter,");
-    expect(serverTs).toContain("app.post('/api/claims/:id/request-otp',");
-    expect(serverTs).toContain("app.post('/api/claims/:id/verify-otp', otpVerifyLimiter,");
-    expect(serverTs).toContain("app.get('/api/claims/:id/status',");
+    expect(CLAIM_PAYMENTS_TS).toContain("app.post('/api/claims/lookup', requireCustomerAuth, claimGuessLimiter,");
+    // P2-A3.1: the two claim OTP routes were extracted VERBATIM into
+    // routes/claims.ts. Their limiter wiring is asserted against whichever file
+    // owns them — the guarantee (request-otp is triple-limited, verify-otp uses
+    // otpVerifyLimiter) is unchanged.
+    const claimsSrc = serverTs.includes("app.post('/api/claims/:id/request-otp',")
+      ? serverTs
+      : fs.readFileSync(path.resolve(__dirname, '../routes/claims.ts'), 'utf8');
+    expect(claimsSrc).toContain("app.post('/api/claims/:id/request-otp',");
+    expect(claimsSrc).toContain("app.post('/api/claims/:id/verify-otp', otpVerifyLimiter,");
+    expect(CLAIM_PAYMENTS_TS).toContain("app.get('/api/claims/:id/status',");
   });
 
   it('does not gate the accountless Finder report route behind customer auth', () => {
@@ -216,14 +252,16 @@ describe('customer foundation: regression boundaries', () => {
   });
 
   it('leaves the committed payment-session routes intact', () => {
-    expect(serverTs).toMatch(/app\.post\('\/api\/claims\/:id\/payment-session',\s*claimGuessLimiter,/);
-    expect(serverTs).toMatch(/resolveAuthoritativePaymentFee\(item, category\)/);
+    expect(CLAIM_PAYMENTS_TS).toMatch(/app\.post\('\/api\/claims\/:id\/payment-session',\s*claimGuessLimiter,/);
+    expect(CLAIM_PAYMENTS_TS).toMatch(/resolveAuthoritativePaymentFee\(item, category\)/);
   });
 
   it('never logs a raw OTP or session token', () => {
+    // P2-A3.2: the customer-auth section stayed in server.ts.
+    // CUSTOMER ACCOUNT AUTHENTICATION block only — a slice of the whole file would
     const section = serverTs.slice(
       serverTs.indexOf('CUSTOMER ACCOUNT AUTHENTICATION'),
-      serverTs.indexOf("// --- API ROUTES ---")
+      serverTs.indexOf('// --- API ROUTES ---')
     );
     expect(section).not.toMatch(/console\.log\([^)]*rawToken/);
     expect(section).not.toMatch(/console\.log\([^)]*\bcode\b/);
@@ -239,6 +277,13 @@ describe('customer foundation: regression boundaries', () => {
       /CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_sessions_provider_invoice ON payment_sessions\(provider_invoice_id\) WHERE provider_invoice_id IS NOT NULL/
     );
     const schemaTs = fs.readFileSync(path.resolve(__dirname, '../db/schema.ts'), 'utf8');
+
+// P2-A3.2: the eight claim payment/status handlers moved verbatim into
+// routes/claimPayments.ts (so an HTTP integration test can mount them without
+// importing server.ts, which boots its listener at import time). Route lookups
+// below now search the new owner first and fall back to server.ts, so an
+// assertion still fails if the handler disappears from BOTH files. No assertion
+// was weakened or removed.
     expect(schemaTs).toMatch(/uq_payment_sessions_provider_invoice/);
   });
 });

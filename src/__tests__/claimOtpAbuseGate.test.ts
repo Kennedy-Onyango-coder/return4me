@@ -21,11 +21,19 @@ import path from 'path';
 // startServer()'s bootstrap.
 
 const serverTs = fs.readFileSync(path.resolve(__dirname, '../server.ts'), 'utf8');
+// P2-A3.1: POST /api/claims/:id/request-otp was extracted VERBATIM from
+// server.ts into routes/claims.ts so it can be mounted for real HTTP
+// integration testing. routeBody resolves the marker from whichever file owns
+// the route, so every assertion below keeps testing the same handler it always
+// tested — only the file the body is read from moved. No behavioural assertion
+// is weakened.
+const claimsRouteTs = fs.readFileSync(path.resolve(__dirname, '../routes/claims.ts'), 'utf8');
 
 function routeBody(method: 'get' | 'post', route: string): string {
   const marker = `app.${method}('${route}'`;
-  const start = serverTs.indexOf(marker);
-  expect(start, `route ${method.toUpperCase()} ${route} not found in server.ts`).toBeGreaterThan(-1);
+  const src = serverTs.includes(marker) ? serverTs : claimsRouteTs;
+  const start = src.indexOf(marker);
+  expect(start, `route ${method.toUpperCase()} ${route} not found in server.ts or routes/claims.ts`).toBeGreaterThan(-1);
   // PHASE 16.1 Batch 2A — widened from 2200 to 6000. The pinned CONTRACT below
   // is unchanged: the phone-match check still runs before the OTP is generated
   // and sent. This hand-written slice simply has to reach `crypto.randomInt(...)`
@@ -33,7 +41,7 @@ function routeBody(method: 'get' | 'post', route: string): string {
   // ownership branches ahead of it — which pushed that line past the old window
   // and made `indexOf` return -1. Nothing about the route's behaviour changed;
   // the window just has to be big enough to contain the whole handler.
-  return serverTs.slice(start, start + 6000);
+  return src.slice(start, start + 6000);
 }
 
 describe('claim OTP request route is rate-limited per claim ID, not just per IP', () => {
@@ -49,7 +57,10 @@ describe('claim OTP request route is rate-limited per claim ID, not just per IP'
   });
 
   it('POST /api/claims/:id/request-otp is mounted with otpGlobalLimiter, otpIpLimiter, AND otpClaimLimiter', () => {
-    expect(serverTs).toMatch(
+    // P2-A3.1: the route moved to routes/claims.ts; the triple-limiter contract
+    // is asserted against whichever file owns it.
+    const src = serverTs.includes("app.post('/api/claims/:id/request-otp'") ? serverTs : claimsRouteTs;
+    expect(src).toMatch(
       /app\.post\('\/api\/claims\/:id\/request-otp',\s*otpGlobalLimiter,\s*otpIpLimiter,\s*otpClaimLimiter,/
     );
   });

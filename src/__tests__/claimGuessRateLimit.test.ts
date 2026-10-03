@@ -26,19 +26,27 @@ import path from 'path';
 
 const serverTs = fs.readFileSync(path.resolve(__dirname, '../server.ts'), 'utf8');
 
+// P2-A3.2: the eight claim payment/status handlers moved verbatim into
+// routes/claimPayments.ts (so an HTTP integration test can mount them without
+// importing server.ts, which boots its listener at import time). Route lookups
+// below now search the new owner first and fall back to server.ts, so an
+// assertion still fails if the handler disappears from BOTH files. No assertion
+// was weakened or removed.
+const CLAIM_PAYMENTS_TS = fs.readFileSync(path.resolve(__dirname, '../routes/claimPayments.ts'), 'utf8');
+
 describe('claim-ID-guessable routes are rate limited beyond the general IP cap', () => {
   it('defines a dedicated limiter for claim-guessing routes', () => {
     expect(serverTs).toMatch(/const claimGuessLimiter = rateLimit\(/);
   });
 
   it('applies claimGuessLimiter to POST /api/claims/:id/pay', () => {
-    expect(serverTs).toMatch(/app\.post\('\/api\/claims\/:id\/pay',\s*claimGuessLimiter,/);
+    expect(CLAIM_PAYMENTS_TS).toMatch(/app\.post\('\/api\/claims\/:id\/pay',\s*claimGuessLimiter,/);
   });
 
   it('applies claimGuessLimiter to POST /api/claims/lookup, behind the Phase 16 auth boundary', () => {
     // PHASE 16: requireCustomerAuth was added as the FIRST middleware on this
     // route (Track My Claim is now an authenticated journey). The limit was
     // additive, not replaced — it is still applied to the same route.
-    expect(serverTs).toMatch(/app\.post\('\/api\/claims\/lookup',\s*requireCustomerAuth,\s*claimGuessLimiter,/);
+    expect(CLAIM_PAYMENTS_TS).toMatch(/app\.post\('\/api\/claims\/lookup',\s*requireCustomerAuth,\s*claimGuessLimiter,/);
   });
 });

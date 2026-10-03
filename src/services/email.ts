@@ -1,4 +1,5 @@
 import { Resend } from 'resend';
+import { getAdminNotificationEmail } from '../config/adminNotificationEmail.ts';
 
 let resendInstance: Resend | null = null;
 
@@ -20,64 +21,18 @@ function getResendClient(): Resend | null {
   }
 }
 
-export const EmailService = {
-  /**
-   * Send a general email
-   */
-  async send(to: string, subject: string, html: string): Promise<boolean> {
-    if (!to || to.trim() === '') {
-      return false;
-    }
 
-    const fromEmail = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
-    const client = getResendClient();
-
-    if (!client) {
-      // No Resend client (API key missing/placeholder). In development/sandbox
-      // this prints to a console outbox and returns true so dev flows work
-      // without a real provider. In production there is NO simulated delivery:
-      // pretending an email was sent when it was not would create false
-      // operational confidence (e.g. a "payment confirmed" or "handover" email
-      // the customer never received), so production FAILS CLOSED.
-      if (process.env.NODE_ENV === 'production') {
-        console.error('[EMAIL SERVICE] RESEND_API_KEY is not configured in production — refusing to claim the email was sent. No delivery happened.');
-        return false;
-      }
-      console.log(`\n=================== [SANDBOX EMAIL OUTBOX] ===================`);
-      console.log(`To: ${to}`);
-      console.log(`From: ${fromEmail}`);
-      console.log(`Subject: ${subject}`);
-      console.log(`--- Body ---`);
-      console.log(html);
-      console.log(`==============================================================\n`);
-      return true;
-    }
-
-    try {
-      const response = await client.emails.send({
-        from: fromEmail,
-        to: to,
-        subject: subject,
-        html: html,
-      });
-
-      if (response.error) {
-        console.error('[EMAIL SERVICE] Resend API error:', response.error);
-        return false;
-      }
-
-      console.log(`[EMAIL SERVICE] Email successfully sent to ${to} (ID: ${response.data?.id})`);
-      return true;
-    } catch (error) {
-      console.error('[EMAIL SERVICE] Failed to send email via Resend:', error);
-      return false;
-    }
-  },
-
-  /**
-   * Email sent to the owner once they pay and escrow is held
-   */
-  async sendPaymentReceivedEmail(
+/**
+ * N8 PURE subject/body builder, extracted verbatim from sendPaymentReceivedEmail().
+ *
+ * Sends nothing, reaches no provider and reads no configuration, so it is
+ * safe to call from NotificationService.render(), which evaluates it
+ * transiently at dispatch time and then discards the result. The body may
+ * contain sensitive values (a pickup code, a phone number) exactly as
+ * before; that is precisely why it must stay transient, because the durable
+ * notification row never stores it.
+ */
+export function renderSendPaymentReceivedEmail(
     to: string,
     ownerPhone: string,
     itemName: string,
@@ -85,7 +40,7 @@ export const EmailService = {
     agentPhone: string,
     itemReference: string,
     pickupCode: string
-  ): Promise<boolean> {
+): { subject: string; body: string } {
     const subject = 'Payment Confirmed / Malipo Imethibitishwa - Return4me';
     const html = `
       <div style="font-family: system-ui, -apple-system, sans-serif; background-color: #f8fafc; padding: 24px; color: #1e293b;">
@@ -186,19 +141,27 @@ export const EmailService = {
       </div>
     `;
 
-    return this.send(to, subject, html);
-  },
+  return { subject, body: html };
+}
 
-  /**
-   * Email sent to the owner when they physically collect the item and handover is completed
-   */
-  async sendItemHandedOverEmail(
+
+/**
+ * N8 PURE subject/body builder, extracted verbatim from sendItemHandedOverEmail().
+ *
+ * Sends nothing, reaches no provider and reads no configuration, so it is
+ * safe to call from NotificationService.render(), which evaluates it
+ * transiently at dispatch time and then discards the result. The body may
+ * contain sensitive values (a pickup code, a phone number) exactly as
+ * before; that is precisely why it must stay transient, because the durable
+ * notification row never stores it.
+ */
+export function renderSendItemHandedOverEmail(
     to: string,
     phone: string,
     itemName: string,
     dropoffCode: string,
     dateStr: string
-  ): Promise<boolean> {
+): { subject: string; body: string } {
     const subject = 'Item Handed Over Successfully / Bidhaa Imekabidhiwa - Return4me';
     const html = `
       <div style="font-family: system-ui, -apple-system, sans-serif; background-color: #f8fafc; padding: 24px; color: #1e293b;">
@@ -289,23 +252,25 @@ export const EmailService = {
       </div>
     `;
 
-    return this.send(to, subject, html);
-  },
+  return { subject, body: html };
+}
 
-  /**
-   * Alert sent to administrators when an auto-assignment fails and needs manual agent assignment
-   */
-  async sendAdminNewReassignmentRequestEmail(
+
+/**
+ * N8 PURE subject/body builder, extracted verbatim from sendAdminNewReassignmentRequestEmail().
+ *
+ * Sends nothing, reaches no provider and reads no configuration, so it is
+ * safe to call from NotificationService.render(), which evaluates it
+ * transiently at dispatch time and then discards the result. The body may
+ * contain sensitive values (a pickup code, a phone number) exactly as
+ * before; that is precisely why it must stay transient, because the durable
+ * notification row never stores it.
+ */
+export function renderSendAdminNewReassignmentRequestEmail(
     dropoffCode: string,
     locationDescription: string,
     finderPhone: string
-  ): Promise<boolean> {
-    const adminEmail = process.env.ADMIN_NOTIFICATION_EMAIL;
-    if (!adminEmail || adminEmail.trim() === '') {
-      console.log(`[EMAIL SERVICE] Admin notification email not set. Skipping admin alert email for item ${dropoffCode}.`);
-      return false;
-    }
-
+): { subject: string; body: string } {
     const subject = `[URGENT] Manual Agent Reassignment Needed - Dropoff Code ${dropoffCode}`;
     const html = `
       <div style="font-family: system-ui, -apple-system, sans-serif; background-color: #fef2f2; padding: 24px; color: #991b1b;">
@@ -360,19 +325,27 @@ export const EmailService = {
       </div>
     `;
 
-    return this.send(adminEmail, subject, html);
-  },
+  return { subject, body: html };
+}
 
-  /**
-   * Email sent to the agent once an owner pays and escrow is held, authorizing release
-   */
-  async sendAgentPaymentConfirmedEmail(
+
+/**
+ * N8 PURE subject/body builder, extracted verbatim from sendAgentPaymentConfirmedEmail().
+ *
+ * Sends nothing, reaches no provider and reads no configuration, so it is
+ * safe to call from NotificationService.render(), which evaluates it
+ * transiently at dispatch time and then discards the result. The body may
+ * contain sensitive values (a pickup code, a phone number) exactly as
+ * before; that is precisely why it must stay transient, because the durable
+ * notification row never stores it.
+ */
+export function renderSendAgentPaymentConfirmedEmail(
     to: string,
     agentBusinessName: string,
     itemName: string,
     dropoffCode: string,
     claimId: string
-  ): Promise<boolean> {
+): { subject: string; body: string } {
     const subject = 'Payment Confirmed / Release Authorized - Return4me';
     const html = `
       <div style="font-family: system-ui, -apple-system, sans-serif; background-color: #f8fafc; padding: 24px; color: #1e293b;">
@@ -457,17 +430,25 @@ export const EmailService = {
       </div>
     `;
 
-    return this.send(to, subject, html);
-  },
+  return { subject, body: html };
+}
 
-  /**
-   * Email sent to the finder once an item they reported has been returned to its owner
-   */
-  async sendFinderItemCollectedEmail(
+
+/**
+ * N8 PURE subject/body builder, extracted verbatim from sendFinderItemCollectedEmail().
+ *
+ * Sends nothing, reaches no provider and reads no configuration, so it is
+ * safe to call from NotificationService.render(), which evaluates it
+ * transiently at dispatch time and then discards the result. The body may
+ * contain sensitive values (a pickup code, a phone number) exactly as
+ * before; that is precisely why it must stay transient, because the durable
+ * notification row never stores it.
+ */
+export function renderSendFinderItemCollectedEmail(
     to: string,
     itemName: string,
     dropoffCode: string
-  ): Promise<boolean> {
+): { subject: string; body: string } {
     const subject = 'Your Found Item Has Been Returned / Bidhaa Uliyopata Imerejeshwa - Return4me';
     const html = `
       <div style="font-family: system-ui, -apple-system, sans-serif; background-color: #f8fafc; padding: 24px; color: #1e293b;">
@@ -558,25 +539,27 @@ export const EmailService = {
       </div>
     `;
 
-    return this.send(to, subject, html);
-  },
+  return { subject, body: html };
+}
 
-  /**
-   * Internal plain text transaction log sent to the admin email on success/handover triggers
-   */
-  async sendAdminTransactionLogEmail(
+
+/**
+ * N8 PURE subject/body builder, extracted verbatim from sendAdminTransactionLogEmail().
+ *
+ * Sends nothing, reaches no provider and reads no configuration, so it is
+ * safe to call from NotificationService.render(), which evaluates it
+ * transiently at dispatch time and then discards the result. The body may
+ * contain sensitive values (a pickup code, a phone number) exactly as
+ * before; that is precisely why it must stay transient, because the durable
+ * notification row never stores it.
+ */
+export function renderSendAdminTransactionLogEmail(
     event: 'PAYMENT_CONFIRMED' | 'HANDOVER_CONFIRMED' | 'HANDOVER_CONFIRMED_PENDING_SETTLEMENT',
     claimId: string,
     itemId: string,
     amount: number | string,
     agentName: string
-  ): Promise<boolean> {
-    const adminEmail = process.env.ADMIN_NOTIFICATION_EMAIL;
-    if (!adminEmail || adminEmail.trim() === '') {
-      console.log(`[EMAIL SERVICE] Admin notification email not set. Skipping transaction log email for event ${event}.`);
-      return false;
-    }
-
+): { subject: string; body: string } {
     const subject = `[ADMIN LOG] ${event} - Claim ${claimId}`;
     const html = `
       <div style="font-family: monospace; background-color: #f4f4f5; padding: 16px; color: #18181b;">
@@ -597,6 +580,214 @@ AGENT NAME:  ${agentName}
       </div>
     `;
 
-    return this.send(adminEmail, subject, html);
+  return { subject, body: html };
+}
+
+export const EmailService = {
+  /**
+   * Send a general email.
+   *
+   * RETAINED UNCHANGED as `Promise<boolean>` for backward compatibility: this is
+   * the public contract every existing caller and test depends on. N9 adds
+   * `sendWithId()` underneath it rather than widening this return type, because
+   * changing a boolean to an object would silently break every boolean consumer.
+   */
+  async send(to: string, subject: string, html: string): Promise<boolean> {
+    const result = await this.sendWithId(to, subject, html);
+    return result.accepted;
+  },
+
+  /**
+   * N9 — send and return the provider's message id.
+   *
+   * The Resend id was ALWAYS available here (`response.data?.id`) but was only
+   * logged and discarded, which left `notification_events.provider_message_id`
+   * permanently NULL for email. That matters because it is the only evidence
+   * that could later resolve an AMBIGUOUS outcome — a crash between dispatch and
+   * the durable `sent` update — via the Resend message-lookup API. Without the id
+   * an ambiguous send is permanently unknowable.
+   *
+   * Returns the SAME accept/refuse decision as `send()`; there is exactly one
+   * underlying Resend call, so the two cannot drift apart.
+   */
+  async sendWithId(
+    to: string,
+    subject: string,
+    html: string
+  ): Promise<{ accepted: boolean; providerMessageId: string | null; providerError: unknown }> {
+    if (!to || to.trim() === '') {
+      return { accepted: false, providerMessageId: null, providerError: null };
+    }
+
+    const fromEmail = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
+    const client = getResendClient();
+
+    if (!client) {
+      // No Resend client (API key missing/placeholder). In development/sandbox
+      // this prints to a console outbox and returns true so dev flows work
+      // without a real provider. In production there is NO simulated delivery:
+      // pretending an email was sent when it was not would create false
+      // operational confidence (e.g. a "payment confirmed" or "handover" email
+      // the customer never received), so production FAILS CLOSED.
+      if (process.env.NODE_ENV === 'production') {
+        console.error('[EMAIL SERVICE] RESEND_API_KEY is not configured in production — refusing to claim the email was sent. No delivery happened.');
+        return { accepted: false, providerMessageId: null, providerError: null };
+      }
+      console.log(`\n=================== [SANDBOX EMAIL OUTBOX] ===================`);
+      console.log(`To: ${to}`);
+      console.log(`From: ${fromEmail}`);
+      console.log(`Subject: ${subject}`);
+      console.log(`--- Body ---`);
+      console.log(html);
+      console.log(`==============================================================\n`);
+      return { accepted: true, providerMessageId: null, providerError: null };
+    }
+
+    try {
+      const response = await client.emails.send({
+        from: fromEmail,
+        to: to,
+        subject: subject,
+        html: html,
+      });
+
+      if (response.error) {
+        console.error('[EMAIL SERVICE] Resend API error:', response.error);
+        // The raw provider error is returned for CLASSIFICATION ONLY. It is
+        // never persisted and never logged verbatim by the caller.
+        return { accepted: false, providerMessageId: null, providerError: response.error };
+      }
+
+      console.log(`[EMAIL SERVICE] Email successfully sent to ${to} (ID: ${response.data?.id})`);
+      return {
+        accepted: true,
+        providerMessageId: response.data?.id ?? null,
+        providerError: null,
+      };
+    } catch (error) {
+      console.error('[EMAIL SERVICE] Failed to send email via Resend:', error);
+      // A thrown error is AMBIGUOUS: the request may or may not have been
+      // accepted before the connection broke. The classifier decides what that
+      // means; this layer only reports that it is unknown.
+      return { accepted: false, providerMessageId: null, providerError: error };
+    }
+  },
+
+  /**
+   * N8 COMPATIBILITY WRAPPER - transport only. Kept so any pre-existing
+   * caller keeps working unchanged. The migrated business callers use
+   * NotificationService instead and do not come through here. The
+   * subject/HTML live in exactly one place: the builder above.
+   */
+  async sendPaymentReceivedEmail(
+    to: string,
+    ownerPhone: string,
+    itemName: string,
+    agentBusinessName: string,
+    agentPhone: string,
+    itemReference: string,
+    pickupCode: string
+  ): Promise<boolean> {
+    const rendered = renderSendPaymentReceivedEmail(to, ownerPhone, itemName, agentBusinessName, agentPhone, itemReference, pickupCode);
+    return this.send(to, rendered.subject, rendered.body);
+  },
+
+  /**
+   * N8 COMPATIBILITY WRAPPER - transport only. Kept so any pre-existing
+   * caller keeps working unchanged. The migrated business callers use
+   * NotificationService instead and do not come through here. The
+   * subject/HTML live in exactly one place: the builder above.
+   */
+  async sendItemHandedOverEmail(
+    to: string,
+    phone: string,
+    itemName: string,
+    dropoffCode: string,
+    dateStr: string
+  ): Promise<boolean> {
+    const rendered = renderSendItemHandedOverEmail(to, phone, itemName, dropoffCode, dateStr);
+    return this.send(to, rendered.subject, rendered.body);
+  },
+
+  /**
+   * N8 COMPATIBILITY WRAPPER - transport only. Kept so any pre-existing
+   * caller keeps working unchanged. The migrated business callers use
+   * NotificationService instead and do not come through here. The
+   * subject/HTML live in exactly one place: the builder above.
+   */
+  async sendAdminNewReassignmentRequestEmail(
+    dropoffCode: string,
+    locationDescription: string,
+    finderPhone: string
+  ): Promise<boolean> {
+    const adminEmail = getAdminNotificationEmail();
+    if (!adminEmail || adminEmail.trim() === '') {
+      console.log(`[EMAIL SERVICE] Admin notification email not set. Skipping admin alert email for item ${dropoffCode}.`);
+      return false;
+    }
+
+    // N8: the admin address is now resolved by the CALLER (see
+    // services/adminNotification.ts). This guard is retained only so the
+    // legacy wrapper's own return contract is unchanged.
+    const rendered = renderSendAdminNewReassignmentRequestEmail(dropoffCode, locationDescription, finderPhone);
+    return this.send(adminEmail, rendered.subject, rendered.body);
+  },
+
+  /**
+   * N8 COMPATIBILITY WRAPPER - transport only. Kept so any pre-existing
+   * caller keeps working unchanged. The migrated business callers use
+   * NotificationService instead and do not come through here. The
+   * subject/HTML live in exactly one place: the builder above.
+   */
+  async sendAgentPaymentConfirmedEmail(
+    to: string,
+    agentBusinessName: string,
+    itemName: string,
+    dropoffCode: string,
+    claimId: string
+  ): Promise<boolean> {
+    const rendered = renderSendAgentPaymentConfirmedEmail(to, agentBusinessName, itemName, dropoffCode, claimId);
+    return this.send(to, rendered.subject, rendered.body);
+  },
+
+  /**
+   * N8 COMPATIBILITY WRAPPER - transport only. Kept so any pre-existing
+   * caller keeps working unchanged. The migrated business callers use
+   * NotificationService instead and do not come through here. The
+   * subject/HTML live in exactly one place: the builder above.
+   */
+  async sendFinderItemCollectedEmail(
+    to: string,
+    itemName: string,
+    dropoffCode: string
+  ): Promise<boolean> {
+    const rendered = renderSendFinderItemCollectedEmail(to, itemName, dropoffCode);
+    return this.send(to, rendered.subject, rendered.body);
+  },
+
+  /**
+   * N8 COMPATIBILITY WRAPPER - transport only. Kept so any pre-existing
+   * caller keeps working unchanged. The migrated business callers use
+   * NotificationService instead and do not come through here. The
+   * subject/HTML live in exactly one place: the builder above.
+   */
+  async sendAdminTransactionLogEmail(
+    event: 'PAYMENT_CONFIRMED' | 'HANDOVER_CONFIRMED' | 'HANDOVER_CONFIRMED_PENDING_SETTLEMENT',
+    claimId: string,
+    itemId: string,
+    amount: number | string,
+    agentName: string
+  ): Promise<boolean> {
+    const adminEmail = getAdminNotificationEmail();
+    if (!adminEmail || adminEmail.trim() === '') {
+      console.log(`[EMAIL SERVICE] Admin notification email not set. Skipping transaction log email for event ${event}.`);
+      return false;
+    }
+
+    // N8: the admin address is now resolved by the CALLER (see
+    // services/adminNotification.ts). This guard is retained only so the
+    // legacy wrapper's own return contract is unchanged.
+    const rendered = renderSendAdminTransactionLogEmail(event, claimId, itemId, amount, agentName);
+    return this.send(adminEmail, rendered.subject, rendered.body);
   },
 };

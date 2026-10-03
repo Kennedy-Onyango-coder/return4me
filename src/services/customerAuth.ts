@@ -12,6 +12,11 @@
 import crypto from 'crypto';
 import type { Request, Response, NextFunction } from 'express';
 import { db } from '../db/database.ts';
+// BATCH 2 (H10) — the single definition of the idle-session window and its
+// boundary comparison, plus the customer-facing wording used when it fires.
+// Imported here so the rule lives in exactly one place and cannot be restated, or
+// contradicted, by a route handler.
+import { CUSTOMER_ACCOUNT_STRINGS, isSessionIdle } from '../config/customerAccountPolicy.ts';
 import { hashCode, toE164Kenyan } from './auth.ts';
 
 export const CUSTOMER_SESSION_COOKIE = 'r4m_customer_session';
@@ -19,6 +24,48 @@ export const CUSTOMER_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 export const CUSTOMER_OTP_TTL_MS = 5 * 60 * 1000; // 5 minutes
 export const CUSTOMER_OTP_MAX_ATTEMPTS = 5;
 export const CUSTOMER_OTP_RESEND_MS = 30 * 1000; // 30s resend floor (SMS cost control)
+
+// N3 — EMAIL ACTIVATION GATE.
+// The activation link lives for a full day, unlike the 5-minute SMS code: the
+// user has to find the email, open it and click. The token is a 32-byte
+// CSPRNG value, so a 24h lifetime does not meaningfully widen the brute-force
+// surface.
+export const CUSTOMER_ACTIVATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+/**
+ * Builds the emailed activation URL.
+ *
+ * The raw token appears HERE and in the email body and nowhere else — never in
+ * a database row, an audit record, a log line or an API response. The frontend
+ * owns the route, so the public origin is configurable; the token is the only
+ * secret and it is single-use + 24h-expiring.
+ */
+export function buildCustomerActivationUrl(rawToken: string): string {
+  const base = (process.env.PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/+$/, '');
+  return `${base}/activate-email?token=${encodeURIComponent(rawToken)}`;
+}
+
+/**
+ * The activation email body. Bilingual like every other user-facing string in
+ * the product, and it states the validity window so a user who misses the
+ * 24h window knows to ask for a new link rather than to keep retrying.
+ */
+export function buildCustomerActivationEmailHtml(fullName: string, activationUrl: string): string {
+  const safeName = String(fullName || '').replace(/[<>&"]/g, '');
+  return `
+<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;line-height:1.6;color:#1f2937">
+  <h2 style="color:#003820;margin:0 0 16px">Activate your Return4me account</h2>
+  <p>Hi ${safeName},</p>
+  <p>Thanks for registering. Confirm your email address to activate your account and start using Return4me.</p>
+  <p style="margin:24px 0">
+    <a href="${activationUrl}" style="background:#003820;color:#ffffff;padding:12px 20px;border-radius:8px;text-decoration:none;display:inline-block">Activate my account</a>
+  </p>
+  <p style="font-size:13px;color:#6b7280">This link works once and expires in 24 hours. If it expires, request a new activation link from the sign-in page.</p>
+  <p style="font-size:13px;color:#6b7280">If you did not create a Return4me account, you can safely ignore this email.</p>
+  <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">
+  <p style="font-size:13px;color:#6b7280"><strong>Hai salamu ${safeName},</strong><br>Asante kwa kujiandikisha. Thibitisha barua pepe yako kuiambisha akaunti yako na kuanza kutumia Return4me.<br>Kiungo hiki kinafanya kazi mara moja tu na kin expires baada ya saa 24. Ukishapokea, omba kiungo kipya kutoka ukurasa wa kuingia.</p>
+</div>`.trim();
+}
 
 // Minimal cookie reader (no extra dependency) — used only for our own cookie.
 export function readCookie(req: Request, name: string): string | undefined {
@@ -32,6 +79,53 @@ export function readCookie(req: Request, name: string): string | undefined {
     }
   }
   return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// N4 — AGENT ACTIVATION LINK.
+//
+// Deliberately its own builder rather than a parameterised
+// buildCustomerActivationUrl(): an agent link and a customer link point at
+// different pages and mean different things (one proves a mailbox, the other
+// activates an account), so a shared "kind" argument would invite the wrong one
+// being used. What IS shared is the origin resolution and the percent-encoding,
+// so both read PUBLIC_APP_URL and both encode identically — one configuration
+// gap, not two.
+//
+// The token appears here and in the link and nowhere else: never persisted in
+// plaintext, never logged, never in a response body.
+// ---------------------------------------------------------------------------
+// N4 — agent email activation reuses the customer activation lifetime. One
+// number, not two: the token is an equally random 32-byte CSPRNG value, so there
+// is no security reason to differentiate, and a second constant would only
+// invite the two to drift apart.
+export const AGENT_ACTIVATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+export function buildAgentActivationUrl(rawToken: string): string {
+  const base = (process.env.PUBLIC_APP_URL || 'http://localhost:3000').replace(/\/+$/, '');
+  return `${base}/activate-agent-email?token=${encodeURIComponent(rawToken)}`;
+}
+
+/**
+ * The agent activation email body. Bilingual like every other user-facing
+ * string in the product, and it states the two facts an applicant most needs to
+ * be true: verifying the address is NOT the same as being approved (an admin
+ * still reviews the application), and the link works once and expires in 24h.
+ */
+export function buildAgentActivationEmailHtml(businessName: string, activationUrl: string): string {
+  const safeName = String(businessName || '').replace(/[<>&\"]/g, '');
+  return `
+<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;line-height:1.6;color:#1f2937">
+  <h2 style="color:#003820;margin:0 0 16px">Verify your Return4me agent email</h2>
+  <p>Hi ${safeName},</p>
+  <p>Thank you for registering as a Return4me agent. Please confirm this email address so we know your business can receive mail from us.</p>
+  <p style="margin:24px 0">
+    <a href="${activationUrl}" style="background:#003820;color:#ffffff;padding:12px 20px;border-radius:8px;text-decoration:none;display:inline-block">Verify my agent email</a>
+  </p>
+  <p style="font-size:13px;color:#6b7280">This link works once and expires after 24 hours. Verifying your email is not the same as approval &mdash; an administrator still reviews your application before you can start work.</p>
+  <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">
+  <p style="font-size:13px;color:#6b7280"><strong>Hai salamu ${safeName},</strong><br>Asante kwa kujisajili kama Wakala wa Return4me. Tafadhali thibitisha barua pepe hii ili tujue biashara yako inaweza kupokea barua kutoka kwetu.<br>Kiungo hiki kinafanya kazi mara moja tu na kin expires baada ya saa 24. Kuthibitisha barua pepe si sawa na kukubaliwa &mdash; msimamizi bado anapaswa kupitia maombi yako kabla ya kuanza kazi.</p>
+</div>`.trim();
 }
 
 export function customerCookieOptions() {
@@ -78,7 +172,7 @@ export function generateSecureId(prefix: string): string {
 }
 
 // Customer auth middleware. Reads ONLY the cookie, hashes the presented token,
-// finds the session server-side, then checks revocation, expiry and the
+// finds the session server-side, then checks revocation, expiry, IDLE TIME and the
 // account's LIVE status — a suspended/locked customer must not remain
 // authenticated merely because an old cookie is still valid.
 export async function requireCustomerAuth(req: any, res: Response, next: NextFunction) {
@@ -90,6 +184,21 @@ export async function requireCustomerAuth(req: any, res: Response, next: NextFun
     if (session.revoked_at) return res.status(401).json({ error: 'Kipindi hiki kimefungwa. / Session has been revoked.' });
     if (session.expires_at && new Date(session.expires_at).getTime() < Date.now()) {
       return res.status(401).json({ error: 'Kipindi hiki kimeisha muda. / Session has expired.' });
+    }
+    // H10 (BATCH 2) — IDLE-TIME CHECK, enforced here and nowhere else.
+    //
+    // Placed AFTER revocation and absolute expiry so the more specific reasons
+    // keep their existing messages and behaviour: a revoked session still reports
+    // "revoked", an expired one still reports "expired". Only a session that is
+    // otherwise valid can be rejected for being idle.
+    //
+    // The session is REVOKED server-side rather than merely refused, so a stale
+    // cookie cannot be replayed on a later request and cannot race the check.
+    // The customer-facing wording says they were signed out and to sign in again;
+    // it deliberately names no middleware, timeout value or internal term.
+    if (isSessionIdle(session.last_seen_at, new Date())) {
+      await db.revokeCustomerSession(session.id);
+      return res.status(401).json({ error: CUSTOMER_ACCOUNT_STRINGS.sessionIdle.en });
     }
     const customer = await db.getCustomerById(session.customer_id);
     if (!customer) return res.status(401).json({ error: 'Akaunti haipatikani. / Account not available.' });

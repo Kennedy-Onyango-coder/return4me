@@ -102,7 +102,7 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
           {lang === 'en' ? 'Privacy Policy' : 'Sera ya Faragha'}
         </h1>
         <p className="text-stone-500 text-sm mt-2 font-mono">
-          {lang === 'en' ? 'Last Updated: July 2026' : 'Imesasishwa Mwisho: Julai 2026'} | Jamoko Solutions Ltd · CR No. [PENDING]
+          {lang === 'en' ? 'Last Updated: July 2026' : 'Imesasishwa Mwisho: Julai 2026'} | Elligrace Technologies Limited · CR No. [PENDING]
         </p>
       </div>
 
@@ -127,7 +127,7 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
           </h3>
           <p className="text-xs text-stone-500 leading-relaxed">
             {lang === 'en'
-              ? 'Sensitive IDs are irreversibly hashed using secure industrial-grade encryption to ensure complete lookup security.'
+              ? 'Sensitive IDs are stored as a one-way keyed hash (HMAC-SHA256) so the original value cannot be read back from the database.'
               : 'Nambari za vitambulisho husimbwa kwa njia salama isiyoweza kurejeshwa ili kuzuia wizi wa utambulisho.'}
           </p>
         </div>
@@ -170,7 +170,7 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
             <span className="text-accent-orange">1.</span> Who We Are
           </h2>
           <p>
-            Return4me is operated by <strong>Jamoko Solutions Ltd</strong> (trading as "Return4me"), a private limited company incorporated under the Companies Act, 2015, operating in Kenya (Certificate of Incorporation No. [PENDING]). Jamoko Solutions Ltd is registered as a Data Controller and Data Processor with the Office of the Data Protection Commissioner (ODPC) under Certificate No. [PENDING]. Registered office: Nairobi, Kenya. Jamoko Solutions Ltd is the legal entity responsible for all obligations described in this policy; "Return4me" is the brand name under which this specific service operates.
+            Return4me is operated by <strong>Elligrace Technologies Limited</strong> (trading as "Return4me"), a private limited company incorporated under the Companies Act, 2015, operating in Kenya (Certificate of Incorporation No. [PENDING]). Elligrace Technologies Limited is registered as a Data Controller and Data Processor with the Office of the Data Protection Commissioner (ODPC) under Certificate No. [PENDING]. Registered office: Nairobi, Kenya. Elligrace Technologies Limited is the legal entity responsible for all obligations described in this policy; "Return4me" is the brand name under which this specific service operates.
           </p>
           <p>
             For any data protection queries, requests to exercise your rights, or compliance feedback, please contact our designated Data Protection officer: <a href="mailto:privacy@return4me.co.ke" className="text-primary-green font-bold hover:underline">privacy@return4me.co.ke</a>.
@@ -231,6 +231,25 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
           <p className="text-xs text-stone-500 font-mono italic">
             * Document numbers and National ID numbers are treated as sensitive personal data under Section 2 of the Data Protection Act, 2019, and are handled with the elevated security controls detailed in Section 5.
           </p>
+          <div className="border-t border-stone-100 pt-4 mt-2 space-y-2">
+            <h3 className="font-extrabold text-stone-800 text-xs uppercase tracking-wider">
+              Session, Cookies and Browser Storage
+            </h3>
+            <p>
+              To keep you signed in and to authenticate your requests, Return4me stores the following on your device or in your browser session. These are the only such mechanisms the Platform uses; it does not use advertising or cross-site tracking cookies.
+            </p>
+            <ul className="list-disc pl-5 space-y-2 text-xs text-stone-600">
+              <li>
+                <strong>Session cookie (r4m_customer_session):</strong> Used to keep a customer signed in. It is marked HTTP-only (so website scripts cannot read it), marked Secure in production, and set with SameSite=Lax. It normally lasts up to 7 days. The session token inside it is hashed before it is looked up in our database, so the stored copy cannot be used directly to sign in.
+              </li>
+              <li>
+                <strong>Browser local storage — agent_token and admin_token:</strong> Used by the Agent and Administrator application flows. These are session tokens stored in your browser rather than in a cookie, and they are cleared when you sign out.
+              </li>
+              <li>
+                <strong>Browser local storage — appearance and language preferences:</strong> Used to remember display settings such as light or dark appearance and your language choice. These contain no account information.
+              </li>
+            </ul>
+          </div>
         </section>
 
         {/* Section 3 */}
@@ -280,7 +299,7 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
           </p>
           <ul className="list-disc pl-5 space-y-2 text-xs text-stone-600">
             <li>
-              <strong>One-Way Hashing:</strong> Document numbers and National ID numbers are never stored in raw plaintext. They are encrypted and stored as secure one-way cryptographic hashes. This allows the system to match claims without storing readable ID numbers.
+              <strong>One-Way Hashing:</strong> Document numbers and National ID numbers are never stored in raw plaintext. They are converted into a keyed one-way cryptographic hash (HMAC-SHA256), meaning the original number cannot be recovered from what is stored — there is no operation that reverses it. This allows the system to match claims without storing readable ID numbers. This is hashing, not encryption: the stored value is not readable by anyone, including us.
             </li>
             <li>
               <strong>Masked Search:</strong> Public search queries never reveal full document numbers, names, or finder details. We display masked placeholders (e.g., "ID card ending in **456") to protect the owner's privacy.
@@ -307,9 +326,58 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
               <strong>Licensed Payment Provider:</strong> Transaction details and phone numbers are sent directly to our Central Bank of Kenya-authorized Payment Service Provider (PSP) to process secure escrow payments. We do not hold or touch your escrow funds directly.
             </li>
             <li>
-              <strong>Smart Scanning Engine:</strong> Found-document photographs are processed via a highly secure Optical Character Recognition (OCR) scanner to extract details. This involves a secure, isolated transfer aligned strictly with Section 48 of the DPA, 2019.
+              <strong>Document Image Processing (OCR)</strong> When a document photograph is uploaded, the image itself is sent to an external Google Gemini / Google AI service, which uses AI to read the document and extract details such as names and document numbers. Return4me does not run its own offline OCR scanner on these images.
             </li>
           </ul>
+          <p className="text-xs text-stone-500 mt-3">
+            The table below lists the external services that process information on Return4me's behalf, and the categories of information involved. It describes what each service receives; it does not address the legal status of any provider.
+          </p>
+          <div className="overflow-x-auto border border-stone-200 rounded-xl mt-2">
+            <table className="min-w-full divide-y divide-stone-200 text-xs">
+              <thead className="bg-stone-50">
+                <tr>
+                  <th className="px-4 py-3 text-left font-bold text-stone-600 uppercase">Service</th>
+                  <th className="px-4 py-3 text-left font-bold text-stone-600 uppercase">Purpose</th>
+                  <th className="px-4 py-3 text-left font-bold text-stone-600 uppercase">Information involved</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-stone-200 bg-white">
+                <tr>
+                  <td className="px-4 py-3 font-bold text-stone-900">Resend</td>
+                  <td className="px-4 py-3 text-stone-600">Email delivery</td>
+                  <td className="px-4 py-3 text-stone-600">Recipient email address and the content of the message being sent</td>
+                </tr>
+                <tr className="bg-stone-50/40">
+                  <td className="px-4 py-3 font-bold text-stone-900">Africa's Talking</td>
+                  <td className="px-4 py-3 text-stone-600">SMS delivery</td>
+                  <td className="px-4 py-3 text-stone-600">Phone number and the text of the message being sent</td>
+                </tr>
+                <tr>
+                  <td className="px-4 py-3 font-bold text-stone-900">IntaSend</td>
+                  <td className="px-4 py-3 text-stone-600">Mobile money payments</td>
+                  <td className="px-4 py-3 text-stone-600">Payment phone number, amount, and transaction or invoice reference</td>
+                </tr>
+                <tr className="bg-stone-50/40">
+                  <td className="px-4 py-3 font-bold text-stone-900">Google Gemini / Google AI</td>
+                  <td className="px-4 py-3 text-stone-600">Document image analysis (OCR)</td>
+                  <td className="px-4 py-3 text-stone-600">The uploaded document image itself</td>
+                </tr>
+                <tr>
+                  <td className="px-4 py-3 font-bold text-stone-900">Nominatim / OpenStreetMap</td>
+                  <td className="px-4 py-3 text-stone-600">Location resolution</td>
+                  <td className="px-4 py-3 text-stone-600">Location text or coordinates submitted for geocoding</td>
+                </tr>
+                <tr className="bg-stone-50/40">
+                  <td className="px-4 py-3 font-bold text-stone-900">S3-compatible object storage</td>
+                  <td className="px-4 py-3 text-stone-600">File storage</td>
+                  <td className="px-4 py-3 text-stone-600">Uploaded images and documents</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p className="text-xs text-stone-500 mt-3">
+            Return4me does not use advertising networks, data brokers, or third-party advertising trackers.
+          </p>
         </section>
 
         {/* Section 7 */}

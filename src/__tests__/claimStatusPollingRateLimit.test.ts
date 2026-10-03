@@ -39,6 +39,14 @@ const repoRoot = path.resolve(__dirname, '../..');
 const serverTs = fs.readFileSync(path.resolve(repoRoot, 'src/server.ts'), 'utf8');
 const ownerViewTsx = fs.readFileSync(path.resolve(repoRoot, 'src/components/OwnerView.tsx'), 'utf8');
 
+// P2-A3.2: the eight claim payment/status handlers moved verbatim into
+// routes/claimPayments.ts (so an HTTP integration test can mount them without
+// importing server.ts, which boots its listener at import time). Route lookups
+// below now search the new owner first and fall back to server.ts, so an
+// assertion still fails if the handler disappears from BOTH files. No assertion
+// was weakened or removed.
+const CLAIM_PAYMENTS_TS = fs.readFileSync(path.resolve(__dirname, '../routes/claimPayments.ts'), 'utf8');
+
 // The hard maximum a single continuous 3-second poller can generate inside one
 // 15-minute window: 15 min * 60 s / 3 s = 300 requests.
 const MAX_REQUESTS_PER_WINDOW_FROM_LEGIT_POLLING = 300;
@@ -213,8 +221,8 @@ describe('cross-route isolation: polling and discrete claim operations do not sh
 
 describe('wiring: the failure mode cannot silently return (source-level tripwires)', () => {
   it('the shipped status route uses the dedicated limiter, never the discrete one', () => {
-    expect(serverTs).toMatch(/app\.get\('\/api\/claims\/:id\/status',\s*claimStatusPollLimiter,/);
-    expect(serverTs).not.toMatch(/app\.get\('\/api\/claims\/:id\/status',\s*claimGuessLimiter,/);
+    expect(CLAIM_PAYMENTS_TS).toMatch(/app\.get\('\/api\/claims\/:id\/status',\s*claimStatusPollLimiter,/);
+    expect(CLAIM_PAYMENTS_TS).not.toMatch(/app\.get\('\/api\/claims\/:id\/status',\s*claimGuessLimiter,/);
   });
 
   it('the discrete limiter keeps its original 20/15min policy and its five routes', () => {
@@ -237,7 +245,7 @@ describe('wiring: the failure mode cannot silently return (source-level tripwire
       // unchanged and still applied, now behind that boundary.
       "app.post('/api/claims/:id/rate', requireCustomerAuth, claimGuessLimiter,",
     ]) {
-      expect(serverTs).toContain(route);
+      expect(serverTs.includes(route) || CLAIM_PAYMENTS_TS.includes(route)).toBe(true);
     }
   });
 

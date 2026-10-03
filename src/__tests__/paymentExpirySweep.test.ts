@@ -40,7 +40,10 @@ describe('expireStaleClaims correctly implements the payment_window_expired tran
   it('C1 race guard: a payment strike is recorded only when expiry actually won — the sweep must not clobber a claim the webhook has since confirmed paid', () => {
     expect(body).toMatch(/const expired = await db\.expirePendingPaymentClaim\(claim\.id\);/);
     expect(body).toMatch(/if \(expired\) \{/);
-    expect(body).toMatch(/recordPaymentStrike\(claim\.owner_phone\)/);
+    // A1 (Batch 0A): provenance (the originating claim id) is now passed so the
+    // individual strike record is attributable. The CAS guard above must still be what
+    // wraps this call.
+    expect(body).toMatch(/recordPaymentStrike\(claim\.owner_phone, claim\.id\)/);
   });
 
   it('a per-claim failure inside the sweep loop is caught and logged, not allowed to crash the whole sweep (one bad claim can never block every other claim from expiring)', () => {

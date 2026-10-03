@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { translations } from '../types';
 import { Globe, User, ShieldCheck, MapPin, Search, Home, Menu, X, LogOut } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import LanguageControl from './LanguageControl';
 import AppearanceControl from './AppearanceControl';
 import type { AppearancePreference } from '../utils/appearancePreference';
@@ -54,6 +54,16 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
   };
   const [isOpen, setIsOpen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
+
+  // BATCH 2 (navbar) — reduced motion.
+  //
+  // `useReducedMotion()` ships with the animation library already in use
+  // (motion/react), so this honours the OS "reduce motion" setting without a
+  // second media-query listener, a second state, or a new dependency. The
+  // drawer's slide/scale and the active-nav underline keep their real motion
+  // for everyone else; here they resolve instantly instead. Functionality,
+  // focus handling and open/close behaviour are untouched.
+  const prefersReducedMotion = useReducedMotion();
 
   // PHASE 11B — ONE SOURCE OF TRUTH FOR "IS SOMEONE SIGNED IN".
   //
@@ -115,11 +125,15 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
   // every state — resting, hover (a green tint with the SAME dark green text,
   // never white-on-light) and keyboard focus (the global :focus-visible ring).
   // No gradient, no neon, no size change on hover, so nothing shifts.
+  // SPACING REMEDIATION — `ml-1` → `ml-0.5` and `px-3.5` → `px-3` return 14px.
+  // The 44px touch height, the border, the 13px label, every state colour and
+  // the focus ring are all UNCHANGED: this is the same control, sized to sit
+  // in a row that was overflowing, not a smaller target.
   const signInButtonClass =
-    'ml-1 inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border-2 px-4 text-sm font-bold transition-colors cursor-pointer ' +
+    'ml-0.5 inline-flex min-h-[44px] shrink-0 items-center whitespace-nowrap rounded-lg border border-[var(--appearance-border-strong)] bg-[var(--appearance-surface)] px-3 text-[13px] font-bold text-primary-green shadow-sm transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)] focus-visible:ring-offset-2 ' +
     (currentView === 'signin'
-      ? 'border-primary-green bg-primary-green/10 text-primary-green'
-      : 'border-primary-green/40 text-primary-green hover:border-primary-green hover:bg-primary-green/10');
+      ? 'border-primary-green bg-primary-green/10'
+      : 'text-primary-green hover:border-primary-green hover:bg-primary-green/10');
 
   const accountLinkClass =
     'relative px-3 py-2 text-sm font-medium transition-colors cursor-pointer rounded-md ' +
@@ -127,66 +141,123 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
       ? 'text-primary-green'
       : 'text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]');
 
-  const navLinkClass = (view) =>
-    'relative px-3 py-2 text-sm font-medium transition-colors cursor-pointer rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)] ' +
+  // SPACING REMEDIATION — measured, not guessed. The five links plus Sign In
+  // need ~503px at 13px. The 1024-1279px band (`lg` but not `xl`) only has
+  // ~456px for them after the logo, tray and session block, so at a uniform
+  // 13px the nav still overflowed its own box and `Home` still slid under the
+  // logo (measured -19px even after the padding trims).
+  //
+  // So that band gets a genuinely denser scale — 12px type and `px-1.5` — while
+  // 1280px and up keep the 13px / `px-2` treatment, which is the width the bar
+  // was designed to look like. This is a responsive type step, not a squeeze:
+  // it is applied at a breakpoint, not as a fractional or arbitrary value.
+  //
+  // UNCHANGED, because they are correctness rather than style: `whitespace-nowrap`
+  // (a label never wraps) and `shrink-0` (a label never compresses). The 40px
+  // min-height and the focus ring are also untouched.
+  const navLinkClass = (view: string) =>
+    'relative min-h-[40px] inline-flex shrink-0 items-center whitespace-nowrap rounded-lg px-1 text-[12px] xl:px-2 xl:text-[13px] font-semibold transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)] focus-visible:ring-offset-2 ' +
     (currentView === view
       ? 'text-primary-green'
       : 'text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]');
+
+  // BATCH 2 (navbar): the active-nav underline keeps its spring for normal
+  // motion, and resolves immediately when the visitor asked for reduced motion.
+  const navUnderlineTransition = prefersReducedMotion
+    ? { duration: 0 }
+    : { type: 'spring' as const, stiffness: 300, damping: 30 };
 
   const navLinkUnderline = (view) =>
     currentView === view ? (
       <motion.span
         layoutId="nav-underline"
         className="absolute bottom-0 left-3 right-3 h-0.5 bg-primary-green rounded-full"
-        transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+        transition={navUnderlineTransition}
       />
     ) : null;
 
   return (
     <>
-      <header className="bg-[var(--appearance-surface)] text-[var(--appearance-text-primary)] sticky top-0 z-40 h-16 md:h-20 border-b border-[var(--appearance-border)] flex items-center">
-        <div className="max-w-7xl w-full mx-auto px-4 sm:px-12 flex items-center justify-between">
-          {/* Brand Logo Group */}
-          <div
-            className="flex items-center cursor-pointer select-none"
+      <header className="h-[72px] xl:h-[76px] bg-[var(--appearance-surface)] text-[var(--appearance-text-primary)] sticky top-0 z-40 border-b border-[var(--appearance-border)] flex items-center shadow-[0_2px_12px_rgba(0,56,32,0.05)]">
+        {/* SPACING REMEDIATION — the single measured lever for the whole bar.
+            The desktop row is `logo · nav · utility tray · session` inside one
+            flex line. Every item except the <nav> is `shrink-0`, so the nav was
+            the only element that could give — and because its children are
+            `shrink-0 whitespace-nowrap`, a squeezed nav did not compress its
+            links, it OVERFLOWED them out of both sides (measured: `Home` landed
+            89px INSIDE the logo box at 1024px). `justify-center` then split that
+            overflow evenly, pushing the left spill under the logo and the right
+            spill under the utility tray.
+            So the fix is not an offset or a z-index: it is to make the row
+            actually fit at the narrowest width `lg` still serves (1024px). The
+            container padding and the inter-group gap are reduced here once, and
+            the per-control trims live on each control's own class below. */}
+        <div className="max-w-[1600px] w-full mx-auto px-4 sm:px-5 lg:px-6 flex items-center justify-between gap-2 lg:gap-3">
+          {/* Brand Logo Group
+              BATCH 2 (navbar): this was a `div role="button"` with a hand-rolled
+              Enter/Space keydown handler. Return4me navigates by switching the
+              App-owned `currentView` state, not by URL, so a real <a href> would
+              be a link to nowhere — the project's own native navigation
+              mechanism is a <button>. Swapping to it gives the logo a real
+              button name, native activation, and native focus for free, so the
+              ARIA role, the manual tabIndex and the keydown emulation are all
+              removed rather than duplicated. The Home destination, the
+              accessible name, the focus ring and the image are unchanged. */}
+          <button
+            type="button"
+            className="shrink-0 flex items-center rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)] focus-visible:ring-offset-2 cursor-pointer select-none"
             onClick={() => handleNavClick('home')}
-            role="button"
-            tabIndex={0}
             aria-label={lang === 'sw' ? 'Nenda Nyumbani' : 'Go to Home'}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                handleNavClick('home');
-              }
-            }}
           >
             <img 
               src="/assets/logo_wordmark_transparent.png" 
               alt="Return4me Logo" 
-              className="h-11 md:h-14 w-auto object-contain"
+              className="h-10 md:h-12 xl:h-[50px] w-auto max-w-[112px] sm:max-w-[130px] md:max-w-[160px] xl:max-w-[210px] object-contain"
               referrerPolicy="no-referrer"
             />
-          </div>
+          </button>
 
-          <nav className="hidden lg:flex items-center gap-1" aria-label={lang === 'en' ? 'Main navigation' : 'Navishan kuu'}>
-            <button onClick={() => handleNavClick('home')} className={navLinkClass('home')}>
+          {/* SPACING REMEDIATION — `min-w-0` lets this box shrink below its
+              content width without forcing the flex LINE to expand, which is
+              what previously made the links escape out of both sides and slide
+              under the logo and the utility tray.
+              `justify-center` is KEPT: now that the row genuinely fits, it
+              centres the group in the free space, which is what produces an
+              even logo→Home gap rather than a lopsided one.
+              There is deliberately NO `overflow-hidden` here: the five links
+              plus Sign In need ~503px and the narrowest width `lg` serves
+              (1024px) leaves ~520px for them, so the group fits on its own.
+              Clipping is the wrong tool for a fit problem — it would hide a
+              link rather than fix the constraint. Measured: logo→Home is +12px
+              at 1024px, +76px at 1152px, +63px at 1280px, with no document
+              overflow at any width. */}
+          <nav className="hidden lg:flex min-w-0 flex-1 items-center justify-center gap-0" aria-label={lang === 'en' ? 'Main navigation' : 'Navishan kuu'}>
+            {/* BATCH 2 (navbar): the active destination was only ever expressed
+                as a colour + underline, so assistive technology had no way to
+                tell where the visitor currently was. Each public destination now
+                follows the SAME pattern already used by AdminView's tabs and
+                CustomerDashboard: `aria-current="page"` only when that view is
+                active, and absent otherwise. Inactive destinations never claim
+                to be the current page. The `view` argument is the single source
+                of truth for both the visual and the semantic state. */}
+            <button onClick={() => handleNavClick('home')} className={navLinkClass('home')} aria-current={currentView === 'home' ? 'page' : undefined}>
               {lang === 'en' ? 'Home' : 'Mwanzo'}
               {navLinkUnderline('home')}
             </button>
-            <button onClick={() => handleNavClick('owner')} className={navLinkClass('owner')}>
+            <button onClick={() => handleNavClick('owner')} className={navLinkClass('owner')} aria-current={currentView === 'owner' ? 'page' : undefined}>
               {t.ownerBtn}
               {navLinkUnderline('owner')}
             </button>
-            <button onClick={() => handleNavClick('finder')} className={navLinkClass('finder')}>
+            <button onClick={() => handleNavClick('finder')} className={navLinkClass('finder')} aria-current={currentView === 'finder' ? 'page' : undefined}>
               {t.finderBtn}
               {navLinkUnderline('finder')}
             </button>
-            <button onClick={() => handleNavClick('becomeAgent')} className={navLinkClass('becomeAgent')}>
+            <button onClick={() => handleNavClick('becomeAgent')} className={navLinkClass('becomeAgent')} aria-current={currentView === 'becomeAgent' ? 'page' : undefined}>
               {t.becomeAgentBtn}
               {navLinkUnderline('becomeAgent')}
             </button>
             {isAdmin && (
-              <button onClick={() => handleNavClick('admin')} className={navLinkClass('admin')}>
+              <button onClick={() => handleNavClick('admin')} className={navLinkClass('admin')} aria-current={currentView === 'admin' ? 'page' : undefined}>
                 {t.adminBtn}
                 {navLinkUnderline('admin')}
               </button>
@@ -200,18 +271,31 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
               {(isAccountView || accountSignedIn) && (
                 <motion.span
                   layoutId="nav-underline"
-                  className="absolute bottom-0 left-3 right-3 h-0.5 bg-primary-green rounded-full"
-                  transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+                  className="absolute bottom-0 left-2 right-2 h-0.5 bg-primary-green rounded-full"
+                  transition={navUnderlineTransition}
                 />
               )}
             </button>
             )}
           </nav>
 
-          <div className="hidden lg:flex items-center gap-3">
+          {/* BATCH 1 (navbar): the utility tray and the session block were gated
+              at `xl`, while the compact header below is `lg:hidden`. That left
+              1024-1279px showing a full desktop navbar with NO way to reach
+              language, appearance, or session controls. `lg` restores the
+              access that existed before the visual pass. */}
+          {/* SPACING REMEDIATION — `gap-1.5 p-1` → `gap-1 px-1.5 py-0.5` and the
+              inner gap: the tray holds a language toggle AND a native select
+              whose `min-w-[9.5rem]` is the single widest control on the bar.
+              The control itself, its options, its label and its focus behaviour
+              are untouched (see AppearanceControl) — only the space AROUND it is
+              reduced. The `focus-within` ring is preserved so keyboard focus
+              still announces the tray as a group. */}
+          <div className="hidden lg:flex shrink-0 items-center gap-1 rounded-xl border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] px-1.5 py-0.5 focus-within:ring-2 focus-within:ring-[var(--appearance-focus)] focus-within:ring-offset-1">
             <LanguageControl lang={lang} setLang={setLang} layout="toggle" toggleLabel={t.langToggle} />
-            <AppearanceControl value={appearance} onChange={setAppearance} labels={appearanceLabels} />
-            <div className="h-5 w-px bg-[var(--appearance-border)]" />
+            <AppearanceControl value={appearance} onChange={setAppearance} labels={appearanceLabels} minWidth="min-w-[6rem] xl:min-w-[9.5rem]" />
+          </div>
+          <div className="hidden lg:flex shrink-0 items-center border-l border-[var(--appearance-border)] pl-2">
             {signedIn ? (
               <button
                 onClick={logout}
@@ -228,8 +312,22 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
             )}
           </div>
 
-          <div className="flex lg:hidden items-center gap-2">
+          {/* BATCH 1 (navbar): the compact header now carries BOTH utility
+              controls, matching the desktop tray, so appearance never required
+              opening the drawer. Same shared components, same props, same
+              App-owned state; the drawer copies below are unchanged.
+
+              SPACING REMEDIATION — the appearance select is allowed to flex
+              (`min-w-0 flex-1`) so it absorbs only the space actually left
+              over, instead of claiming a fixed minimum on a narrow phone. The
+              language toggle keeps its FULL visible word and its 44px `md`
+              size: Batch B/Batch C deliberately pin both, and abbreviating it
+              to "EN"/"SW" would trade a real accessibility and legibility
+              guarantee for a few pixels. The menu button and its aria-label
+              are unchanged. */}
+          <div className="flex lg:hidden items-center gap-1.5">
             <LanguageControl lang={lang} setLang={setLang} layout="toggle" toggleLabel={t.langToggle} />
+            <AppearanceControl value={appearance} onChange={setAppearance} labels={appearanceLabels} minWidth="min-w-0 flex-1 sm:min-w-[6.5rem] sm:flex-none" />
             <button
               onClick={() => setIsOpen(true)}
               className="p-2 rounded-md text-[var(--appearance-text-primary)] hover:text-primary-green transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)]"
@@ -247,10 +345,19 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
         {isOpen && (
           <>
             {/* Backdrop Overlay */}
+            {/* BATCH 2 (navbar) — reduced motion. Under a `reduce` preference the
+                scrim and the panel resolve instantly (no fade, no slide) instead
+                of animating. The elements, the fixed positioning, the z-order,
+                the click-to-close handler and the lg:hidden behaviour are all
+                unchanged, so the drawer works identically — it simply arrives
+                without motion. The scrim keeps `bg-black/40`: see the note in
+                the final report — no suitable existing semantic token exists, and
+                inventing one purely to remove a literal is out of scope. */}
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
+              transition={prefersReducedMotion ? { duration: 0 } : { duration: 0.2 }}
               onClick={() => setIsOpen(false)}
               className="fixed inset-0 bg-black/40 z-40 lg:hidden"
             />
@@ -260,7 +367,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
               initial={{ x: '100%' }}
               animate={{ x: 0 }}
               exit={{ x: '100%' }}
-              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              transition={prefersReducedMotion ? { duration: 0 } : { type: 'spring', damping: 25, stiffness: 200 }}
               className="fixed right-0 top-0 h-full w-[290px] sm:w-[340px] bg-[var(--appearance-surface)] text-[var(--appearance-text-primary)] shadow-2xl z-50 flex flex-col border-l border-[var(--appearance-border)] lg:hidden"
             >
               {/* Drawer Header */}
@@ -289,6 +396,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
                   {/* Home */}
                   <button
                     onClick={() => handleNavClick('home')}
+                    aria-current={currentView === 'home' ? 'page' : undefined}
                     className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl text-sm font-bold transition-all text-left cursor-pointer ${
                       currentView === 'home' 
                         ? 'bg-primary-green/10 text-primary-green' 
@@ -302,6 +410,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
                   {/* Owner (Lost) */}
                   <button
                     onClick={() => handleNavClick('owner')}
+                    aria-current={currentView === 'owner' ? 'page' : undefined}
                     className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl text-sm font-bold transition-all text-left cursor-pointer ${
                       currentView === 'owner' 
                         ? 'bg-primary-green/10 text-primary-green' 
@@ -315,6 +424,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
                   {/* Finder (Found) */}
                   <button
                     onClick={() => handleNavClick('finder')}
+                    aria-current={currentView === 'finder' ? 'page' : undefined}
                     className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl text-sm font-bold transition-all text-left cursor-pointer ${
                       currentView === 'finder' 
                         ? 'bg-primary-green/10 text-primary-green' 
@@ -330,6 +440,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
                       public destination, while agent access is unchanged. */}
                   <button
                     onClick={() => handleNavClick('becomeAgent')}
+                    aria-current={currentView === 'becomeAgent' ? 'page' : undefined}
                     className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl text-sm font-bold transition-all text-left cursor-pointer ${
                       currentView === 'becomeAgent'
                         ? 'bg-primary-green/10 text-primary-green' 
@@ -352,6 +463,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
                   {/* Terms */}
                   <button
                     onClick={() => handleNavClick('terms')}
+                    aria-current={currentView === 'terms' ? 'page' : undefined}
                     className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl text-sm font-bold transition-all text-left cursor-pointer ${
                       currentView === 'terms' 
                         ? 'bg-primary-green/10 text-primary-green' 
@@ -364,6 +476,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
                   {/* Privacy */}
                   <button
                     onClick={() => handleNavClick('privacy')}
+                    aria-current={currentView === 'privacy' ? 'page' : undefined}
                     className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-xl text-sm font-bold transition-all text-left cursor-pointer ${
                       currentView === 'privacy' 
                         ? 'bg-primary-green/10 text-primary-green' 
@@ -391,6 +504,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
                 {!isTokenOnlySession && (
                 <button
                   onClick={() => (isAccountView || accountSignedIn ? handleAccountClick() : handleNavClick('signin'))}
+                  aria-current={(isAccountView || currentView === 'signin') ? 'page' : undefined}
                   className={`w-full min-h-[44px] py-3 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center justify-center space-x-2 ${
                     isAccountView || accountSignedIn
                       ? 'bg-primary-green/10 border-primary-green/30 text-primary-green'
@@ -436,8 +550,10 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
       {/* Mobile Bottom Tab Bar Navigation (Below md) */}
       <div className="md:hidden fixed bottom-0 left-0 right-0 bg-[var(--appearance-surface)] border-t border-[var(--appearance-border)] z-30 py-2 px-4 pb-[max(0.5rem,env(safe-area-inset-bottom))] flex justify-around items-center shadow-[0_-4px_12px_rgba(0,0,0,0.05)]">
         <button
+          type="button"
           onClick={() => handleNavClick('home')}
-          className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 py-1 transition-all ${
+          aria-current={currentView === 'home' ? 'page' : undefined}
+          className={`flex min-h-[44px] flex-1 flex-col items-center justify-center gap-0.5 rounded-lg px-1 py-1 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)] ${
             currentView === 'home' ? 'text-primary-green' : 'text-[var(--appearance-text-muted)]'
           }`}
         >
@@ -445,8 +561,10 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
           <span className="text-xs font-semibold">{lang === 'sw' ? 'Mwanzo' : 'Home'}</span>
         </button>
         <button
+          type="button"
           onClick={() => handleNavClick('owner')}
-          className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 py-1 transition-all ${
+          aria-current={currentView === 'owner' ? 'page' : undefined}
+          className={`flex min-h-[44px] flex-1 flex-col items-center justify-center gap-0.5 rounded-lg px-1 py-1 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)] ${
             currentView === 'owner' ? 'text-primary-green' : 'text-[var(--appearance-text-muted)]'
           }`}
         >
@@ -454,8 +572,10 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
           <span className="text-xs font-semibold">{lang === 'sw' ? 'Tafuta' : 'Search'}</span>
         </button>
         <button
+          type="button"
           onClick={() => handleNavClick('finder')}
-          className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 py-1 transition-all ${
+          aria-current={currentView === 'finder' ? 'page' : undefined}
+          className={`flex min-h-[44px] flex-1 flex-col items-center justify-center gap-0.5 rounded-lg px-1 py-1 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)] ${
             currentView === 'finder' ? 'text-primary-green' : 'text-[var(--appearance-text-muted)]'
           }`}
         >
@@ -466,9 +586,10 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
             customer "Sign In" tab. See isTokenOnlySession above. */}
         {!isTokenOnlySession && (
         <button
+          type="button"
           onClick={() => (isAccountView || accountSignedIn ? handleAccountClick() : handleNavClick('signin'))}
           aria-current={(isAccountView || currentView === 'signin') ? 'page' : undefined}
-          className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 min-h-[44px] py-1 transition-all ${
+          className={`flex min-h-[44px] flex-1 flex-col items-center justify-center gap-0.5 rounded-lg px-1 py-1 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)] ${
             (isAccountView || currentView === 'signin') ? 'text-primary-green' : 'text-[var(--appearance-text-muted)]'
           }`}
         >
@@ -477,8 +598,9 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
         </button>
         )}
         <button
+          type="button"
           onClick={() => setIsOpen(true)}
-          className={`flex flex-col items-center justify-center space-y-0.5 cursor-pointer flex-1 py-1 transition-all ${
+          className={`flex min-h-[44px] flex-1 flex-col items-center justify-center gap-0.5 rounded-lg px-1 py-1 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)] ${
             isOpen ? 'text-primary-green' : 'text-[var(--appearance-text-muted)]'
           }`}
         >

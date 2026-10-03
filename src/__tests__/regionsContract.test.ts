@@ -128,9 +128,15 @@ describe('GEO-16-07 — GET /api/regions is retired (route, method and consumers
 // ---------------------------------------------------------------------------
 describe('GEO-16-07 — the canonical county search is the replacement', () => {
   it('the public search accepts a validated canonical county parameter', () => {
-    expect(SERVER_RAW).toContain('resolveCountyName(county)');
-    expect(SERVER_RAW).toContain('FOUND_COUNTY_MESSAGES.invalid');
-    expect(SERVER_RAW).toContain('itemMatchesCanonicalCounty(item, countyFilter');
+    // P2-A2: the search handler was extracted VERBATIM into routes/publicSearch.ts,
+    // so these are asserted against whichever file owns the route. The guarantees
+    // — canonical-only resolution, the same bilingual refusal as the report route,
+    // and filtering through the one shared predicate — are unchanged.
+    const anchor = "app.get('/api/items/search'";
+    const src = SERVER_RAW.includes(anchor) ? SERVER_RAW : read('src/routes/publicSearch.ts');
+    expect(src).toContain('resolveCountyName(county)');
+    expect(src).toContain('FOUND_COUNTY_MESSAGES.invalid');
+    expect(src).toContain('itemMatchesCanonicalCounty(item, countyFilter');
   });
 
   it('the county options come from the ONE canonical dataset, not from item rows', () => {
@@ -164,9 +170,14 @@ describe('GEO-16-07 — the properties the old suite protected are preserved', (
   it('the public county filter stays unauthenticated, like the search it belongs to', () => {
     // Scoped to the search route itself so the check cannot be satisfied by an
     // unrelated authenticated route.
-    const routeStart = SERVER_RAW.indexOf("app.get('/api/items/search'");
+    // P2-A2: the route was extracted VERBATIM into routes/publicSearch.ts, so it
+    // is read from whichever file owns the anchor. The guarantee asserted here —
+    // public search carries no authentication middleware — is unchanged.
+    const anchor = "app.get('/api/items/search'";
+    const src = SERVER_RAW.includes(anchor) ? SERVER_RAW : read('src/routes/publicSearch.ts');
+    const routeStart = src.indexOf(anchor);
     expect(routeStart).toBeGreaterThan(-1);
-    const rest = SERVER_RAW.slice(routeStart);
+    const rest = src.slice(routeStart);
     const next = rest.search(/\n {2}app\.[a-z]+\(/);
     const route = stripComments(next === -1 ? rest : rest.slice(0, next + 1));
     expect(route).not.toContain('authenticateJWT');

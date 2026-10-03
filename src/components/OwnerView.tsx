@@ -17,6 +17,7 @@ import Button from './ui/Button';
 // PHASE 16.1 (GEO-16-01): the ONE canonical 47-county dataset, imported — never
 // re-typed here. The same source the Finder and the lost-report wizard use.
 import { countiesByUxGroup } from '../config/kenyaCounties';
+import { administrativeUnitsForCounty, resolveAdministrativeUnitId } from '../config/kenyaAdministrativeUnits';
 
 /** The 47 canonical counties, grouped for display. Static data — read once. */
 const COUNTY_GROUPS = countiesByUxGroup();
@@ -286,14 +287,48 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
   // Search States
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedArea, setSelectedArea] = useState('');
   const [selectedCat, setSelectedCat] = useState('');
   const [selectedCounty, setSelectedCounty] = useState('');
+  const [selectedAdministrativeUnit, setSelectedAdministrativeUnit] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [testModeEnabled, setTestModeEnabled] = useState(false);
   const [simulatedPickupCode, setSimulatedPickupCode] = useState<string | null>(null);
+  // P1 (B-2) — pickup-code recovery. Holds NO code, ever: the server returns
+  // only { success: true }, so there is nothing secret to keep in client state
+  // and nothing that could end up in localStorage/sessionStorage. Deliberately
+  // not persisted across a refresh — the owner's real source of truth remains
+  // the SMS the server sent.
+  const [pickupCodeResendState, setPickupCodeResendState] = useState<
+    { status: 'idle' | 'sending' | 'sent' | 'error' }
+  >({ status: 'idle' });
+
+  // P1 (B-2). Asks the server to issue a fresh pickup code. It never reads,
+  // stores or renders a code: the response is { success: true } or an error
+  // string. The disabled state during flight is a UX courtesy only — the
+  // server enforces a real per-claim cooldown and rate limit regardless of
+  // what the client does.
+  const requestPickupCodeResend = async () => {
+    if (!paidClaim?.id) return;
+    setPickupCodeResendState({ status: 'sending' });
+    try {
+      const response = await fetch(`/api/customer/claims/${encodeURIComponent(paidClaim.id)}/pickup-code/resend`, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (response.ok) {
+        setPickupCodeResendState({ status: 'sent' });
+        return;
+      }
+      setPickupCodeResendState({ status: 'error' });
+    } catch {
+      setPickupCodeResendState({ status: 'error' });
+    }
+  };
 
   // PHASE 16.1 (GEO-16-01) — the county filter is NOT fetched.
   // It used to call GET /api/regions, which returned a mixed vocabulary of
@@ -591,14 +626,19 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
     try {
       const params = new URLSearchParams();
+      // `q` is the broad item query (name, identifying/plate number, details).
+      // `area` is deliberately independent exact/free-text place context.
       if (searchQuery) params.append('q', searchQuery);
+      if (selectedArea) params.append('area', selectedArea);
       if (selectedCat) params.append('categoryId', selectedCat);
       // PHASE 16.1 (GEO-16-01): a STRUCTURED canonical county filter. Omitted
       // entirely when no county is selected, so an unfiltered search is the
       // pre-16.1 request and legacy items with no county stay searchable.
-      // `q` above remains the free-text "Exact place" search — the two
-      // combine (county AND text), and neither is inferred from the other.
       if (selectedCounty) params.append('county', selectedCounty);
+       if (selectedAdministrativeUnit) {
+         const validUnit = resolveAdministrativeUnitId(selectedCounty, selectedAdministrativeUnit);
+         if (validUnit) params.append('administrativeUnitId', validUnit);
+       }
 
       const response = await fetch(`/api/items/search?${params.toString()}`);
       const data = await response.json();
@@ -629,7 +669,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
       return;
     }
     handleSearch();
-  }, [selectedCat, selectedCounty]);
+  }, [selectedCat, selectedCounty, selectedAdministrativeUnit]);
 
   // Submit Tier 1 Security answers — collected by the category-specific
   // VerificationForm (field keys are defined in verificationProfiles.ts).
@@ -1075,89 +1115,54 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             </div>
           )}
 
-          {/* Search Box / Filters */}
-          <form onSubmit={handleSearch} className="bg-white rounded-2xl border border-line-subtle p-6 shadow-sm space-y-4">
-            <div className="flex flex-col md:flex-row gap-3">
-              <div className="flex-1 relative">
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder={t.searchPlaceholder}
-                  aria-label={t.searchPlaceholder}
-                  className="w-full border border-line-subtle rounded-2xl pl-10 pr-4 py-3 text-sm focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30 focus:outline-none bg-brand-beige"
-                />
-                <Search className="absolute left-3.5 top-3.5 text-ink-muted" size={18} />
-              </div>
+          {/* Public discovery: broad item query and exact-place context remain
+              independent. Structured geography comes only from canonical configs. */}
+          <form onSubmit={handleSearch} className="space-y-5 rounded-2xl border border-line-subtle bg-white p-5 shadow-sm sm:p-6">
+            <div className="grid gap-4">
+              <label className="grid gap-2 sm:grid-cols-[9rem_1fr] sm:items-center">
+                <span className="text-xs font-extrabold uppercase tracking-wider text-primary-green">{lang === 'en' ? 'Item details' : 'Maelezo ya kitu'}</span>
+                <span className="relative">
+                  <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder={t.searchPlaceholder} aria-label={t.searchPlaceholder} className="w-full rounded-2xl border border-line-subtle bg-brand-beige py-3 pl-10 pr-4 text-sm focus:border-accent-orange focus:outline-none focus:ring-2 focus:ring-accent-orange/30" />
+                  <Search className="absolute left-3.5 top-3.5 text-ink-muted" size={18} aria-hidden="true" />
+                </span>
+              </label>
 
-              {/* Category Filter */}
-              <select
-                value={selectedCat}
-                onChange={(e) => setSelectedCat(e.target.value)}
-                aria-label={lang === 'en' ? 'Filter by category' : 'Chuja kwa kategoria'}
-                className="border border-line-subtle rounded-2xl px-3 py-3 text-sm bg-white focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30 disabled:bg-brand-light-gray disabled:text-brand-muted-text"
-                disabled={categoriesLoading || categoriesError}
-              >
-                {categoriesLoading ? (
-                  <option value="">{lang === 'en' ? 'Loading categories...' : 'Inapakia kategoria...'}</option>
-                ) : categoriesError ? (
-                  <option value="">{lang === 'en' ? 'Categories unavailable — please refresh' : 'Kategoria hazipatikani - tafadhali pakia upya'}</option>
-                ) : (
-                  (() => {
-                    const validCategories = categories.filter(cat => cat.name_en && cat.name_sw);
-                    const invalidCount = categories.length - validCategories.length;
-                    if (invalidCount > 0) {
-                      console.warn(`[OwnerView] Filtered out ${invalidCount} incomplete categories from rendering.`);
-                    }
-                    return [
-                      <option key="all-categories" value="">{lang === 'en' ? '-- All Categories --' : '-- Kategoria Zote --'}</option>,
-                      ...validCategories.map(cat => (
-                        <option key={cat.id} value={cat.id}>
-                          {lang === 'en' ? cat.name_en : cat.name_sw}
-                        </option>
-                      ))
-                    ];
-                  })()
-                )}
-              </select>
+              <fieldset className="grid gap-3 sm:grid-cols-2">
+                <legend className="mb-1 text-xs font-extrabold uppercase tracking-wider text-primary-green sm:col-span-2">{lang === 'en' ? 'Where was it found?' : 'Ilipopatikana wapi?'}</legend>
+                <label className="grid gap-1.5">
+                  <span className="text-xs font-bold text-ink-muted">{lang === 'en' ? 'Category' : 'Kategoria'}</span>
+                  <select value={selectedCat} onChange={e => setSelectedCat(e.target.value)} aria-label={lang === 'en' ? 'Filter by category' : 'Chuja kwa kategoria'} className="w-full rounded-2xl border border-line-subtle bg-white px-3 py-3 text-sm focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30 disabled:bg-brand-light-gray disabled:text-brand-muted-text" disabled={categoriesLoading || categoriesError}>
+                    {categoriesLoading ? <option value="">{lang === 'en' ? 'Loading categories...' : 'Inapakia kategoria...'}</option> : categoriesError ? <option value="">{lang === 'en' ? 'Categories unavailable — please refresh' : 'Kategoria hazipatikani - tafadhali pakia upya'}</option> : [<option key="all-categories" value="">{lang === 'en' ? 'All categories' : 'Kategoria zote'}</option>, ...categories.filter(cat => cat.name_en && cat.name_sw).map(cat => <option key={cat.id} value={cat.id}>{lang === 'en' ? cat.name_en : cat.name_sw}</option>)]}
+                  </select>
+                </label>
+                <label className="grid gap-1.5">
+                  <span className="text-xs font-bold text-ink-muted">{lang === 'en' ? 'County' : 'Kaunti'}</span>
+                  <select value={selectedCounty} onChange={e => { setSelectedCounty(e.target.value); setSelectedAdministrativeUnit(''); }} aria-label={lang === 'en' ? 'Filter by county' : 'Chuja kwa kaunti'} className="w-full rounded-2xl border border-line-subtle bg-white px-3 py-3 text-sm focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30">
+                    <option value="">{lang === 'en' ? 'All counties' : 'Kaunti zote'}</option>
+                    {COUNTY_GROUPS.map(group => <optgroup key={group.group} label={group.group}>{group.counties.map(county => <option key={county.code} value={county.name}>{county.name}</option>)}</optgroup>)}
+                  </select>
+                </label>
+                <label className="grid gap-1.5 sm:col-span-2">
+                  <span className="text-xs font-bold text-ink-muted">{lang === 'en' ? 'Sub-county' : 'Kaunti ndogo'}</span>
+                  <select value={selectedAdministrativeUnit} onChange={e => setSelectedAdministrativeUnit(e.target.value)} disabled={!selectedCounty} aria-label={lang === 'en' ? 'Filter by sub-county' : 'Chuja kwa kaunti ndogo'} className="w-full rounded-2xl border border-line-subtle bg-white px-3 py-3 text-sm focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30 disabled:bg-brand-light-gray disabled:text-brand-muted-text">
+                    <option value="">{lang === 'en' ? (selectedCounty ? 'All sub-counties' : 'Select county first') : (selectedCounty ? 'Kaunti ndogo zote' : 'Chagua kaunti kwanza')}</option>
+                    {selectedCounty && administrativeUnitsForCounty(selectedCounty).map(unit => <option key={unit.id} value={unit.id}>{unit.name}</option>)}
+                  </select>
+                </label>
+              </fieldset>
 
-              {/* PHASE 16.1 (GEO-16-01) — CANONICAL COUNTY FILTER.
-                  Replaces the old "Area Quick Selector", which was fed by
-                  GET /api/regions and mixed counties, towns, estates and
-                  arbitrary reporter-typed text in one list. This is a select
-                  over the ONE canonical 47-county dataset, the same pattern the
-                  Finder and the lost-report wizard already use, so a household
-                  searching for its item is choosing a real county — never an
-                  area string that merely looks like one.
-                  The "Exact place" text stays free text in the search box. */}
-              <select
-                value={selectedCounty}
-                onChange={(e) => setSelectedCounty(e.target.value)}
-                aria-label={lang === 'en' ? 'Filter by county' : 'Chuja kwa kaunti'}
-                className="border border-line-subtle rounded-2xl px-3 py-3 text-sm bg-white focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30"
-              >
-                <option value="">{lang === 'en' ? '-- All Counties --' : '-- Kaunti Zote --'}</option>
-                {COUNTY_GROUPS.map(group => (
-                  <optgroup key={group.group} label={group.group}>
-                    {group.counties.map(county => (
-                      <option key={county.code} value={county.name}>{county.name}</option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
-
-              <button
-                type="submit"
-                disabled={searchLoading}
-                className="bg-accent-strong hover:bg-accent-strong-hover text-white px-8 py-3 rounded-2xl font-bold transition flex items-center justify-center space-x-2 shadow-lg shadow-orange-500/10 cursor-pointer disabled:opacity-50"
-              >
-                {searchLoading ? (
-                  <Loader2 className="animate-spin" size={18} />
-                ) : (
-                  <span>Search</span>
-                )}
-              </button>
+              <label className="grid gap-2 sm:grid-cols-[9rem_1fr] sm:items-center">
+                <span className="text-xs font-extrabold uppercase tracking-wider text-primary-green">{lang === 'en' ? 'Exact place / area' : 'Mahali halisi / eneo'}</span>
+                <span className="relative">
+                  <input type="text" value={selectedArea} onChange={e => setSelectedArea(e.target.value)} aria-label={lang === 'en' ? 'Exact place or area' : 'Mahali halisi au eneo'} placeholder={lang === 'en' ? 'Street, estate, building, landmark, stage or market' : 'Barabara, eneo, jengo, alama, kituo au sokoni'} className="w-full rounded-2xl border border-line-subtle bg-brand-beige py-3 pl-10 pr-4 text-sm focus:border-accent-orange focus:outline-none focus:ring-2 focus:ring-accent-orange/30" />
+                  <MapPin className="absolute left-3.5 top-3.5 text-ink-muted" size={18} aria-hidden="true" />
+                </span>
+              </label>
             </div>
+            <button type="submit" disabled={searchLoading} className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-2xl bg-accent-strong px-8 py-3 font-bold text-white shadow-lg shadow-orange-500/10 transition hover:bg-accent-strong-hover disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto">
+              {searchLoading ? <Loader2 className="animate-spin" size={18} aria-hidden="true" /> : <Search size={18} aria-hidden="true" />}
+              <span>{lang === 'en' ? 'Search found items' : 'Tafuta vitu vilivyopatikana'}</span>
+            </button>
           </form>
 
           {/* Privacy masking badge info */}
@@ -1201,8 +1206,10 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                     type="button"
                     onClick={() => {
                       setSearchQuery('');
+                      setSelectedArea('');
                       setSelectedCat('');
                       setSelectedCounty('');
+                      setSelectedAdministrativeUnit('');
                       if (selectedCat === '' && selectedCounty === '') {
                         handleSearch();
                       }
@@ -1218,9 +1225,9 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 {searchResults.map(item => {
                   const cat = categories.find(c => c.id === item.category_id);
                   return (
-                    <div key={item.id} className="bg-white rounded-2xl border border-line-subtle p-5 shadow-md flex items-start space-x-4">
+                    <div key={item.id} className="flex flex-col gap-4 bg-white rounded-2xl border border-line-subtle p-5 shadow-md sm:flex-row sm:items-start sm:space-x-4">
                       {/* Document photo */}
-                      <div className="w-20 h-20 bg-brand-beige rounded-2xl overflow-hidden shrink-0 border border-line-subtle flex items-center justify-center">
+                      <div className="w-full h-28 sm:w-20 sm:h-20 bg-brand-beige rounded-2xl overflow-hidden shrink-0 border border-line-subtle flex items-center justify-center">
                         {item.is_sensitive_document ? (
                           <div className="flex flex-col items-center justify-center p-2 text-center h-full w-full bg-brand-light-gray text-brand-muted-text">
                             <Lock size={18} className="text-ink-muted mb-1 shrink-0" />
@@ -1645,7 +1652,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                   <span className="font-mono font-bold text-ink-muted">{money(agentShare)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-ink-muted font-medium">Return4me Escrow & Platform</span>
+                  <span className="text-ink-muted font-medium">Return4me platform fee</span>
                   <span className="font-mono font-bold text-ink-muted">{money(platformShare)}</span>
                 </div>
                 <div className="h-px bg-line-subtle" />
@@ -1770,7 +1777,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             </div>
             <div className="flex items-center space-x-2 text-stone-400">
               <Lock size={14} className="opacity-40 shrink-0" />
-              <span>{lang === 'en' ? 'Secure Escrow receipt' : 'Kipokezi salama cha Escrow'}</span>
+              <span>{lang === 'en' ? 'Payment receipt' : 'Kipokezi cha malipo'}</span>
             </div>
           </div>
 
@@ -1875,6 +1882,45 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             <p className="text-caption text-stone-300">
               {lang === 'sw' ? 'Toa msimbo huu wa siri kwa Agent PEKEE wakati wa kuchukua bidhaa yako.' : 'Give this secret code to the Agent ONLY when collecting your item.'}
             </p>
+
+            {/* P1 (B-2) — recovery action.
+                The server never returns the plaintext pickup code, and this UI
+                deliberately never displays one returned by the API: there is
+                nothing to show. What it does offer is a way to ask the server to
+                send a FRESH code, because the original may never have arrived.
+                That new code invalidates the previous one, which is stated
+                explicitly before the request is made. */}
+            <div className="pt-2 border-t border-white/15">
+              <button
+                type="button"
+                onClick={requestPickupCodeResend}
+                disabled={pickupCodeResendState.status === 'sending'}
+                className="inline-flex items-center gap-2 rounded-xl border border-white/40 px-3 py-2 text-sm font-bold text-white hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {pickupCodeResendState.status === 'sending'
+                  ? (lang === 'sw' ? 'Inatuma…' : 'Sending…')
+                  : (lang === 'sw' ? 'Tuma msimbo mwingine' : 'Resend my pickup code')}
+              </button>
+              <p className="text-caption text-stone-300 mt-2">
+                {lang === 'sw'
+                  ? 'Ukitumia msimbo mwingine, msimbo wa awali hautumiki tena.'
+                  : 'Requesting a new code immediately invalidates the previous one.'}
+              </p>
+              {pickupCodeResendState.status === 'sent' && (
+                <p role="status" className="text-caption font-bold text-accent-orange mt-2">
+                  {lang === 'sw'
+                    ? 'Msimbo mpya umetumwa kwa nambari yako. Angalia ujumbe wa Return4me.'
+                    : 'A new code has been sent to your phone. Look for a message from Return4me.'}
+                </p>
+              )}
+              {pickupCodeResendState.status === 'error' && (
+                <p role="alert" className="text-caption font-bold text-stone-100 mt-2">
+                  {lang === 'sw'
+                    ? 'Hatukuweza kutuma msimbo kwa sasa. Hakuna msimbo uliobadilishwa — jaribu tena baadaye.'
+                    : 'We could not send a code right now. Your existing code is unchanged — please try again shortly.'}
+                </p>
+              )}
+            </div>
           </div>
 
           {simulatedPickupCode && (

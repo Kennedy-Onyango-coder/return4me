@@ -45,25 +45,67 @@ export function isPlaceholderKey(key: string | undefined | null): boolean {
 // so it's unit-testable (server.ts has no exports and a large amount of
 // top-level side-effecting setup unsafe to import in a test file — same
 // reasoning as isAgentActionable/isAdminSessionCurrent in services/auth.ts).
-// 'match': proceed. 'mismatch': refuse, do not hold escrow. 'unknown':
-// the webhook payload didn't include a recognizable amount field at all —
-// proceed with a warning rather than blocking, since a wrong guess about
-// an external API's field name should never be able to silently halt
-// every real payment (see the NOTE ON FIELD NAME comment in server.ts).
-// 0.5 KES epsilon tolerance absorbs decimal-string formatting differences
-// ("500" vs "500.00"), not genuine underpayment.
+//
+// P1 HARDENING (this batch). The three-result contract below is unchanged in
+// shape, but 'unknown' now means EXACTLY ONE thing: "this payload carried no
+// usable amount", and the caller MUST NOT treat it as a reconciliation. It is
+// the trigger for an authoritative provider lookup, never a licence to proceed.
+//
+// WHAT CHANGED AND WHY:
+//
+// 1. parseFloat() accepted numeric PREFIXES. `parseFloat('500abc')` is 500, so a
+//    corrupt or tampered field whose value began with the right digits was
+//    silently reconciled as a MATCH. Validation is now strict: the whole trimmed
+//    string must be a finite number, or the input is not numeric at all.
+//
+// 2. parseFloat('Infinity') is Infinity, and |Infinity - 500| is > 0.5 so it
+//    happened to be caught, but only by accident of the comparison — it was not
+//    rejected as non-numeric. Non-finite values are now rejected up front.
+//
+// 3. parseFloat(true) is NaN and parseFloat({}) is NaN, which returned 'unknown'
+//    and therefore PROCEEDED TO ESCROW. A boolean or an object arriving in a
+//    money field is malformed, not absent, and must not be reconciled.
+//
+// 4. Zero and negatives are rejected. A real collection is always a strictly
+//    positive amount: a zero or negative "successful" payment is a provider or
+//    data fault, never a legitimate settlement of a positive fee.
+//
+// The 0.5 KES epsilon tolerance is RETAINED unchanged: it absorbs decimal
+// formatting differences ("500" vs "500.00") and is deliberately far too small
+// to hide genuine underpayment.
 export function reconcileWebhookAmount(
-  confirmedAmount: number | string | null | undefined,
-  expectedFee: number | string
+  confirmedAmount: unknown,
+  expectedFee: unknown
 ): 'match' | 'mismatch' | 'unknown' {
-  if (confirmedAmount === undefined || confirmedAmount === null || confirmedAmount === '') {
-    return 'unknown';
-  }
-  const confirmedNum = parseFloat(String(confirmedAmount));
-  const expectedNum = parseFloat(String(expectedFee));
-  if (isNaN(confirmedNum) || isNaN(expectedNum)) {
-    return 'unknown';
-  }
+  // Strict, type-safe numeric coercion. Only a real number, or a string that is
+  // ENTIRELY a number, is numeric. Objects, arrays, booleans and functions are
+  // rejected by the typeof guard before String() is ever applied.
+  const toStrictNumber = (raw: unknown): number | null => {
+    if (typeof raw === 'number') {
+      return Number.isFinite(raw) ? raw : null;
+    }
+    if (typeof raw !== 'string') return null; // null, undefined, {}, [], booleans
+    const trimmed = raw.trim();
+    if (trimmed === '') return null;
+    // A full-string numeric match: this is what parseFloat could not do.
+    // Rejects "500abc", "1,000", "12px", "--5" and any other prefix/suffix.
+    if (!/^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(trimmed)) return null;
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const confirmedNum = toStrictNumber(confirmedAmount);
+  if (confirmedNum === null) return 'unknown';
+
+  const expectedNum = toStrictNumber(expectedFee);
+  if (expectedNum === null) return 'unknown';
+
+  // A collection can only ever settle a strictly positive amount. Zero and
+  // negative values are malformed for this purpose, and are reported as
+  // 'unknown' (i.e. "do not reconcile, verify with the provider") rather than
+  // 'mismatch', because they tell us nothing about what was actually charged.
+  if (confirmedNum <= 0) return 'unknown';
+
   return Math.abs(confirmedNum - expectedNum) <= 0.5 ? 'match' : 'mismatch';
 }
 
@@ -206,6 +248,131 @@ export const PaymentService = {
         message: `Kuna hitilafu ya mtandao wakati wa kutuma ombi la malipo: ${error.message}. Tafadhali jaribu tena.`,
       };
     }
+  },
+
+  /**
+   * AUTHORITATIVE PAYMENT-STATUS LOOKUP (P1 / B-1).
+   *
+   * WHY THIS EXISTS. IntaSend's documented collection callback carries `value`,
+   * but a callback can also arrive that does not — and a malformed value (an
+   * object, a boolean, a numeric-prefix string like "500abc") is just as
+   * unusable as an absent one. Previously BOTH cases returned 'unknown' from
+   * reconcileWebhookAmount and the caller PROCEEDED TO ESCROW anyway, so a
+   * P1 financial control was silently inert.
+   *
+   * This is the documented fallback for exactly that case: IntaSend's Payment
+   * Status endpoint resolves an `invoice_id` to the authoritative invoice,
+   * whose `state` and `value` are the settlement record. It is called ONLY when
+   * the callback's own amount could not be reconciled — a normal, valid callback
+   * never makes this extra network call.
+   *
+   * CONTRACT, deliberately narrow and fail-closed:
+   *   - `verified` is true ONLY when the provider returned an invoice whose
+   *     identity matches, whose state is COMPLETE, and which yielded a usable
+   *     amount. Anything else is `verified: false` with a reason, and the
+   *     caller's only correct response is to NOT enter escrow.
+   *   - Never throws, never fabricates an amount, never logs the secret key.
+   *   - Bounded by fetchWithTimeout (default 12s) so a webhook can never hang.
+   *   - Honours the same sandbox/production base URL split as every other call.
+   */
+  async fetchAuthoritativeCollectionStatus(
+    invoiceId: string,
+    expectedAmount: number | string
+  ): Promise<{
+    verified: boolean;
+    reason: string;
+    providerState: string | null;
+    providerAmount: number | string | null;
+    providerInvoiceId: string | null;
+    providerReference: string | null;
+  }> {
+    const unverified = (reason: string, extra: Record<string, any> = {}) => ({
+      verified: false,
+      reason,
+      providerState: null,
+      providerAmount: null,
+      providerInvoiceId: null,
+      providerReference: null,
+      ...extra,
+    });
+
+    const trimmedInvoice = String(invoiceId || '').trim();
+    if (!trimmedInvoice) return unverified('missing_invoice_id');
+
+    const secretKey = process.env.INTASEND_SECRET_KEY;
+    if (isPlaceholderKey(secretKey)) {
+      // Without real credentials there is nothing authoritative to consult. The
+      // sandbox/simulation path must NOT be treated as proof of payment.
+      return unverified('provider_credentials_unavailable');
+    }
+
+    let data: any;
+    try {
+      const response = await fetchWithTimeout(
+        `${INTASEND_BASE_URL}/payment/status/${encodeURIComponent(trimmedInvoice)}`,
+        {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${secretKey}`,
+          },
+        },
+        12000
+      );
+      if (!response.ok) {
+        return unverified(`provider_http_${response.status}`);
+      }
+      data = await response.json();
+    } catch (error: any) {
+      // Network error, DNS failure, provider outage or our own 12s timeout.
+      return unverified('provider_request_failed');
+    }
+
+    // The status endpoint nests the invoice under `invoice`. Guessing at a
+    // shape we do not control is exactly the failure mode this method exists to
+    // close, so an unexpected shape is reported as unverified, never guessed.
+    const invoice = data?.invoice;
+    if (!invoice || typeof invoice !== 'object') {
+      return unverified('provider_response_unrecognised');
+    }
+
+    const providerInvoiceId = invoice.invoice_id ? String(invoice.invoice_id) : null;
+    // Identity must match the invoice we asked about. A provider that answers
+    // with a different invoice is not evidence about this payment.
+    if (!providerInvoiceId || providerInvoiceId !== trimmedInvoice) {
+      return unverified('provider_invoice_identity_mismatch', { providerInvoiceId });
+    }
+
+    const providerState = invoice.state ? String(invoice.state).trim().toUpperCase() : null;
+    // IntaSend's documented successful collection state is COMPLETE. Anything
+    // else — FAILED, PENDING, CANCELLED, or absent — is not a settlement.
+    if (providerState !== 'COMPLETE') {
+      return unverified('provider_state_not_complete', { providerState, providerInvoiceId });
+    }
+
+    // Amount is read from the same top-level `value` field the documented
+    // callback uses, and is returned RAW (still a string) so the caller's
+    // strict predicate — not this method — decides whether it reconciles.
+    const providerAmount = (invoice.value ?? invoice.amount) ?? null;
+    if (providerAmount === null || providerAmount === '') {
+      return unverified('provider_amount_absent', { providerState, providerInvoiceId });
+    }
+
+    // Log the decision, never the secret and never the full provider body.
+    console.warn('[INTASEND AUTHORITATIVE LOOKUP] Resolved invoice to COMPLETE; handing the amount to strict reconciliation.', {
+      invoice_id: providerInvoiceId,
+      state: providerState,
+      expected: String(expectedAmount),
+    });
+
+    return {
+      verified: true,
+      reason: 'provider_confirmed_complete',
+      providerState,
+      providerAmount,
+      providerInvoiceId,
+      providerReference: invoice.transaction_id ? String(invoice.transaction_id) : null,
+    };
   },
 
   /**

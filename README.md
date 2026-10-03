@@ -1,82 +1,153 @@
-# Return4me - Decentralized National Lost & Found Registry
+# Return4me
 
-Return4me is a secure, privacy-first, tiered-verification national lost & found registry system. It helps citizens recover lost national IDs, driver's licenses, passports, and other critical documents by matching them against reported finds at registered physical physical agent locations.
+Return4me is a national lost and found registry. Someone who finds an item
+reports it; someone who loses an item searches for it. A claim is verified,
+payment is taken into escrow, a registered agent hands the item over at a
+designated collection point, and funds are released once the handover is done.
 
-The system incorporates Gemini AI OCR document analysis, cryptographic privacy hashing, fuzzy matching algorithms, tiered validation (including SMS OTP), and real-time mobile payment settlements processed via IntaSend, a CBK-licensed Payment Service Provider (PSP) which in turn settles transactions to Safaricom M-Pesa.
+Reported items are matched through OCR-assisted document analysis, so a claimant
+can be shown a probable match even when the reporter does not remember the
+exact description.
 
-## Core Features
+## Who uses it
 
--   **Privacy-First Document Matching**: Document numbers are protected using salted HMAC-SHA256 hashes, allowing owners to search and find their exact documents without exposing sensitive document databases.
--   **Gemini AI OCR Processing**: Uploaded documents are automatically pre-scanned on the agent/finder side using Gemini to extract document numbers and names securely.
--   **Fuzzy Matching**: Uses Jaro-Winkler/Levenshtein matching on names to match claims, preventing mismatches from transcription errors.
--   **Tiered Identity Validation**:
--       **Tier 1**: Basic automated security questionnaire matching.
--       **Tier 2**: Two-factor SMS verification (OTP challenge).
--       **Tier 3**: Manual physical or high-integrity photo ID proof upload.
--   **IntaSend PSP Integration**:
--       **STK Push Collection**: Automated collection of reclaim fees from owners via IntaSend's M-Pesa STK push.
--       **Disbursement Split Outflows**: Instant split payouts to finders and physical holding agents via IntaSend's Disbursements API once a document is successfully reclaimed and verified.
--   **Cloud File Storage**: All uploaded photos (found item photos and owner ID proofs) are securely stored in S3-compatible cloud object storage (e.g., Backblaze B2).
+| Actor | What they do |
+|---|---|
+| **Finder** | Reports a found item, optionally uploads an image or document, and later confirms the item was released |
+| **Owner** | Searches for a lost item, files a claim, proves control of a phone number, pays a fee, and collects the item |
+| **Agent** | A registered collection point. Verifies items, receives drop-offs, confirms viewing, and completes handover |
+| **Customer** | A registered account holder who can file claims and manage them under one account |
+| **Administrator** | Approves agents, reviews items, adjudicates disputes, reconciles payments, monitors notification failures |
 
----
+Agents are the only actors who physically move items. An owner never receives an
+item directly; every handover goes through an approved agent at an assigned
+location.
 
-## Environment Configuration
+## Main workflows
 
-Create a `.env` file in the root directory and configure the following variables:
+**Reporting a found item** — a finder submits a description and an optional
+image. The backend runs OCR over the image, extracts candidate text, and stores
+the extracted text and a display name for search. An administrator reviews the
+item before it is surfaced publicly.
 
-### Critical Security Secrets
--   `JWT_SECRET`: High-entropy salt used to sign OTP and login tokens (minimum 32 characters).
--   `DOC_HASH_SALT`: Salt value used to hash document numbers for privacy-preserving matches (minimum 32 characters).
--   `ADMIN_PASSCODE`: Passcode required to access the Return4me administration console (minimum 12 characters).
+**Finding and claiming an item** — an owner searches, submits a claim, and
+receives a one-time verification code by SMS. Once verified, an agent confirms
+the item is at their location, which opens a short payment window. The owner
+pays, the payment is held in escrow, and a pickup code is issued. See
+[docs/claims-and-payments.md](docs/claims-and-payments.md).
 
-### IntaSend Payment Gateway
--   `INTASEND_PUBLISHABLE_KEY`: IntaSend account publishable/public key.
--   `INTASEND_SECRET_KEY`: IntaSend account secret API key.
--   `INTASEND_WEBHOOK_SECRET`: Optional IntaSend webhook secret for secure transaction updates.
+**Collection and settlement** — the agent confirms the owner viewed the item,
+then confirms handover. Handover puts the claim into settlement, which releases
+the disbursement split. A dispute window runs before release; a disputed claim is
+adjudicated by an administrator.
 
-### Cloud Object Storage
--   `STORAGE_ENDPOINT`: S3-compatible storage API endpoint (e.g., `https://s3.us-west-004.backblazeb2.com`).
--   `STORAGE_BUCKET`: S3 bucket name.
--   `STORAGE_KEY`: Access Key ID / key ID.
--   `STORAGE_SECRET`: Secret Access Key / application key.
+**Agent onboarding** — an agent registers with a phone number, verifies a
+one-time code, activates their email, submits business and location details, and
+waits for administrator approval. Approved agents are assigned a location. See
+[docs/agent-workflows.md](docs/agent-workflows.md).
 
-### AI & Application Details
--   `GEMINI_API_KEY`: API key for Google Gemini model access (used for document OCR analysis).
--   `APP_URL`: Public base URL of the deployment (used for M-Pesa instant payment callbacks).
--   `CORS_ORIGIN`: Allowed origin for API requests (default: `http://localhost:3000`).
+## Technology stack
 
----
+| Layer | Used for |
+|---|---|
+| TypeScript, Node.js | Server and shared application code |
+| Express | HTTP API |
+| React 19, Vite | Frontend |
+| Drizzle ORM, PostgreSQL | Persistence |
+| Resend | Email delivery |
+| Africa's Talking | SMS delivery |
+| IntaSend | Mobile payment (M-Pesa STK push and disbursements) |
+| Google GenAI SDK | Document OCR and analysis |
+| AWS S3 | Object storage for images and documents |
+| Sentry | Error reporting |
+| Vitest | Tests |
 
-## Local Development Setup
+Document OCR uses the Google GenAI SDK. The specific model is selected at
+runtime from the configured API key, so it is not pinned here.
 
-### Prerequisites
--   Node.js (v18 or higher)
--   npm (v9 or higher)
+## Running it locally
 
-### Installation
-1.  Clone the repository and navigate to the project root:
-    ```bash
-    cd return4me
-    ```
-2.  Install all required dependencies:
-    ```bash
-    npm install
-    ```
-3.  Configure your environment variables inside a `.env` file as described in the **Environment Configuration** section.
+### 1. Prerequisites
 
-### Launching the Application
--   To run the full-stack developer server (Vite frontend + Express backend):
-    ```bash
-    npm run dev
-    ```
--   Open your browser and navigate to `http://localhost:3000`.
+- Node.js 18 or newer
+- npm
+- A reachable PostgreSQL instance
 
----
+### 2. Install
 
-## Technical Architecture
+```bash
+npm install
+```
 
--   **Frontend**: React 19, Tailwind CSS v4, Motion (for page transitions).
--   **Backend**: Node.js/Express, TypeScript (`tsx`).
--   **Database**: PostgreSQL with Drizzle ORM.
--   **OCR Engine**: Google GenAI SDK (`gemini-3.5-flash`).
--   **Object Storage**: `@aws-sdk/client-s3`.
+### 3. Configure
+
+```bash
+cp .env.example .env
+```
+
+`.env.example` lists every supported environment variable with commentary. The
+minimum needed to start is `DATABASE_URL` and `JWT_SECRET`. SMS, email,
+payments, storage, OCR and geocoding each fail closed or degrade when their own
+configuration is absent, so an incomplete `.env` produces a running server with
+reduced capability rather than a startup error. Note that
+[docs/configuration.md](docs/configuration.md) documents one variable,
+`PUBLIC_APP_URL`, that the application reads but `.env.example` does not yet
+list.
+
+### 4. Start the development server
+
+```bash
+npm run dev
+```
+
+The server listens on `PORT` and serves the API and the Vite frontend from the
+same process.
+
+### 5. Verify
+
+```bash
+npm test          # full test suite
+npx tsc --noEmit  # type check
+npm run build     # production build
+```
+
+`npm run lint` is an alias for `npx tsc --noEmit`; this repository has no
+separate linter. See [docs/development.md](docs/development.md) and
+[docs/testing.md](docs/testing.md).
+
+## npm scripts
+
+| Script | Command | Purpose |
+|---|---|---|
+| `dev` | `tsx src/server.ts` | Development server |
+| `build` | `vite build` plus an esbuild server bundle | Production build: frontend assets to `dist/`, server to `dist/server.cjs` |
+| `start` | `node dist/server.cjs` | Run the production build |
+| `test` | `vitest run` | Run the test suite once |
+| `lint` | `tsc --noEmit` | Type check |
+| `clean` | `rm -rf dist return4me_db.json` | Remove build output |
+
+## Documentation
+
+| Document | Covers |
+|---|---|
+| [architecture.md](docs/architecture.md) | System structure, service boundaries, decisions that shape them |
+| [api.md](docs/api.md) | Route reference, grouped by actor |
+| [authentication.md](docs/authentication.md) | Roles, both session models, activation and OTP flows |
+| [claims-and-payments.md](docs/claims-and-payments.md) | Claim lifecycle, escrow, settlement, disputes |
+| [agent-workflows.md](docs/agent-workflows.md) | Agent onboarding through handover |
+| [notifications.md](docs/notifications.md) | Notification events, idempotency, failure classification, retry |
+| [data-and-privacy.md](docs/data-and-privacy.md) | Personal data handling, hashing, erasure |
+| [DATA_RETENTION_POLICY.md](docs/DATA_RETENTION_POLICY.md) | Authoritative retention schedule (draft, awaiting legal sign-off) |
+| [database.md](docs/database.md) | Tables, relationships, correctness constraints |
+| [configuration.md](docs/configuration.md) | Every environment variable |
+| [development.md](docs/development.md) | Working with the repository |
+| [testing.md](docs/testing.md) | Test layout and commands |
+| [deployment.md](docs/deployment.md) | Production build and runtime requirements |
+| [operations.md](docs/operations.md) | Background sweeps, failure handling, recovery |
+
+Superseded engineering reports are kept in [docs/archive/](docs/archive/) as
+historical records. They describe earlier states of the codebase and are not
+current documentation.
+
+Return4me is operated by Elligrace Technologies Limited.
+

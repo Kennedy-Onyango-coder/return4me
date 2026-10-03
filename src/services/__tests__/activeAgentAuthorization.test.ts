@@ -56,6 +56,16 @@ describe('isAgentActionable — the decision logic behind requireActiveAgent', (
 // suspended/pending Agent's still-valid token being usable at all).
 
 const serverTs = fs.readFileSync(path.resolve(__dirname, '../../server.ts'), 'utf8');
+// P2-A3.4A: four operational routes moved verbatim into routes/agentOps.ts.
+// This guard is SECURITY-CRITICAL (it is what stops a suspended/pending Agent's
+// still-valid token from working), so it must keep checking ALL SIX routes. The
+// only change is WHERE each route is read from - assertions are unchanged.
+const agentOpsTs = fs.readFileSync(path.resolve(__dirname, '../../routes/agentOps.ts'), 'utf8');
+
+/** Reads a route body from whichever file currently owns it. */
+function owningSource(route: string): string {
+  return agentOpsTs.indexOf(`'${route}'`) > -1 ? agentOpsTs : serverTs;
+}
 
 describe('requireActiveAgent is wired into every Agent operational route', () => {
   const operationalRoutes: Array<{ method: 'get' | 'post'; route: string }> = [
@@ -70,15 +80,16 @@ describe('requireActiveAgent is wired into every Agent operational route', () =>
   for (const { method, route } of operationalRoutes) {
     it(`${method.toUpperCase()} ${route} is mounted with authenticateJWT, requireActiveAgent`, () => {
       const marker = `app.${method}('${route}', authenticateJWT, requireActiveAgent,`;
-      expect(serverTs.includes(marker), `expected to find: ${marker}`).toBe(true);
+      expect(owningSource(route).includes(marker), `expected to find: ${marker}`).toBe(true);
     });
   }
 
   it('none of the operational routes still contain the old inline role-only check (would indicate a regression back to trusting the JWT claim alone)', () => {
     for (const { route } of operationalRoutes) {
-      const routeStart = serverTs.indexOf(`'${route}'`);
+      const src = owningSource(route);
+      const routeStart = src.indexOf(`'${route}'`);
       expect(routeStart, `route not found: ${route}`).toBeGreaterThan(-1);
-      const body = serverTs.slice(routeStart, routeStart + 600);
+      const body = src.slice(routeStart, routeStart + 600);
       // The old pattern this replaced, inline in the handler body itself
       // (as opposed to being handled by the requireActiveAgent middleware
       // mounted on the route).

@@ -32,12 +32,29 @@ import path from 'path';
 // tests pin the duplicate guard to that same standard.
 
 const serverTs = fs.readFileSync(path.resolve(__dirname, '../server.ts'), 'utf8');
+// P2-A3.1: the claim submit + claim OTP routes now live in routes/claims.ts.
+const CLAIMS_ROUTE_TS = fs.readFileSync(path.resolve(__dirname, '../routes/claims.ts'), 'utf8');
+
+// P2-A3.2: the eight claim payment/status handlers moved verbatim into
+// routes/claimPayments.ts (so an HTTP integration test can mount them without
+// importing server.ts, which boots its listener at import time). Route lookups
+// below now search the new owner first and fall back to server.ts, so an
+// assertion still fails if the handler disappears from BOTH files. No assertion
+// was weakened or removed.
+const CLAIM_PAYMENTS_TS = fs.readFileSync(path.resolve(__dirname, '../routes/claimPayments.ts'), 'utf8');
 
 /** The body of the claims-submit handler alone, comments stripped. */
 function submitHandler(): string {
-  const start = serverTs.indexOf("app.post('/api/claims/submit'");
+  // P2-A3.1: POST /api/claims/submit was extracted VERBATIM from server.ts into
+  // routes/claims.ts so it can be mounted for real HTTP integration testing. The
+  // body is read from whichever file now owns the route, so every assertion below
+  // keeps testing the same handler it always tested — only the file moved. No
+  // behavioural assertion is weakened.
+  const anchor = "app.post('/api/claims/submit'";
+  const src = serverTs.includes(anchor) ? serverTs : CLAIMS_ROUTE_TS;
+  const start = CLAIM_PAYMENTS_TS.indexOf(anchor) >= 0 ? CLAIM_PAYMENTS_TS.indexOf(anchor) : src.indexOf(anchor);
   expect(start).toBeGreaterThan(-1);
-  const rest = serverTs.slice(start);
+  const rest = src.slice(start);
   const next = rest.slice(1).search(/\n  app\.[a-z]+\(/);
   const body = next === -1 ? rest : rest.slice(0, next + 1);
   return body

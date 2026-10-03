@@ -11,14 +11,25 @@ import path from 'path';
 // didn't. Static source-audit test (same pattern as adminRouteAudit.test.ts)
 // since server.ts doesn't export its Express app separately from
 // startServer()'s bootstrap.
+//
+// P2-A3.3: the route was extracted verbatim into routes/webhooks.ts, so the
+// resolver below reads from whichever file owns it. Every assertion is
+// unchanged — this is a source-LOCATION change only, and the assertion that
+// both checks are timing-safe still has to find exactly two.
 
 const serverTs = fs.readFileSync(path.resolve(__dirname, '../server.ts'), 'utf8');
+const webhooksTs = fs.readFileSync(path.resolve(__dirname, '../routes/webhooks.ts'), 'utf8');
 
 function routeBody(method: 'get' | 'post', route: string): string {
   const marker = `app.${method}('${route}'`;
   const start = serverTs.indexOf(marker);
-  expect(start, `route ${method.toUpperCase()} ${route} not found in server.ts`).toBeGreaterThan(-1);
-  return serverTs.slice(start, start + 3000);
+  if (start > -1) return serverTs.slice(start, start + 3000);
+  const moduleStart = webhooksTs.indexOf(marker);
+  expect(
+    moduleStart,
+    `route ${method.toUpperCase()} ${route} not found in server.ts or routes/webhooks.ts`
+  ).toBeGreaterThan(-1);
+  return webhooksTs.slice(moduleStart, moduleStart + 3000);
 }
 
 describe('IntaSend webhook signature verification is timing-safe', () => {

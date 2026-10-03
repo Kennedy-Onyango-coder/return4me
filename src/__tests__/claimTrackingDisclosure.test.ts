@@ -16,6 +16,12 @@ import path from 'path';
 // lookup/pay routes now return hand-built safe DTOs instead of raw rows.
 
 const serverTs = fs.readFileSync(path.resolve(__dirname, '../server.ts'), 'utf8');
+// P2-A3.1: the claim submit + claim OTP routes were extracted VERBATIM from
+// server.ts into routes/claims.ts so they can be mounted for real HTTP
+// integration testing. routeBody resolves a marker from whichever file now owns
+// it, so every assertion keeps testing the same handler it always tested — only
+// the file the body is read from moved. No behavioural assertion is weakened.
+const CLAIMS_ROUTE_TS = fs.readFileSync(path.resolve(__dirname, '../routes/claims.ts'), 'utf8');
 const ownerViewTsx = fs.readFileSync(path.resolve(__dirname, '../components/OwnerView.tsx'), 'utf8');
 // Phase 2 moved the three owner-safe view builders into
 // services/ownerSafeViews.ts (so the customer dashboard reuses the exact same
@@ -24,11 +30,22 @@ const ownerViewTsx = fs.readFileSync(path.resolve(__dirname, '../components/Owne
 // functions now live in.
 const ownerSafeViewsTs = fs.readFileSync(path.resolve(__dirname, '../services/ownerSafeViews.ts'), 'utf8');
 
+// P2-A3.2: the eight claim payment/status handlers moved verbatim into
+// routes/claimPayments.ts (so an HTTP integration test can mount them without
+// importing server.ts, which boots its listener at import time). Route lookups
+// below now search the new owner first and fall back to server.ts, so an
+// assertion still fails if the handler disappears from BOTH files. No assertion
+// was weakened or removed.
+const CLAIM_PAYMENTS_TS = fs.readFileSync(path.resolve(__dirname, '../routes/claimPayments.ts'), 'utf8');
+// P2-A3.4A: the four agent operational routes moved to routes/agentOps.ts.
+const AGENT_OPS_TS = fs.readFileSync(path.resolve(__dirname, '../routes/agentOps.ts'), 'utf8');
+
 function routeBody(method: 'get' | 'post', route: string, len = 4000): string {
   const marker = `app.${method}('${route}'`;
-  const start = serverTs.indexOf(marker);
-  expect(start, `route ${method.toUpperCase()} ${route} not found in server.ts`).toBeGreaterThan(-1);
-  return serverTs.slice(start, start + len);
+  const src = serverTs.includes(marker) ? serverTs : (CLAIMS_ROUTE_TS.includes(marker) ? CLAIMS_ROUTE_TS : (CLAIM_PAYMENTS_TS.includes(marker) ? CLAIM_PAYMENTS_TS : AGENT_OPS_TS));
+  const start = src.indexOf(marker);
+  expect(start, `route ${method.toUpperCase()} ${route} not found in server.ts or any extracted route module`).toBeGreaterThan(-1);
+  return src.slice(start, start + len);
 }
 
 // The sensitive keys that must never be allowed to appear in an owner-facing
@@ -118,9 +135,12 @@ describe('owner-facing claim routes return the safe DTOs, never raw rows', () =>
       "app.post('/api/claims/:id/pay'",
     ];
     for (const marker of ownerRoutes) {
-      const start = serverTs.indexOf(marker);
+      // P2-A3.1: /submit lives in routes/claims.ts; P2-A3.2 moved the payment
+      // routes to routes/claimPayments.ts. Resolve per marker so the guard keeps
+      const src = serverTs.includes(marker) ? serverTs : (CLAIMS_ROUTE_TS.includes(marker) ? CLAIMS_ROUTE_TS : CLAIM_PAYMENTS_TS);
+      const start = src.indexOf(marker);
       expect(start).toBeGreaterThan(-1);
-      const body = serverTs.slice(start, start + 4000);
+      const body = src.slice(start, start + 4000);
       expect(body).not.toMatch(/\.\.\.(claim|item)/);
     }
   });
@@ -155,14 +175,18 @@ describe('the agent evidence surface is filtered, not the raw claim', () => {
 // publicNavigation.test.ts strips comments), so judging the CODE requires it.
 describe('SEC-2B-02: confirm-viewing projects the claim instead of returning the raw row', () => {
   const marker = "app.post('/api/agents/claims/:claimId/confirm-viewing'";
-  const start = serverTs.indexOf(marker);
-  const after = serverTs.slice(start);
+  // P2-A3.2: confirm-viewing is an AGENT route and was deliberately NOT extracted.
+  // P2-A3.4B: confirm-viewing moved verbatim into routes/agentOps.ts, so the
+  // locator reads it from whichever file owns it. Assertions unchanged.
+  const src = AGENT_OPS_TS.includes(marker) ? AGENT_OPS_TS : serverTs;
+  const start = src.indexOf(marker);
+  const after = src.slice(start);
   const nextRoute = after.indexOf('\n  app.', 10);
-  const rawBody = serverTs.slice(start, nextRoute > -1 ? start + nextRoute : start + 6000);
+  const rawBody = src.slice(start, nextRoute > -1 ? start + nextRoute : start + 6000);
   const body = rawBody.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
 
   it('the route exists (guards this test\'s own locator)', () => {
-    expect(start, 'confirm-viewing route not found in server.ts').toBeGreaterThan(-1);
+    expect(start, 'confirm-viewing route not found in server.ts or routes/agentOps.ts').toBeGreaterThan(-1);
     expect(rawBody).toContain('/api/agents/claims/:claimId/confirm-viewing');
   });
 
@@ -250,8 +274,11 @@ describe('server-side verification validation is enforced on submit', () => {
     expect(submit).toMatch(/const categoryId = item\.category_id \|\| 'other-item';/);
     expect(submit).not.toMatch(/categoryId\s*[:=][^;]*req\.body/);
     // The destructured claim body must not include a claimant-controlled category.
-    const bodyStart = serverTs.indexOf("app.post('/api/claims/submit'");
-    const body = serverTs.slice(bodyStart, bodyStart + 300);
+    // P2-A3.1: read from whichever file owns the route (see CLAIMS_ROUTE_TS).
+    const submitAnchor = "app.post('/api/claims/submit'";
+    const submitSrc = serverTs.includes(submitAnchor) ? serverTs : CLAIMS_ROUTE_TS;
+    const bodyStart = submitSrc.indexOf(submitAnchor);
+    const body = submitSrc.slice(bodyStart, bodyStart + 300);
     expect(body).not.toMatch(/category/i);
   });
 

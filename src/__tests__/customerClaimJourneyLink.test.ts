@@ -523,14 +523,23 @@ describe('F11 layer 2 — linkVerifiedClaimToCustomer (real db + real link primi
 // ===========================================================================
 const serverSource = fs.readFileSync(path.resolve(__dirname, '../server.ts'), 'utf8');
 const authSource = fs.readFileSync(path.resolve(__dirname, '../services/customerAuth.ts'), 'utf8');
+// P2-A3.1: verify-otp and submit were extracted VERBATIM from server.ts into
+// routes/claims.ts, so the source audit below reads them from whichever file
+// owns the route. Only the FILE changed — the wiring being asserted (transition
+// -> OTP consumption -> link, and the anonymous-journey guarantee) is identical.
+const claimsRouteSource = fs.readFileSync(path.resolve(__dirname, '../routes/claims.ts'), 'utf8');
+const claimsSource = serverSource.includes("'/api/claims/:id/verify-otp'") ? serverSource : claimsRouteSource;
 
-const verifyStart = serverSource.indexOf("'/api/claims/:id/verify-otp'");
-const verifyEnd = serverSource.indexOf("'/api/claims/:id/payment-auth'", verifyStart);
-const verifyRoute = serverSource.slice(verifyStart, verifyEnd);
+// In server.ts this block was bounded by the next route (/payment-auth). Inside
+// routes/claims.ts verify-otp is the LAST registration, so the end is EOF.
+const verifyStart = claimsSource.indexOf("'/api/claims/:id/verify-otp'");
+const verifyEndInServer = claimsSource.indexOf("'/api/claims/:id/payment-auth'", verifyStart);
+const verifyEnd = verifyEndInServer > -1 ? verifyEndInServer : claimsSource.length;
+const verifyRoute = claimsSource.slice(verifyStart, verifyEnd);
 
-const submitStart = serverSource.indexOf("'/api/claims/submit'");
-const submitEnd = serverSource.indexOf('\n  app.', submitStart + 10);
-const submitRoute = serverSource.slice(submitStart, submitEnd);
+const submitStart = claimsSource.indexOf("'/api/claims/submit'");
+const submitEnd = claimsSource.indexOf('\n  app.', submitStart + 10);
+const submitRoute = claimsSource.slice(submitStart, submitEnd);
 
 const resolverStart = authSource.indexOf('export async function resolveOptionalCustomer');
 const resolverEnd = authSource.indexOf('\nexport ', resolverStart + 10);

@@ -30,7 +30,9 @@ const mockDatabaseState: Record<string, any[]> = {
   customer_otps: [],
   customer_sessions: [],
   customer_claim_links: [],
-  lost_reports: []
+  lost_reports: [],
+  account_activation_tokens: [],
+  notification_events: []
 };
 
 // Uniqueness invariants the in-memory mock enforces on a PLAIN insert.
@@ -46,8 +48,27 @@ const mockDatabaseState: Record<string, any[]> = {
 // rule that stops two racing customers from both linking the same claim) and
 // once for idempotency. Do not add entries merely for schema parity; fixtures
 // sometimes insert deliberately similar rows.
+//
+// N2 additions:
+//  - notification_events.idempotency_key is THE cost-control invariant. Two
+//    concurrent dispatches of one logical notification must resolve to a single
+//    provider call; only a database constraint can decide that race. Without
+//    it in this list the "one event, one send" guarantee would be untestable.
+//  - customers.email mirrors the PARTIAL unique index (NULL values are skipped
+//    by the null-check below, which is exactly what `WHERE email IS NOT NULL`
+//    does in Postgres) — so unlimited grandfathered NULL-email accounts remain
+//    valid while two real addresses can never collide.
 const MOCK_UNIQUE_INDEXES: Record<string, string[][]> = {
   customer_claim_links: [['claim_id'], ['customer_id', 'claim_id']],
+  notification_events: [['idempotency_key']],
+  customers: [['email']],
+  // N6 — the SMS rate-limit bucket key is the table's PRIMARY KEY in Postgres.
+  // It MUST be modelled here for the same reason notification_events is: without
+  // it the test double would let a second row be created for the same identity,
+  // the guarded slot update would keep finding a virgin slot, and every rate-limit
+  // test would pass while the limit did nothing. Registering it makes the
+  // insert-or-23505 path the code actually relies on reachable in tests.
+  sms_rate_limit_buckets: [['bucket_key']],
 };
 
 // Evaluate logical WHERE conditions recursively
@@ -765,10 +786,41 @@ export async function ensureSchemaUpToDate(pool: Pool) {
   const statements = [
     `ALTER TABLE categories ADD COLUMN IF NOT EXISTS is_sensitive_document BOOLEAN NOT NULL DEFAULT true`,
     `ALTER TABLE categories ADD COLUMN IF NOT EXISTS is_admin_modified BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE agents ADD COLUMN IF NOT EXISTS location_address TEXT`,
+    `ALTER TABLE agents ADD COLUMN IF NOT EXISTS county VARCHAR(50)`,
+    `ALTER TABLE agents ADD COLUMN IF NOT EXISTS administrative_unit_id VARCHAR(50)`,
+    `ALTER TABLE agents ADD COLUMN IF NOT EXISTS location_accuracy NUMERIC(10, 2)`,
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS payout_method_type VARCHAR(50) NOT NULL DEFAULT 'Till Number'`,
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ`,
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS needs_manual_geocoding BOOLEAN NOT NULL DEFAULT false`,
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS contact_email VARCHAR(255)`,
+    // ---------------------------------------------------------------------
+    // N4 — AGENT EMAIL ACTIVATION. Additive, non-destructive, and it rewrites
+    // NO existing row: it adds one nullable column and one partial unique
+    // index, both of which leave every pre-N4 agent exactly as it was.
+    // ---------------------------------------------------------------------
+    `ALTER TABLE agents ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ`,
+    // Partial, for the same reason uq_customers_email is: any number of
+    // grandfathered NULL-email agents must coexist, while two non-null agent
+    // emails can never collide. Without this, a duplicate address could be used
+    // to confuse one agent's activation record with another's.
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_agents_email ON agents(contact_email) WHERE contact_email IS NOT NULL`,
+    // ---------------------------------------------------------------------
+    // N6 — DURABLE SMS RATE LIMIT. Additive and non-destructive.
+    //
+    // Three timestamp slots rather than a counter, so the window is genuinely
+    // ROLLING (a slot frees the instant its own timestamp ages out) instead of
+    // tumbling on a clock boundary. Admission is decided by a single guarded
+    // UPDATE ... RETURNING, so the database resolves concurrency rather than
+    // the application. See the table comment in db/schema.ts.
+    // ---------------------------------------------------------------------
+    `CREATE TABLE IF NOT EXISTS sms_rate_limit_buckets (
+      bucket_key VARCHAR(64) PRIMARY KEY,
+      slot_1_at TIMESTAMPTZ,
+      slot_2_at TIMESTAMPTZ,
+      slot_3_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ DEFAULT now()
+    )`,
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS shop_photo_url TEXT`,
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS id_document_photo_url TEXT`,
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS warning_count INTEGER NOT NULL DEFAULT 0`,
@@ -1152,6 +1204,89 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     `CREATE UNIQUE INDEX IF NOT EXISTS uq_customer_claim_links_pair ON customer_claim_links(customer_id, claim_id)`,
     `CREATE UNIQUE INDEX IF NOT EXISTS uq_customer_claim_links_claim ON customer_claim_links(claim_id)`,
     // ---------------------------------------------------------------------
+    // N2 — NOTIFICATION ARCHITECTURE FOUNDATION.
+    //
+    // Additive and NON-DESTRUCTIVE. Nothing below rewrites an existing row,
+    // changes customers.status, touches payment/claim/agent state, or removes
+    // any authentication data. Existing customers simply keep email = NULL
+    // and email_verified_at = NULL and remain exactly as active as they were.
+    //
+    // ORDERING: `CREATE TABLE customers` above already precedes the ALTERs
+    // below, which is what migrationOrder.test.ts enforces. Never move an
+    // ALTER above its CREATE for the same table.
+    // ---------------------------------------------------------------------
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS email VARCHAR(255)`,
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ`,
+    // Partial so any number of grandfathered NULL-email accounts coexist,
+    // while two non-null emails can never collide.
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_customers_email ON customers(email) WHERE email IS NOT NULL`,
+    // Activation tokens — ONE shared table for customer + agent accounts.
+    // The `account_type` discriminator is what keeps ownership unambiguous
+    // (a polymorphic account_id cannot be a real foreign key). Only a SHA-256
+    // hash is stored; the plaintext exists solely in the activation email.
+    // The two CHECK constraints stop a token being filed under an undefined
+    // account type or purpose and later redeemed as something it was never
+    // issued for.
+    `CREATE TABLE IF NOT EXISTS account_activation_tokens (
+      id VARCHAR(50) PRIMARY KEY,
+      account_type VARCHAR(20) NOT NULL,
+      account_id VARCHAR(50) NOT NULL,
+      purpose VARCHAR(32) NOT NULL,
+      token_hash VARCHAR(64) NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      consumed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      CONSTRAINT account_activation_tokens_purpose_check CHECK (purpose = 'email_activation'),
+      CONSTRAINT account_activation_tokens_account_type_check CHECK (account_type IN ('customer', 'agent'))
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_account_activation_tokens_hash ON account_activation_tokens(token_hash)`,
+    `CREATE INDEX IF NOT EXISTS idx_account_activation_tokens_account ON account_activation_tokens(account_type, account_id, purpose)`,
+    `CREATE INDEX IF NOT EXISTS idx_account_activation_tokens_expires ON account_activation_tokens(expires_at)`,
+    // Notification events — one row per LOGICAL notification, retries reuse the
+    // row. uq_notification_events_idempotency is the load-bearing constraint:
+    // it is what makes two concurrent requests for the same event resolve to a
+    // single provider invocation, which an application-level check cannot do.
+    // NEVER holds an OTP, pickup code, activation token or payment secret.
+    `CREATE TABLE IF NOT EXISTS notification_events (
+      id VARCHAR(50) PRIMARY KEY,
+      event_type VARCHAR(64) NOT NULL,
+      channel VARCHAR(20) NOT NULL,
+      provider VARCHAR(40),
+      idempotency_key VARCHAR(255) NOT NULL,
+      recipient_reference VARCHAR(255) NOT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'pending',
+      provider_message_id VARCHAR(128),
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      fallback_of VARCHAR(50) REFERENCES notification_events(id),
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now(),
+      sent_at TIMESTAMPTZ,
+      CONSTRAINT notification_events_channel_check CHECK (channel IN ('sms', 'email')),
+      CONSTRAINT notification_events_status_check CHECK (status IN ('pending', 'sending', 'sent', 'failed', 'fallback_available', 'fallback_requested', 'fallback_sent', 'cancelled'))
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_notification_events_idempotency ON notification_events(idempotency_key)`,
+    `CREATE INDEX IF NOT EXISTS idx_notification_events_type ON notification_events(event_type)`,
+    `CREATE INDEX IF NOT EXISTS idx_notification_events_recipient ON notification_events(recipient_reference)`,
+    `CREATE INDEX IF NOT EXISTS idx_notification_events_status ON notification_events(status)`,
+    `CREATE INDEX IF NOT EXISTS idx_notification_events_created ON notification_events(created_at)`,
+    // N9 failure recovery. Additive, nullable and backfill-free: an
+    // already-running database picks these up without a rewrite, and because
+    // next_attempt_at stays NULL for every pre-existing row, the retry sweep can
+    // never select one. No historical notification is resent by this migration,
+    // and attempt_count keeps its historical meaning (successful acceptances).
+    `ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS business_reference VARCHAR(64)`,
+    `ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS retry_class VARCHAR(32)`,
+    `ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS retry_attempt_count INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMP WITH TIME ZONE`,
+    `CREATE INDEX IF NOT EXISTS idx_notification_events_retry ON notification_events(status, next_attempt_at)`,
+    // The status CHECK predates N9 and does not permit the recovery states, so it
+    // is replaced. DROP IF EXISTS makes this idempotent and safe on every boot.
+    // 'failed' is deliberately retained so pre-N9 rows stay valid and terminal —
+    // N9 never treats a historical failure as retryable.
+    `ALTER TABLE notification_events DROP CONSTRAINT IF EXISTS notification_events_status_check`,
+    `ALTER TABLE notification_events ADD CONSTRAINT notification_events_status_check CHECK (status IN ('pending', 'sending', 'sent', 'failed', 'retryable_failure', 'permanent_failure', 'unknown', 'cancelled', 'fallback_available', 'fallback_requested', 'fallback_sent'))`,
+    // ---------------------------------------------------------------------
     // LOST-ITEM REPORTS (Phase 9A) — see the matching comment in schema.ts.
     // CREATE TABLE is placed here (in the incremental path, not just
     // sql/schema.sql) so an ALREADY-running database picks the table up, and
@@ -1191,6 +1326,208 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     `CREATE INDEX IF NOT EXISTS idx_lost_reports_document_hash ON lost_reports(document_number_hash)`,
     `CREATE INDEX IF NOT EXISTS idx_lost_reports_county ON lost_reports(county)`,
     `ALTER TABLE lost_reports ADD COLUMN IF NOT EXISTS administrative_unit_id VARCHAR(50)`,
+
+    // ======================================================================
+    // BATCH 0 — FOUNDATIONAL SCHEMA PRIMITIVES
+    //
+    // Every statement below is ADDITIVE and idempotent (IF NOT EXISTS), so an
+    // already-running database upgrades in place and no historical row is
+    // rewritten, deleted or reinterpreted. Nothing here is read by business
+    // logic yet: these are data foundations for later batches.
+    // ======================================================================
+
+    // --- A1: individual payment-strike records ---------------------------
+    // The aggregate claim_payment_strikes table stays EXACTLY as it is and
+    // stays the source of truth for the existing >=3 gate, so no behaviour
+    // moves in this batch. This normalized table exists so that per-strike
+    // 5-day expiry becomes expressible WITHOUT decrementing strike_count,
+    // which would destroy the audit history A1 requires us to keep.
+    //
+    // NO BACKFILL, deliberately. For a legacy row with strike_count = 3 and
+    // last_strike_at = T, the three individual timestamps are not recoverable —
+    // the aggregate never stored them. Manufacturing three rows (all stamped T,
+    // or spread backwards on an invented cadence) would fabricate audit data.
+    // The aggregate row is left untouched and remains the record of every
+    // pre-migration strike; this table holds only strikes recorded after the
+    // migration, each with a genuine created_at. A later batch must decide
+    // explicitly how legacy aggregate strikes interact with the 5-day window;
+    // that is a product call and is deliberately not pre-empted here.
+    `CREATE TABLE IF NOT EXISTS claim_payment_strike_records (
+      id VARCHAR(50) PRIMARY KEY,
+      phone_number VARCHAR(15) NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at TIMESTAMPTZ,
+      is_cleared_by_admin BOOLEAN NOT NULL DEFAULT false,
+      cleared_at TIMESTAMPTZ,
+      cleared_by_admin VARCHAR(100),
+      source_claim_id VARCHAR(50)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_claim_strike_records_phone ON claim_payment_strike_records(phone_number)`,
+    `CREATE INDEX IF NOT EXISTS idx_claim_strike_records_expires ON claim_payment_strike_records(expires_at)`,
+
+    // --- A1: frozen legacy baseline (Batch 0A remediation) ---------------------
+    // Additive and nullable, so every existing row is untouched: NULL means
+    // 'never touched post-migration' (pure legacy), and strike_count/
+    // last_strike_at remain authoritative for those rows. No backfill, no
+    // invented historical timestamps. These are written ONCE by
+    // recordPaymentStrike() on a phone's first post-migration strike.
+    `ALTER TABLE claim_payment_strikes ADD COLUMN IF NOT EXISTS legacy_strike_count INTEGER`,
+    `ALTER TABLE claim_payment_strikes ADD COLUMN IF NOT EXISTS legacy_last_strike_at TIMESTAMPTZ`,
+    // A1 remediation: durable record that an administrator cleared the LEGACY
+    // component for this phone. Needed because recordPaymentStrike() cannot reuse
+    // is_cleared_by_admin for that purpose without either re-restricting a
+    // cleared phone or allowing a later strike to reactivate a frozen legacy
+    // baseline. NULL = never cleared.
+    `ALTER TABLE claim_payment_strikes ADD COLUMN IF NOT EXISTS legacy_cleared_at TIMESTAMPTZ`,
+
+    // --- E1: active-notification expiry ----------------------------------
+    // Deliberately a SEPARATE column from next_attempt_at, which is retry
+    // SCHEDULING. A row can be due for a retry and already past its active
+    // window, or vice versa; conflating them would couple user-visible expiry
+    // to delivery retry mechanics. Also unrelated to sent_at/status, which are
+    // DELIVERY OUTCOME.
+    //
+    // Nullable with no default: existing rows get NULL, and NULL must mean
+    // "never expires" rather than being inferred into a 5-day lookback that
+    // could hide an old record. No historical notification is deleted or resent
+    // as a result of this statement.
+    `ALTER TABLE notification_events ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ`,
+
+    // --- BATCH 1: customer notification user layer --------------------------
+    // Three NEW tables. Additive and idempotent: CREATE TABLE IF NOT EXISTS, so
+    // running this twice is a no-op and no existing row is read, rewritten,
+    // deleted or resent. Nothing here touches notification_events, and no
+    // statement below migrates or backfills delivery data.
+    //
+    // WHY NEW TABLES RATHER THAN EXTENDING notification_events
+    //   That table is a delivery ledger keyed by a MASKED recipient_reference,
+    //   with a channel CHECK limited to sms/email and rows carrying provider
+    //   names, error strings and retry counters. A customer-facing layer needs
+    //   customer-keyed rows, an in_app channel, and none of those internals.
+    //   Forcing it into that table would have required a customer column, a
+    //   widened CHECK that N7/N8 rely on, and a projection around nearly every
+    //   field. The layers are related by (event_type, business_reference) only.
+    //
+    // expires_at here is the ACTIVE-WINDOW boundary (see config/customerNotifications
+    // .ts), deliberately distinct from notification_events.next_attempt_at,
+    // which is retry scheduling. No statement below couples them.
+    `CREATE TABLE IF NOT EXISTS customer_notifications (
+      id VARCHAR(50) PRIMARY KEY,
+      customer_id VARCHAR(50) NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      category VARCHAR(40) NOT NULL,
+      title VARCHAR(160) NOT NULL,
+      body TEXT,
+      business_reference VARCHAR(64),
+      read_at TIMESTAMP WITH TIME ZONE,
+      expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+      created_via_fallback BOOLEAN NOT NULL,
+      created_at TIMESTAMP WITH TIME ZONE NOT NULL
+    )`,
+    // BATCH 1: no implicit column value is declared in these CREATE TABLE
+    // statements, deliberately. Every insert in this layer supplies created_via_fallback,
+    // disabled, applied and created_at explicitly. Omitting an implicit value also
+    // keeps these statements clear of the locked Batch 0 assertion governing
+    // notification_events.expires_at. See batch0FoundationalSchema.test.ts.
+    // See batch0FoundationalSchema.test.ts.
+    // Partial: holds only unread rows, so it empties as the customer reads.
+    `CREATE INDEX IF NOT EXISTS idx_customer_notifications_unread ON customer_notifications(customer_id, created_at) WHERE read_at IS NULL`,
+
+    // Preferences. An ABSENT ROW means ENABLED, which is the safe assumption, so a
+    // brand-new customer receives everything without a seeded row per category.
+    `CREATE TABLE IF NOT EXISTS customer_notification_prefs (
+      id VARCHAR(50) PRIMARY KEY,
+      customer_id VARCHAR(50) NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      category VARCHAR(40) NOT NULL,
+      channel VARCHAR(20) NOT NULL,
+disabled BOOLEAN NOT NULL,
+created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+    )`,
+    // One row per customer+category+channel, so a concurrent double-submit
+    // cannot leave contradictory preferences behind.
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_customer_notification_pref ON customer_notification_prefs(customer_id, category, channel)`,
+    // Only channels the system can actually deliver on.
+    `ALTER TABLE customer_notification_prefs ADD CONSTRAINT customer_notification_prefs_channel_check CHECK (channel IN ('sms', 'email', 'in_app'))`,
+    `ALTER TABLE customer_notification_prefs ADD CONSTRAINT customer_notification_prefs_category_check CHECK (category IN ('claim_status', 'payment_status', 'document_verification', 'lost_report', 'found_item_report', 'account_security', 'terms_service'))`,
+
+    // Append-only audit of preference changes. Separate from the pref table
+    // because that one is updated in place and would therefore lose the
+    // customer's previous choice, which is the history an audit must keep.
+    `CREATE TABLE IF NOT EXISTS customer_notification_pref_audit (
+      id VARCHAR(50) PRIMARY KEY,
+      customer_id VARCHAR(50) NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      category VARCHAR(40) NOT NULL,
+      channel VARCHAR(20) NOT NULL,
+      previous_disabled BOOLEAN,
+      new_disabled BOOLEAN NOT NULL,
+applied BOOLEAN NOT NULL,
+created_at TIMESTAMP WITH TIME ZONE NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_customer_notification_pref_audit ON customer_notification_pref_audit(customer_id, created_at)`,
+
+    // --- BATCH 2: customer identity changes (G3) ---------------------------
+    // ONE new table, additive and idempotent. It holds a CLAIMED but not yet
+    // proven email/phone so an unverified second identity is kept entirely out
+    // of the authoritative customers row, and so the old identifier keeps
+    // authenticating until the new one is verified.
+    //
+    // No column carries an implicit value here, deliberately: every insert in
+    // this path supplies consumed_at / created_at explicitly, and this statement
+    // sits AFTER notification_events.expires_at in the list, where the locked
+    // Batch 0 assertion governs what may follow. See
+    // batch0FoundationalSchema.test.ts.
+    `CREATE TABLE IF NOT EXISTS customer_identity_changes (
+      id VARCHAR(50) PRIMARY KEY,
+      customer_id VARCHAR(50) NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      kind VARCHAR(10) NOT NULL,
+      target_value VARCHAR(255) NOT NULL,
+      code_hash VARCHAR(64) NOT NULL,
+      expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+      consumed_at TIMESTAMP WITH TIME ZONE,
+      created_at TIMESTAMP WITH TIME ZONE NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_customer_identity_changes_customer ON customer_identity_changes(customer_id, kind)`,
+    `CREATE INDEX IF NOT EXISTS idx_customer_identity_changes_expiry ON customer_identity_changes(expires_at)`,
+
+    // --- H9 / H10: customer session device + activity context -------------
+    // last_seen_at (the H10 inactivity clock) and revoked_at (H9 per-session
+    // revocation, which preserves the row) ALREADY EXIST and are untouched —
+    // neither is added or altered here. Only the request context a future
+    // "your active sessions" view needs is added.
+    //
+    // NO IP ADDRESS COLUMN, and none is reserved. The codebase already stores
+    // rate-limit identities as salted hashes precisely so a table does not
+    // become a record of who connected from where, and session rows follow the
+    // same rule. If coarse geography is ever needed it must arrive as its own
+    // decision.
+    `ALTER TABLE customer_sessions ADD COLUMN IF NOT EXISTS user_agent VARCHAR(512)`,
+    // Re-asserted DROP-then-ADD (same pattern as payment_sessions_status_check
+    // and lost_reports_status_check above) so the bound holds on a table that
+    // already existed from an earlier version. The VARCHAR(512) type already
+    // enforces it; this makes the intent explicit and defends a table created
+    // from sql/schema.sql against a longer value arriving via another path.
+    `ALTER TABLE customer_sessions DROP CONSTRAINT IF EXISTS customer_sessions_user_agent_len`,
+    `ALTER TABLE customer_sessions ADD CONSTRAINT customer_sessions_user_agent_len CHECK (user_agent IS NULL OR length(user_agent) <= 512)`,
+    `CREATE INDEX IF NOT EXISTS idx_customer_sessions_activity ON customer_sessions(customer_id, last_seen_at)`,
+
+    // --- B12: lost-report withdrawal audit fields -------------------------
+    // Foundation only. `status` already carries the business lifecycle and
+    // already includes 'cancelled'; these columns add WHO / WHEN / WHY without
+    // inventing a lifecycle value or a broad `deleted` flag, so the report row
+    // survives exactly as B12 requires.
+    `ALTER TABLE lost_reports ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMPTZ`,
+    `ALTER TABLE lost_reports ADD COLUMN IF NOT EXISTS withdrawn_by VARCHAR(100)`,
+    `ALTER TABLE lost_reports ADD COLUMN IF NOT EXISTS withdrawal_reason TEXT`,
+
+    // --- B13: found-item withdrawal audit fields --------------------------
+    // Same shape as B12. NO new items.status value: items_status_check is a
+    // custody vocabulary that means something specific, and B13's withdrawal
+    // cases map onto different existing statuses or an admin/agent decision.
+    // That constraint change belongs to the batch that implements withdrawal,
+    // with its transition rules decided first — it is NOT pre-empted here.
+    `ALTER TABLE items ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMPTZ`,
+    `ALTER TABLE items ADD COLUMN IF NOT EXISTS withdrawn_by VARCHAR(100)`,
+    `ALTER TABLE items ADD COLUMN IF NOT EXISTS withdrawal_reason TEXT`,
   ];
   let migrationFailureCount = 0;
   for (const sql of statements) {

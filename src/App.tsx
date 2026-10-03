@@ -69,6 +69,14 @@ const BecomeAgentView = lazy(() => import('./components/BecomeAgentView'));
 // and a thin shell around the EXISTING customer lost-report experience — it
 // renders no report form of its own.
 const ReportLostView = lazy(() => import('./components/ReportLostView'));
+// N3 — the public /activate-email landing page for the emailed customer
+// activation link. Lazy like every other non-home screen: a normal visitor
+// landing on the homepage never downloads it.
+const CustomerActivationView = lazy(() => import('./components/CustomerActivationView'));
+// N4 — the AGENT activation landing page. Separate chunk for the same reason:
+// an applicant following an emailed agent link is on a completely different
+// journey from a customer, and a normal visitor must never download it.
+const AgentActivationView = lazy(() => import('./components/AgentActivationView'));
 
 // Shown for the brief moment a lazy view's chunk is being fetched — kept
 // minimal and framework-agnostic (no dependency on any single view's
@@ -378,6 +386,25 @@ export default function App() {
       document.title = lang === 'sw'
         ? 'Ripoti Kitu Kilichopotea | Return4me'
         : 'Report a Lost Item | Return4me';
+      return;
+    }
+    // N3: /activate-email likewise renders from `route`. The title must never
+    // include the token — it is a credential, and a document title is exactly
+    // the kind of place a credential ends up in history, screenshots and
+    // shoulder-surfing.
+    if (route.kind === 'activateEmail') {
+      document.title = lang === 'sw'
+        ? 'Ushiriki wa Barua Pepe | Return4me'
+        : 'Email Activation | Return4me';
+      return;
+    }
+    // N4: /activate-agent-email is the same contract for the agent link. A
+    // generic title, and never the token — a document title is exactly the kind
+    // of place a credential ends up in history, screenshots and shoulder-surfing.
+    if (route.kind === 'activateAgentEmail') {
+      document.title = lang === 'sw'
+        ? 'Uthibitishaji wa Barua Pepe ya Wakala | Return4me'
+        : 'Agent Email Verification | Return4me';
       return;
     }
     const titles: Record<typeof currentView, { en: string; sw: string }> = {
@@ -849,6 +876,44 @@ export default function App() {
               </div>
             </Suspense>
           </ErrorBoundary>
+        ) : route.kind === 'activateEmail' ? (
+          /* N3 — PUBLIC EMAIL-ACTIVATION LANDING PAGE. Rendered from the URL
+             alone and inside the PUBLIC shell, because the person following the
+             emailed link has, by definition, no session yet: mounting it in the
+             dashboard shell would hide the very person who most needs to see it.
+             Only `hasToken` crosses this boundary — the token VALUE never leaves
+             window.location, so it is not in the route, not in React state and
+             not in anything App could re-render or push into history. */
+          <ErrorBoundary fallbackTitle="Activation Page Crash">
+            <Suspense fallback={<ViewLoadingFallback />}>
+              <CustomerActivationView
+                lang={lang}
+                hasToken={route.hasToken}
+                onSignIn={() => navigate(accountPath(), 'home')}
+                onExit={() => navigate('/', 'home')}
+              />
+            </Suspense>
+          </ErrorBoundary>
+        ) : route.kind === 'activateAgentEmail' ? (
+          /* N4 — PUBLIC AGENT EMAIL-ACTIVATION LANDING PAGE. Rendered from the
+             URL alone and inside the PUBLIC shell, for the same reason as the
+             customer activation page: the applicant following the emailed link
+             has no session by definition, and mounting this in the dashboard
+             shell would hide the very person who most needs to see it.
+
+             Only `hasToken` crosses this boundary. The token VALUE never leaves
+             window.location — it is not in the route, not in React state, and
+             not in anything App could re-render, log or push into history. */
+          <ErrorBoundary fallbackTitle="Agent Activation Page Crash">
+            <Suspense fallback={<ViewLoadingFallback />}>
+              <AgentActivationView
+                lang={lang}
+                hasToken={route.hasToken}
+                onSignIn={() => navigate(pathForView('agent'), 'agent')}
+                onExit={() => navigate('/', 'home')}
+              />
+            </Suspense>
+          </ErrorBoundary>
         ) : (
         <Suspense fallback={<ViewLoadingFallback />}>
           {currentView === 'home' && (
@@ -866,6 +931,11 @@ export default function App() {
               recentItems={recentItems}
               recentItemsLoading={recentItemsLoading}
               recentItemsError={recentItemsError}
+              /* Batch 4 — the discovery section's "Try Again" control. This is
+                 the SAME fetchRecentItems used on mount, on return-to-home and
+                 on the 45s poll; passing it is additive wiring only. No second
+                 request, no change to the polling, abort or overlap guards. */
+              onRetryRecentItems={fetchRecentItems}
               onOpenItem={(itemId: string) => navigate(itemPath(itemId), 'home')}
             />
           )}

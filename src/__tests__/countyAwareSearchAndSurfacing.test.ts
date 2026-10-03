@@ -41,11 +41,46 @@ function stripComments(source: string): string {
 
 /** Anchors are located in the RAW source and comments stripped from the SLICE. */
 const SERVER_RAW = read('src/server.ts');
+// P2-A2: GET /api/items/search was extracted VERBATIM from server.ts into
+// routes/publicSearch.ts so it could be mounted for real HTTP integration
+// testing. searchRouteBody() reads it from whichever file owns the anchor, so
+// every assertion below keeps testing the same handler it always tested — only
+// the file it is read from moved. No behavioural assertion is weakened.
+const PUBLIC_SEARCH_RAW = read('src/routes/publicSearch.ts');
+
+describe('P2-A2 — the public search route is owned by routes/publicSearch.ts', () => {
+  it('server.ts only registers it; the handler body lives in exactly one place', () => {
+    // Proves the extraction and rules out a second, divergent copy.
+    expect(PUBLIC_SEARCH_RAW).toContain("app.get('/api/items/search'");
+    expect(SERVER_RAW).not.toContain("app.get('/api/items/search'");
+    expect(SERVER_RAW).toContain('registerPublicSearchRoutes(app, { sendServerError, canCreateClaim });');
+  });
+
+  it('the module never boots the application and never imports server.ts', () => {
+    expect(PUBLIC_SEARCH_RAW).not.toContain('startServer(');
+    expect(PUBLIC_SEARCH_RAW).not.toMatch(/from\s+['"].*server['"]/);
+    // Exactly one registration inside the module — no accidental duplicate.
+    const registrations = PUBLIC_SEARCH_RAW.match(/app\.(get|post|put|delete)\(/g) || [];
+    expect(registrations).toHaveLength(1);
+  });
+
+  it('receives the shared dependencies through the injection boundary', () => {
+    // canCreateClaim is the single claimability rule shared with
+    // routes/publicItems.ts and routes/lostReports.ts — it must be injected,
+    // never re-implemented here, or the public list could drift from what the
+    // claim endpoint accepts. The window is generous because the injection
+    // boundary carries its own rationale comment.
+    expect(PUBLIC_SEARCH_RAW).toMatch(/registerPublicSearchRoutes[\s\S]{0,1200}?canCreateClaim/);
+    expect(PUBLIC_SEARCH_RAW).toContain('const { sendServerError, canCreateClaim } = deps;');
+  });
+});
 
 function searchRouteBody(): string {
-  const start = SERVER_RAW.indexOf("app.get('/api/items/search'");
-  expect(start, 'GET /api/items/search not found in server.ts').toBeGreaterThan(-1);
-  const rest = SERVER_RAW.slice(start);
+  const anchor = "app.get('/api/items/search'";
+  const src = SERVER_RAW.includes(anchor) ? SERVER_RAW : PUBLIC_SEARCH_RAW;
+  const start = src.indexOf(anchor);
+  expect(start, 'GET /api/items/search not found in server.ts or routes/publicSearch.ts').toBeGreaterThan(-1);
+  const rest = src.slice(start);
   const next = rest.search(/\n {2}app\.[a-z]+\(/);
   const body = next === -1 ? rest : rest.slice(0, next + 1);
   return stripComments(body);
@@ -139,7 +174,7 @@ describe('GEO-16-01 — the county parameter canonicalises exactly like every ot
 describe('GEO-16-01 — GET /api/items/search is wired to the structured county filter', () => {
   it('accepts an optional `county` parameter alongside the existing q/categoryId/area', () => {
     const body = searchRouteBody();
-    expect(body).toContain('const { q, categoryId, area, county } = req.query;');
+    expect(body).toContain('const { q, categoryId, area, county, administrativeUnitId } = req.query;');
   });
 
   it('refuses a county that is not canonical instead of falling back to an area search', () => {
@@ -191,27 +226,29 @@ describe('GEO-16-01 — the Owner search offers the canonical counties, not an a
   it('builds its county options from the ONE canonical dataset', () => {
     expect(OWNER).toContain("import { countiesByUxGroup } from '../config/kenyaCounties'");
     expect(OWNER).toContain('const COUNTY_GROUPS = countiesByUxGroup()');
-    expect(OWNER).toMatch(/COUNTY_GROUPS\.map\(group => \(/);
+    expect(OWNER).toContain('COUNTY_GROUPS.map(group => <optgroup');
     expect(OWNER).toMatch(/<optgroup key=\{group\.group\} label=\{group\.group\}>/);
     expect(OWNER).toMatch(/value=\{county\.name\}/);
   });
 
   it('sends the selected county as a STRUCTURED county parameter', () => {
     expect(OWNER).toMatch(/if \(selectedCounty\) params\.append\('county', selectedCounty\)/);
-    // Exactly one county selector, and the exact-place search box is untouched.
+    // Exactly one county selector. Broad item search and exact-place text are
+    // independent query parameters and neither is treated as a county.
     expect(OWNER.match(/value=\{selectedCounty\}/g)?.length).toBe(1);
     expect(OWNER).toMatch(/if \(searchQuery\) params\.append\('q', searchQuery\)/);
+    expect(OWNER).toMatch(/if \(selectedArea\) params\.append\('area', selectedArea\)/);
   });
 
   it('no longer consumes the retired /api/regions area vocabulary', () => {
     expect(OWNER).not.toContain("fetch('/api/regions')");
-    expect(OWNER).not.toContain('selectedArea');
     expect(OWNER).not.toContain('All Regions');
     expect(OWNER).not.toContain('regionsLoading');
   });
 
-  it('does not post the legacy `area` parameter as though it were a county', () => {
-    expect(OWNER).not.toMatch(/params\.append\('area'/);
+  it('uses the exact-place `area` parameter independently, not as a county vocabulary', () => {
+    expect(OWNER).toMatch(/if \(selectedArea\) params\.append\('area', selectedArea\)/);
+    expect(OWNER).toMatch(/aria-label=\{lang === 'en' \? 'Exact place or area'/);
   });
 });
 
@@ -358,17 +395,19 @@ describe('GEO-16-01 — POST /api/items/report never infers a county from free t
   });
 
   it('the route refuses before it can write, and stores the CANONICAL value (source pin)', () => {
-    // /api/items/report is declared inside startServer() in server.ts, which
-    // boots Vite middleware and background sweeps at import time, so the handler
-    // cannot be mounted by a test. This is the same constraint — and the same
-    // convention — documented at the top of
-    // services/__tests__/foundItemCounty.test.ts, whose own route-wiring
-    // assertions this extends rather than repeats.
-    const routeStart = SERVER_RAW.indexOf("app.post('/api/items/report'");
-    const routeEnd = SERVER_RAW.indexOf("app.get('/api/items/search'");
-    expect(routeStart, 'POST /api/items/report not found').toBeGreaterThan(0);
-    expect(routeEnd).toBeGreaterThan(routeStart);
-    const route = stripComments(SERVER_RAW.slice(routeStart, routeEnd));
+    // P2-A1: /api/items/report was extracted VERBATIM from server.ts into
+    // routes/finderReport.ts precisely so it COULD be mounted by a test; the
+    // constraint described below (server.ts boots Vite middleware and background
+    // sweeps at import time) is why that extraction happened. The body is now
+    // read from its new owning module. The guarantees asserted here are
+    // unchanged — only the file the source is read from moved.
+    const FINDER_RAW = read('src/routes/finderReport.ts');
+    const routeStart = FINDER_RAW.indexOf("app.post('/api/items/report'");
+    expect(routeStart, 'POST /api/items/report not found in routes/finderReport.ts').toBeGreaterThan(0);
+    // The report handler is the last registration in that module, so the slice
+    // runs to end-of-file — an upper bound that cannot bleed into an unrelated
+    // route the way the old "up to /api/items/search" bound could.
+    const route = stripComments(FINDER_RAW.slice(routeStart));
 
     expect(route).toContain('resolveFoundCountyInput(foundCounty)');
     expect(route).toMatch(/if \(!foundCountyResolution\.ok\)[\s\S]{0,200}status\(400\)/);

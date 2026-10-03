@@ -170,9 +170,9 @@ export const translations = {
     agentDetails: 'Assigned Return4me Agent Hub',
 
     // Owner Journey
-    ownerTitle: 'Search for Your Lost Document',
-    ownerSubtitle: 'Enter your document number or name. Results are masked to preserve your privacy.',
-    searchPlaceholder: 'Search by ID Number, Plate Number, or Name...',
+    ownerTitle: 'Find My Lost Item',
+    ownerSubtitle: 'Search available found items by name, identifying number, plate number, or other details. Results are masked to protect privacy.',
+    searchPlaceholder: 'Search by name, ID number, plate number, or item details...',
     noResults: 'No matches found yet. Try searching for partial names, or check back later!',
     maskedName: 'Holder Name',
     foundAt: 'Found Near',
@@ -196,6 +196,10 @@ export const translations = {
     // Agent Portal
     agentTitle: 'Return4me Agent Hub',
     agentSubtitle: 'Receive physical drop-offs and process verified owner collections. Earn commissions safely.',
+    // N4 — why the business email is now required. Stated in the UI because an
+    // applicant who is not told will simply treat "required" as arbitrary, and
+    // an unverified agent is blocked from every agent operation.
+    agentEmailHelp: 'We send a verification link to this address. You must confirm it before you can use the Agent Hub.',
     applyBtn: 'Register as a New Return4me Agent',
     businessName: 'Business / Cyber Café Name',
     mpesaTill: 'M-Pesa Till or Paybill Number (Payout Target)',
@@ -230,6 +234,26 @@ export const translations = {
     agentDropoffWorkflow: 'Review the item when it arrives.',
     agentReview: 'Review',
     agentReject: 'Reject',
+    // AGENTHUB UX BATCH 4 — verification action hierarchy. The panel submits ONE
+    // action whose outcome depends on two independent facts: whether the agent
+    // corrected the Finder's report, and whether the item was physically
+    // inspected. These keys replace four compound English-only labels that
+    // bundled two consequences behind an "&". They state only what the existing
+    // workflow does (record verification, and approve when physically checked)
+    // and imply nothing about payment, refund, payout, or notification.
+    agentVerifyConfirmReported: 'Confirm As Reported',
+    agentVerifySaveCorrections: 'Save Corrections',
+    agentVerifyApprovesToo: 'This also approves the drop-off.',
+    agentVerifySavesOnly: 'This saves your work. Inspect the item physically, then approve it.',
+    agentVerifySubmitHint: 'Verification',
+    // AGENTHUB UX BATCH 2 (UX-03) — the consequence statement shown beside the
+    // rejection action. It states only what the server actually enforces in
+    // POST /api/agents/reject-dropoff (src/server.ts): the item is rejected and
+    // removed from Return4me, and the decision is attributed to the acting
+    // Agent rather than to the system. It deliberately promises nothing about
+    // refunds, finder notification, or any other outcome the server does not
+    // decide on this route.
+    agentRejectConsequence: 'Rejecting removes this item from Return4me permanently. The decision is recorded against your Agent account and cannot be undone from this screen.',
     agentCancel: 'Cancel',
 
     // Admin Console
@@ -290,9 +314,9 @@ export const translations = {
     agentDetails: 'Wakala wa Return4me Aliyepangiwa',
 
     // Owner Journey
-    ownerTitle: 'Tafuta Hati Yako Iliyopotea',
-    ownerSubtitle: 'Weka nambari ya hati yako au jina. Matokeo yamefichwa kulinda faragha yako.',
-    searchPlaceholder: 'Tafuta kwa Nambari ya ID, Bamba la Nambari, au Jina...',
+    ownerTitle: 'Pata Kitu Kilichopotea',
+    ownerSubtitle: 'Tafuta vitu vilivyopatikana kwa jina, nambari ya kitambulisho, nambari ya bamba, au maelezo mengine. Matokeo yamefichwa kulinda faragha.',
+    searchPlaceholder: 'Tafuta kwa jina, nambari ya ID, bamba la nambari, au maelezo ya kitu...',
     noResults: 'Hakuna kulingana kulikopatikana bado. Jaribu kutafuta kwa jina fupi au uangalie baadaye!',
     maskedName: 'Jina la Mmiliki',
     foundAt: 'Kupatikana Karibu na',
@@ -354,6 +378,8 @@ export const translations = {
     // Agent Portal
     agentTitle: 'Kituo cha Mawakala wa Return4me',
     agentSubtitle: 'Pokea bidhaa na usimamie uchukuaji uliothibitishwa na wamiliki. Pata kamisheni kwa usalama.',
+    // N4 — the Swahili counterpart of agentEmailHelp; same rule, same reason.
+    agentEmailHelp: 'Tutatumia kiungo cha uthibitishaji kwa barua pepe hii. Lazima uiithibitishe kabla ya kutumia Kituo cha Mawakala.',
     applyBtn: 'Jisajili kama Wakala Mpya wa Return4me',
     businessName: 'Jina la Biashara / Cyber Café',
     mpesaTill: 'Nambari ya M-Pesa Till au Paybill (Payout Target)',
@@ -386,6 +412,15 @@ export const translations = {
     agentDropoffWorkflow: 'Kagua bidhaa p inapotafika.',
     agentReview: 'Kagua',
     agentReject: 'Kataa',
+    // AGENTHUB UX BATCH 4 - see the English block above.
+    agentVerifyConfirmReported: 'Thibitisha Kama Ilivyoripotiwa',
+    agentVerifySaveCorrections: 'Hifadhi Marekebisho',
+    agentVerifyApprovesToo: 'Hii pia inaidhinisha kupokea bidhaa.',
+    agentVerifySavesOnly: 'Hii inahifadhi kazi yako. Kagua bidhaa kimwili, kisha uiidhinishe.',
+    agentVerifySubmitHint: 'Uthibitisho',
+    // AGENTHUB UX BATCH 2 (UX-03) - see the English block above. Mirrors the
+    // same server-enforced consequences, with no new business claim.
+    agentRejectConsequence: 'Kukataa huondoa bidhaa hii kwa kutengua kwenye Return4me. Uamuzi huu huhifadhiwa kwa akaunti yako ya Wakala na hauwezi kutenduliwa kutoka kwenye skrini hii.',
     agentCancel: 'Ghairi',
 
     // Admin Console

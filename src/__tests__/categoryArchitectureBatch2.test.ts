@@ -30,12 +30,22 @@ function stripComments(source: string): string {
 const SERVER_RAW = read('src/server.ts');
 const DATABASE_RAW = read('src/db/database.ts');
 const LOST_REPORT_ROUTES_RAW = read('src/routes/lostReports.ts');
+// P2-A1: the found-item report route now lives in routes/finderReport.ts.
+const FINDER_REPORT_RAW = read('src/routes/finderReport.ts');
+// P2-A3.4A: the four agent operational routes moved to routes/agentOps.ts.
+const AGENT_OPS_RAW = read('src/routes/agentOps.ts');
 
 /** One inline route handler: from its registration to the next one. */
 function routeBody(anchor: string): string {
-  const start = SERVER_RAW.indexOf(anchor);
-  expect(start, `${anchor} not found in server.ts`).toBeGreaterThan(-1);
-  const rest = SERVER_RAW.slice(start);
+  // P2-A1: POST /api/items/report was extracted VERBATIM from server.ts into
+  // routes/finderReport.ts so it can be mounted for real HTTP integration
+  // testing. The body is read from whichever file now owns the anchor, so this
+  // slicer keeps testing the same handler it always tested — only the file moved.
+  // (routes/categories.ts gets the same treatment just below, for the same reason.)
+  const src = SERVER_RAW.includes(anchor) ? SERVER_RAW : (FINDER_REPORT_RAW.includes(anchor) ? FINDER_REPORT_RAW : AGENT_OPS_RAW);
+  const start = src.indexOf(anchor);
+  expect(start, `${anchor} not found in server.ts, routes/finderReport.ts or routes/agentOps.ts`).toBeGreaterThan(-1);
+  const rest = src.slice(start);
   const next = rest.slice(1).search(/\n {2}app\.[a-z]+\(/);
   return stripComments(next === -1 ? rest : rest.slice(0, next + 1));
 }

@@ -1,11 +1,15 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Link2, Unlink, RefreshCw, LayoutDashboard, FileSearch, ArrowRight, MapPin, Store, CalendarDays, Clock, type LucideIcon } from 'lucide-react';
+import { Link2, Unlink, RefreshCw, LayoutDashboard, FileSearch, ArrowRight, MapPin, Store, CalendarDays, Clock, Bell, type LucideIcon } from 'lucide-react';
 import { Badge, Button, EmptyState, Input, OTPInput, Banner, StatCard, Skeleton } from './ui';
 import { getClaimStatusDisplay } from './claimStatus';
 import { getVerificationFields } from '../config/verificationProfiles';
 import { verificationTranslation } from '../config/verificationTranslations';
 // Phase 9C: the customer's lost-report experience (report, list, matches).
 import LostReportsSection from './customer/LostReportsSection';
+// BATCH 1: the customer notification user layer (active list, History, read
+// state, preferences). Reads only the customer-facing API - it never imports the
+// delivery ledger, so no provider or retry concept can reach this view.
+import NotificationCentre from './customer/NotificationCentre';
 
 interface Props {
   lang: 'en' | 'sw';
@@ -70,11 +74,31 @@ interface AccountSectionCopy {
   hint?: string;
 }
 
-type AccountSectionKey = 'overview' | 'lost' | 'claims';
+type AccountSectionKey = 'overview' | 'lost' | 'claims' | 'notifications';
 
-const ACCOUNT_SECTION_ORDER: AccountSectionKey[] = ['overview', 'lost', 'claims'];
+// BATCH 1: 'notifications' joins the existing three. It is ordered last because
+// it is a passive surface - the customer comes to it deliberately, whereas the
+// others carry work in progress.
+const ACCOUNT_SECTION_ORDER: AccountSectionKey[] = ['overview', 'lost', 'claims', 'notifications'];
 
 const ACCOUNT_SECTIONS: Record<AccountSectionKey, { icon: LucideIcon; en: AccountSectionCopy; sw: AccountSectionCopy }> = {
+  // BATCH 1 - the customer notification user layer. The wording stays in plain
+  // service language and names no transport, provider or internal concept.
+  notifications: {
+    icon: Bell,
+    en: {
+      label: 'Notifications',
+      title: 'Notifications',
+      description: 'Updates about your claims, payments and reports, and a record of everything we have told you before.',
+      hint: 'See updates and your notification history.',
+    },
+    sw: {
+      label: 'Taarifa',
+      title: 'Taarifa',
+      description: 'Taarifa kuhusu claims, malipo na ripoti zako, pamoja na kumbukumbu ya taarifa zote ulizopokea awali.',
+      hint: 'Tazama taarifa na historia yako.',
+    },
+  },
   overview: {
     icon: LayoutDashboard,
     en: {
@@ -539,6 +563,18 @@ export default function CustomerDashboard({
               />
             </section>
           )}
+
+      {/* BATCH 1 - NOTIFICATIONS. The section renders the SAME component with the
+          SAME props; it only stops printing its own title, because the page title
+          above is already the section's single heading. */}
+      {tab === 'notifications' && (
+        <section
+          className="bg-white border border-brand-border rounded-2xl p-4 sm:p-6"
+          aria-labelledby="account-section-heading"
+        >
+          <NotificationCentre lang={lang} />
+        </section>
+      )}
 
       {/* My claims */}
       {tab === 'claims' && (

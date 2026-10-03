@@ -50,6 +50,8 @@
 //     implementation, kept deliberately replaceable.
 import { BoundedTtlCache, RequestThrottle, normalizeGeocodingKey } from './cache.ts';
 import { isValidLatitude, isValidLongitude, parseCoordinateInput } from '../coordinates.ts';
+import { KENYA_COUNTIES, resolveCountyName } from '../../config/kenyaCounties.ts';
+import { KENYA_ADMINISTRATIVE_UNITS } from '../../config/kenyaAdministrativeUnits.ts';
 
 // ---------------------------------------------------------------------------
 // RESULT / INTERFACE TYPES
@@ -66,6 +68,18 @@ export type GeocodingUnavailableReason =
 
 export type GeocodeOutcome =
   | { status: 'ok'; latitude: number; longitude: number; source: 'provider' | 'cache' }
+  | { status: 'unavailable'; reason: GeocodingUnavailableReason };
+
+export interface ReverseGeocodeResult {
+  latitude: number;
+  longitude: number;
+  displayName: string | null;
+  countyCandidate: string | null;
+  subCountyCandidate: string | null;
+}
+
+export type ReverseGeocodeOutcome =
+  | { status: 'ok'; result: ReverseGeocodeResult; source: 'provider' | 'cache' }
   | { status: 'unavailable'; reason: GeocodingUnavailableReason };
 
 /**
@@ -103,7 +117,7 @@ export interface GeocodingConfig {
   userAgent: string;
 }
 
-const DEFAULT_ENDPOINT = 'https://nominatim.openstreetmap.org/search';
+const DEFAULT_ENDPOINT = 'https://nominatim.openstreetmap.org';
 const DEFAULT_USER_AGENT = 'Return4me-Kenya-Lost-and-Found-Platform/1.0 (contact@return4me.co.ke)';
 
 /** Values that mean "do not call anyone". */
@@ -175,7 +189,8 @@ export function createNominatimProvider(config: GeocodingConfig): GeocodingProvi
   return {
     name: 'nominatim',
     async lookup(query: string, signal: AbortSignal) {
-      const url = `${config.endpoint}?q=${encodeURIComponent(`${query}, Kenya`)}&format=json&limit=1`;
+      const base = config.endpoint.replace(/\/search\/?$/, '');
+      const url = `${base}/search?q=${encodeURIComponent(`${query}, Kenya`)}&format=json&limit=1`;
       const response = await fetch(url, {
         headers: {
           'User-Agent': config.userAgent,
@@ -338,6 +353,37 @@ async function runProviderLookup(
  * outbound request from a cache hit — the throttle requirement depends on that
  * distinction.
  */
+export async function geocodeReverse(latitude: number, longitude: number): Promise<ReverseGeocodeOutcome> {
+  const config = readGeocodingConfig();
+  const provider = resolveProvider(config);
+  if (!provider) return { status: 'unavailable', reason: 'disabled' };
+  if (!isValidLatitude(latitude) || !isValidLongitude(longitude)) return { status: 'unavailable', reason: 'invalid_response' };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+  try {
+    const base = config.endpoint.replace(/\/search\/?$/, '');
+    const response = await fetch(`${base}/reverse?lat=${latitude}&lon=${longitude}&format=json&zoom=14&addressdetails=1`, { headers: { 'User-Agent': config.userAgent, 'Accept': 'application/json' }, signal: controller.signal });
+    if (!response.ok) return { status: 'unavailable', reason: 'provider_error' };
+    const payload: any = await response.json();
+    const lat = parseCoordinateInput(payload?.lat);
+    const lon = parseCoordinateInput(payload?.lon);
+    if (lat === null || lon === null) return { status: 'unavailable', reason: 'invalid_response' };
+    const address = payload?.address && typeof payload.address === 'object' ? payload.address : {};
+    const countyText = [address.county, address.state, address.state_district, address.region].filter(Boolean).join(' ');
+    const countyCandidate = resolveCountyName(countyText);
+    const countyCode = KENYA_COUNTIES.find(county => county.name === countyCandidate)?.code ?? null;
+    const countyUnits = new Set(KENYA_ADMINISTRATIVE_UNITS.filter(unit => unit.countyCode === countyCode).map(unit => unit.name.toLocaleLowerCase('en')));
+    const subCountyCandidate = [address.suburb, address.neighbourhood, address.quarter, address.city_district].find(value => {
+      const text = String(value ?? '').trim();
+      return text && countyUnits.has(text.toLocaleLowerCase('en'));
+    });
+    const displayName = typeof payload?.display_name === 'string' && payload.display_name.trim() ? payload.display_name.trim() : null;
+    return { status: 'ok', result: { latitude: lat, longitude: lon, displayName, countyCandidate, subCountyCandidate: subCountyCandidate ? String(subCountyCandidate) : null }, source: 'provider' };
+  } catch {
+    return { status: 'unavailable', reason: 'timeout' };
+  } finally { clearTimeout(timer); }
+}
+
 export async function geocodeForward(rawQuery: string): Promise<GeocodeOutcome> {
   const config = readGeocodingConfig();
   const provider = resolveProvider(config);

@@ -37,11 +37,20 @@ import path from 'path';
 
 const serverTs = fs.readFileSync(path.resolve(__dirname, '../server.ts'), 'utf8');
 
+// P2-A1: the found-item report handler was extracted VERBATIM from server.ts into
+// routes/finderReport.ts so it can be mounted for real HTTP integration testing.
+// reportHandler() reads the body from whichever file now owns the route, so every
+// ordering assertion below keeps testing exactly what it always tested — only
+// the file the source is read from moved. No guarantee is weakened.
+const finderReportTs = fs.readFileSync(path.resolve(__dirname, '../routes/finderReport.ts'), 'utf8');
+
 /** The body of the public found-item report handler alone, comments stripped. */
 function reportHandler(): string {
-  const start = serverTs.indexOf("app.post('/api/items/report'");
-  expect(start).toBeGreaterThan(-1);
-  const rest = serverTs.slice(start);
+  const anchor = "app.post('/api/items/report'";
+  const src = serverTs.includes(anchor) ? serverTs : finderReportTs;
+  const start = src.indexOf(anchor);
+  expect(start, 'found-item report route not found in server.ts or routes/finderReport.ts').toBeGreaterThan(-1);
+  const rest = src.slice(start);
   const next = rest.slice(1).search(/\n  app\.[a-z]+\(/);
   const body = next === -1 ? rest : rest.slice(0, next + 1);
 

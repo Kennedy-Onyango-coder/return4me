@@ -28,6 +28,12 @@ pnpm-debug.log*
 *.sln
 *.sw?
 
+# Local IDE agent worktrees (machine-local, not project content).
+# `.kilo/worktrees/big-chatter` is a stale Kilo Code git worktree holding a
+# duplicate copy of the whole source tree, created on another machine. It is
+# tooling state, not Return4me source, and must never enter the audit history.
+.kilo/
+
 # OS files
 .DS_Store
 Thumbs.db

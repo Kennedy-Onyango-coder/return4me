@@ -105,7 +105,10 @@ describe('Batch F incremental appearance surface migration', () => {
       expect(navbar).toContain(`--appearance-${token}`);
     }
     expect((navbar.match(/<LanguageControl /g) || [])).toHaveLength(3);
-    expect((navbar.match(/<AppearanceControl /g) || [])).toHaveLength(2);
+    // BATCH 1 (navbar): 3 Navbar appearance instances - desktop utility tray,
+    // sub-lg compact header, drawer. The compact header previously had none, so
+    // appearance was unreachable there without opening the drawer.
+    expect((navbar.match(/<AppearanceControl /g) || [])).toHaveLength(3);
   });
 
   it('migrates DashboardShell and language-choice surfaces without changing shell behavior', () => {

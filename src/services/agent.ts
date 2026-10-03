@@ -68,7 +68,9 @@ export const AgentMatchingService = {
   async assignNearestAgent(
     lat: number | null,
     lon: number | null,
-    locationDescription: string
+    locationDescription: string,
+    itemCounty?: string | null,
+    itemAdministrativeUnitId?: string | null,
   ): Promise<{
     agent: Agent | null;
     method: 'gps_haversine' | 'geocoded_text' | 'manual_required';
@@ -77,6 +79,18 @@ export const AgentMatchingService = {
   }> {
     const agents = await db.getAgents();
     const activeAgents = agents.filter(a => a.status === 'active');
+    const sameCounty = itemCounty
+      ? activeAgents.filter(a => a.county === itemCounty)
+      : activeAgents;
+    if (itemCounty && sameCounty.length === 0) {
+      return { agent: null, method: 'manual_required', distanceKm: null, needsManualAgentReassignment: true };
+    }
+    const rankedAgents = [...sameCounty].sort((a, b) => {
+      const aSub = itemAdministrativeUnitId && a.administrative_unit_id === itemAdministrativeUnitId ? 0 : 1;
+      const bSub = itemAdministrativeUnitId && b.administrative_unit_id === itemAdministrativeUnitId ? 0 : 1;
+      if (aSub !== bSub) return aSub - bSub;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
 
     // Scenario D (no active agents at all): this used to throw, which
     // failed the Finder's entire report submission with a hard error.
@@ -101,14 +115,19 @@ export const AgentMatchingService = {
       let nearestAgent: Agent | null = null;
       let minDistance = Infinity;
 
-      for (const agent of activeAgents) {
+      let eligibleAgents = rankedAgents;
+      if (itemAdministrativeUnitId) {
+        const sameSubCounty = eligibleAgents.filter(a => a.administrative_unit_id === itemAdministrativeUnitId);
+        if (sameSubCounty.length > 0) eligibleAgents = sameSubCounty;
+      }
+      for (const agent of eligibleAgents) {
         // PHASE 9D: an agent's stored coordinates are also validated on read,
         // so a legacy row holding an out-of-range or non-numeric value is
         // treated as "this hub has no coordinates" rather than being fed into
         // the Haversine formula. Its meaning is never guessed or corrected.
         if (isValidCoordinatePair(agent.latitude, agent.longitude)) {
           const distance = calculateHaversineDistance(lat, lon, agent.latitude, agent.longitude);
-          if (distance < minDistance) {
+          if (distance < minDistance || (distance === minDistance && nearestAgent && agent.id < nearestAgent.id)) {
             minDistance = distance;
             nearestAgent = agent;
           }
@@ -133,10 +152,12 @@ export const AgentMatchingService = {
         let nearestAgent: Agent | null = null;
         let minDistance = Infinity;
 
-        for (const agent of activeAgents) {
+        const sameSubCounty = rankedAgents.filter(a => itemAdministrativeUnitId && a.administrative_unit_id === itemAdministrativeUnitId);
+        const eligibleAgents = sameSubCounty.length > 0 ? sameSubCounty : rankedAgents;
+        for (const agent of eligibleAgents) {
           if (isValidCoordinatePair(agent.latitude, agent.longitude)) {
             const distance = calculateHaversineDistance(geoResult.latitude, geoResult.longitude, agent.latitude, agent.longitude);
-            if (distance < minDistance) {
+            if (distance < minDistance || (distance === minDistance && nearestAgent && agent.id < nearestAgent.id)) {
               minDistance = distance;
               nearestAgent = agent;
             }

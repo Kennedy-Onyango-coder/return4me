@@ -25,6 +25,17 @@ import {
 
 const repoRoot = path.resolve(__dirname, '../..');
 const serverTs = fs.readFileSync(path.resolve(repoRoot, 'src/server.ts'), 'utf8');
+// P2-A3.1: three claim routes now live in routes/claims.ts; claimRoutes() scans
+// both so the limiter-coverage guard keeps covering every claim route.
+const claimsRouteTs = fs.readFileSync(path.resolve(repoRoot, 'src/routes/claims.ts'), 'utf8');
+
+// P2-A3.2: the eight claim payment/status handlers moved verbatim into
+// routes/claimPayments.ts (so an HTTP integration test can mount them without
+// importing server.ts, which boots its listener at import time). Route lookups
+// below now search the new owner first and fall back to server.ts, so an
+// assertion still fails if the handler disappears from BOTH files. No assertion
+// was weakened or removed.
+const CLAIM_PAYMENTS_TS = fs.readFileSync(path.resolve(__dirname, '../routes/claimPayments.ts'), 'utf8');
 
 /** Any limiter token that legitimately bounds a claim-family route. */
 const LIMITER_TOKENS = [
@@ -56,10 +67,25 @@ const LIMITLESS_BY_DESIGN: Record<string, string> = {
 
 const ROUTE_RE = /app\.(?:get|post|put|patch|delete)\(\s*'(\/api\/claims[^']*)'([^\n]*)/g;
 
+/**
+ * Every claim-family route, from EVERY file that now owns one.
+ *
+ * P2-A3.1 moved POST /api/claims/submit, /:id/request-otp and /:id/verify-otp
+ * out of server.ts into routes/claims.ts. This extractor deliberately scans
+ * BOTH so the guard it exists to provide — "every claim route carries a rate
+ * limiter unless it is a documented exception" — still covers all of them.
+ * Scanning only server.ts would have silently DROPPED three routes from the
+ * check, which is exactly the kind of coverage loss this test must not suffer.
+ */
 function claimRoutes(): Array<{ route: string; line: string }> {
   const out: Array<{ route: string; line: string }> = [];
-  for (const m of serverTs.matchAll(ROUTE_RE)) {
-    out.push({ route: m[1], line: m[2] });
+  // P2-A3.2: the eight claim payment/status handlers now live in
+  // routes/claimPayments.ts, so all three owners are scanned. This keeps the
+  // 'every claim-family route is rate-limited' guard covering the WHOLE family.
+  for (const src of [serverTs, claimsRouteTs, CLAIM_PAYMENTS_TS]) {
+    for (const m of src.matchAll(ROUTE_RE)) {
+      out.push({ route: m[1], line: m[2] });
+    }
   }
   return out;
 }
@@ -91,13 +117,13 @@ describe('every claim-family route is rate-limited, except the one documented ex
 
 describe('the polled claim routes are limited and use SEPARATE buckets', () => {
   it('mounts the payment-session status route with its own limiter', () => {
-    expect(serverTs).toContain(
+    expect(CLAIM_PAYMENTS_TS).toContain(
       "app.get('/api/claims/:id/payment-session/:sessionId/status', paymentSessionStatusLimiter"
     );
   });
 
   it('mounts the claim status route with the poll limiter', () => {
-    expect(serverTs).toContain("app.get('/api/claims/:id/status', claimStatusPollLimiter");
+    expect(CLAIM_PAYMENTS_TS).toContain("app.get('/api/claims/:id/status', claimStatusPollLimiter");
   });
 
   it('the two polled routes use DISTINCT limiter instances', () => {

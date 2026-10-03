@@ -29,15 +29,17 @@ import { toOwnerSafeAgentView } from '../services/ownerSafeViews';
 
 const repoRoot = path.resolve(__dirname, '../..');
 const serverTs = fs.readFileSync(path.resolve(repoRoot, 'src/server.ts'), 'utf8');
+const CLAIM_PAYMENTS_TS = fs.readFileSync(path.resolve(repoRoot, 'src/routes/claimPayments.ts'), 'utf8');
 const ownerViewTsx = fs.readFileSync(path.resolve(repoRoot, 'src/components/OwnerView.tsx'), 'utf8');
 const publicItemsTs = fs.readFileSync(path.resolve(repoRoot, 'src/routes/publicItems.ts'), 'utf8');
 const ownerSafeViewsTs = fs.readFileSync(path.resolve(repoRoot, 'src/services/ownerSafeViews.ts'), 'utf8');
 
 function statusRouteBody(len = 3000): string {
   const marker = "app.get('/api/claims/:id/status'";
-  const start = serverTs.indexOf(marker);
-  expect(start, 'GET /api/claims/:id/status not found in server.ts').toBeGreaterThan(-1);
-  return serverTs.slice(start, start + len);
+  const src = serverTs.includes(marker) ? serverTs : CLAIM_PAYMENTS_TS;
+  const start = src.indexOf(marker);
+  expect(start, 'status route not found in routes/claimPayments.ts or server.ts').toBeGreaterThan(-1);
+  return src.slice(start, start + len);
 }
 
 describe('GET /api/claims/:id/status is a minimal, public-safe status DTO', () => {
@@ -45,8 +47,9 @@ describe('GET /api/claims/:id/status is a minimal, public-safe status DTO', () =
     // F1 (Phase 7B.2): the status route used to share claimGuessLimiter's
     // 20/15-min bucket with /lookup, /pay, /payment-auth, /payment-session and
     // /:id/rate, which starved the legitimate owner's own polling + payment.
-    expect(serverTs).toMatch(/app\.get\('\/api\/claims\/:id\/status',\s*claimStatusPollLimiter,/);
-    expect(serverTs).not.toMatch(/app\.get\('\/api\/claims\/:id\/status',\s*claimGuessLimiter,/);
+  // P2-A3.2: this route moved to routes/claimPayments.ts.
+    expect(CLAIM_PAYMENTS_TS).toMatch(/app\.get\('\/api\/claims\/:id\/status',\s*claimStatusPollLimiter,/);
+    expect(CLAIM_PAYMENTS_TS).not.toMatch(/app\.get\('\/api\/claims\/:id\/status',\s*claimGuessLimiter,/);
     // The dedicated module must supply this limiter. Expressed as "imported FROM
     // this module" rather than as one exact brace string: Phase 12 added a second
     // named export to the SAME module (paymentSessionStatusLimiter, for the other
@@ -73,7 +76,7 @@ describe('GET /api/claims/:id/status is a minimal, public-safe status DTO', () =
       "app.post('/api/claims/:id/rate', requireCustomerAuth, claimGuessLimiter,",
     ];
     for (const route of discreteRoutes) {
-      expect(serverTs, `discrete limit removed from ${route}`).toContain(route);
+      expect(CLAIM_PAYMENTS_TS, `discrete limit removed from ${route}`).toContain(route);
     }
     const limiterStart = serverTs.indexOf('const claimGuessLimiter = rateLimit({');
     expect(limiterStart).toBeGreaterThan(-1);
@@ -230,8 +233,11 @@ describe('pickup-details contract hardening (F4 / F7 / F9)', () => {
 describe('R1/R2 — POST /api/claims/lookup disclosure policy (Phase 7C.7)', () => {
   // Bounded to THIS route body only — an unbounded slice would run to the end of
   // server.ts and pick up every later route's status codes and status strings.
-  const lookupStart = serverTs.indexOf("app.post('/api/claims/lookup'");
-  const lookupRoute = serverTs.slice(lookupStart, serverTs.indexOf('\n  app.', lookupStart + 10));
+  const lookupMarker = "app.post('/api/claims/lookup'";
+  const lookupSrc = serverTs.includes(lookupMarker) ? serverTs : CLAIM_PAYMENTS_TS;
+  const lookupStart = lookupSrc.indexOf(lookupMarker);
+  const nextRoute = lookupSrc.slice(lookupStart + 10).search(/\n\s+app\.(get|post)\(/);
+  const lookupRoute = lookupSrc.slice(lookupStart, nextRoute > -1 ? lookupStart + 10 + nextRoute : lookupStart + 12000);
 
   // The exact expression the route evaluates, built from the real exports.
   const gatedAgentView = (status: string, agent: any): any =>

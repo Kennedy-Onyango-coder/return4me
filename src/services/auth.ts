@@ -202,7 +202,7 @@ export function verifyToken(token: string): SessionPayload | null {
 
 // --- AUTH SERVICES ---
 
-const SMS_UNAVAILABLE_MESSAGE =
+export const SMS_UNAVAILABLE_MESSAGE =
   'Imeshindwa kutuma SMS. Tafadhali jaribu tena au tumia njia nyingine. / SMS delivery is temporarily unavailable. Please try again or use another method.';
 
 /**
@@ -336,9 +336,35 @@ export async function sendCodeViaSms(cleanPhone: string, code: string, label: st
   }
 }
 
+/**
+ * The transport seam used to deliver a generated code. Defaults to the real SMS
+ * gateway.
+ *
+ * N7 injects a NotificationService-backed dispatcher here so that the agent OTP
+ * request acquires a durable notification record, N5/N6 idempotency and N6 rate
+ * limiting, WITHOUT auth.ts importing the notification layer.
+ *
+ * That indirection is not stylistic. `notificationService.ts` binds its provider
+ * at MODULE INIT (`let smsProvider = africaTalkingSmsProvider`), and
+ * `notificationProviders.ts` already imports this file for the gateway itself —
+ * so `auth.ts` importing the notification layer back would close a cycle whose
+ * reverse entry order hits a temporal-dead-zone `ReferenceError` at startup. The
+ * existing `sendCodeViaSms` default keeps this function's behaviour unchanged
+ * for any existing caller and test.
+ */
+export type CodeDeliveryDispatcher = (
+  cleanPhone: string,
+  code: string,
+  label: string,
+  message: string,
+) => Promise<{ success: boolean; message: string }>;
+
 export const AuthService = {
   // Generate and "send" an OTP code to a Kenyan phone number
-  async requestOTP(phone: string): Promise<{ success: boolean; message: string }> {
+  async requestOTP(
+    phone: string,
+    dispatch: CodeDeliveryDispatcher = sendCodeViaSms,
+  ): Promise<{ success: boolean; message: string }> {
     // Validate Kenyan format (+254 or 07... / 01...)
     const cleanPhone = phone.replace(/\s+/g, '');
     const isKenyan = /^(\+254|0)(7|1)[0-9]{8}$/.test(cleanPhone);
@@ -359,7 +385,10 @@ export const AuthService = {
     // server restart/redeploy and multiple server instances can share state.
     await db.setOtp(canonicalPhone, hashCode(code), expiresAt);
 
-    return sendCodeViaSms(canonicalPhone, code, 'OTP', `Msimbo wa OTP umetumwa kwa nambari yako ya simu ya ${canonicalPhone}.`);
+    // N7: the delivery seam is injected. Code generation, the 5-minute expiry,
+    // the canonical E.164 store key and the persist-then-send ordering above are
+    // untouched — the migration changes transport, not business logic.
+    return dispatch(canonicalPhone, code, 'OTP', `Msimbo wa OTP umetumwa kwa nambari yako ya simu ya ${canonicalPhone}.`);
   },
 
   // Verify OTP code with automatic brute-force invalidation after 5 attempts.
@@ -448,11 +477,55 @@ export const AuthService = {
 // loading, production fatal-throw guards, rate limiters, etc.), so
 // importing anything from it in a test file is unsafe; auth.ts has none of
 // that and is already safely imported by existing tests. Takes only the
-// two fields the decision actually depends on, not a full Agent record —
+// fields the decision actually depends on, not a full Agent record —
 // an undefined/null agent (the "no such Agent" / "unknown agentId" case)
-// is never actionable, and only 'active' status is.
-export function isAgentActionable(agent: { status: string } | undefined | null): boolean {
-  return !!agent && agent.status === 'active';
+// is never actionable.
+//
+// N4 — AGENT EMAIL ACTIVATION. The decision is now the conjunction of TWO
+// INDEPENDENT AXES, and this function is the single place they combine:
+//
+//   1. status          — BUSINESS APPROVAL ('pending' | 'active' | 'suspended')
+//   2. email_verified_at — EMAIL ACTIVATION (NULL | timestamp)
+//
+// THE GRANDFATHER RULE, AND WHY IT IS SAFE TO HAVE ONE AT ALL.
+//
+// N4 makes contact_email mandatory for NEW agent registrations, so every agent
+// created after this change has an email and must verify it. But every agent
+// that already existed has email_verified_at = NULL — not because they failed
+// anything, but because the column did not exist when they were approved. A
+// bare `email_verified_at !== null` requirement would therefore lock the entire
+// existing agent network out of the platform on deploy: they did nothing wrong,
+// and there is no resend endpoint (out of scope) that could ever let them
+// recover.
+//
+// The discriminator is contact_email, and it is SAFE precisely because it is
+// not a bypass anyone can steer:
+//
+//   * It is NULL only for rows that predate N4. createAgent() normalizes a
+//     blank address to NULL and the registration route REJECTS a missing or
+//     invalid address, so no agent created after N4 can ever present NULL.
+//   * Therefore an agent with an email but no verification can never use this
+//     clause: it is the exact opposite — it HAS an email and HAS failed to
+//     verify it.
+//   * The clause is additionally bounded by status === 'active', so it can
+//     never make a pending or suspended agent actionable.
+//
+// The result, stated as the truth table this enforces:
+//
+//   pending                     -> false  (never actionable, verified or not)
+//   suspended                   -> false
+//   unknown/garbage status      -> false  (fails closed, unchanged)
+//   active  + verified email    -> true
+//   active  + unverified email  -> false  (new agent, has not activated)
+//   active  + NULL email        -> true   (pre-N4 agent, grandfathered)
+export function isAgentActionable(
+  agent: { status: string; email_verified_at?: string | Date | null; contact_email?: string | null } | undefined | null
+): boolean {
+  if (!agent) return false;
+  if (agent.status !== 'active') return false;
+  // N4: the email axis. See the truth table above.
+  if (agent.email_verified_at) return true;
+  return !agent.contact_email;
 }
 
 // Pure decision predicate behind server.ts's requireCurrentAdminSession

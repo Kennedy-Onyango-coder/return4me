@@ -5,7 +5,7 @@ import { agentClaimBadge } from '../components/claimStatus';
 import { getClaimStatusDisplay, CLAIM_STATUS_VALUES } from '../components/claimStatus';
 
 // =============================================================================
-// PHASE 16.1 BATCH 3 — AGENT HUB RELIABILITY + ACCESSIBILITY REGRESSION
+// PHASE 16.1 BATCH 3 ΓÇö AGENT HUB RELIABILITY + ACCESSIBILITY REGRESSION
 // =============================================================================
 // Batch 2 (forensic audit) established the defects this batch remediates:
 //   F-1 operational failures wrote to `authError`, rendered ONLY in the
@@ -21,9 +21,9 @@ import { getClaimStatusDisplay, CLAIM_STATUS_VALUES } from '../components/claimS
 //
 // This repository has NO DOM harness (vitest.config.ts runs `environment:
 // 'node'`; Batch 1C confirmed jsdom/RTL is not installed and must not be added
-// for one batch), so — following the same convention as
+// for one batch), so ΓÇö following the same convention as
 // phase9PublicSurface.test.ts, publicNavigation.test.ts and Batch 1C's
-// categoryExplorerDisclosure.test.ts — the contract is pinned two ways:
+// categoryExplorerDisclosure.test.ts ΓÇö the contract is pinned two ways:
 //   1. BEHAVIOURALLY, where a pure function was factored out for the purpose
 //      (agentClaimBadge, and the shared claim-status map it delegates to);
 //   2. SOURCE-LEVEL, against the real component and the real server that ship.
@@ -36,26 +36,52 @@ const read = (rel: string) => fs.readFileSync(path.resolve(repoRoot, rel), 'utf8
 /**
  * Comments are stripped before every structural assertion: this batch's own
  * explanatory comments name the very identifiers being asserted about
- * (operationError, handoverCodeInput, authError, …), so judging the CODE
+ * (operationError, handoverCodeInput, authError, ΓÇª), so judging the CODE
  * requires removing the prose. Same technique and rationale as
  * publicNavigation.test.ts / claimTrackingDisclosure.test.ts.
  */
 function stripComments(source: string): string {
+  // Line comments are stripped FIRST, block comments second.
+  //
+  // This order is load-bearing, not cosmetic. server.ts contains `//` comments
+  // that mention globs (e.g. "resolution of /src/* sourcemap requests"). If
+  // block comments are stripped first, that `/*` is read as a block-comment
+  // opener and the non-greedy match runs to the next `*/` anywhere later in the
+  // file, silently deleting tens of thousands of characters of REAL code —
+  // including routes this suite then reports as "not found".
+  //
+  // Stripping `//` first means a glob mentioned in a line comment can never
+  // open a phantom block. This version keeps strictly more source than the
+  // previous one; it does not relax any assertion.
   return source
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ');
 }
 
-const AGENTVIEW = stripComments(read('src/components/AgentView.tsx'));
+const AGENTVIEW_FILE = stripComments(read('src/components/AgentView.tsx'));
+const AGENT_OPERATIONS = stripComments(read('src/hooks/useAgentOperations.ts'));
+// AgentView remains the composition root; operational ownership now lives in the
+// feature-local hook. Existing behavioral contracts inspect the composed surface.
+const AGENTVIEW = `${AGENTVIEW_FILE}\n${AGENT_OPERATIONS}`;
 const AGENTHUB = stripComments(read('src/components/agent/AgentHub.tsx'));
+// BATCH B: the verification/rejection panel markup now lives in two
+// presentation-only children, so markup contracts read the COMPOSED Hub.
+const AGENT_PANELS = stripComments(
+  read('src/components/agent/AgentVerificationPanel.tsx') +
+  '\n' +
+  read('src/components/agent/AgentRejectionPanel.tsx')
+);
 const APP = stripComments(read('src/App.tsx'));
 const SERVER = read('src/server.ts');
-// BATCH 4: the live Hub JSX moved to AgentHub; these suites read the composed
-// AgentView+AgentHub surface so Batch 3 contracts follow the code.
-const HUB = AGENTVIEW + '\n' + AGENTHUB;
+// P2-A3.4A: four /api/agents routes moved verbatim into routes/agentOps.ts, so
+// the server invariants below scan that module as well as server.ts.
+const AGENT_OPS = read('src/routes/agentOps.ts');
+// P2-A3.4A: four /api/agents routes moved verbatim into routes/agentOps.ts, so
+// the server invariants below scan that module as well as server.ts.
+const HUB = AGENTVIEW + '\n' + AGENTHUB + '\n' + AGENT_PANELS;
 
 // ---------------------------------------------------------------------------
-// Test 1 — F-1: operational errors have their own channel AND their own render
+// Test 1 ΓÇö F-1: operational errors have their own channel AND their own render
 // ---------------------------------------------------------------------------
 describe('B3-F1: operational failures are separated from authentication failures', () => {
   it('declares a dedicated operational error state and renders it in the Hub', () => {
@@ -114,7 +140,7 @@ describe('B3-F1: operational failures are separated from authentication failures
 });
 
 // ---------------------------------------------------------------------------
-// Test 2 — F-5 / H-3: a failed queue request is NOT a vetting-status change
+// Test 2 ΓÇö F-5 / H-3: a failed queue request is NOT a vetting-status change
 // ---------------------------------------------------------------------------
 describe('B3-F5: queue failure never asserts an agent status change', () => {
   it('agentStatus is set to "active" on success and NEVER set to "pending" by a failure', () => {
@@ -129,9 +155,9 @@ describe('B3-F5: queue failure never asserts an agent status change', () => {
     expect(AGENTVIEW).toContain("const [queueLoading, setQueueLoading] = useState(false);");
     // non-OK response + thrown fetch
     expect((AGENTVIEW.match(/setQueueError\(/g) ?? []).length).toBeGreaterThanOrEqual(2);
-    // the error surfaces: AgentView keeps the standalone panel…
+    // the error surfaces: AgentView keeps the standalone panelΓÇª
     expect(AGENTVIEW).toContain('{token && !queueLoading && queueError && !agentProfile && (');
-    // …and the Hub renders the same failure inline when the Hub is already
+    // ΓÇªand the Hub renders the same failure inline when the Hub is already
     // open. BATCH 4 moved that JSX into AgentHub, so it is asserted there and
     // it reaches the state through props.
     expect((AGENTHUB.match(/\{props\.queueError && \(/g) ?? []).length).toBe(1);
@@ -139,28 +165,44 @@ describe('B3-F5: queue failure never asserts an agent status change', () => {
 
   it('the queue response body is read defensively before the failure branch', () => {
     // A non-JSON body (proxy error page) must not throw past the failure handling.
-    expect(AGENTVIEW).toContain('data = await response.json();');
-    expect(AGENTVIEW).toContain('data = null;');
+    // Parsing is the typed transport's job now; malformed success bodies surface
+    // as an AgentApiError and reach the same queueError path.
+    expect(read('src/services/agentApi.ts')).toContain('async function parseJson(response: Response)');
+    expect(read('src/services/agentApi.ts')).toContain('if (data === null) throw new AgentApiError');
+    expect(AGENTVIEW).toContain('const data = await agentApi.getQueue(token);');
+    expect(AGENTVIEW).toContain("e instanceof AgentApiError ? e.message.trim() : ''");
   });
 
   it('the vetting-pending screen is no longer reachable from a failed request', () => {
-    expect(AGENTVIEW).toContain("{token && agentStatus === 'pending' && !queueError && !queueLoading && (");
-    // …and there is a dedicated pre-answer loading state instead.
+    expect(AGENTVIEW).toContain("{token && agentStatus === 'pending' && !queueError && !queueLoading && !awaitingEmailVerification && (");
+    // ΓÇªand there is a dedicated pre-answer loading state instead.
     expect(AGENTVIEW).toContain('{token && queueLoading && !agentProfile && !queueError && (');
     expect(AGENTVIEW).toContain('const retryQueue = () => {');
+    // N4 CONTRACT UPDATE: the panel also excludes `awaitingEmailVerification`, so
+    // the approval-pending screen and the new email-verification screen are never
+    // shown together. The pre-existing exclusions are still individually
+    // asserted, so this line cannot quietly drop one of them.
+    expect(AGENTVIEW).toContain("!queueError && !queueLoading && !awaitingEmailVerification");
+    expect(AGENTVIEW).toContain('{token && awaitingEmailVerification && (');
   });
 });
 
 // ---------------------------------------------------------------------------
-// Test 3 — F-2 / F-3: dead state and dead construction are gone
+// Test 3 ΓÇö F-2 / F-3: dead state and dead construction are gone
 // ---------------------------------------------------------------------------
 describe('B3-F2/F3: dead handover input and dead registration payload removed', () => {
   it('handoverCodeInput no longer exists as a binding or a rendered control', () => {
     expect(AGENTVIEW).not.toMatch(/const \[handoverCodeInput/);
     expect(AGENTVIEW).not.toContain('setHandoverCodeInput');
     expect(AGENTVIEW).not.toContain('Enter Handover Code (CLM-');
-    // …while the REAL handover action and its pickup-code dialog are untouched.
-    expect(AGENTVIEW).toContain("fetch('/api/agents/confirm-handover'");
+    // ΓÇªwhile the REAL handover action and its pickup-code dialog are untouched.
+    expect(AGENTVIEW).toContain('const submitConfirmHandover = async () => {');
+    expect(AGENTVIEW).toContain("if (!code || code.trim() === '') {");
+    expect(AGENTVIEW).toContain('if (!photoBase64) {');
+    expect(AGENTVIEW).toContain('agentApi.confirmHandover(token!, { claimId, pickupCode: code.trim(), handoverPhotoBase64: photoBase64 });');
+    // Failure retains the dialog; only the success path closes it and reloads.
+    expect(AGENTVIEW).toContain('setPickupCodeModal(null); void fetchQueues();');
+    expect(AGENTVIEW).toContain('catch (e: any) { setOperationError(e.message); } finally { finishProcessing(); }');
     expect(AGENTVIEW).toContain('const [pickupCodeModal, setPickupCodeModal] = useState<{');
     expect(AGENTVIEW).toContain('handleConfirmHandover');
   });
@@ -168,9 +210,9 @@ describe('B3-F2/F3: dead handover input and dead registration payload removed', 
   it('handleAuthRequest no longer builds an unused registration payload', () => {
     expect(AGENTVIEW).not.toContain('const payload: any = { phone };');
     expect(AGENTVIEW).not.toContain('payload.businessName');
-    // The OTP request still sends exactly what it always did…
+    // The OTP request still sends exactly what it always didΓÇª
     expect(AGENTVIEW).toContain("body: JSON.stringify({ phone }),");
-    // …and registration data still travels with OTP verification, unchanged.
+    // ΓÇªand registration data still travels with OTP verification, unchanged.
     expect(AGENTVIEW).toContain("fetch('/api/auth/verify-otp'");
     expect(AGENTVIEW).toContain('businessName,');
     expect(AGENTVIEW).toContain('termsAccepted: agreedTerms,');
@@ -180,13 +222,13 @@ describe('B3-F2/F3: dead handover input and dead registration payload removed', 
 });
 
 // ---------------------------------------------------------------------------
-// Test 4 — F-4: truthful claim status display (behavioural)
+// Test 4 ΓÇö F-4: truthful claim status display (behavioural)
 // ---------------------------------------------------------------------------
 describe('B3-F4: the agent-side claim badge is truthful for every delivered status', () => {
   it('disputed and released are NOT labelled "Awaiting Payment"', () => {
     expect(agentClaimBadge('disputed', 'en').label).not.toBe('Awaiting Payment');
     expect(agentClaimBadge('released', 'en').label).not.toBe('Awaiting Payment');
-    // …they carry the SHARED map's own wording, not a second invented vocabulary.
+    // ΓÇªthey carry the SHARED map's own wording, not a second invented vocabulary.
     expect(agentClaimBadge('disputed', 'en').label).toBe(getClaimStatusDisplay('disputed', 'en').label);
     expect(agentClaimBadge('released', 'en').label).toBe(getClaimStatusDisplay('released', 'en').label);
   });
@@ -241,14 +283,14 @@ describe('B3-F4: the agent-side claim badge is truthful for every delivered stat
     expect(HUB).not.toContain('Awaiting Payment');
     expect(HUB).toContain('agentClaimBadge(item.associatedClaim?.status,');
     // Informational (action-less) explanation exists for the two non-actionable
-    // delivered statuses — no invented action, no invented endpoint.
+    // delivered statuses ΓÇö no invented action, no invented endpoint.
     expect(HUB).toContain("item.associatedClaim?.status === 'disputed'");
     expect(HUB).toContain("item.associatedClaim?.status === 'released'");
   });
 });
 
 // ---------------------------------------------------------------------------
-// Test 5 — F-6: the confirmation modal awaits its action
+// Test 5 ΓÇö F-6: the confirmation modal awaits its action
 // ---------------------------------------------------------------------------
 describe('B3-F6: the confirm modal resolves before it closes', () => {
   it('onConfirm resolves to a boolean, so success and failure are distinguishable', () => {
@@ -268,13 +310,13 @@ describe('B3-F6: the confirm modal resolves before it closes', () => {
     expect(AGENTVIEW).toContain('const [modalBusy, setModalBusy] = useState(false);');
     expect(AGENTVIEW).toContain('if (modalBusy) return;');
     expect(AGENTVIEW).toContain('aria-busy={modalBusy}');
-    // The real protections are untouched in server.ts — see Test 9.
-    expect(SERVER).toContain("return res.status(409).json({ error: settlement.message ||");
+    // The real protections are untouched in server.ts ΓÇö see Test 9.
+    expect(AGENT_OPS).toContain("return res.status(409).json({ error: settlement.message ||");
   });
 });
 
 // ---------------------------------------------------------------------------
-// Test 6 — H-1 / M-6: one category source, no private fetch
+// Test 6 ΓÇö H-1 / M-6: one category source, no private fetch
 // ---------------------------------------------------------------------------
 describe('B3-H1: AgentView reads the App-level category source', () => {
   it('AgentView no longer owns a category list or fetches /api/categories', () => {
@@ -308,7 +350,7 @@ describe('B3-H1: AgentView reads the App-level category source', () => {
     // The admin refresh path introduced by Batch 1A is intact.
     expect(APP).toContain('onCategoriesChanged={fetchCategories}');
     // Exactly two /api/categories call sites in App (the one fetch definition and
-    // …it is one). AgentView contributing a second is what this batch removed.
+    // ΓÇªit is one). AgentView contributing a second is what this batch removed.
     expect((APP.match(/fetch\('\/api\/categories'\)/g) ?? []).length).toBe(1);
   });
 
@@ -321,7 +363,7 @@ describe('B3-H1: AgentView reads the App-level category source', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 7 — A-2: programmatic label association in the verification panel
+// Test 7 ΓÇö A-2: programmatic label association in the verification panel
 // ---------------------------------------------------------------------------
 describe('B3-A2: verification controls are programmatically labelled', () => {
   const pairs: Array<[string, string]> = [
@@ -355,7 +397,7 @@ describe('B3-A2: verification controls are programmatically labelled', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 8 — A-6 / A-7 / A-8
+// Test 8 ΓÇö A-6 / A-7 / A-8
 // ---------------------------------------------------------------------------
 describe('B3-A6/A7/A8: busy state, media name, dialog semantics', () => {
   it('A-6: asynchronous action controls expose aria-busy, not every button', () => {
@@ -401,7 +443,7 @@ describe('B3-A6/A7/A8: busy state, media name, dialog semantics', () => {
     expect(AGENTVIEW).toContain('dialogRef.current?.focus();');
     // Escape must not bypass an in-flight action.
     expect(AGENTVIEW).toContain('if (modalBusy) return;');
-    // …and no THIRD modal primitive was introduced.
+    // ΓÇªand no THIRD modal primitive was introduced.
     expect((AGENTVIEW.match(/fixed inset-0 z-\[100\]/g) ?? []).length).toBe(2);
   });
 
@@ -414,15 +456,22 @@ describe('B3-A6/A7/A8: busy state, media name, dialog semantics', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 9 — the server invariants this batch must not have touched
+// Test 9 ΓÇö the server invariants this batch must not have touched
 // ---------------------------------------------------------------------------
 describe('B3-invariants: server authorization, ordering and projection are intact', () => {
   const SERVER_CODE = stripComments(SERVER);
 
   it('every /api/agents route still mounts authenticateJWT + requireActiveAgent', () => {
-    const guarded = SERVER.match(
-      /app\.(?:get|post)\('\/api\/agents[^']*',\s*authenticateJWT,\s*requireActiveAgent/g
-    ) ?? [];
+    // P2-A3.4A: four of the six /api/agents routes moved VERBATIM into
+    // routes/agentOps.ts, so the scan covers BOTH files. The property is
+    // unchanged - there are still exactly SIX guarded agent routes, each
+    // mounting authenticateJWT then requireActiveAgent, in the same order.
+    const pattern =
+      /app\.(?:get|post)\('\/api\/agents[^']*',\s*authenticateJWT,\s*requireActiveAgent/g;
+    const guarded = [
+      ...(SERVER.match(pattern) ?? []),
+      ...(AGENT_OPS.match(pattern) ?? []),
+    ];
     expect(guarded).toHaveLength(6);
     // The middleware still re-loads the agent and requires it to be actionable.
     expect(SERVER).toContain('function requireActiveAgent(req: Request, res: Response, next: NextFunction) {');
@@ -434,53 +483,70 @@ describe('B3-invariants: server authorization, ordering and projection are intac
   });
 
   it('per-route ownership is still enforced against the token, not the request body', () => {
-    const ownership = SERVER.match(/item\.assigned_agent_id !== req\.user\.agentId/g) ?? [];
+    // P2-A3.4A: three of these guards moved into routes/agentOps.ts with the
+    // routes they protect; the count across both files is what the property
+    // means. Still token-derived, never body-derived.
+    const ownPat = /item\.assigned_agent_id !== req\.user\.agentId/g;
+    const ownership = [...(SERVER.match(ownPat) ?? []), ...(AGENT_OPS.match(ownPat) ?? [])];
     expect(ownership.length).toBeGreaterThanOrEqual(4);
     expect(SERVER).toContain('req.user.agentId');
+    expect(AGENT_OPS).toContain('req.user.agentId');
   });
 
   it('verify-before-approve ordering is still enforced server-side', () => {
-    expect(SERVER).toContain("if (item.verification_status === 'pending') {");
-    expect(SERVER).toContain('if (!item.physically_verified_at) {');
-    // …and the verification route still validates the category against the ACTIVE list.
-    expect(SERVER).toContain('const resolvedCategory = resolveCategoryId(categoryId, await db.getActiveCategories());');
+    // P2-A3.4A: these guards live in confirm-dropoff / verify-item, which moved
+    // to routes/agentOps.ts. Read from their new owner; assertions unchanged.
+    const OP = AGENT_OPS;
+    expect(OP).toContain("if (item.verification_status === 'pending') {");
+    expect(OP).toContain('if (!item.physically_verified_at) {');
+    // ΓÇªand the verification route still validates the category against the ACTIVE list.
+    expect(OP).toContain('const resolvedCategory = resolveCategoryId(categoryId, await db.getActiveCategories());');
     // The category guard runs BEFORE the write.
-    expect(SERVER.indexOf('const resolvedCategory = resolveCategoryId')).toBeLessThan(
-      SERVER.indexOf('await db.recordItemVerification(')
+    expect(OP.indexOf('const resolvedCategory = resolveCategoryId')).toBeLessThan(
+      OP.indexOf('await db.recordItemVerification(')
     );
   });
 
   it('handover still verifies the pickup code BEFORE uploading any photo, and settles via CAS', () => {
-    const codeCheck = SERVER.indexOf('timingSafeEqualHex(hashCode(pickupCode.trim()), pickupRecord.code_hash)');
-    const upload = SERVER.indexOf("await uploadBase64Image(handoverPhotoBase64, 'handover-evidence')");
-    const settle = SERVER.indexOf('await db.enterPendingSettlement(claimId, DISPUTE_WINDOW_MS)');
+    // P2-A3.4B: confirm-handover moved into routes/agentOps.ts, so the three
+    // ordering probes read the module. The proof-before-evidence guarantee
+    // itself is unchanged.
+    const codeCheck = AGENT_OPS.indexOf('timingSafeEqualHex(hashCode(pickupCode.trim()), pickupRecord.code_hash)');
+    const upload = AGENT_OPS.indexOf("await uploadBase64Image(handoverPhotoBase64, 'handover-evidence')");
+    const settle = AGENT_OPS.indexOf('await db.enterPendingSettlement(claimId, DISPUTE_WINDOW_MS)');
     expect(codeCheck).toBeGreaterThan(-1);
     expect(upload).toBeGreaterThan(codeCheck);
     expect(settle).toBeGreaterThan(upload);
     // The handover photo is still mandatory.
-    expect(SERVER).toContain("if (!handoverPhotoBase64 || typeof handoverPhotoBase64 !== 'string' || handoverPhotoBase64.trim() === '') {");
+    expect(AGENT_OPS).toContain("if (!handoverPhotoBase64 || typeof handoverPhotoBase64 !== 'string' || handoverPhotoBase64.trim() === '') {");
     // The dispute / stolen / legal-hold fail-safe survives.
-    expect(SERVER).toContain("claimability.reason === 'suspected_stolen'");
-    expect(SERVER).toContain("claimability.reason === 'legal_hold'");
-    expect(SERVER).toContain("claimability.reason === 'unresolved_dispute'");
+    expect(AGENT_OPS).toContain("claimability.reason === 'suspected_stolen'");
+    expect(AGENT_OPS).toContain("claimability.reason === 'legal_hold'");
+    expect(AGENT_OPS).toContain("claimability.reason === 'unresolved_dispute'");
     // The platform pause gate survives.
-    expect(SERVER).toContain("isPlatformOperationPaused(pauseSettingKey('handovers'))");
+    expect(AGENT_OPS).toContain("isPlatformOperationPaused(pauseSettingKey('handovers'))");
   });
 
   it('confirm-viewing still uses the atomic CAS and returns a PROJECTED claim', () => {
-    expect(SERVER).toContain("expected: ['awaiting_agent_confirmation'],");
-    expect(SERVER).toContain("return res.status(viewingTransition.code === 'NOT_FOUND' ? 404 : 409).json({");
+    expect(AGENT_OPS).toContain("expected: ['awaiting_agent_confirmation'],");
+    expect(AGENT_OPS).toContain("return res.status(viewingTransition.code === 'NOT_FOUND' ? 404 : 409).json({");
 
     // The projection check must be scoped to THIS route's body. `owner_phone`,
     // `paid_at` and friends are legitimately used by OTHER routes (the owner
     // and customer claim views, /lookup, /pay), so scanning all of server.ts
-    // for them would be a false positive — which is exactly what an earlier
+    // for them would be a false positive ΓÇö which is exactly what an earlier
     // version of this assertion hit.
     const marker = "app.post('/api/agents/claims/:claimId/confirm-viewing'";
-    const start = SERVER_CODE.indexOf(marker);
+    // P2-A3.4B: confirm-viewing moved verbatim into routes/agentOps.ts. Locate
+    // the route on RAW source (the marker is code, not a comment), take this
+    // route's slice, and only then strip comments from that slice. The leak
+    // assertions below are unchanged.
+    const inAgentOps = AGENT_OPS.includes(marker);
+    const owner = inAgentOps ? AGENT_OPS : SERVER;
+    const start = owner.indexOf(marker);
     expect(start, 'confirm-viewing route not found').toBeGreaterThan(-1);
-    const nextRoute = SERVER_CODE.indexOf('app.post(', start + marker.length);
-    const body = SERVER_CODE.slice(start, nextRoute > -1 ? nextRoute : undefined);
+    const nextRoute = owner.indexOf('app.post(', start + marker.length);
+    const body = stripComments(owner.slice(start, nextRoute > -1 ? nextRoute : undefined));
     expect(body.length).toBeGreaterThan(100);
 
     // Projected, never the raw row: an explicit object, never `claim: updatedClaim,`.
@@ -493,19 +559,19 @@ describe('B3-invariants: server authorization, ordering and projection are intac
   });
 
   it('the agent queue still projects associatedClaim field-by-field, category-filtered', () => {
-    expect(SERVER).toContain('security_answers: toAgentVerificationEvidence(item.category_id');
-    expect(SERVER).toContain('owner_identifying_details: associatedClaim.owner_identifying_details || null,');
+    expect(AGENT_OPS).toContain('security_answers: toAgentVerificationEvidence(item.category_id');
+    expect(AGENT_OPS).toContain('owner_identifying_details: associatedClaim.owner_identifying_details || null,');
     // The claim-status filter the UI depends on is unchanged.
     for (const status of ["'escrow_held'", "'released'", "'disputed'", "'awaiting_agent_confirmation'", "'pending_payment'"]) {
-      expect(SERVER).toContain(status);
+      expect(AGENT_OPS).toContain(status);
     }
   });
 
   it('financial semantics are untouched: no payout happens at handover time', () => {
-    expect(SERVER).toContain('the actual M-Pesa split disbursement does NOT happen here');
-    expect(SERVER).toContain('db.setHandoverPhoto(claimId, handoverPhotoUrl);');
+    expect(AGENT_OPS).toContain('the actual M-Pesa split disbursement does NOT happen here');
+    expect(AGENT_OPS).toContain('db.setHandoverPhoto(claimId, handoverPhotoUrl);');
     // The earnings aggregate is still the only earnings surface for the agent.
-    expect(SERVER).toContain('const earnings = await db.getAgentEarnings(agentId);');
+    expect(AGENT_OPS).toContain('const earnings = await db.getAgentEarnings(agentId);');
     const view = read('src/components/AgentView.tsx');
     expect(view).not.toContain('payout_request');
     expect(view).not.toContain('/api/agents/payout');

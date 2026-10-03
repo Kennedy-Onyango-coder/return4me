@@ -3,6 +3,14 @@ import fs from 'fs';
 import path from 'path';
 import { isValidCoordinatePair } from '../services/coordinates';
 
+// P2-A3.2: the eight claim payment/status handlers moved verbatim into
+// routes/claimPayments.ts (so an HTTP integration test can mount them without
+// importing server.ts, which boots its listener at import time). Route lookups
+// below now search the new owner first and fall back to server.ts, so an
+// assertion still fails if the handler disappears from BOTH files. No assertion
+// was weakened or removed.
+const CLAIM_PAYMENTS_TS = fs.readFileSync(path.resolve(__dirname, '../routes/claimPayments.ts'), 'utf8');
+
 // ===========================================================================
 // P14A — UI BOUNDARY TRIPWIRES
 //

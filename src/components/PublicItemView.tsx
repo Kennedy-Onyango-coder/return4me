@@ -153,7 +153,12 @@ export default function PublicItemView({
       className="inline-flex items-center gap-1.5 text-xs font-bold text-primary-green hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-green/40 rounded"
     >
       <ArrowLeft size={14} aria-hidden="true" />
-      {t('Back to found items', 'Rudi kwenye vitu vilivyopatikana')}
+      {/* BATCH 4 — WORDING ONLY. The handler and destination are untouched:
+          this link has always returned to the HOMEPAGE (onBack ->
+          navigate('/', 'home')), and it is not being given a return-to-results
+          behaviour in this batch. Only the visible label changed, so it now
+          describes the destination it actually has. */}
+      {t('Back to home', 'Rudi nyumbani')}
     </a>
   );
 

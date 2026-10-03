@@ -35,6 +35,8 @@ function stripComments(source: string): string {
 
 const SERVER_RAW = read('src/server.ts');
 const DATABASE_RAW = read('src/db/database.ts');
+// P2-A2: the public discovery search route now lives in routes/publicSearch.ts.
+const PUBLIC_SEARCH_RAW = read('src/routes/publicSearch.ts');
 
 // PHASE 16.1 BATCH 1A — `GET /api/categories` and `POST /api/admin/categories`
 // were extracted into routes/categories.ts (handler bodies moved VERBATIM) so the
@@ -78,10 +80,21 @@ function databaseMethodBody(anchor: string): string {
 }
 
 /** One inline route handler: from its registration to the next one. */
+// P2-A3.4A: four agent operational routes moved to routes/agentOps.ts, so the
+// resolver below searches that module too. Assertion unchanged.
+const AGENT_OPS_RAW = read('src/routes/agentOps.ts');
+
 function routeBody(anchor: string): string {
-  const start = SERVER_RAW.indexOf(anchor);
-  expect(start, `${anchor} not found in server.ts`).toBeGreaterThan(-1);
-  const rest = SERVER_RAW.slice(start);
+  // P2-A2: GET /api/items/search was extracted VERBATIM from server.ts into
+  // routes/publicSearch.ts so it can be mounted for real HTTP integration
+  // testing. The body is read from whichever file now owns the anchor, so this
+  // slicer keeps testing the same handler it always tested — only the file the
+  // body lives in moved. No behavioural assertion is weakened. (This mirrors the
+  // same treatment routes/categories.ts already gets just above.)
+  const src = SERVER_RAW.includes(anchor) ? SERVER_RAW : (PUBLIC_SEARCH_RAW.includes(anchor) ? PUBLIC_SEARCH_RAW : AGENT_OPS_RAW);
+  const start = src.indexOf(anchor);
+  expect(start, `${anchor} not found in server.ts, routes/publicSearch.ts or routes/agentOps.ts`).toBeGreaterThan(-1);
+  const rest = src.slice(start);
   const next = rest.slice(1).search(/\n {2}app\.[a-z]+\(/);
   return stripComments(next === -1 ? rest : rest.slice(0, next + 1));
 }
@@ -461,7 +474,7 @@ describe('CAT-07 — GET /api/items/search refuses an invalid category instead o
     const body = routeBody("app.get('/api/items/search'");
     // The two lines below are pinned by the pre-existing geography suite
     // (countyAwareSearchAndSurfacing.test.ts) and are deliberately unchanged.
-    expect(body).toContain('const { q, categoryId, area, county } = req.query;');
+    expect(body).toMatch(/const \{ q, categoryId, area, county(?:,\s*administrativeUnitId)? \} = req\.query;/);
     expect(body).toContain('item.category_id === categoryId');
     // ...so the boundary must reject anything that is not byte-identical to a
     // live canonical id, otherwise the filter would compare a padded/variant

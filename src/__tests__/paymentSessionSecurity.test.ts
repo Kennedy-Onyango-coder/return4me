@@ -6,18 +6,26 @@ import path from 'path';
 // flow). Static source-audit tests (pattern of paymentAuthGate.test.ts).
 const serverTs = fs.readFileSync(path.resolve(__dirname, '../server.ts'), 'utf8');
 
+// P2-A3.2: the eight claim payment/status handlers moved verbatim into
+// routes/claimPayments.ts (so an HTTP integration test can mount them without
+// importing server.ts, which boots its listener at import time). Route lookups
+// below search the new owner FIRST and fall back to server.ts, so an assertion
+// still fails if a handler disappeared from BOTH. No assertion weakened.
+const CLAIM_PAYMENTS_TS = fs.readFileSync(path.resolve(__dirname, '../routes/claimPayments.ts'), 'utf8');
+
 function routeBody(marker: string): string {
-  const idx = serverTs.indexOf(marker);
+  const idx = CLAIM_PAYMENTS_TS.indexOf(marker) >= 0 ? CLAIM_PAYMENTS_TS.indexOf(marker) : serverTs.indexOf(marker);
   expect(idx, `marker not found: ${marker}`).toBeGreaterThan(-1);
-  const after = serverTs.slice(idx);
+  const src = CLAIM_PAYMENTS_TS.indexOf(marker) >= 0 ? CLAIM_PAYMENTS_TS : serverTs;
+  const after = src.slice(idx);
   const nextRoute = after.indexOf("\n  app.", 10);
   const end = nextRoute > -1 ? idx + nextRoute : idx + 12000;
-  return serverTs.slice(idx, end);
+  return src.slice(idx, end);
 }
 
 describe('payment session: creation endpoint', () => {
   it('is rate-limited alongside other claim-ID-guessable routes', () => {
-    expect(serverTs).toMatch(/app\.post\('\/api\/claims\/:id\/payment-session',\s*claimGuessLimiter,/);
+    expect(CLAIM_PAYMENTS_TS).toMatch(/app\.post\('\/api\/claims\/:id\/payment-session',\s*claimGuessLimiter,/);
   });
 
   it('still requires ownership proof: the claim owner phone must match', () => {
@@ -91,18 +99,43 @@ describe('payment session: webhook confirmation', () => {
   });
 
   it('reconciles the confirmed amount against the session, not the client', () => {
+    // P1 (B-1): this local was renamed sessionAmountRecon -> sessionRecon so the
+    // 'unknown' result could be given its own provider-verification path. The
+    // contract is unchanged and strictly stronger — a session amount that
+    // cannot be reconciled now escalates to the provider rather than passing.
     expect(body).toMatch(/reconcileWebhookAmount\(confirmedAmount, session\.amount\)/);
-    expect(body).toMatch(/sessionAmountRecon === 'mismatch'/);
+    expect(body).toMatch(/sessionRecon === 'mismatch'/);
+    expect(body).toMatch(/sessionRecon === 'unknown'/);
+  });
+
+  it('reconciles the claim fee as well as the session amount', () => {
+    // P1 (B-1): `confirmedAmount` -> `authoritativeAmount` so the same variable
+    // can hold either the callback's value or the provider-confirmed one after
+    // the escalation above. Both must be reconciled against the claim's fee.
+    expect(body).toMatch(/const claimRecon = reconcileWebhookAmount\(authoritativeAmount, expectedFee\)/);
+    expect(body).toMatch(/claimRecon === 'mismatch'/);
   });
 
   it('is idempotent: session CAS plus the claim-level escrow CAS', () => {
     expect(body).toMatch(/attemptPaymentSessionConfirm\(session\.id\)/);
     expect(body).toMatch(/attemptClaimEscrowHold\(claimId, invoiceId\)/);
   });
+
+  it('P1: refuses to confirm the session until an unreconcilable amount is verified', () => {
+    // The provider lookup must sit BETWEEN the session reconcile and the
+    // session CAS, so a payment we could not verify never consumes the
+    // session's single confirmation.
+    const verifyIdx = body.indexOf('fetchAuthoritativeCollectionStatus');
+    const confirmIdx = body.indexOf('attemptPaymentSessionConfirm');
+    expect(verifyIdx).toBeGreaterThan(-1);
+    expect(confirmIdx).toBeGreaterThan(-1);
+    expect(verifyIdx).toBeLessThan(confirmIdx);
+  });
 });
 
 describe('payment session: DB primitives are CAS-guarded', () => {
   const dbTs = fs.readFileSync(path.resolve(__dirname, '../db/database.ts'), 'utf8');
+
 
   it('reservePaymentSession only transitions from created (one winner)', () => {
     expect(dbTs).toMatch(/status: 'payment_initiated'/);

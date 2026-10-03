@@ -20,6 +20,10 @@
 //                     one destination the /lost page's "Report a Lost Item"
 //                     call to action leads to, and the one safe post-sign-in
 //                     return path a lost reporter can be sent back to.
+//   /activate-email   N3 customer email-activation landing page. PUBLIC and
+//                     unauthenticated: the emailed link must work for someone
+//                     who by definition has no session yet. The route records
+//                     only whether a token is present, never its value.
 //   /found            I Found Something (finder report journey)
 //   /become-an-agent  public Agent journey (leads to /agent_portal)
 //   /sign-in          the single Sign In chooser (Owner/Claimant vs Agent)
@@ -50,6 +54,26 @@ export type PublicRoute =
   // and either renders the existing reporting experience or hands off to the
   // existing /account authentication boundary.
   | { kind: 'reportLost' }
+  // N3 — the emailed customer activation landing page (/activate-email?token=…).
+  //
+  // The route carries NO token. It records only whether one was present, and the
+  // page reads the token itself from window.location at the moment it needs it.
+  // That is deliberate: the credential then never enters the route object, the
+  // history state or any component state tree, so it cannot be re-rendered from,
+  // restored from history, or serialised anywhere it should not be.
+  | { kind: 'activateEmail'; hasToken: boolean }
+  // N4 — the emailed AGENT activation landing page (/activate-agent-email?token=…).
+  //
+  // A SEPARATE route kind from 'activateEmail', not a flag on it. The two pages
+  // redeem different credentials against different endpoints and say genuinely
+  // different things afterwards (a customer is signed in; an agent is only
+  // verified, and may still be awaiting approval), so sharing one kind would
+  // mean a boolean threaded through both pages to keep them from lying to the
+  // user. Splitting them keeps each page honest by construction.
+  //
+  // As with the customer route, the token is NEVER carried here — only whether
+  // one was present.
+  | { kind: 'activateAgentEmail'; hasToken: boolean }
   // A plain, public, unauthenticated screen identified by its own path. These
   // are the state-driven views that also have a real URL, so they can be
   // linked, bookmarked and refreshed like any other page.
@@ -63,6 +87,15 @@ const AGENT_PATH = '/agent_portal';
 const LOST_PATH = '/lost';
 const FOUND_PATH = '/found';
 const REPORT_LOST_PATH = '/report-lost';
+// N3 — the path buildCustomerActivationUrl() (services/customerAuth.ts) puts in
+// the activation email. Read from source rather than re-invented, so the link
+// the backend generates and the page the frontend serves can never drift.
+const ACTIVATE_EMAIL_PATH = '/activate-email';
+// N4 — the path buildAgentActivationUrl() (services/customerAuth.ts) puts in the
+// AGENT activation email. Declared next to the customer path, and asserted
+// against that builder's output in the N4 tests, so the link the backend
+// generates and the page the frontend serves can never drift apart.
+const ACTIVATE_AGENT_EMAIL_PATH = '/activate-agent-email';
 const BECOME_AGENT_PATH = '/become-an-agent';
 const SIGNIN_PATH = '/sign-in';
 
@@ -134,6 +167,26 @@ export function itemPath(itemId: string): string {
  */
 export function reportLostPath(): string {
   return REPORT_LOST_PATH;
+}
+
+/**
+ * N3 — the bare /activate-email path. Exported as a builder (not a bare constant
+ * the caller concatenates onto) purely so the page and the tests reference one
+ * definition, matching itemPath()/accountPath(). The token is appended by the
+ * email template in the backend, never here: a builder that took a token would
+ * invite a caller to hold the credential in application state.
+ */
+export function activateEmailPath(): string {
+  return ACTIVATE_EMAIL_PATH;
+}
+
+/**
+ * N4 — the bare /activate-agent-email path, for the same reason as
+ * activateEmailPath(): one definition shared by the page and the tests, never
+ * hand-concatenated by a caller, and never given a token parameter.
+ */
+export function activateAgentEmailPath(): string {
+  return ACTIVATE_AGENT_EMAIL_PATH;
 }
 
 /**
@@ -228,6 +281,35 @@ export function parsePublicRoute(pathname: string, search = ''): PublicRoute {
   if (lower === CONSOLE_PATH) return { kind: 'console' };
   if (lower === AGENT_PATH) return { kind: 'agent' };
   if (lower === REPORT_LOST_PATH) return { kind: 'reportLost' };
+  if (lower === ACTIVATE_EMAIL_PATH) {
+    // Only the PRESENCE of a token is recorded. The value stays in the URL,
+    // where the activation page reads it once and discards it — it is never
+    // copied into the route object, so it cannot be pushed into history state,
+    // re-rendered from, or serialised. A missing/blank token is reported as
+    // `hasToken: false` so the page can explain the link is incomplete instead
+    // of firing a pointless request.
+    let hasToken = false;
+    try {
+      hasToken = (new URLSearchParams(search || '').get('token') || '').trim().length > 0;
+    } catch {
+      hasToken = false;
+    }
+    return { kind: 'activateEmail', hasToken };
+  }
+  if (lower === ACTIVATE_AGENT_EMAIL_PATH) {
+    // Presence only, exactly as above. The value stays in the URL, where the
+    // agent activation page reads it once inside the request effect and drops
+    // it. Note there is deliberately NO `next`/return-destination support here:
+    // this page has no authenticated surface to return to, so there is nothing
+    // a redirect parameter could legitimately point at.
+    let hasToken = false;
+    try {
+      hasToken = (new URLSearchParams(search || '').get('token') || '').trim().length > 0;
+    } catch {
+      hasToken = false;
+    }
+    return { kind: 'activateAgentEmail', hasToken };
+  }
 
   const publicView = VIEW_PATHS.find((entry) => entry.path === lower);
   if (publicView) return { kind: 'view', view: publicView.view };

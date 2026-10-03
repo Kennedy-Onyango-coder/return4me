@@ -114,7 +114,15 @@ describe('contrast remediation (Phase 8.2)', () => {
   });
 
   it('the homepage eyebrow uses the caption token and a passing colour', () => {
-    expect(homeViewTsx).toContain('text-caption font-extrabold uppercase tracking-widest text-ink-muted mb-3');
+    // HOMEPAGE BATCH 3 migrated the eyebrow's colour from the fixed
+    // `text-ink-muted` to the semantic `text-[var(--appearance-text-muted)]`.
+    // The INTENT of this assertion is the contrast remediation, not the literal
+    // token name: the eyebrow must stay on the caption scale and must use a
+    // colour that passes AA. Both still hold — --appearance-text-muted is
+    // #605B50 in light, byte-identical to --color-ink-muted.
+    expect(homeViewTsx).toContain(
+      'text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)] mb-3'
+    );
   });
 
   it('the pickup code keeps its brand accent because it sits on dark green (4.89:1)', () => {
@@ -396,5 +404,84 @@ describe('finder report flow (Phase 8.5)', () => {
     expect(gpsCopy).not.toMatch(/closest Return4me Agent hub/);
     expect(gpsCopy).not.toMatch(/securing your payout faster/);
     expect(gpsCopy).not.toMatch(/Precise Agent Match Enabled/);
+  });
+});
+
+
+
+
+describe('homepage batch 1 CTA and discovery contracts', () => {
+  // BATCH 5 (MF-3) supersedes the "Find My Lost Item" expectation that used to
+  // live here. This Batch 1 test originally pinned the hero's primary recovery
+  // label; Batch 5 relabelled that CTA to the canonical public-navigation label
+  // `t.ownerBtn` ("I Lost Something") because "Find My Lost Item" was the only
+  // occurrence of that phrase in the whole application and sat on a slide whose
+  // heading addresses the person who FOUND something.
+  //
+  // What this test actually protected — and what is still protected below — is
+  // the DESTINATION and the sibling relationship, not the exact wording:
+  //   * the hero's lost action still goes to `view: 'owner'` (/lost)
+  //   * the found action is still secondary and still goes to `view: 'finder'`
+  //   * the Agent Portal is still not a homepage destination
+  // The exact hero label is now pinned by homepageCtaJourneyBatch5.test.ts,
+  // which asserts the canonical `t.ownerBtn` in both languages.
+  it('routes the hero primary to the owner/lost view and keeps Finder as secondary', () => {
+    expect(homeViewTsx).toContain("{ label: t.ownerBtn, view: 'owner' }");
+    expect(homeViewTsx).toContain("label: lang === 'en' ? 'Report a Found Item' : 'Ripoti Kitu Kilichopatikana', view: 'finder'");
+    expect(homeViewTsx).toContain("view: 'owner'");
+    expect(homeViewTsx).not.toMatch(/view: 'agent'/);
+  });
+
+  it('exposes a first-class found-item discovery action to the existing search view', () => {
+    // Batch 4: the DISCOVERY SECTION's CTA is now named for what it has always
+    // actually done — it opens the public found-item search (OwnerView at /lost),
+    // it never reported a loss. Batch 5 later relabelled the hero's own CTA
+    // (MF-3) but left this discovery CTA, and this section, untouched.
+    expect(homeViewTsx).toContain("lang === 'en' ? 'Browse Found Items' : 'Vinjari Vitu Vilivyopatikana'");
+    expect(homeViewTsx).toContain("onClick={() => setView('owner')}");
+    expect(homeViewTsx).toContain('href={`/item/${encodeURIComponent(item.id)}`}');
+    expect(homeViewTsx).toContain('onOpenItem(item.id)');
+  });
+
+  it('keeps the truthful empty-state capability and public DTO boundaries', () => {
+    expect(homeViewTsx).toMatch(/setView\('finder'\)/);
+    expect(homeViewTsx).toContain('is_sensitive_document');
+    for (const privateField of ['contact_phone', 'finder_phone', 'document_number', 'latitude', 'longitude']) {
+      expect(homeViewTsx).not.toContain(privateField);
+    }
+  });
+});
+
+describe('public discovery structured geography', () => {
+  it('keeps the existing search destination and canonical county source', () => {
+    expect(ownerViewTsx).toContain("import { countiesByUxGroup } from '../config/kenyaCounties';");
+    expect(ownerViewTsx).toContain('countiesByUxGroup()');
+    expect(ownerViewTsx).toContain('verificationStep === \'search\'');
+  });
+
+  it('derives sub-county options from the selected county and resets on county change', () => {
+    expect(ownerViewTsx).toContain("import { administrativeUnitsForCounty, resolveAdministrativeUnitId } from '../config/kenyaAdministrativeUnits';");
+    expect(ownerViewTsx).toContain('administrativeUnitsForCounty(selectedCounty)');
+    expect(ownerViewTsx).toContain("setSelectedAdministrativeUnit('')");
+    expect(ownerViewTsx).toContain('disabled={!selectedCounty}');
+    expect(ownerViewTsx).toContain('Select county first');
+  });
+
+  it('keeps the exact-place query independent and sends only validated unit IDs', () => {
+    expect(ownerViewTsx).toContain('const [selectedArea, setSelectedArea]');
+    expect(ownerViewTsx).toContain("params.append('q', searchQuery)");
+    expect(ownerViewTsx).toContain("params.append('area', selectedArea)");
+    expect(ownerViewTsx).toContain("params.append('administrativeUnitId', validUnit)");
+    expect(ownerViewTsx).toMatch(/if \(selectedArea\) params\.append\('area'/);
+    expect(ownerViewTsx).not.toContain('administrativeUnitId: selectedAdministrativeUnit');
+    expect(ownerViewTsx).toContain("setSelectedAdministrativeUnit('')");
+  });
+
+  it('clears structured geography atomically and uses a responsive filter grid', () => {
+    const clearBlock = ownerViewTsx.slice(ownerViewTsx.indexOf("setSearchQuery('')"), ownerViewTsx.indexOf("if (selectedCat === ''"));
+    expect(clearBlock).toContain("setSelectedCounty('')");
+    expect(clearBlock).toContain("setSelectedAdministrativeUnit('')");
+    expect(ownerViewTsx).toContain('grid gap-3 sm:grid-cols-2');
+    expect(ownerViewTsx).not.toContain('flex flex-col md:flex-row gap-3');
   });
 });

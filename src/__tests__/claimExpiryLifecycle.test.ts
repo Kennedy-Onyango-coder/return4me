@@ -12,6 +12,9 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const serverTs = readFileSync(resolve(__dirname, '../server.ts'), 'utf8');
+// P2-A3.1: the claim-submission route now lives in routes/claims.ts.
+const claimsRouteTs = readFileSync(resolve(__dirname, '../routes/claims.ts'), 'utf8');
+const MARKER = 'Check if there is already an active (non-disputed, non-rejected) claim';
 const databaseTs = readFileSync(resolve(__dirname, '../db/database.ts'), 'utf8');
 // Phase 2 moved the INACTIVE_CLAIM_STATUSES set into config/claimStatuses.ts so
 // the customer dashboard groups Active/History by exactly the same rule (rather
@@ -22,9 +25,14 @@ const claimStatusesTs = readFileSync(resolve(__dirname, '../config/claimStatuses
 
 // Locate the claim-submission competing-claim detection block.
 function submissionBlock(): string {
-  const i = serverTs.indexOf('Check if there is already an active (non-disputed, non-rejected) claim');
+  // P2-A3.1: the claim-submission route was extracted VERBATIM from server.ts
+  // into routes/claims.ts. The duplicate-detection block it contains is what
+  // these assertions pin, so read it from whichever file owns it — the guarantee
+  // (a closed/inactive claim stops reserving the item) is unchanged.
+  const src = serverTs.includes(MARKER) ? serverTs : claimsRouteTs;
+  const i = src.indexOf(MARKER);
   expect(i, 'claim-submission duplicate-detection block not found').toBeGreaterThan(-1);
-  return serverTs.slice(i, i + 5000);
+  return src.slice(i, i + 5000);
 }
 
 describe('claim expiry lifecycle: payment expiry != dispute', () => {

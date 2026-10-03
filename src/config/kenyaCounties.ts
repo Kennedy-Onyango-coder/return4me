@@ -40,12 +40,10 @@
  * "Elgeyo-Marakwet" — `constitutionName` records that difference so nobody has
  * to guess later).
  *
- * WHAT THIS FILE DELIBERATELY DOES NOT CONTAIN
- *   - no sub-counties, wards, villages or "areas": those are large (290+
- *     sub-counties, 1,450 wards) and change; hard-coding them here would create
- *     invented or stale administrative data. The UI asks for the COUNTY as a
- *     selector (see `countiesByUxGroup()`), and everything below it as typed
- *     free text — the "Exact place" field.
+  The UI follows county → centrally configured administrative unit → exact free-text
+  place. `kenyaAdministrativeUnits.ts` owns the second level; this file deliberately
+  remains county-only so there is one county source. Wards, cities, towns and exact
+  place text are not county alternatives.
  *   - no coordinates per county: an approximate centroid would be a fabricated
  *     location, and the only coordinates Return4me uses are the ones the browser
  *     actually reports (see FinderView) or the geocoder actually returns (see

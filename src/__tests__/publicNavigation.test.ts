@@ -180,6 +180,38 @@ describe('design foundation (Phase 8.1)', () => {
 });
 
 describe('accessibility + addressability of the new public screens (Phase 8.1)', () => {
+  it('keeps desktop navigation text-led and keeps utility controls reachable at every desktop width', () => {
+    expect(navbarTsx).toContain('hidden lg:flex min-w-0 flex-1 items-center justify-center');
+    // BATCH 1 (navbar): the utility tray was pinned to `hidden xl:flex`, which
+    // combined with the `lg:hidden` compact header to leave 1024-1279px with a
+    // full desktop navbar and NO reachable language/appearance/session control.
+    // The tray now starts at `lg`; `xl` remains only a sizing refinement.
+    //
+    // SPACING REMEDIATION: the row was measured overflowing its own nav box at
+    // 1024px (`Home` rendered 89px INSIDE the logo). The tray's inner spacing
+    // was reduced `gap-1.5` -> `gap-1` and `p-1` -> `px-1.5 py-0.5` as part of
+    // making the whole row fit. The `lg` breakpoint and the tray's role as the
+    // always-reachable utility group are UNCHANGED — only the space around the
+    // controls inside it.
+    expect(navbarTsx).toContain('hidden lg:flex shrink-0 items-center gap-1 rounded-xl border');
+    expect(navbarTsx).not.toContain('hidden xl:flex');
+    expect(navbarTsx).toContain('whitespace-nowrap');
+    expect(navbarTsx).toContain('h-10 md:h-12 xl:h-[50px]');
+    expect(navbarTsx).toContain('bg-[var(--appearance-surface)]');
+    expect(navbarTsx).not.toContain('border-2 px-4 text-sm font-bold');
+  });
+
+  it('gives every public bottom tab a 44px keyboard/touch target', () => {
+    const bar = navbarTsx.slice(navbarTsx.indexOf('{/* Mobile Bottom Tab Bar Navigation'));
+    const buttons = bar.match(/<button[\s\S]*?<\/button>/g) || [];
+    expect(buttons.length).toBeGreaterThanOrEqual(5);
+    for (const button of buttons) {
+      expect(button).toContain('type="button"');
+      expect(button).toContain('min-h-[44px]');
+      expect(button).toContain('focus-visible:ring-2');
+    }
+  });
+
   it('primary CTAs meet the 44px touch-target floor (Button size="lg" is 48px)', () => {
     for (const [name, code] of [['SignInView', signInCode], ['BecomeAgentView', becomeAgentCode]] as const) {
       expect(code, `${name} must use the shared Button primitive`).toContain("from './ui/Button'");

@@ -20,6 +20,12 @@
 import type { Express } from 'express';
 import { db } from '../db/database.ts';
 import { authenticateJWT } from '../services/auth.ts';
+// BATCH 3 - in-app customer notification producers for the refund transitions.
+import {
+  produceClaimNotSuccessful,
+  produceRefundComplete,
+} from '../services/claimNotificationProducers.ts';
+
 import { PaymentService } from '../services/payments.ts';
 
 export interface AdminDisputeRouteDeps {
@@ -120,6 +126,29 @@ export function registerAdminDisputeRoutes(app: Express, deps: AdminDisputeRoute
         throw resolveErr;
       }
 
+      // BATCH 3 / P8 - customer notification for the losing, paid claimant.
+      //
+      // POST-COMMIT BY DESIGN. resolveDispute() above has already committed in
+      // its own transaction; this runs strictly afterwards, so notification
+      // success can never determine whether the dispute commits, and a producer
+      // failure can never roll back an adjudicated decision. The producer itself
+      // cannot throw (it catches and returns null), so the route below is
+      // unaffected either way.
+      //
+      // Guarded on `refundNeededForClaimId`, which is the authoritative signal
+      // that resolveDispute actually locked a PAID losing claim into 'refunding'.
+      // An unpaid losing claimant is rejected rather than refunded and produces no
+      // payment notification, which is correct: no money is being returned to them.
+      //
+      // resolveDispute has exactly ONE caller in this codebase (verified during
+      // Batch 3 discovery), so this site is the complete choke point rather than
+      // one of several. finalizeClaimRefund is called from two places and is
+      // therefore wired at both.
+      if (result.refundNeededForClaimId) {
+        await produceClaimNotSuccessful(result.refundNeededForClaimId);
+      }
+
+
       // If the losing claimant had already paid into escrow, they were
       // locked into 'refunding' by resolveDispute above. Trigger the real
       // M-Pesa refund now — outside the DB transaction, since it's a
@@ -136,7 +165,21 @@ export function registerAdminDisputeRoutes(app: Express, deps: AdminDisputeRoute
           result.refundNeededForClaimId
         );
         if (refundResult.outcome === 'completed') {
-          await db.finalizeClaimRefund(result.refundNeededForClaimId, result.refundAmount, result.refundPhone, adminIdentifier);
+          const refundFinalized = await db.finalizeClaimRefund(result.refundNeededForClaimId, result.refundAmount, result.refundPhone, adminIdentifier);
+          // BATCH 3 / P9 - customer notification for the completed refund.
+          //
+          // Guarded on the finalizeClaimRefund return value, which is true ONLY
+          // for the call that actually performed the refunding -> refunded CAS.
+          // That is the idempotency guard: a repeated reconciliation of a claim
+          // that is no longer in 'refunding' returns false and stays silent.
+          //
+          // Note the deliberate distinction from the ambiguous branch below: a
+          // network timeout leaves the claim in 'refunding' and notifies NOTHING,
+          // because we genuinely do not know yet whether the money moved. Only a
+          // confirmed-executed refund produces a customer-visible completion.
+          if (refundFinalized) {
+            await produceRefundComplete(result.refundNeededForClaimId);
+          }
         } else if (refundResult.outcome === 'unknown') {
           // FIX #4 (audit finding A1): a network timeout/exception means we
           // do NOT know whether IntaSend executed the refund. Treating that

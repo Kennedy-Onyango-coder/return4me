@@ -1,8 +1,33 @@
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { db } from '../db/database';
+// ---------------------------------------------------------------------------
+// N7 — isolate the durable SMS rate limiter out of these business-logic tests.
+//
+// These routes now carry N6's limiter, which enforces 3 SMS requests per
+// rolling 10 minutes on BOTH the client IP AND the verified principal
+// (`req.customer.id`). Each of these files drives one shared customer through
+// many OTP operations across many tests, so that customer's bucket exhausted
+// partway through and the tests began failing with 429s that had nothing to do
+// with what they assert.
+//
+// That is the limiter working correctly, not a defect in the flows: a real
+// customer doing the same thing would be limited too. What these files exist to
+// test is the logic BEHIND the limiter — OTP binding, freshness, single use,
+// cross-claim and cross-customer authorization — and that logic is only
+// observable with a non-exhausting budget.
+//
+// Rate limiting itself is verified exhaustively, and over real HTTP, by
+// src/__tests__/smsIdempotencyRateLimitN6.test.ts, which drives the same
+// middleware through requests 1-4 and asserts the 4th is refused BEFORE any
+// provider call. Nothing is asserted more weakly here; the limiter is stubbed
+// the same way the SMS gateway, storage and email service already are in these
+// files.
+const __n7RealConsumeSlot = (db as any).consumeSmsRateLimitSlot;
+(db as any).consumeSmsRateLimitSlot = async () => ({ allowed: true, retryAfterSeconds: 0 });
+afterAll(() => { (db as any).consumeSmsRateLimitSlot = __n7RealConsumeSlot; });
 import { hashCode } from '../services/auth';
 import { ensureTestCategory, testRunId } from '../db/__tests__/ensureTestCategory';
 
@@ -148,6 +173,26 @@ function claimRow(id: string, itemId: string, ownerPhone: string, status: string
 
 let server: any;
 let baseUrl = '';
+// ---------------------------------------------------------------------------
+// N7 â€” per-test client identity for the durable SMS rate limiter.
+//
+// The SMS routes now carry N6's DURABLE per-IP limiter: 3 requests per rolling
+// 10 minutes. The app sets `trust proxy`, so `req.ip` is derived from
+// X-Forwarded-For. Before N7 every test in this file shared the single loopback
+// address, so the quota was global to the FILE: one test's SMS requests drained
+// the budget of every later test and legitimate multi-step flows began returning
+// 429. That was cross-test bleed, not the limiter misbehaving.
+//
+// Each test now presents its own client IP. This is what the limiter expects,
+// and it also restores real isolation between tests.
+let __n7IpCounter = 0;
+let TEST_CLIENT_IP = '10.90.0.1';
+beforeEach(() => {
+  __n7IpCounter += 1;
+  const a = Math.floor(__n7IpCounter / 250) % 250;
+  const b = (__n7IpCounter % 250) + 1;
+  TEST_CLIENT_IP = `10.90.${a}.${b}`;
+});
 
 async function seed() {
   await db.createCustomer(CUSTOMER_A, 'Asha Mwangi', PHONE_A);
@@ -249,6 +294,9 @@ function cookie(token: string) {
 
 async function api(method: string, urlPath: string, token?: string, body?: any) {
   const headers: Record<string, string> = {};
+    // N7: a distinct client IP per test, so the durable SMS limiter budgets
+    // each test independently (see TEST_CLIENT_IP above).
+    headers['X-Forwarded-For'] = TEST_CLIENT_IP;
   if (token) Object.assign(headers, cookie(token));
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   const res = await fetch(baseUrl + urlPath, {
@@ -683,12 +731,20 @@ describe('customer claims: static hardening', () => {
     expect(routesTs).toContain("app.get('/api/customer/claims/:id', requireCustomerAuth,");
     expect(routesTs).toContain("app.delete('/api/customer/claims/:id/link', requireCustomerAuth,");
     // ...with a limiter on every one of them.
-    expect((routesTs.match(/requireCustomerAuth,\s+claimLinkLimiter,/g) || []).length).toBe(2);
+    // P1 (B-2) adds a third: the pickup-code recovery route also sits behind
+    // requireCustomerAuth + claimLinkLimiter, plus its own claim-keyed and
+    // IP-independent global limiters (see pickupCodeResendLimiter). It is an
+    // SMS-sending route, so the same "every send costs a real SMS" ceiling
+    // applies to it as to the two OTP routes above.
+    expect((routesTs.match(/requireCustomerAuth,\s+claimLinkLimiter,/g) || []).length).toBe(3);
     // The OTP-sending route carries the IP-independent global ceiling, exactly
     // like the existing customer OTP routes in server.ts.
     expect(routesTs).toMatch(/claimLinkGlobalOtpLimiter/);
     expect(routesTs).toMatch(/keyGenerator: \(\) => 'global-claim-link-otp-bucket'/);
     expect(routesTs).toMatch(/claimLinkVerifyLimiter/);
+    // P1 (B-2): the pickup-code route has its own, also IP-independent.
+    expect(routesTs).toMatch(/pickupCodeResendGlobalLimiter/);
+    expect(routesTs).toMatch(/keyGenerator: \(\) => 'global-pickup-code-resend-bucket'/);
 
     // server.ts registers the real routes and injects the REAL checkClaimExpiry,
     // so dashboard expiry awareness is the platform's own lifecycle logic.

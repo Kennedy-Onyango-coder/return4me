@@ -18,6 +18,10 @@ import path from 'path';
 
 const paymentsTs = fs.readFileSync(path.resolve(__dirname, '../payments.ts'), 'utf8');
 const serverTs = fs.readFileSync(path.resolve(__dirname, '../../server.ts'), 'utf8');
+// P2-A3.3: the IntaSend webhook ROUTE moved verbatim to src/routes/webhooks.ts.
+// The masking assertion below reads the route from its new owner; everything
+// else in this file still concerns server.ts and services/payments.ts.
+const webhooksTs = fs.readFileSync(path.resolve(__dirname, '../../routes/webhooks.ts'), 'utf8');
 
 describe('phone numbers are masked before logging (payment paths)', () => {
   it('triggerIntasendRefund masks the account/phone before logging the payload', () => {
@@ -32,9 +36,12 @@ describe('phone numbers are masked before logging (payment paths)', () => {
   });
 
   it('the IntaSend webhook handler does not log the raw unredacted callback payload', () => {
-    const start = serverTs.indexOf("app.post('/api/webhooks/intasend'");
-    expect(start).toBeGreaterThan(-1);
-    const body = serverTs.slice(start, start + 1500);
+    // P2-A3.3: the webhook route moved verbatim to src/routes/webhooks.ts.
+    // Both assertions are unchanged — the raw payload is still never logged and
+    // the phone is still masked before anything is written.
+    const start = webhooksTs.indexOf("app.post('/api/webhooks/intasend'");
+    expect(start, 'webhook route not found in routes/webhooks.ts').toBeGreaterThan(-1);
+    const body = webhooksTs.slice(start, start + 1500);
     expect(body).not.toMatch(/console\.log\('\[INTASEND WEBHOOK\] Received callback event:', JSON\.stringify\(payload,/);
     expect(body).toMatch(/maskPhoneForLog\(payload\?\.phone_number\)/);
   });

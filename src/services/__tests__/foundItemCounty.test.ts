@@ -251,30 +251,54 @@ describe('the matcher consumes the STORED canonical county', () => {
 // ROUTE WIRING (source assertion — see the note at the top of this file)
 // ---------------------------------------------------------------------------
 describe('the found-item report route is wired to the canonical county rule', () => {
+  // P2-A1: the found-item report handler was extracted VERBATIM from server.ts
+  // into routes/finderReport.ts so it can be mounted for real HTTP integration
+  // testing (server.ts calls startServer() at import time and therefore cannot
+  // be imported by a test). The assertions below therefore read the extracted
+  // module instead of server.ts. The GUARANTEES they assert are unchanged —
+  // only the file the source is read from moved.
+  const reportSource = fs.readFileSync(path.resolve(__dirname, '..', '..', 'routes', 'finderReport.ts'), 'utf8');
+  // Still used by the route-ownership assertion below, which must prove the
+  // handler no longer lives inline in server.ts.
   const serverSource = fs.readFileSync(path.resolve(__dirname, '..', '..', 'server.ts'), 'utf8');
 
+  it('P2-A1: the report route is OWNED by finderReport.ts, and server.ts only registers it', () => {
+    // Structural proof of the extraction. The handler body must exist in exactly
+    // one place, and server.ts must be reduced to a registration call — so a
+    // second, divergent copy can never appear.
+    expect(reportSource).toContain("app.post('/api/items/report', reportLimiter");
+    expect(serverSource).not.toContain("app.post('/api/items/report'");
+    expect(serverSource).toContain('registerFinderReportRoutes(app, {');
+    // The shared dependencies are passed in, not re-implemented in the module.
+    expect(serverSource).toMatch(/registerFinderReportRoutes\(app, \{[\s\S]{0,600}?ocrAnalyzeLimiter/);
+    expect(reportSource).not.toContain('startServer(');
+  });
+
   it('validates the county through the shared rule and returns 400 when it fails', () => {
-    expect(serverSource).toContain('resolveFoundCountyInput(foundCounty)');
-    expect(serverSource).toMatch(/if \(!foundCountyResolution\.ok\)[\s\S]{0,200}status\(400\)/);
+    expect(reportSource).toContain('resolveFoundCountyInput(foundCounty)');
+    expect(reportSource).toMatch(/if \(!foundCountyResolution\.ok\)[\s\S]{0,200}status\(400\)/);
   });
 
   it('stores the CANONICAL county on the item', () => {
-    expect(serverSource).toContain('found_county: canonicalFoundCounty');
+    expect(reportSource).toContain('found_county: canonicalFoundCounty');
   });
 
   it('reads the county from the request body and keeps the free-text field separate', () => {
-    expect(serverSource).toContain('foundCounty,');
-    expect(serverSource).toContain('location_description: locationDescription,');
+    expect(reportSource).toContain('foundCounty,');
+    expect(reportSource).toContain('location_description: locationDescription,');
   });
 
   it('validates the county BEFORE the paid image/analysis path and before agent matching', () => {
     // Scoped to the report route itself, so an earlier `isValidImageSignature`
     // call in another route cannot make this pass or fail by accident.
-    const routeStart = serverSource.indexOf("app.post('/api/items/report'");
-    const routeEnd = serverSource.indexOf("app.get('/api/items/search'");
+    // P2-A1: the bounds now come from the extracted module. The report handler
+    // is the LAST registration in registerFinderReportRoutes, so the route slice
+    // runs from its own app.post to the end of the file — an upper bound that
+    // cannot accidentally fall through into an unrelated route the way the old
+    // "up to /api/items/search" bound did.
+    const routeStart = reportSource.indexOf("app.post('/api/items/report'");
     expect(routeStart).toBeGreaterThan(0);
-    expect(routeEnd).toBeGreaterThan(routeStart);
-    const route = serverSource.slice(routeStart, routeEnd);
+    const route = reportSource.slice(routeStart);
 
     const countyAt = route.indexOf('resolveFoundCountyInput(foundCounty)');
     const imageAt = route.indexOf('isValidImageSignature(photoBase64)');

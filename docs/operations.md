@@ -1,0 +1,199 @@
+# Operations
+
+Day-to-day running: what the server does on its own, how to read its logs, and
+what to do when something has failed.
+
+## Background sweeps
+
+Five sweeps run on timers, started when the server begins listening. Each is
+wrapped in its own try/catch so one failure does not stop the others or kill the
+timer.
+
+| Sweep | Interval | What it does |
+|---|---|---|
+| `expireStaleClaims` | 60 seconds | Moves unpaid, agent-confirmed claims to `payment_window_expired` and records a payment strike |
+| `releaseDueSettlements` | 5 minutes | Pays the disbursement split for claims whose dispute window has closed |
+| `socialRetrySweep` | 5 minutes | Retries failed found-notice social publications |
+| `notificationRetrySweep` | 5 minutes | Re-dispatches due retryable notifications |
+| `handoverEvidenceRetentionSweep` | 24 hours | Purges handover evidence photos past their retention window |
+
+### Claim expiry
+
+The sweep selects claims in `pending_payment` whose window has elapsed, then
+calls `expirePendingPaymentClaim`, a conditional update guarded on the claim still
+being in `pending_payment`. It returns whether the update happened; only then is
+a payment strike recorded.
+
+That guard exists because an earlier unconditional status write let the sweep
+expire a claim at the same moment a webhook was confirming payment. The winner of
+the conditional update is the only writer that acts.
+
+### Settlement
+
+The sweep selects claims due for settlement, then uses the CAS-guarded
+`attemptSettlementRelease`, which asserts the `pending_settlement → releasing`
+edge and conditionally updates. Only the instance that wins performs the payout.
+
+Settlement is partial-tolerant. If one leg of the disbursement split fails, the
+claim returns to `pending_settlement` and a message records which payout is
+outstanding; the next sweep retries only that leg. A permanently failing leg
+therefore does not block the other payouts, and an administrator can settle
+manually through `POST /api/admin/claims/:id/release-settlement`.
+
+### Notification retry
+
+The sweep claims due rows with a conditional update, sets them to `sending`, then
+dispatches. Claiming before dispatching is what stops two instances sending the
+same message.
+
+The claim does not re-run the business transaction that produced the
+notification. See [notifications.md](notifications.md).
+
+### Social retry
+
+Automatic retry is implemented only for `found_notice` publications. Other
+publication types are logged as skipped rather than retried, because each would
+need its own scoped retry path, and an unreviewed sweep across every category at
+once is the failure mode being avoided.
+
+### Handover evidence retention
+
+Purges handover photos past their retention window. This is the one retention
+category in [DATA_RETENTION_POLICY.md](DATA_RETENTION_POLICY.md) with an
+
+## Notification failure handling
+
+`GET /api/admin/notifications` is the failure console. It lists notification
+events with their status, retry class, attempt counts and last error.
+
+| Status | Meaning | Action |
+|---|---|---|
+| `retryable_failure` | Scheduled for another attempt | Wait; no action unless it exhausts the budget |
+| `permanent_failure` | Will not be retried | Determine why, then act by hand |
+| `unknown` | Outcome undeterminable | Confirm with the recipient whether they received it, then decide |
+| `failed` | Failed before the retry lifecycle existed | Treat as terminal; resend manually |
+
+`unknown` is the one that needs judgement rather than a reflex. It means the
+provider's response did not establish whether the message was accepted, so
+retrying could double-send a code and not retrying could drop it. Asking the
+recipient is the only way to resolve it.
+
+Exhausting the retry budget also produces `permanent_failure`, with
+`next_attempt_at` cleared. Five attempts over roughly a day and a half is the
+current policy; see [notifications.md](notifications.md).
+
+### Manual retry
+
+`POST /api/admin/notifications/:id/retry` dispatches a single row. It refuses any
+event outside the five retry-eligible ones, regardless of who asks, and leaves
+the original idempotency key untouched.
+
+The refusal is not a limitation to work around. The nine non-retryable events
+carry a one-time secret stored only as a hash, so the message cannot be
+reconstructed; regenerating the secret would invalidate a code the recipient may
+already be using. To resend a code, request a new one through the relevant
+endpoint rather than retrying the notification.
+
+## Recovery procedures
+
+### A claim is stuck in `releasing`
+
+A settlement that died mid-flight can leave the claim in `releasing`. The release
+operation is re-entrant from `releasing` back to `pending_settlement`, so the
+next sweep pass picks it up and retries the outstanding payout. If it does not
+clear, settle it manually through the admin route and check the settlement sweep
+logs for the specific payout that is failing.
+
+### A webhook reports a payment but the claim did not move
+
+Check, in order: the webhook signature secret is set; the amount matched the
+persisted session; and the claim was still in `pending_payment` when the webhook
+arrived. An amount mismatch is refused by design, and a claim already moved out
+of `pending_payment` means the payment was already applied. See
+[claims-and-payments.md](claims-and-payments.md).
+
+### Notification rows are stuck in `sending`
+
+A `sending` row means a worker claimed it and then did not finish — usually a
+process terminated mid-dispatch. The row is not automatically returned to a
+retryable state, because the dispatch may actually have reached the provider. Use
+`GET /api/admin/notifications` to identify the rows, confirm with recipients
+where the event is reconstructable, and retry or resend deliberately.
+
+### No emails are arriving
+
+Check, in order: `RESEND_API_KEY` is set; `RESEND_FROM_EMAIL` is a verified
+sender and not Resend's test sender; and the notification rows are `sent` rather
+than failed. The test sender restricts delivery to the API key owner, so a
+deployment left on it will show successful sends and deliver nothing. See
+[configuration.md](configuration.md).
+
+### No SMS is arriving
+
+Check `SMS_ENABLED`, then the Africa's Talking credentials and sender ID. In
+production a disabled or unconfigured SMS path fails closed, so the affected
+request reports failure rather than appearing to succeed.
+
+Note the durable limit: 3 SMS per 10 minutes per identity. A user testing several
+flows in quick succession will hit it, and that is expected.
+
+### Activation links point at localhost
+
+`PUBLIC_APP_URL` is unset. It falls back to `http://localhost:3000`, and it is
+not listed in `.env.example`, so a deployment assembled only from that file will
+omit it. See [configuration.md](configuration.md).
+
+## Pause controls
+
+Administrators can pause the platform and social publishing independently:
+
+- `GET /api/admin/settings/pause-status`
+- `POST /api/admin/settings/pause`
+- `POST /api/admin/settings/social-publishing-pause`
+
+## What does not exist
+
+Stating these plainly, so an operator does not go looking for them:
+
+- There is no metrics endpoint and no instrumentation beyond the error reporting
+  configured through Sentry.
+- There is no alerting. Nothing pages anyone when a sweep fails or a notification
+  exhausts its budget; someone has to look.
+- There is no dead-letter queue. A `permanent_failure` row stays in the table
+  until reviewed.
+- There is no backfill or replay tooling for the notification system.
+- There is no health check covering provider reachability. `GET /api/health`
+  confirms the process is up and nothing more.
+
+## Related
+
+- [notifications.md](notifications.md) — the notification lifecycle
+- [claims-and-payments.md](claims-and-payments.md) — settlement and dispute flow
+- [database.md](database.md) — the constraints the sweeps rely on
+- [configuration.md](configuration.md) — provider configuration
+- [deployment.md](deployment.md) — running more than one instance
+
+implemented sweep; the rest are documented but not automated. See section 4 of
+that policy.
+
+A record under an active legal hold is not purged.
+
+## Reading the logs
+
+Sweeps log one line per pass or per item, with a bracketed prefix identifying
+them:
+
+| Prefix | Meaning |
+|---|---|
+| `[NOTIFICATION RETRY SWEEP]` | Rows claimed and sent this pass |
+| `[SETTLEMENT SWEEP]` | A claim settled, failed, or partially processed |
+| `[SOCIAL RETRY SWEEP]` | A publication retried or skipped as unsupported |
+| `[HANDOVER PHOTO RETENTION SWEEP]` | Photos purged, or a per-claim purge failure |
+| `[SWEEP]` | A claim's payment window expired |
+
+A line reporting `Sweep failed` means the whole pass threw; the timer continues
+and the next pass retries the same work. A per-item error means that item failed
+while the rest of the pass continued.
+
+Phone numbers in sweep logs are masked. A masked number in a log is expected
+behaviour, not redaction gone wrong.

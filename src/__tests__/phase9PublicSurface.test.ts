@@ -123,7 +123,7 @@ describe('Request 13 — Sign In is a distinct control, not a nav link', () => {
   it('is rendered as an outlined, 44px-tall control with its own class', () => {
     expect(navbar).toContain('signInButtonClass');
     expect(navbar).toMatch(/const signInButtonClass =[\s\S]{0,300}min-h-\[44px\]/);
-    expect(navbar).toMatch(/const signInButtonClass =[\s\S]{0,400}border-2/);
+    expect(navbar).toMatch(/const signInButtonClass =[\s\S]{0,400}border border-\[var\(--appearance-border-strong\)\]/);
   });
 
   it('keeps readable text in every state (no white-on-light, no gradients)', () => {

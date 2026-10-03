@@ -3,7 +3,11 @@ import { translations } from '../types';
 import ClaimVerificationEvidence from './ClaimVerificationEvidence';
 import { getClaimStatusDisplay, agentClaimBadge } from './claimStatus';
 import AgentHub from './agent/AgentHub';
-import { ShieldCheck, Plus, CheckCircle, PackageOpen, HelpCircle, Loader2, ArrowRight, AlertCircle, Phone, Lock, Eye, Camera, Upload } from 'lucide-react';
+import { ShieldCheck, Plus, CheckCircle, PackageOpen, HelpCircle, Loader2, ArrowRight, AlertCircle, Phone, Lock, Eye, Camera, Upload, MapPin, Mail } from 'lucide-react';
+import { countiesByUxGroup } from '../config/kenyaCounties';
+import { administrativeUnitsForCounty } from '../config/kenyaAdministrativeUnits';
+import { detectBrowserLocation, type DetectedLocation } from '../services/browserLocation';
+import { useAgentOperations } from '../hooks/useAgentOperations';
 
 interface AgentViewProps {
   lang: 'en' | 'sw';
@@ -68,16 +72,16 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
   const [authLoading, setAuthLoading] = useState(false);
 
   // OPERATIONAL (post-sign-in) error channel — see F-1 above.
-  //
-  // Rendered inside the authenticated Agent Hub, and only there. Cleared at the
-  // start of every operation so a stale message can never be mistaken for the
-  // result of the action the agent just took.
-  const [operationError, setOperationError] = useState('');
-
-  // Application/Registration form states
   const [isRegistering, setIsRegistering] = useState(false);
   const [businessName, setBusinessName] = useState('');
   const [locationAddress, setLocationAddress] = useState('');
+  const [agentCounty, setAgentCounty] = useState('');
+  const [agentAdministrativeUnitId, setAgentAdministrativeUnitId] = useState('');
+  const [agentLatitude, setAgentLatitude] = useState<number | null>(null);
+  const [agentLongitude, setAgentLongitude] = useState<number | null>(null);
+  const [agentLocationAccuracy, setAgentLocationAccuracy] = useState<number | null>(null);
+  const [agentDetectedLocation, setAgentDetectedLocation] = useState<DetectedLocation | null>(null);
+  const [agentLocationMessage, setAgentLocationMessage] = useState('');
   const [payoutMethodType, setPayoutMethodType] = useState('Till Number');
   const [tillNumber, setTillNumber] = useState('');
   const [nationalId, setNationalId] = useState('');
@@ -85,59 +89,28 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
   const [shopPhotoBase64, setShopPhotoBase64] = useState<string | null>(null);
   const [idDocumentPhotoBase64, setIdDocumentPhotoBase64] = useState<string | null>(null);
   const [agreedTerms, setAgreedTerms] = useState(false);
+  // N4 — true only between a successful REGISTRATION and the applicant
+  // confirming their email. It drives one informational panel and nothing else:
+  // it is never consulted when authorizing anything, because the server does
+  // that. Defaulting to false means every other entry path (an existing agent
+  // signing in, a grandfathered pre-N4 agent) is unaffected.
+  const [awaitingEmailVerification, setAwaitingEmailVerification] = useState(false);
 
-  // Agent Queue States
-  //
-  // PHASE 16.1 BATCH 3 (F-5 / H-3) — `agentStatus` AND request failure are now
-  // SEPARATE concerns.
-  //
-  // `agentStatus` used to be overwritten with 'pending' for ANY non-OK queue
-  // response, which turned a transient 500, a dropped connection, or an expired
-  // session into the "Vetting Pending" screen — i.e. the UI asserted an
-  // account-status change that the server never reported. It is now only ever
-  // ADVANCED to 'active' by a definitive 2xx, and is never REGRESSED by a
-  // failure. The initial 'pending' value remains the honest "no definitive
-  // answer yet" state.
-  //
-  // `queueError` carries the failure text instead, and `queueLoading` marks the
-  // in-flight window so the pre-answer render is a loading state rather than a
-  // claim about the account.
-  const [agentStatus, setAgentStatus] = useState<string>('pending');
-  const [queueError, setQueueError] = useState('');
-  const [queueLoading, setQueueLoading] = useState(false);
-  const [expectedDropoffs, setExpectedDropoffs] = useState<any[]>([]);
-  const [holdingPickups, setHoldingPickups] = useState<any[]>([]);
-  const [agentProfile, setAgentProfile] = useState<any | null>(null);
-  const [agentEarnings, setAgentEarnings] = useState<{ totalEarned: number; completedPayoutsCount: number } | null>(null);
-
-  // Modal / Inputs
-  const [dropoffCodeInput, setDropoffCodeInput] = useState('');
-  // PHASE 16.1 BATCH 3 (F-2) — `handoverCodeInput` was REMOVED here.
-  //
-  // It backed a "Enter Handover Code (CLM-...)" text box in the held-items
-  // card, but no handler ever read the value: the real handover action collects
-  // the OWNER'S secret pickup code inside `pickupCodeModal` (below) and posts it
-  // to /api/agents/confirm-handover. The state and its input were dead UI, so
-  // both are gone. No handover API semantics changed — see submitConfirmHandover.
-  const [actionSuccessMsg, setActionSuccessMsg] = useState('');
-
-  // Item verification/correction panel — the Agent reviews the Finder's
-  // original submission before physically approving it. Confirming as
-  // reported or saving a correction both go through the same
-  // /api/agents/verify-item call; approving only proceeds to
-  // /api/agents/confirm-dropoff once verification (and, for a sensitive
-  // item's identity fields, physical verification) is complete — enforced
-  // server-side, not just by this UI's button order.
-  const [verifyingItemId, setVerifyingItemId] = useState<string | null>(null);
-  const [verifyCategoryId, setVerifyCategoryId] = useState('');
-  const [verifyName, setVerifyName] = useState('');
-  const [verifyDocNumber, setVerifyDocNumber] = useState('');
-  const [verifyDescription, setVerifyDescription] = useState('');
-  const [verifyFoundArea, setVerifyFoundArea] = useState('');
-  const [verifyPhysicallyChecked, setVerifyPhysicallyChecked] = useState(false);
-  const [verifyReason, setVerifyReason] = useState('Finder entered wrong information');
-  const [verifyReasonDetail, setVerifyReasonDetail] = useState('');
-  const [verifyError, setVerifyError] = useState('');
+  const {
+    agentStatus, queueError, queueLoading, expectedDropoffs, holdingPickups, agentProfile, agentEarnings,
+    dropoffCodeInput, setDropoffCodeInput, operationError, setOperationError, actionSuccessMsg,
+    actionProcessing, processingItemId, verifyingItemId, setVerifyingItemId, verifyCategoryId,
+    setVerifyCategoryId, verifyName, setVerifyName, verifyDocNumber, setVerifyDocNumber,
+    verifyDescription, setVerifyDescription, verifyFoundArea, setVerifyFoundArea,
+    verifyPhysicallyChecked, setVerifyPhysicallyChecked, verifyReason, setVerifyReason,
+    verifyReasonDetail, setVerifyReasonDetail, verifyError, rejectingItemId, setRejectingItemId,
+    rejectionReason, setRejectionReason, rejectionCustomText, setRejectionCustomText, confirmModal,
+    setConfirmModal, modalBusy, setModalBusy, pickupCodeModal, setPickupCodeModal, useHandoverCamera,
+    handoverPhotoInputRef, handoverVideoRef, handoverCanvasRef, dialogRef, retryQueue,
+    openVerificationPanel, hasCorrections, handleSubmitVerification, handleLookupDropoff,
+    handleRejectDropoff, handleConfirmHandover, handleHandoverPhotoCapture, startHandoverCamera,
+    stopHandoverCamera, captureHandoverFrame, submitConfirmHandover, handleConfirmViewing,
+  } = useAgentOperations({ token, lang, refreshCategories });
 
   // PHASE 16.1 BATCH 3 (H-1 / M-6) — the private category list and its
   // mount-only fetch were REMOVED here.
@@ -155,315 +128,28 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
   // (AdminView.onCategoriesChanged → App.fetchCategories) instead of keeping a
   // frozen snapshot.
 
-  const openVerificationPanel = (item: any) => {
-    // Refresh the shared category list at the moment of use, through the
-    // EXISTING App-level fetch (the same callback AdminView receives). This is
-    // a read of the one category source, not a second one: it guarantees a
-    // category created — or deactivated — since the last app-level load is
-    // reflected in the selector below. Fire-and-forget: the panel still opens
-    // immediately with the list currently in hand.
-    refreshCategories?.();
-    setVerifyingItemId(item.id);
-    setVerifyCategoryId(item.category_id || '');
-    setVerifyName(item.ocr_extracted_name || '');
-    setVerifyDocNumber(item.ocr_extracted_number || '');
-    setVerifyDescription(item.description || '');
-    setVerifyFoundArea(item.location_description || '');
-    setVerifyPhysicallyChecked(false);
-    setVerifyReason('Finder entered wrong information');
-    setVerifyReasonDetail('');
-    setVerifyError('');
-    setActionSuccessMsg('');
-  };
-
-  const hasCorrections = (item: any) => {
-    if (!item) return false;
-    return (
-      verifyCategoryId !== (item.category_id || '') ||
-      verifyName !== (item.ocr_extracted_name || '') ||
-      verifyDocNumber !== (item.ocr_extracted_number || '') ||
-      verifyDescription !== (item.description || '') ||
-      verifyFoundArea !== (item.location_description || '')
-    );
-  };
-
-  // Submits verification/correction, then — only if the Agent has
-  // checked "physically verified" — immediately proceeds to
-  // confirm-dropoff in the same action. This combines the design brief's
-  // separate "verify" and "approve & accept" steps into one button when
-  // the Agent has already looked at the item; if they haven't checked
-  // the physical-verification box, this only saves the correction and
-  // leaves the item in the queue for them to come back and approve once
-  // they've actually inspected it.
-  const handleSubmitVerification = async (item: any, outcome: 'confirmed' | 'corrected') => {
-    setVerifyError('');
-    setActionSuccessMsg('');
-    setActionProcessing(true);
-    // BATCH 4B-1 (B3): this action belongs to ONE drop-off item, so only that
-    // card's controls go busy while the request is in flight.
-    setProcessingItemId(item?.id ?? null);
-
-    const changed = hasCorrections(item);
-    if (outcome === 'corrected' && !changed) {
-      setVerifyError(lang === 'en' ? 'No fields were actually changed — use "Confirm As Reported" instead, or edit a field first.' : 'Hakuna sehemu iliyobadilishwa — tumia "Thibitisha Kama Ilivyoripotiwa", au badilisha sehemu kwanza.');
-      finishProcessing();
-      return;
-    }
-
-    try {
-      const verifyResponse = await fetch('/api/agents/verify-item', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          dropoffCode: item.id,
-          categoryId: verifyCategoryId,
-          name: item.is_sensitive_document ? (verifyName || null) : null,
-          documentNumber: item.is_sensitive_document ? (verifyDocNumber || null) : null,
-          description: verifyDescription || null,
-          foundArea: verifyFoundArea,
-          reason: changed ? verifyReason : '',
-          reasonDetail: changed ? (verifyReasonDetail || null) : null,
-          physicallyVerified: verifyPhysicallyChecked,
-        }),
-      });
-      const verifyData = await verifyResponse.json();
-      if (!verifyResponse.ok) {
-        throw new Error(verifyData.error || 'Verification failed');
-      }
-
-      if (!verifyPhysicallyChecked) {
-        // Correction/confirmation saved, but the Agent hasn't physically
-        // inspected the item yet — leave it in the queue rather than
-        // approving it now.
-        setActionSuccessMsg(lang === 'en' ? 'Saved. Physically inspect the item, then check the box and confirm to approve it.' : 'Imehifadhiwa. Kagua bidhaa kimwili, kisha weka alama kwenye kisanduku na uthibitishe ili kuikubali.');
-        setVerifyingItemId(null);
-        fetchQueues();
-        finishProcessing();
-        return;
-      }
-
-      // Physically verified — proceed straight to approval.
-      const approveResponse = await fetch('/api/agents/confirm-dropoff', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ dropoffCode: item.id }),
-      });
-      const approveData = await approveResponse.json();
-      if (!approveResponse.ok) {
-        throw new Error(approveData.error || 'Approval failed');
-      }
-
-      setActionSuccessMsg(approveData.message);
-      setVerifyingItemId(null);
-      fetchQueues();
-    } catch (e: any) {
-      setVerifyError(e.message);
-    } finally {
-      finishProcessing();
-    }
-  };
-
-  // Rejection States
-  const [rejectingItemId, setRejectingItemId] = useState<string | null>(null);
-  const [rejectionReason, setRejectionReason] = useState<string>("Not a real item");
-  const [rejectionCustomText, setRejectionCustomText] = useState<string>("");
-
-  // Action Loading State
-  const [actionProcessing, setActionProcessing] = useState(false);
-
-  // PHASE 16.1 BATCH 4B-1 (B3) - THE PER-ITEM BUSY IDENTITY.
-  //
-  // `actionProcessing` above is a single global flag, so while ONE card's action
-  // was in flight every card in the Hub was disabled AND every action button
-  // showed a spinner - a slow handover greyed out an unrelated drop-off, and a
-  // drop-off verification greyed out every held item. This state records WHICH
-  // record's action is actually running, and the Hub (which stays presentational
-  // and hook-free) receives it as `processingItemId`:
-  //   * drop-off actions (verify/correct, reject)     -> the drop-off code (item.id)
-  //   * held-item actions (confirm viewing, handover) -> the claim id
-  // R4M- drop-off codes and CLM- claim ids are disjoint namespaces, so a single
-  // field is unambiguous across the two queues.
-  //
-  // `actionProcessing` is deliberately KEPT rather than replaced: the
-  // modal-driven operations (confirm-viewing, handover submission) still use it,
-  // it is what Batch 3's `aria-busy={actionProcessing}` anchor reflects, and it
-  // remains the broad "an operation is in flight" flag. Neither flag authorizes
-  // anything - the server's ownership guards, the claim-status CAS in
-  // transitionClaimStatus, and the pickup-code check remain the authoritative
-  // protections against a duplicate or unauthorized submission.
-  const [processingItemId, setProcessingItemId] = useState<string | null>(null);
-
-  // Single exit point for "no action is running any more": the global flag and
-  // the per-item identity are always cleared together, so a card cannot be left
-  // permanently busy by clearing one and forgetting the other.
-  const finishProcessing = () => {
-    setActionProcessing(false);
-    setProcessingItemId(null);
-  };
-
-  // Confirmation Modal State
-  //
-  // PHASE 16.1 BATCH 3 (F-6) — `onConfirm` now RESOLVES TO A BOOLEAN so the
-  // modal can tell success from failure. It used to be `() => void` and the
-  // Confirm button fire-and-forgot it while unconditionally closing the modal,
-  // so the dialog vanished before the request had even failed. The dialog now
-  // stays open on failure (the Hub's operational error channel explains why) and
-  // closes only once the action reports success. The server-side CAS in
-  // transitionClaimStatus remains the authoritative duplicate-submission
-  // protection; `modalBusy` below is a UX guard only.
-  const [confirmModal, setConfirmModal] = useState<{
-    title: string;
-    message: string;
-    onConfirm: () => Promise<boolean>;
-  } | null>(null);
-  const [modalBusy, setModalBusy] = useState(false);
-
-  // Handover Pickup Code Modal State — collects the owner's secret pickup
-  // code and a handover evidence photo before /api/agents/confirm-handover
-  // is called.
-  const [pickupCodeModal, setPickupCodeModal] = useState<{
-    claimId: string;
-    code: string;
-    photoBase64: string | null;
-  } | null>(null);
-  const handoverPhotoInputRef = useRef<HTMLInputElement>(null);
-  const [useHandoverCamera, setUseHandoverCamera] = useState(false);
-  const handoverVideoRef = useRef<HTMLVideoElement | null>(null);
-  const handoverCanvasRef = useRef<HTMLCanvasElement | null>(null);
-
-  // ---------------------------------------------------------------------------
-  // PHASE 16.1 BATCH 3 (A-8) — DIALOG SEMANTICS, ESCAPE AND FOCUS.
-  //
-  // Both modals are real blocking dialogs, but until now they were plain
-  // <div>s: no role, no accessible name, no focus move into the dialog, no
-  // Escape handling and no focus restoration on close. A keyboard or
-  // screen-reader user could be left focused on the page behind the overlay.
-  //
-  // This is deliberately ONE small effect shared by both existing modals
-  // rather than a new (third) modal primitive — extraction is a later batch.
-  // Capture order matters: the element focused BEFORE the dialog opened is
-  // remembered and restored on close, so a keyboard user returns to the control
-  // they activated rather than to the top of the document.
-  // ---------------------------------------------------------------------------
-  const dialogRef = useRef<HTMLDivElement | null>(null);
-  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
-  const anyModalOpen = Boolean(confirmModal || pickupCodeModal);
-
-  useEffect(() => {
-    if (!anyModalOpen) return;
-
-    previouslyFocusedRef.current = (typeof document !== 'undefined'
-      ? (document.activeElement as HTMLElement | null)
-      : null);
-
-    // Move focus into the dialog itself (tabIndex={-1} on the panel), which is
-    // the least surprising option when neither modal has a single obvious first
-    // field. The pickup-code input keeps its own autoFocus.
-    dialogRef.current?.focus();
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        // Closing is a pure dismissal: no request is sent, so this cannot
-        // bypass or duplicate the server-side work. `modalBusy` is respected so
-        // Escape cannot dismiss a dialog whose action is still in flight.
-        if (modalBusy) return;
-        setConfirmModal(null);
-        setPickupCodeModal(null);
-      }
-    };
-    document.addEventListener('keydown', onKeyDown);
-
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      previouslyFocusedRef.current?.focus?.();
-    };
-  }, [anyModalOpen, modalBusy]);
-
-  // Fetch Agent Queues on Token availability.
-  //
-  // PHASE 16.1 BATCH 3 (F-5 / H-3) — a FAILED REQUEST NO LONGER CLAIMS THE
-  // AGENT BECAME PENDING.
-  //
-  // Before: any non-OK response ran `setAgentStatus('pending')`, so a 500, a
-  // dropped connection, or an expired session replaced the whole Hub with the
-  // "Vetting Pending" screen — the UI asserted an account-status change the
-  // server never reported. Note that BOTH of this route's guards can answer
-  // 403 (`authenticateJWT` returns 403 for an EXPIRED session; `requireActiveAgent`
-  // returns 403 for a non-actionable agent), so a status code alone could never
-  // justify asserting a vetting state.
-  //
-  // Now: `agentStatus` is advanced to 'active' ONLY by a definitive 2xx and is
-  // never regressed by a failure. Every failure lands in `queueError` instead.
-  // The server stays the sole authority on whether this agent may act — nothing
-  // here grants or withholds anything; it only stops the UI from inventing a
-  // status. `queueLoading` marks the in-flight window so the pre-answer render
-  // is a loading state rather than a claim about the account.
-  const fetchQueues = async () => {
-    if (!token) return;
-    setQueueLoading(true);
-    try {
-      const response = await fetch('/api/agents/queue', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      // A non-JSON body (a proxy error page, a truncated response) must not
-      // throw out of the failure handling below.
-      let data: any = null;
-      try {
-        data = await response.json();
-      } catch {
-        data = null;
-      }
-
-      if (!response.ok) {
-        // Preferred message: the server's own explanation, when it supplied
-        // one. Both guards' 403/401 bodies are deliberately user-facing,
-        // bilingual copy (e.g. "Akaunti yako ya Agent bado haijaidhinishwa au
-        // imesitishwa." / "Muda wako wa kuingia umeisha. Tafadhali ingia
-        // tena."), so surfacing it tells the agent the real reason instead of a
-        // invented one. Never the raw status code or an internal detail.
-        const serverMessage = typeof data?.error === 'string' && data.error.trim() ? data.error.trim() : '';
-        setQueueError(serverMessage || (lang === 'en'
-          ? "We couldn't load your agent hub just now. Please try again."
-          : 'Imeshindwa kupakia ukurasa wako wa wakala sasa. Tafadhali jaribu tena.'));
-        return;
-      }
-
-      setQueueError('');
-      setAgentStatus('active');
-      setAgentProfile(data.agent);
-      setAgentEarnings(data.earnings || null);
-      setExpectedDropoffs(data.pendingDropoffs);
-      setHoldingPickups(data.holdingItems);
-    } catch (e) {
-      console.error(e);
-      // A thrown fetch (offline, DNS, CORS, abort) is a request failure, never
-      // an account-status change.
-      setQueueError(lang === 'en'
-        ? "We couldn't reach Return4me. Check your connection and try again."
-        : 'Imeshindwa kufikia Return4me. Angalia mtandao wako na ujaribu tena.');
-    } finally {
-      setQueueLoading(false);
-    }
-  };
-
-  const retryQueue = () => {
-    setQueueError('');
-    fetchQueues();
-  };
-
-  useEffect(() => {
-    fetchQueues();
-  }, [token]);
-
   // Request login/onboarding OTP
   const handleAuthRequest = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
 
-    if (isRegistering && contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) {
-      setAuthError('Tafadhali weka barua pepe sahihi (Please enter a valid email address).');
-      return;
+    // N4 — the business email is now REQUIRED for a new agent registration, so
+    // the guard can no longer be `contactEmail && ...`: that skipped a blank
+    // value entirely, which was correct when the field was optional and is a
+    // hole now. The trim happens here so "   " is caught by the required arm
+    // rather than reaching the regex. This is a client-side convenience only —
+    // the backend rejects a missing or malformed address independently, and it
+    // is the backend that actually enforces the rule.
+    if (isRegistering) {
+      const trimmedEmail = contactEmail.trim();
+      if (!trimmedEmail) {
+        setAuthError('Tafadhali weka barua pepe ya biashara (Please enter your business email address).');
+        return;
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+        setAuthError('Tafadhali weka barua pepe sahihi (Please enter a valid email address).');
+        return;
+      }
     }
 
     setAuthLoading(true);
@@ -504,6 +190,29 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
     }
   };
 
+  const countyGroups = countiesByUxGroup();
+  const agentUnits = administrativeUnitsForCounty(agentCounty);
+
+  const detectAgentLocation = async () => {
+    setAgentLocationMessage('Detecting your location…');
+    const result = await detectBrowserLocation();
+    if (result.status === 'error') { setAgentLocationMessage(result.message); return; }
+    setAgentDetectedLocation(result.location);
+    setAgentLocationMessage(result.location.county ? 'Location detected. Confirm or edit the fields below.' : 'Coordinates captured, but the county could not be determined. Enter it manually.');
+  };
+
+  const applyDetectedAgentLocation = () => {
+    if (!agentDetectedLocation) return;
+    setAgentLatitude(agentDetectedLocation.latitude);
+    setAgentLongitude(agentDetectedLocation.longitude);
+    setAgentLocationAccuracy(agentDetectedLocation.accuracy);
+    if (agentDetectedLocation.county) {
+      setAgentCounty(agentDetectedLocation.county);
+      setAgentAdministrativeUnitId(agentDetectedLocation.subCountyId ?? '');
+      if (agentDetectedLocation.place && !locationAddress.trim()) setLocationAddress(agentDetectedLocation.place);
+    }
+  };
+
   // Verify OTP & save token
   const handleOtpVerify = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -520,6 +229,11 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
           role: 'agent',
           businessName,
           locationAddress,
+          county: agentCounty,
+          administrativeUnitId: agentAdministrativeUnitId,
+          latitude: agentLatitude,
+          longitude: agentLongitude,
+          locationAccuracy: agentLocationAccuracy,
           payoutMethodType,
           tillNumber,
           nationalId,
@@ -535,221 +249,25 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
         throw new Error(data.error || 'OTP Verification failed');
       }
 
+      // N4 — the backend reports the EMAIL axis separately from the approval
+      // axis. When a brand-new applicant still has to verify, we show that
+      // state immediately instead of dropping them into the generic "Vetting
+      // Pending" screen, which only ever spoke about approval and would leave
+      // them with no idea an email was on its way — or that ignoring it leaves
+      // them permanently blocked from the Hub.
+      //
+      // This is a DISPLAY decision only. It grants nothing: the token below is
+      // the same phone-ownership proof as before, and every protected agent
+      // route still refuses this account until BOTH axes are satisfied.
+      setAwaitingEmailVerification(
+        data?.profile?.role === 'agent' && data?.profile?.activationRequired === true
+      );
       setToken(data.token);
     } catch (e: any) {
       setAuthError(e.message);
     } finally {
       setAuthLoading(false);
     }
-  };
-
-  // Look up a pending item by drop-off code and open its verification
-  // panel, rather than confirming immediately — confirm-dropoff now
-  // requires verification to have happened first (server-enforced).
-  const handleLookupDropoff = (e: React.FormEvent) => {
-    e.preventDefault();
-    // PHASE 16.1 BATCH 3 (F-1) — this is an OPERATIONAL action taken while the
-    // agent is signed in, so its failure belongs in `operationError` (which the
-    // Hub renders). It previously wrote to `authError`, which is only rendered
-    // inside the signed-OUT card — so a bad drop-off code produced no visible
-    // feedback at all.
-    setOperationError('');
-    const item = expectedDropoffs.find(i => i.id.trim().toUpperCase() === dropoffCodeInput.trim().toUpperCase());
-    if (!item) {
-      setOperationError(lang === 'en' ? 'No pending item found with that drop-off code.' : 'Hakuna bidhaa inayosubiri yenye msimbo huo.');
-      return;
-    }
-    openVerificationPanel(item);
-    setDropoffCodeInput('');
-  };
-
-  const handleRejectDropoff = async (dropoffCode: string) => {
-    setActionSuccessMsg('');
-    // PHASE 16.1 BATCH 3 (F-1) — operational failure channel, not `authError`.
-    setOperationError('');
-    setActionProcessing(true);
-    // BATCH 4B-1 (B3): busy state is scoped to THIS drop-off code.
-    setProcessingItemId(dropoffCode);
-
-    const finalReason = rejectionReason === "Other" ? `Other: ${rejectionCustomText}` : rejectionReason;
-
-    try {
-      const response = await fetch('/api/agents/reject-dropoff', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ dropoffCode, reason: finalReason }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Reject drop-off failed');
-      }
-
-      setActionSuccessMsg(data.message);
-      setRejectingItemId(null);
-      fetchQueues(); // Reload queues
-    } catch (e: any) {
-      setOperationError(e.message);
-    } finally {
-      finishProcessing();
-    }
-  };
-
-  // Confirm visual check of owner ID and physical handover — requires the
-  // owner's secret pickup code (sent to them privately via SMS/email once
-  // payment was confirmed), so a separate dedicated modal collects it here
-  // rather than reusing the generic yes/no confirmModal.
-  const handleConfirmHandover = (claimId: string) => {
-    setActionSuccessMsg('');
-    setOperationError('');
-    setPickupCodeModal({ claimId, code: '', photoBase64: null });
-  };
-
-  const handleHandoverPhotoCapture = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !pickupCodeModal) return;
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      setPickupCodeModal({ ...pickupCodeModal, photoBase64: reader.result as string });
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const startHandoverCamera = async () => {
-    setOperationError('');
-    setUseHandoverCamera(true);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-      if (handoverVideoRef.current) {
-        handoverVideoRef.current.srcObject = stream;
-        handoverVideoRef.current.play();
-      }
-    } catch (e) {
-      console.error('Camera access denied:', e);
-      setOperationError(lang === 'en' ? 'Could not access camera. Please use file upload instead.' : 'Imeshindwa kufungua kamera. Tafadhali weka picha ya faili badala yake.');
-      setUseHandoverCamera(false);
-    }
-  };
-
-  const stopHandoverCamera = () => {
-    if (handoverVideoRef.current && handoverVideoRef.current.srcObject) {
-      const stream = handoverVideoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach(track => track.stop());
-      handoverVideoRef.current.srcObject = null;
-    }
-    setUseHandoverCamera(false);
-  };
-
-  const captureHandoverFrame = () => {
-    if (handoverVideoRef.current && handoverCanvasRef.current && pickupCodeModal) {
-      const video = handoverVideoRef.current;
-      const canvas = handoverCanvasRef.current;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL('image/jpeg');
-        setPickupCodeModal({ ...pickupCodeModal, photoBase64: dataUrl });
-        stopHandoverCamera();
-      }
-    }
-  };
-
-  const submitConfirmHandover = async () => {
-    if (!pickupCodeModal) return;
-    const { claimId, code, photoBase64 } = pickupCodeModal;
-    if (!code || code.trim() === '') {
-      setOperationError(lang === 'en' ? 'Ask the owner for their secret pickup code first.' : 'Muulize mmiliki msimbo wake wa siri kwanza.');
-      return;
-    }
-    if (!photoBase64) {
-      setOperationError(lang === 'en' ? 'Take a photo of the claimant with the item before confirming handover — this protects both of you if a dispute comes up later.' : 'Piga picha ya mdai akiwa na bidhaa kabla ya kuthibitisha — hii inawalinda nyote wawili endapo mzozo utatokea baadaye.');
-      return;
-    }
-    setOperationError('');
-    setActionProcessing(true);
-    // BATCH 4B-1 (B3): the held-item card for THIS claim shows the busy state;
-    // the modal's own Confirm button keeps its modalBusy protection.
-    setProcessingItemId(claimId);
-    try {
-      const response = await fetch('/api/agents/confirm-handover', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ claimId, pickupCode: code.trim(), handoverPhotoBase64: photoBase64 }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Confirm handover failed');
-      }
-
-      setActionSuccessMsg(data.message);
-      setPickupCodeModal(null);
-      fetchQueues(); // Reload queues
-    } catch (e: any) {
-      // PHASE 16.1 BATCH 3 (F-1) — a failed handover (wrong pickup code, paused
-      // platform, unmet dispute/legal-hold fail-safe, upload failure) now shows
-      // in the Hub instead of vanishing into the unrendered `authError`. The
-      // modal deliberately STAYS OPEN so the agent can correct the code and
-      // retry; the server's pickup-code check and settlement CAS remain the
-      // authoritative protections.
-      setOperationError(e.message);
-    } finally {
-      finishProcessing();
-    }
-  };
-
-  // Confirm owner viewed and verified the item physically
-  const handleConfirmViewing = (claimId: string) => {
-    setActionSuccessMsg('');
-    // PHASE 16.1 BATCH 3 (F-1) — operational channel.
-    setOperationError('');
-
-    setConfirmModal({
-      title: lang === 'en' ? 'Confirm Viewing' : 'Thibitisha Ukaguzi',
-      message: lang === 'en'
-        ? "Are you sure you want to confirm that the owner has visually inspected and verified this item? This will trigger the 15-minute payment window and cannot be undone."
-        : "Je, una uhakika unataka kuthibitisha kwamba mmiliki amekagua na kuthibitisha bidhaa hii kwa macho? Hii itaanzisha muda wa dakika 15 wa malipo na kitendo hiki hakiwezi kubatilishwa.",
-      // PHASE 16.1 BATCH 3 (F-6) — resolves to TRUE only on success, so the
-      // modal closes after the action completes and stays open when it fails.
-      onConfirm: async () => {
-        setActionProcessing(true);
-        // BATCH 4B-1 (B3): the busy identity is the CLAIM this confirmation
-        // targets, so unrelated drop-offs and held items stay actionable while
-        // the request is in flight. Escape/close protection stays modalBusy's.
-        setProcessingItemId(claimId);
-        try {
-          const response = await fetch(`/api/agents/claims/${claimId}/confirm-viewing`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${token}`,
-            },
-          });
-
-          const data = await response.json();
-          if (!response.ok) {
-            throw new Error(data.error || 'Confirm viewing failed');
-          }
-
-          setActionSuccessMsg(data.message);
-          fetchQueues(); // Reload queues
-          return true;
-        } catch (e: any) {
-          setOperationError(e.message);
-          return false;
-        } finally {
-          finishProcessing();
-        }
-      }
-    });
   };
 
   return (
@@ -828,20 +346,39 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                       type="text"
                       value={businessName}
                       onChange={(e) => setBusinessName(e.target.value)}
-                      placeholder="e.g. Hurlingham Cyber Café"
+                      placeholder="Enter your business or shop name"
                       className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm"
                       required
                     />
                   </div>
 
                   <div className="space-y-1">
-                    <label htmlFor="agent-location" className="block text-xs font-bold text-primary-green uppercase tracking-wider">Physical Street/Building Location *</label>
+                    <label htmlFor="agent-county" className="block text-xs font-bold text-primary-green uppercase tracking-wider">Service County *</label>
+                    <select id="agent-county" value={agentCounty} onChange={e => { setAgentCounty(e.target.value); setAgentAdministrativeUnitId(''); }} className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-white" required>
+                      <option value="">Select county</option>
+                      {countyGroups.map(group => <optgroup key={group.group} label={group.group}>{group.counties.map(county => <option key={county.code} value={county.name}>{county.name}</option>)}</optgroup>)}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label htmlFor="agent-sub-county" className="block text-xs font-bold text-primary-green uppercase tracking-wider">Service Sub-county *</label>
+                    <select id="agent-sub-county" value={agentAdministrativeUnitId} onChange={e => setAgentAdministrativeUnitId(e.target.value)} disabled={!agentCounty} className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-white disabled:bg-stone-100" required>
+                      <option value="">{agentCounty ? 'Select sub-county' : 'Select county first'}</option>
+                      {agentUnits.map(unit => <option key={unit.id} value={unit.id}>{unit.name}</option>)}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <button type="button" onClick={detectAgentLocation} className="w-full min-h-11 border border-primary-green rounded-xl px-3 py-2.5 text-sm font-bold text-primary-green inline-flex items-center justify-center gap-2"><MapPin size={16} aria-hidden="true" /> Use my current location</button>
+                    {agentLocationMessage && <p className="text-caption text-stone-600" role="status">{agentLocationMessage}</p>}
+                    {agentDetectedLocation && <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs space-y-2"><p className="font-bold">Location detected</p>{agentDetectedLocation.county && <p>County: {agentDetectedLocation.county}</p>}{agentDetectedLocation.place && <p>Detected place: {agentDetectedLocation.place}</p>}{agentDetectedLocation.accuracy !== null && <p>GPS accuracy: approximately {Math.round(agentDetectedLocation.accuracy)} metres</p>}<button type="button" onClick={applyDetectedAgentLocation} className="font-bold text-primary-green underline">Use this location</button></div>}
+                  </div>
+                  <div className="space-y-1">
+                    <label htmlFor="agent-location" className="block text-xs font-bold text-primary-green uppercase tracking-wider">Exact operational area *</label>
                     <input
                       id="agent-location"
                       type="text"
                       value={locationAddress}
                       onChange={(e) => setLocationAddress(e.target.value)}
-                      placeholder="e.g. Argwings Kodhek Rd, prestige plaza"
+                      placeholder="e.g. Near the main shopping centre"
                       className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm"
                       required
                     />
@@ -884,7 +421,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                           type="text"
                           value={nationalId}
                           onChange={(e) => setNationalId(e.target.value)}
-                          placeholder="e.g. 32019482"
+                          placeholder="e.g. Enter your national ID number"
                           className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm font-mono"
                           required
                         />
@@ -893,7 +430,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
 
                     <div className="space-y-1">
                       <label htmlFor="agent-contact-email" className="block text-xs font-bold text-primary-green uppercase tracking-wider">
-                        Email Address (Optional / Barua Pepe - Sio Lazima)
+                        Email Address (Required / Barua Pepe - Inahitajika)
                       </label>
                       <input
                         id="agent-contact-email"
@@ -901,8 +438,22 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                         value={contactEmail}
                         onChange={(e) => setContactEmail(e.target.value)}
                         placeholder="e.g. agent@return4me.co.ke"
+                        // N4 — required, and `required` is a real HTML constraint,
+                        // not decoration: the browser blocks submission before
+                        // any network call. The backend independently rejects a
+                        // missing or malformed address, so this is a convenience
+                        // for the applicant, never the enforcement point.
+                        required
+                        aria-describedby="agent-contact-email-help"
                         className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm font-sans"
                       />
+                      {/* N4 — say WHY it is required. An applicant who does not
+                          know the address will be emailed and verified cannot
+                          act on the platform, so a bare "required" would read as
+                          arbitrary. */}
+                      <p id="agent-contact-email-help" className="text-[11px] text-stone-500 leading-relaxed">
+                        {t.agentEmailHelp}
+                      </p>
                     </div>
 
                     {/* Shop Photo Upload */}
@@ -1083,11 +634,61 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
         </div>
       )}
 
-      {/* 3. PENDING APPROVAL VIEW.
+      {/* 3. PENDING EMAIL VERIFICATION (N4).
+          Shown immediately after a successful registration, BEFORE the generic
+          "Vetting Pending" panel, because the two states need different
+          instructions: this one is resolved by the applicant (open the email,
+          click the link) and that one is resolved by an administrator.
+
+          It deliberately states BOTH requirements. An applicant who verifies
+          their email but is still unapproved will be blocked from the Hub, and
+          an applicant who is approved but never verified will be blocked too —
+          so saying only one of the two would set an expectation the system
+          cannot meet. It is informational only: no agent data is rendered and
+          no action is offered, so there is nothing here to authorize. */}
+      {token && awaitingEmailVerification && (
+        <div className="bg-white rounded-2xl border border-stone-100 p-8 shadow-sm max-w-md mx-auto text-center space-y-5 fade-in">
+          <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mx-auto">
+            <Mail size={32} aria-hidden={true} />
+          </div>
+          <div>
+            <h2 className="text-2xl font-extrabold text-primary-green">
+              {lang === 'sw' ? 'Thibitisha Barua Pepe Yako' : 'Verify Your Email'}
+            </h2>
+            <p className="text-stone-600 text-sm mt-2 font-semibold leading-relaxed">
+              {lang === 'sw'
+                ? 'Tumetumia kiungo cha uthibitishaji kwenye barua pepe uliyoandika. Fungua barua pepe hiyo kwenye kifaa hiki na bonyeza kiungo kilichomo.'
+                : 'We sent a verification link to the business email you provided. Open that email on this device and click the link in it.'}
+            </p>
+          </div>
+          {/* role="status" announces the change of screen to assistive tech. The
+              outcome is never signalled by the blue icon alone — the heading and
+              the body text both change. */}
+          <div role="status" className="bg-brand-beige border border-stone-200 p-4 rounded-xl text-left text-xs text-stone-600 space-y-1.5 leading-tight">
+            {lang === 'sw' ? (
+              <>
+                <span className="font-bold block mb-1">Kuna hatua mbili:</span>
+                <span>1. Thibitisha barua pepe yako kwa kiungo tuliotuma</span>
+                <span>2. Msimamizi akapitisha maombi yako kabla ya kuanza kazi</span>
+                <span className="block pt-1">Hutapewa taarifa kupitia barua pepe.</span>
+              </>
+            ) : (
+              <>
+                <span className="font-bold block mb-1">There are two separate steps:</span>
+                <span>1. Verify your email using the link we sent you</span>
+                <span>2. An administrator approves your application before you can start work</span>
+                <span className="block pt-1">You will be notified by email once that is complete.</span>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 4. PENDING APPROVAL VIEW.
           Retained, but NO LONGER reachable by a failed request — only by the
           brief window before the server has answered, or by a future server
           response that states a non-active agent positively. */}
-      {token && agentStatus === 'pending' && !queueError && !queueLoading && (
+      {token && agentStatus === 'pending' && !queueError && !queueLoading && !awaitingEmailVerification && (
         <div className="bg-white rounded-2xl border border-stone-100 p-8 shadow-sm max-w-md mx-auto text-center space-y-5 fade-in">
           <div className="w-16 h-16 bg-orange-100 text-accent-orange rounded-full flex items-center justify-center mx-auto">
             <Lock size={32} />
@@ -1174,7 +775,6 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
           handleConfirmViewing={handleConfirmViewing}
           categories={categories}
           holdingPickups={holdingPickups}
-          refreshCategories={refreshCategories}
         />
       )}
 

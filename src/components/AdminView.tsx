@@ -16,6 +16,10 @@ import Textarea from './ui/Textarea';
 import Select from './ui/Select';
 import Input from './ui/Input';
 import StatCard from './ui/StatCard';
+// P1-01: the refund reconciliation confirmation uses the SHARED modal, which
+// already provides focus trapping, Escape-to-cancel, focus restoration and
+// aria-modal semantics. No second dialog component was introduced.
+import Modal from './ui/Modal';
 // Phase 6F — Claims Administration lives in its own module so this view stays
 // integration/navigation only. The Claims surface is read-only and talks to the
 // 6E API through that module; it never imports the database or the DTO layer.
@@ -417,6 +421,32 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
     message: string;
     onConfirm: () => void;
   } | null>(null);
+
+  // ---------------------------------------------------------------------------
+  // PROD BATCH 3 / P1-01 — refund reconciliation confirmation.
+  //
+  // WHY THIS EXISTS
+  //   Both refund-reconciliation outcomes were previously guarded by
+  //   `window.confirm(...)`. A browser-native dialog is unstyled, cannot be
+  //   translated, blocks the main thread, is not focus-managed, and — most
+  //   seriously for a financial action — cannot show a loading state, so an
+  //   operator could not tell a finished reconciliation from a stalled one.
+  //
+  //   It is now the SHARED ui/Modal, which already provides focus trapping,
+  //   Escape-to-cancel, focus restoration, `role="dialog"` + `aria-modal`, a
+  //   scrollable body and a footer action row. No second modal component was
+  //   introduced.
+  //
+  // WHAT DID NOT CHANGE
+  //   The endpoint, the Authorization bearer, the request bodies, the
+  //   `refundReconcileProcessing` guard that disables the originating row, the
+  //   authoritative refreshes after success, and every server-side rule. Only
+  //   HOW the operator confirms changed. No refund business logic was touched.
+  // ---------------------------------------------------------------------------
+  const [refundConfirm, setRefundConfirm] = useState<null | {
+    kind: 'finalize' | 'revert';
+    claimId: string;
+  }>(null);
 
   const startReview = (item: any) => {
     setSelectedReviewItem(item);
@@ -1263,56 +1293,68 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
   };
 
   // Admin has verified with the provider that the refund WAS executed.
-  const handleRefundFinalize = (claimId: string) => {
-    if (window.confirm(
-      'Confirm REFUND EXECUTED?\n\nHave you verified directly with the payment provider (IntaSend) that this refund actually reached the claimant? Selecting "OK" records the claim as refunded and closes it. It will NOT send any money.\n\nClaim: ' + claimId
-    )) {
-      setRefundReconcileProcessing(claimId);
-      setDataError('');
-      setActionWarning('');
-      setActionSuccess('');
-      fetch(`/api/admin/refund-reconciliation/${encodeURIComponent(claimId)}/finalize`, {
+  // P1-01: the browser-native confirm() is replaced by the shared ui/Modal. The
+  // request below is UNCHANGED — same endpoint, same auth, same refreshes.
+  /** Opens the confirmation dialog (P1-01). No request is made until confirmed. */
+  const handleRefundFinalize = (claimId: string) => setRefundConfirm({ kind: 'finalize', claimId });
+
+  /** Opens the confirmation dialog (P1-01). No request is made until confirmed. */
+  const handleRefundRevert = (claimId: string) => setRefundConfirm({ kind: 'revert', claimId });
+
+  const executeRefundOutcome = async (kind: 'finalize' | 'revert', claimId: string) => {
+    setRefundReconcileProcessing(claimId);
+    try {
+      const url = `/api/admin/refund-reconciliation/${encodeURIComponent(claimId)}/${kind}`;
+      const res = await fetch(url, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      })
-        .then(async (res) => {
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.error || 'Finalize failed.');
-          setActionSuccess(data.message);
-          fetchRefundReconciliation();
-          fetchDashboardData();
-        })
-        .catch((err) => setDataError(err.message))
-        .finally(() => setRefundReconcileProcessing(null));
+        headers:
+          kind === 'revert'
+            ? { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
+            : { Authorization: `Bearer ${token}` },
+        ...(kind === 'revert'
+          ? { body: JSON.stringify({ reason: 'Admin confirmed with the provider that the refund was NOT executed.' }) }
+          : {}),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || (kind === 'finalize' ? 'Finalize failed.' : 'Revert failed.'));
+      if (kind === 'finalize') setActionSuccess(data.message);
+      else setActionWarning(data.message);
+      fetchRefundReconciliation();
+      fetchDashboardData();
+    } finally {
+      setRefundReconcileProcessing(null);
     }
   };
 
-  // Admin has verified with the provider that the refund was NOT executed.
-  const handleRefundRevert = (claimId: string) => {
-    if (window.confirm(
-      'Confirm REFUND NOT EXECUTED?\n\nHave you verified directly with the payment provider (IntaSend) that this refund was NOT sent? Selecting "OK" rejects the losing claim and flags the held escrow for a manual refund. It will NOT send any money.\n\nClaim: ' + claimId
-    )) {
-      setRefundReconcileProcessing(claimId);
-      setDataError('');
-      setActionWarning('');
-      setActionSuccess('');
-      fetch(`/api/admin/refund-reconciliation/${encodeURIComponent(claimId)}/revert`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ reason: 'Admin confirmed with the provider that the refund was NOT executed.' }),
-      })
-        .then(async (res) => {
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.error || 'Revert failed.');
-          setActionWarning(data.message);
-          fetchRefundReconciliation();
-          fetchDashboardData();
-        })
-        .catch((err) => setDataError(err.message))
-        .finally(() => setRefundReconcileProcessing(null));
+  /**
+   * P1-01: one confirmation surface for both reconciliation outcomes.
+   *
+   * The dialog STAYS OPEN while the request is in flight and the confirm button
+   * is disabled + `aria-busy`, so a slow call cannot be fired twice and the
+   * operator can see that work is happening. It closes ONLY when the server has
+   * answered successfully; on failure it stays open and the authoritative
+   * `dataError` (rendered inside the dialog) is shown, so the operator can read
+   * what went wrong and retry without re-deciding from scratch.
+   *
+   * This does not change the request itself — only when the dialog dismisses.
+   */
+  const [refundConfirmBusy, setRefundConfirmBusy] = useState(false);
+
+  const confirmRefundOutcome = async () => {
+    if (!refundConfirm || refundConfirmBusy) return;
+    const { kind, claimId } = refundConfirm;
+    setRefundConfirmBusy(true);
+    setDataError('');
+    setActionWarning('');
+    setActionSuccess('');
+    try {
+      // Throws on a non-2xx so a failure never reports success.
+      await executeRefundOutcome(kind, claimId);
+      setRefundConfirm(null);
+    } catch (err: any) {
+      setDataError(err?.message || 'Action failed.');
+    } finally {
+      setRefundConfirmBusy(false);
     }
   };
 
@@ -1398,7 +1440,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
 
     const winnerOutcome = winnerPaid
       ? (lang === 'en'
-        ? 'Winning claim stays paid — it will be held at ESCROW HELD and proceed to handover.'
+        ? 'Winning claim stays paid — the money is held while the item is handed over, then released.'
         : 'Claim ya mshindi inabaki imelipwa — itawekwa kwenye AMANA na kuendelea hadi makabidhiano.')
       : (lang === 'en'
         ? 'Winning claim is NOT paid — it goes back to PENDING VERIFICATION and must complete verification and payment normally.'
@@ -4182,6 +4224,63 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
           </div>
         </div>
       )}
+
+      {/* P1-01 — refund reconciliation confirmation (shared ui/Modal).
+          Replaces the two browser-native window.confirm() calls. Focus is
+          trapped, Escape cancels, and the confirm button is disabled while the
+          request is in flight so the financial action cannot be double-fired. */}
+      <Modal
+        open={refundConfirm !== null}
+        onClose={() => {
+          if (!refundConfirmBusy) setRefundConfirm(null);
+        }}
+        title={
+          refundConfirm?.kind === 'revert'
+            ? lang === 'en' ? 'Confirm refund NOT executed' : 'Thibitisha kwamba urejeshaji haukuuatikwa'
+            : lang === 'en' ? 'Confirm refund executed' : 'Thibitisha kwamba urejeshaji uliuatikwa'
+        }
+        closeLabel={lang === 'en' ? 'Close' : 'Funga'}
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" size="sm" onClick={() => setRefundConfirm(null)} disabled={refundConfirmBusy}>
+              {lang === 'en' ? 'Cancel' : 'Ghairi'}
+            </Button>
+            <Button
+              variant={refundConfirm?.kind === 'revert' ? 'danger' : 'primary'}
+              size="sm"
+              loading={refundConfirmBusy}
+              loadingLabel={lang === 'en' ? 'Saving…' : 'Inahifadhi…'}
+              onClick={confirmRefundOutcome}
+            >
+              {refundConfirm?.kind === 'revert'
+                ? lang === 'en' ? 'Confirm not executed' : 'Thibitisha haukuuatikwa'
+                : lang === 'en' ? 'Confirm executed' : 'Thibitisha imeuatikwa'}
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-stone-700">
+            {refundConfirm?.kind === 'revert'
+              ? lang === 'en'
+                ? 'Have you verified directly with the payment provider (IntaSend) that this refund was NOT sent? Confirming rejects the losing claim and flags the money it was holding for a manual refund. It will NOT send any money.'
+                : 'Je, ume$thibitisha mwenyewe kwa mwenyeji wa malipo (IntaSend) kwamba urejeshaji huu HAKUUATIKWA? Kubatilisha kuthibitisha mdai aliyoshindwa na kuweka pesa aliyokuwa akishikilia kwa urejeshaji wa mwongozi. Hakutuma pesa yoyote.'
+              : lang === 'en'
+                ? 'Have you verified directly with the payment provider (IntaSend) that this refund actually reached the claimant? Confirming records the claim as refunded and closes it. It will NOT send any money.'
+                : 'Je, ume$thibitisha mwenyewe kwa mwenyeji wa malipo (IntaSend) kwamba urejeshaji huu kwa kweli umefika kwa mdai? Kubatilisha kunarekodi kuwa mdai amepata pesa na kumaliza. Hakutuma pesa yoyote.'}
+          </p>
+          <p className="font-mono text-xs text-stone-500">
+            {lang === 'en' ? 'Claim: ' : 'Claim: '}{refundConfirm?.claimId}
+          </p>
+          {/* Authoritative server failure stays inside the dialog, so a rejected
+              action is never mistaken for a completed one. */}
+          {dataError && (
+            <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
+              {dataError}
+            </p>
+          )}
+        </div>
+      </Modal>
 
       {/* Custom Confirmation Modal */}
       {confirmModal && (

@@ -15,12 +15,15 @@ import { ensureTestCategory, testRunId } from './ensureTestCategory';
 // once-per-claim dedup via db.markClaimRatedIfNotAlready.
 
 const serverTs = fs.readFileSync(path.resolve(__dirname, '../../server.ts'), 'utf8');
+// P2-A3.2: the claim payment/status routes moved to routes/claimPayments.ts.
+const CLAIM_PAYMENTS_TS = fs.readFileSync(path.resolve(__dirname, '../../routes/claimPayments.ts'), 'utf8');
 
 function routeBody(method: 'get' | 'post', route: string): string {
   const marker = `app.${method}('${route}'`;
-  const start = serverTs.indexOf(marker);
+  const src = serverTs.includes(marker) ? serverTs : CLAIM_PAYMENTS_TS;
+  const start = src.indexOf(marker);
   expect(start, `route ${method.toUpperCase()} ${route} not found in server.ts`).toBeGreaterThan(-1);
-  return serverTs.slice(start, start + 2500);
+  return src.slice(start, start + 2500);
 }
 
 describe('POST /api/claims/:id/rate is rate-limited, status-gated, and dedup-guarded', () => {
@@ -34,8 +37,9 @@ describe('POST /api/claims/:id/rate is rate-limited, status-gated, and dedup-gua
     // now mounted AHEAD of the limiter, so the registration prefix necessarily
     // moved. The assertion below was updated for that reason only; the limiter
     // is still applied rather than replaced, which the second assertion pins.
-    expect(serverTs).toMatch(/app\.post\('\/api\/claims\/:id\/rate',\s*requireCustomerAuth,\s*claimGuessLimiter,/);
-    expect(serverTs).toMatch(/app\.post\('\/api\/claims\/:id\/rate',[^\n]*claimGuessLimiter,/);
+    // P2-A3.2: the route moved; the pinned contract is unchanged.
+    expect(CLAIM_PAYMENTS_TS).toMatch(/app\.post\('\/api\/claims\/:id\/rate',\s*requireCustomerAuth,\s*claimGuessLimiter,/);
+    expect(CLAIM_PAYMENTS_TS).toMatch(/app\.post\('\/api\/claims\/:id\/rate',[^\n]*claimGuessLimiter,/);
   });
 
   it('requires the claim status to indicate handover has actually occurred', () => {

@@ -10,6 +10,10 @@ import {
   audit_log as auditLogTable,
   phone_reputations as phoneReputationsTable,
   claim_payment_strikes as claimPaymentStrikesTable,
+  // A1 (Batch 0A) — individual per-strike records. The aggregate table above is
+  // retained untouched as the historical/legacy record; this is the
+  // authoritative post-migration strike lifecycle.
+  claim_payment_strike_records as claimPaymentStrikeRecordsTable,
   admin_users as adminUsersTable,
   otp_codes as otpCodesTable,
   claim_otps as claimOtpsTable,
@@ -23,10 +27,46 @@ import {
   customer_otps as customerOtpsTable,
   customer_sessions as customerSessionsTable,
   customer_claim_links as customerClaimLinksTable,
+  // BATCH 2 (G3) — claimed-but-unverified email/phone. Deliberately NOT a
+  // pending_* column on `customers`: the unproven value is kept out of the
+  // authoritative row entirely so the old identifier keeps working until the
+  // new one is proven.
+  customer_identity_changes as customerIdentityChangesTable,
   lost_reports as lostReportsTable,
+  // N3 — the shared account-activation token store (N2 schema). One table
+  // serves customer and agent activation; `account_type` keeps ownership
+  // unambiguous.
+  account_activation_tokens as accountActivationTokensTable,
+  // N5 — the durable notification record. Imported here for the first time as a
+  // PRODUCTION writer; until now only the N2 schema test read this table.
+  notification_events as notificationEventsTable,
+  // BATCH 1 (customer-facing). Imported here for BATCH 2 (G2) ONLY, so account
+  // erasure can remove a customer's notification history — purgeUserData predates
+  // these tables and does not know about them. Batch 1's own semantics are
+  // untouched: this module only deletes rows, it never reinterprets them.
+  customer_notifications as customerNotificationsTable,
+  customer_notification_prefs as customerNotificationPrefsTable,
+  customer_notification_pref_audit as customerNotificationPrefAuditTable,
+  // N6 — the durable SMS rate-limit bucket. See the table comment in schema.ts
+  // for why the window is three timestamps rather than one counter.
+  sms_rate_limit_buckets as smsRateLimitBucketsTable,
 } from "./schema.ts";
-import { eq, and, or, isNull, isNotNull, inArray, notInArray, lte, gte, desc, asc, sql } from "drizzle-orm";
+import { eq, and, or, isNull, isNotNull, inArray, notInArray, lt, lte, gte, ne, desc, asc, sql } from "drizzle-orm";
 import { isAllowedClaimTransition, TERMINAL_CLAIM_STATUSES } from "../config/claimStatuses";
+// A1 (Batch 0A) — the single definition of the 5-day strike window, plus the
+// repository's EXISTING canonical phone normalization (re-exported, never
+// reimplemented) so every strike path resolves to one identity.
+import {
+  toE164Kenyan,
+  paymentStrikeExpiresAt,
+  isWithinActiveWindow,
+} from "../config/paymentStrikePolicy";
+// BATCH 2 (H9-a/G1) — the device label derivation used to project a stored
+// User-Agent into something a customer can recognise. Pure and shared with the
+// route layer, so the export and the session list can never label the same device
+// two different ways.
+import { deriveDeviceLabel } from "../config/customerAccountPolicy";
+import crypto from "crypto";
 import { getSignedPhotoUrl } from "../services/storage.ts";
 
 // Local copy of the phone-masking helper (also defined in services/auth.ts
@@ -85,6 +125,9 @@ export interface Agent {
   business_name: string;
   contact_phone: string;
   location_address: string;
+  county?: string | null;
+  administrative_unit_id?: string | null;
+  location_accuracy?: number | null;
   latitude: number | null;
   longitude: number | null;
   mpesa_till_or_paybill: string;
@@ -95,6 +138,9 @@ export interface Agent {
   rating: number;
   rating_count: number;
   needs_manual_geocoding: boolean;
+  // N4 — independent EMAIL axis. NULL = not verified. `status` remains the
+  // business-approval axis; see isAgentActionable() for how the two combine.
+  email_verified_at?: string | null;
   contact_email?: string | null;
   shop_photo_url?: string | null;
   id_document_photo_url?: string | null;
@@ -602,6 +648,9 @@ function parseAgent(row: any): Agent {
     business_name: row.business_name,
     contact_phone: row.contact_phone,
     location_address: row.location_address,
+    county: row.county ?? null,
+    administrative_unit_id: row.administrative_unit_id ?? null,
+    location_accuracy: row.location_accuracy !== null && row.location_accuracy !== undefined ? parseFloat(row.location_accuracy) : null,
     // PHASE 9D: explicit null checks (not truthiness) so a stored coordinate of
     // exactly 0 is not reported as absent — audit finding C3, fixed on the read
     // path here as well as for items.
@@ -615,6 +664,10 @@ function parseAgent(row: any): Agent {
     rating: row.rating ? parseFloat(row.rating) : 5.0,
     rating_count: row.rating_count || 0,
     needs_manual_geocoding: row.needs_manual_geocoding ?? false,
+    // N4 — read both activation axes. A raw Date is normalised to an ISO string
+    // here, exactly like every other timestamp on this interface, so a caller
+    // never has to know which shape the driver returned.
+    email_verified_at: row.email_verified_at ? new Date(row.email_verified_at).toISOString() : null,
     contact_email: row.contact_email || null,
     shop_photo_url: row.shop_photo_url || null,
     id_document_photo_url: row.id_document_photo_url || null,
@@ -879,6 +932,38 @@ function parseLostReport(row: any): LostReport {
  * the server begins accepting requests, so the real set is always in place.
  */
 let canonicalCategoryIds: ReadonlySet<string> | null = null;
+
+/**
+ * Is this a Postgres UNIQUE violation (SQLSTATE 23505)?
+ *
+ * WHY THIS HELPER EXISTS — a real defect N6 found while building the rate limit.
+ *
+ * Drizzle does not surface a driver error unchanged: it re-throws it wrapped in a
+ * `DrizzleQueryError`, so the SQLSTATE lives on `error.cause.code` and
+ * `error.code` is undefined. A handler written as `error.code === '23505'`
+ * therefore NEVER matches — in tests and in production alike — and the
+ * duplicate-handling path it guards becomes dead code.
+ *
+ * The failure mode is not a crash, which is why it survived N5: the surrounding
+ * catch simply rethrows, the caller treats the write as failed, and (on the
+ * notification path) NO message is sent. That is fail-closed and therefore safe,
+ * but a routine concurrent-duplicate race would drop legitimate notifications
+ * instead of deduplicating them.
+ *
+ * The `cause.code` form is the convention already used elsewhere in this
+ * codebase (routes/claims.ts, routes/lostReports.ts); this centralises it and
+ * adds a message fallback for drivers that surface the constraint name but no
+ * code.
+ */
+function isUniqueViolation(error: any): boolean {
+  if (!error) return false;
+  if (error.code === '23505') return true;
+  if (error.cause && error.cause.code === '23505') return true;
+  // Some driver/ORM combinations preserve only the message, which names the
+  // constraint. Checked last so a structured code always wins.
+  const message = String(error.message || (error.cause && error.cause.message) || '');
+  return /duplicate key value violates unique constraint/i.test(message);
+}
 
 class DatabaseEngine {
   constructor() {}
@@ -2475,6 +2560,9 @@ class DatabaseEngine {
           business_name: agent.business_name,
           contact_phone: agent.contact_phone,
           location_address: agent.location_address,
+          county: agent.county ?? null,
+          administrative_unit_id: agent.administrative_unit_id ?? null,
+          location_accuracy: agent.location_accuracy === null || agent.location_accuracy === undefined ? null : String(agent.location_accuracy),
           // PHASE 9D (F1) — explicit null/undefined checks rather than
           // truthiness, matching createItem and both parseAgent/parseFoundItem
           // read paths. `agent.latitude ? ... : null` discarded a legitimate
@@ -2493,7 +2581,22 @@ class DatabaseEngine {
           rating: "5.00",
           rating_count: 0,
           needs_manual_geocoding: agent.needs_manual_geocoding ?? false,
-          contact_email: agent.contact_email || null,
+          // N4 — EMAIL NORMALIZATION HAPPENS HERE, IN THE SINGLE WRITER, not in
+          // the caller. This mirrors createCustomerPendingActivation() exactly:
+          // every stored value is therefore already trimmed and lower-cased, so
+          // a comparison against the normalized input is precisely equivalent to
+          // comparing against what is stored, and two addresses differing only in
+          // case collide on uq_agents_email as they must.
+          //
+          // Blank becomes NULL. That distinction is load-bearing, not cosmetic:
+          // NULL is what the grandfather rule in isAgentActionable() reads as
+          // "pre-N4 agent", and an empty string would silently fail that test
+          // and lock a legacy agent out.
+          contact_email: agent.contact_email ? String(agent.contact_email).trim().toLowerCase() || null : null,
+          // N4 — a newly created agent is ALWAYS unverified. There is no caller
+          // that may pre-set this: only the activation endpoint writes it, and
+          // only after a token has been atomically consumed.
+          email_verified_at: null,
           shop_photo_url: agent.shop_photo_url || null,
           id_document_photo_url: agent.id_document_photo_url || null,
           warning_count: agent.warning_count ?? 0,
@@ -4155,82 +4258,326 @@ class DatabaseEngine {
     }
   }
 
-  // Record a payment strike for a phone number
-  public async recordPaymentStrike(phone: string): Promise<void> {
+  // A1 — Record a payment strike for a phone number.
+  //
+  // POST-MIGRATION BEHAVIOUR (Batch 0A): writes a genuine
+  // claim_payment_strike_records row with its own created_at and an expires_at
+  // exactly 5 days later. That individual record is what the >=3 gate counts.
+  //
+  // THE LEGACY AGGREGATE IS STILL UPDATED, DELIBERATELY. It is preserved as
+  // the historical/legacy record and existing admin reporting reads it, so it
+  // keeps reflecting "this phone has had N strike events". Double counting is
+  // prevented in getActivePaymentStrikeCount(), not by stopping this write — see
+  // the legacy-component note there. The aggregate is never decremented,
+  // rewritten or expired; it only ever grows, exactly as before.
+  //
+  // `sourceClaimId` is provenance only and is NOT de-duplication: strike
+  // identity remains "one row per expiry event", and callers already gate this
+  // on the winning CAS (expirePendingPaymentClaim returns true for exactly one
+  // caller), so a retry cannot manufacture a second strike for one claim.
+  public async recordPaymentStrike(phone: string, sourceClaimId?: string | null): Promise<void> {
+    const canonicalPhone = toE164Kenyan(phone);
+    const createdAt = new Date();
     try {
-      const existing = await drizzleDb
-        .select()
-        .from(claimPaymentStrikesTable)
-        .where(eq(claimPaymentStrikesTable.phone_number, phone));
+await drizzleDb.transaction(async (tx) => {
+        // SERIALISE ON THE OBSERVED VALUE, not with a row lock. Two claims on one
+        // phone can expire at the same instant, so two callers reach this
+        // function concurrently for the SAME phone. The previous shape -
+        // individual insert, then SELECT, then UPDATE-or-INSERT - let them
+        // interleave: both could read strike_count = 3 and both write 4, losing a
+        // real event from the reporting counter; and far worse, both could
+        // capture the write-once legacy baseline from different pre-increment
+        // values, freezing a strike count that NEVER EXISTED and permanently
+        // mis-stating the customer's history.
+        //
+        // The update below is a compare-and-swap: it only applies while
+        // strike_count still equals the value this caller read. If another
+        // writer committed first, the predicate matches nothing, the update
+        // returns no rows, and we re-read and retry. That makes the read and the
+        // write a single indivisible step, so the baseline is captured exactly
+        // once and the increment never loses an event.
+        //
+        // Two alternatives were tried and REJECTED because this project's
+        // in-memory test sandbox silently mis-executes both, which would have
+        // left this logic unverified by any test that actually runs in CI:
+        //   * INSERT ... ON CONFLICT DO UPDATE - the DO UPDATE branch no-ops, so
+        //     the conflicting row comes back unchanged and nothing advances.
+        //   * SELECT ... FOR UPDATE - returns zero rows inside a transaction, so
+        //     every caller would wrongly conclude the row does not exist.
+        // Both are correct on real PostgreSQL, but a behaviour that cannot be
+        // exercised by the test suite is not something to build on here.
+        const MAX_CAS_ATTEMPTS = 5;
+        for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt++) {
+          const rows = await tx
+            .select()
+            .from(claimPaymentStrikesTable)
+            .where(eq(claimPaymentStrikesTable.phone_number, canonicalPhone));
 
-      if (existing.length > 0) {
-        await drizzleDb
-          .update(claimPaymentStrikesTable)
-          .set({
-            strike_count: existing[0].strike_count + 1,
-            last_strike_at: new Date(),
+          const row = rows[0];
+
+          // First ever strike for this phone: create the row inside the same
+          // transaction so the individual record can never exist without its
+          // aggregate counterpart.
+          if (!row) {
+            const inserted = await tx
+              .insert(claimPaymentStrikesTable)
+              .values({
+                phone_number: canonicalPhone,
+                strike_count: 1,
+                last_strike_at: createdAt,
+                is_cleared_by_admin: false,
+                // A phone with no pre-migration history gets a genuine ZERO
+                // baseline rather than a NULL. That is what stops its only
+                // strike being counted twice (see getActivePaymentStrikeCount's
+                // deliberate non-fallback at 0).
+                legacy_strike_count: 0,
+                legacy_last_strike_at: null,
+              })
+              .returning({ phone_number: claimPaymentStrikesTable.phone_number });
+
+            // A concurrent writer created the row first. Retry on the next
+            // iteration against the row it committed.
+            if (inserted.length === 0) continue;
+
+            await tx.insert(claimPaymentStrikeRecordsTable).values({
+              id: `PSR-${crypto.randomBytes(10).toString('hex').toUpperCase()}`,
+              phone_number: canonicalPhone,
+              created_at: createdAt,
+              expires_at: paymentStrikeExpiresAt(createdAt),
+              is_cleared_by_admin: false,
+              source_claim_id: sourceClaimId ?? null,
+            });
+            return;
+          }
+
+          const updated = await tx
+            .update(claimPaymentStrikesTable)
+            .set({
+              // Freeze the PRE-increment legacy state, exactly once.
+              legacy_strike_count: row.legacy_strike_count ?? row.strike_count,
+              legacy_last_strike_at:
+                row.legacy_strike_count != null ? row.legacy_last_strike_at : row.last_strike_at,
+              strike_count: row.strike_count + 1,
+              last_strike_at: createdAt,
+              // Preserved original semantics for the legacy path and
+              // getPaymentStrikeCount(): a cleared phone is not re-restricted by
+              // a later strike.
+              is_cleared_by_admin: false,
+              // NOTE: legacy_cleared_at is deliberately NOT written here. It is
+              // the durable record that an admin cleared the LEGACY component,
+              // and no later strike may clear it - otherwise the customer's next
+              // strike would silently reactivate a frozen legacy baseline.
+            })
+            .where(
+              and(
+                eq(claimPaymentStrikesTable.phone_number, canonicalPhone),
+                eq(claimPaymentStrikesTable.strike_count, row.strike_count),
+              ),
+            )
+            .returning({ phone_number: claimPaymentStrikesTable.phone_number });
+
+          if (updated.length === 0) continue; // lost the race; re-read and retry
+
+          await tx.insert(claimPaymentStrikeRecordsTable).values({
+            id: `PSR-${crypto.randomBytes(10).toString('hex').toUpperCase()}`,
+            phone_number: canonicalPhone,
+            created_at: createdAt,
+            expires_at: paymentStrikeExpiresAt(createdAt),
             is_cleared_by_admin: false,
-          })
-          .where(eq(claimPaymentStrikesTable.phone_number, phone));
-      } else {
-        await drizzleDb
-          .insert(claimPaymentStrikesTable)
-          .values({
-            phone_number: phone,
-            strike_count: 1,
-            last_strike_at: new Date(),
-            is_cleared_by_admin: false,
+            source_claim_id: sourceClaimId ?? null,
           });
-      }
+          return;
+        }
+
+        throw new Error('Payment strike contention: gave up after repeated conflicts.');
+      });
     } catch (error) {
-      console.error("Failed to record payment strike:", error);
-      throw new Error("Failed to record payment strike.");
+      console.error('Failed to record payment strike:', error);
+      throw new Error('Failed to record payment strike.');
     }
   }
 
-  // Get strike count for a phone number
+  // A1 — THE AUTHORITATIVE ACTIVE-STRIKE COUNT used by the >=3 restriction gate.
+  //
+  // Two independent components:
+  //
+  //   A. LEGACY AGGREGATE COMPONENT (one component, not N).
+  //      Pre-migration strikes only ever existed as an aggregate row
+  //      (strike_count + last_strike_at). Their individual timestamps were never
+  //      stored and are NOT reconstructible, so this is deliberately ONE
+  //      component representing the historical restriction state rather than N
+  //      separately timestamped strikes — manufacturing N rows, or reading N
+  //      independent expirations out of one timestamp, would both fabricate
+  //      audit data. It contributes its FULL strike_count, but ONLY while
+  //      last_strike_at is still inside the 5-day transition window.
+  //
+  //   B. INDIVIDUAL RECORDS (post-migration strikes): one row per strike,
+  //      counted while unexpired and uncleared.
+  //
+  // DOUBLE-COUNTING, and why it cannot happen:
+  //   recordPaymentStrike() still increments the aggregate, so a brand-new phone
+  //   has BOTH an aggregate row and an individual row for the same strike. The
+  //   legacy component is therefore only allowed to contribute when it is
+  //   LEGACY — i.e. when NO individual record exists for that phone at all. The
+  //   moment this migration writes its first individual record for a phone, the
+  //   aggregate stops contributing and the individual records become the sole
+  //   authority. Clean hand-off: the aggregate's contribution decays to zero at
+  //   the first post-migration strike instead of stacking on top of the new
+  //   records, which is what a naive "sum both" would do. The aggregate itself
+  //   keeps growing for reporting; it simply stops being double-counted.
+  //   The legacy component is read from the FROZEN snapshot columns, never from
+  //   the live `strike_count`. The snapshot is written exactly once - on a
+  //   phone's FIRST post-migration strike, capturing the PRE-increment value -
+  //   so it holds only genuinely pre-migration strikes. The new strike that
+  //   triggered the capture is written to strike_count AND to an individual
+  //   record, but is NOT in the snapshot, so it is counted once (via the
+  //   individual record). Every later strike behaves the same way.
+  //
+  //   Summing the live `strike_count` instead would double-count, because it has
+  //   been incremented by every post-migration strike. Ignoring the aggregate
+  //   whenever an individual record exists (an earlier attempt) instead DELETED
+  //   the legacy component on the first new strike. The frozen baseline is what
+  //   makes both impossible.
+  //
+  // NULL baseline = the row was never touched post-migration, so it is pure
+  // legacy and strike_count / last_strike_at are themselves still authoritative.
+  public async getActivePaymentStrikeCount(phone: string, now: Date = new Date()): Promise<number> {
+    const canonicalPhone = toE164Kenyan(phone);
+    try {
+      const individual = await drizzleDb
+        .select()
+        .from(claimPaymentStrikeRecordsTable)
+        .where(eq(claimPaymentStrikeRecordsTable.phone_number, canonicalPhone));
+
+      // Component B: post-migration strikes, each individually windowed.
+      const activeIndividuals = individual.filter(
+        (r) =>
+          !r.is_cleared_by_admin &&
+          r.expires_at != null &&
+          new Date(r.expires_at).getTime() > now.getTime(),
+      ).length;
+
+      // Component A: the frozen legacy component. Admin clearing suppresses it
+      // using the EXISTING is_cleared_by_admin semantics, unchanged.
+      const rows = await drizzleDb
+        .select()
+        .from(claimPaymentStrikesTable)
+        .where(eq(claimPaymentStrikesTable.phone_number, canonicalPhone));
+
+      if (rows.length === 0) return activeIndividuals;
+      const aggregate = rows[0];
+
+      // A1: a DURABLE legacy clear suppresses the legacy component forever.
+      // is_cleared_by_admin alone is insufficient, because recordPaymentStrike()
+      // resets it on the next strike; legacy_cleared_at is never reset, so an
+      // administrator's clear of the legacy component cannot be undone by the
+      // customer striking again.
+      if (aggregate.legacy_cleared_at != null) return activeIndividuals;
+      if (aggregate.is_cleared_by_admin) return activeIndividuals;
+
+      // A row whose baseline has NEVER been frozen is pure legacy: it predates
+      // the migration entirely, so strike_count/last_strike_at ARE the legacy
+      // snapshot. Once recordPaymentStrike() has frozen a baseline, that snapshot
+      // is authoritative and the live columns are ignored here - which is what
+      // stops a post-migration strike from also being counted through the
+      // aggregate it just incremented.
+      //
+      // Note the fallback is deliberately NOT applied when a baseline exists but
+      // is 0: a brand-new phone has baseline 0 and a live strike_count of 1, and
+      // reading the live column there would count its only strike twice.
+      const legacyCount =
+        aggregate.legacy_strike_count != null ? aggregate.legacy_strike_count : aggregate.strike_count;
+      const legacyAnchor =
+        aggregate.legacy_strike_count != null
+          ? aggregate.legacy_last_strike_at
+          : aggregate.last_strike_at;
+      if (legacyCount <= 0) return activeIndividuals;
+      if (!isWithinActiveWindow(legacyAnchor, now)) return activeIndividuals;
+
+      return legacyCount + activeIndividuals;
+    } catch (error) {
+      console.error('Failed to get active payment strike count:', error);
+      return 0; // Fail OPEN rather than lock a customer out on a read error.
+    }
+  }
+
+  // Raw aggregate strike count. Retained for historical/admin reporting; the
+  // restriction gate MUST use getActivePaymentStrikeCount() instead.
   public async getPaymentStrikeCount(phone: string): Promise<number> {
     try {
       const rows = await drizzleDb
         .select()
         .from(claimPaymentStrikesTable)
-        .where(eq(claimPaymentStrikesTable.phone_number, phone));
+        .where(eq(claimPaymentStrikesTable.phone_number, toE164Kenyan(phone)));
 
       if (rows.length === 0 || rows[0].is_cleared_by_admin) {
         return 0;
       }
       return rows[0].strike_count;
     } catch (error) {
-      console.error("Failed to get payment strike count:", error);
+      console.error('Failed to get payment strike count:', error);
       return 0; // Safe fallback
     }
   }
 
-  // Clear payment strikes for a phone number
-  public async clearPaymentStrikes(phone: string): Promise<void> {
+  // A1 — Administrator clearing.
+  //
+  // Individual strikes: sets the per-strike clear fields and RETAINS the row,
+  // so the strike remains a complete audit record. Never deleted or decremented.
+  //
+  // Legacy aggregate: pre-existing semantics preserved EXACTLY (strike_count
+  // zeroed, is_cleared_by_admin set), because getPaymentStrikeCount() and the
+  // admin console both depend on that shape. The one deliberate change is that
+  // the aggregate is now written under the CANONICAL phone, so clearing "0712…"
+  // clears the same row the gate reads.
+  //
+  // `clearedByAdmin` is recorded per individual strike when known, so a clear
+  // is attributable rather than anonymous.
+  public async clearPaymentStrikes(phone: string, clearedByAdmin?: string | null): Promise<void> {
+    const canonicalPhone = toE164Kenyan(phone);
     try {
+      await drizzleDb
+        .update(claimPaymentStrikeRecordsTable)
+        .set({
+          is_cleared_by_admin: true,
+          cleared_at: new Date(),
+          cleared_by_admin: clearedByAdmin ?? null,
+        })
+        .where(eq(claimPaymentStrikeRecordsTable.phone_number, canonicalPhone));
+
       await drizzleDb
         .update(claimPaymentStrikesTable)
         .set({
           strike_count: 0,
           is_cleared_by_admin: true,
+          // A1: record the legacy clear DURABLY. Without this, the next
+          // recordPaymentStrike() resets is_cleared_by_admin to false and the
+          // frozen legacy baseline becomes active again — silently undoing an
+          // administrator's decision. This marker is never reset.
+          legacy_cleared_at: new Date(),
         })
-        .where(eq(claimPaymentStrikesTable.phone_number, phone));
+        .where(eq(claimPaymentStrikesTable.phone_number, canonicalPhone));
     } catch (error) {
-      console.error("Failed to clear payment strikes:", error);
-      throw new Error("Failed to clear payment strikes.");
+      console.error('Failed to clear payment strikes:', error);
+      throw new Error('Failed to clear payment strikes.');
     }
   }
 
-  // Get all payment strikes for admin view
+  // Admin view. Now returns the AUTHORITATIVE active count alongside the raw
+  // aggregate, so the console shows what the gate actually enforces rather than
+  // a historical number that no longer reflects the restriction.
   public async getAllPaymentStrikes(): Promise<any[]> {
     try {
-      const rows = await drizzleDb
-        .select()
-        .from(claimPaymentStrikesTable);
-      return rows.filter(r => r.strike_count > 0);
+      const rows = await drizzleDb.select().from(claimPaymentStrikesTable);
+      const enriched = await Promise.all(
+        rows.map(async (r) => ({
+          ...r,
+          active_strike_count: await this.getActivePaymentStrikeCount(r.phone_number),
+        })),
+      );
+      return enriched.filter((r) => r.strike_count > 0 || r.active_strike_count > 0);
     } catch (error) {
-      console.error("Failed to get all payment strikes:", error);
+      console.error('Failed to get all payment strikes:', error);
       return [];
     }
   }
@@ -4986,6 +5333,824 @@ class DatabaseEngine {
     }
   }
 
+  // -----------------------------------------------------------------------
+  // N3 — CUSTOMER EMAIL ACTIVATION GATE.
+  //
+  // Grandfathering is deliberate and is the reason these helpers are additive
+  // rather than replacements: every customer that existed before N3 has
+  // email = NULL, email_verified_at = NULL and status = 'active'. Nothing here
+  // reads, rewrites, backfills or deactivates such a row. Existing accounts
+  // keep authenticating exactly as before.
+  // -----------------------------------------------------------------------
+
+  /**
+   * Case-insensitive email lookup.
+   *
+   * The comparison itself is an exact match on the NORMALIZED value rather
+   * than a `lower(email) = lower($1)` SQL expression. That is not a shortcut:
+   * the only writer of this column, createCustomerPendingActivation, already
+   * stores a trimmed, lower-cased address, so every stored value is normalized
+   * and an equality comparison on the normalized input is exactly equivalent.
+   * Keeping the normalization in one place is what makes that true, and it also
+   * keeps this query a plain indexed equality against uq_customers_email.
+   *
+   * N2's uniqueness index is PARTIAL (WHERE email IS NOT NULL), so an unlimited
+   * number of grandfathered NULL-email accounts remain valid and only non-null
+   * emails can collide.
+   */
+  public async getCustomerByEmail(email: string): Promise<any | undefined> {
+    try {
+      const normalized = String(email || '').trim().toLowerCase();
+      if (!normalized) return undefined;
+      const rows = await drizzleDb
+        .select()
+        .from(customersTable)
+        .where(eq(customersTable.email, normalized))
+        .limit(1);
+      return rows[0];
+    } catch (error) {
+      console.error("Failed to read customer by email:", error);
+      return undefined;
+    }
+  }
+
+  /**
+   * Creates a customer in the INACTIVE state with an unverified email.
+   *
+   * Unlike the original createCustomer (which defaults status to 'active' and
+   * is still used by the grandfathered login path), this is the only place a
+   * NEW account is created, and it can never produce an active account: the
+   * activation endpoint is the single writer of `status = 'active'`.
+   *
+   * The partial unique index on email raises a 23505 when the address is
+   * already taken; that is surfaced to the caller rather than swallowed.
+   */
+  public async createCustomerPendingActivation(
+    id: string,
+    fullName: string,
+    phone: string,
+    email: string
+  ): Promise<any> {
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    const rows = await drizzleDb
+      .insert(customersTable)
+      .values({
+        id,
+        full_name: fullName,
+        phone,
+        status: 'pending_activation',
+        email: normalizedEmail,
+        email_verified_at: null,
+      })
+      .returning();
+    return rows[0];
+  }
+
+  /**
+   * Issues an activation token. Only `tokenHash` is ever persisted — the
+   * plaintext exists solely long enough to build the emailed link and is not
+   * returned here, so it cannot reach an audit row or a log by accident.
+   */
+  public async createAccountActivationToken(
+    id: string,
+    accountType: string,
+    accountId: string,
+    purpose: string,
+    tokenHash: string,
+    expiresAt: Date
+  ): Promise<any> {
+    try {
+      const rows = await drizzleDb
+        .insert(accountActivationTokensTable)
+        .values({
+          id,
+          account_type: accountType,
+          account_id: accountId,
+          purpose,
+          token_hash: tokenHash,
+          expires_at: expiresAt,
+          consumed_at: null,
+        })
+        .returning();
+      return rows[0];
+    } catch (error) {
+      console.error("Failed to create account activation token:", error);
+      throw new Error("Failed to create account activation token.");
+    }
+  }
+
+  public async getAccountActivationTokenByHash(tokenHash: string): Promise<any | undefined> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(accountActivationTokensTable)
+        .where(eq(accountActivationTokensTable.token_hash, tokenHash))
+        .limit(1);
+      return rows[0];
+    } catch (error) {
+      console.error("Failed to read account activation token:", error);
+      return undefined;
+    }
+  }
+
+  /**
+   * ATOMIC single-use consumption.
+   *
+   * The guard lives in the WHERE clause, not in a prior SELECT: the row is
+   * updated only while it is still UNCONSUMED and still UNEXPIRED. Two
+   * concurrent redemptions of the same token therefore produce exactly one
+   * true — the loser updates zero rows. A read-then-write implementation
+   * would let both requests pass the check and both activate.
+   *
+   * Returns true only for the caller that actually consumed it.
+   */
+  public async consumeAccountActivationToken(id: string): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(accountActivationTokensTable)
+        .set({ consumed_at: new Date() })
+        .where(
+          and(
+            eq(accountActivationTokensTable.id, id),
+            isNull(accountActivationTokensTable.consumed_at),
+            sql`${accountActivationTokensTable.expires_at} > now()`
+          )
+        )
+        .returning();
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Failed to consume account activation token:", error);
+      return false;
+    }
+  }
+
+  /**
+   * Marks the email verified AND activates the account in ONE statement, and
+   * only from the pre-activation state. Both halves are in the same WHERE
+   * clause so a second activation attempt — or any call against an account
+   * that was never pending — updates nothing.
+   */
+  public async activateCustomerAccount(id: string): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(customersTable)
+        .set({
+          email_verified_at: new Date(),
+          status: 'active',
+          updated_at: new Date(),
+        })
+        .where(
+          and(
+            eq(customersTable.id, id),
+            eq(customersTable.status, 'pending_activation'),
+            isNull(customersTable.email_verified_at)
+          )
+        )
+        .returning();
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Failed to activate customer account:", error);
+      return false;
+    }
+  }
+
+
+  // --- SMS RATE LIMITING (N6) ---
+
+  /**
+   * Durable, true-rolling-window admission control. Returns whether ONE more
+   * request may proceed for this bucket, and if not, when the next slot frees.
+   *
+   * THE ALGORITHM, and why it is one statement per slot:
+   *
+   *   For slot 1, then 2, then 3:
+   *     UPDATE ... SET slot_n_at = now
+   *      WHERE bucket_key = $1 AND (slot_n_at IS NULL OR slot_n_at < $windowStart)
+   *      RETURNING bucket_key
+   *
+   * A returned row means this caller OWNS that slot. An empty result means
+   * someone else owns it, so the caller falls through to the next slot and
+   * tries again. After three empty results every slot holds a hit that is still
+   * inside the window, which is exactly the definition of "quota exhausted".
+   *
+   * WHY NOT CHECK-THEN-INSERT: `SELECT count() ... if (count < 3) INSERT` lets N
+   * concurrent callers all read 2 and all insert, so the quota is exceeded by
+   * exactly the concurrency it was meant to bound. Here the UPDATE's WHERE
+   * clause is the gate and the database serialises it, so the outcome is
+   * identical across multiple application instances.
+   *
+   * WHY THREE TIMESTAMPS: it makes the window ROLLING. A counter reset when
+   * `window_start + window` elapses is a tumbling window — 3 at 10:00:01 and 3
+   * more at 10:10:01 is 6 messages in two seconds. Here each hit ages out
+   * independently, so "at most 3 in any 10 minutes" is literally true.
+   */
+  public async consumeSmsRateLimitSlot(
+    bucketKey: string,
+    limit: number,
+    windowMs: number
+  ): Promise<{ allowed: boolean; retryAfterSeconds: number; used: number }> {
+    const now = new Date();
+    const windowStart = new Date(now.getTime() - windowMs);
+    const slots = ['slot_1_at', 'slot_2_at', 'slot_3_at'].slice(0, Math.max(1, limit));
+
+    // Ensure the row exists. A 23505 here simply means a concurrent request won
+    // the race to create it, which is a perfectly good outcome.
+    try {
+      await drizzleDb.insert(smsRateLimitBucketsTable).values({ bucket_key: bucketKey });
+    } catch (error: any) {
+      if (!isUniqueViolation(error)) {
+        // A create failure must not silently disable the limit. Fail CLOSED: an
+        // unlimitable request is worse than a refused one.
+        console.error('[SMS RATE LIMIT] Failed to ensure bucket row:', error);
+        return { allowed: false, retryAfterSeconds: Math.ceil(windowMs / 1000), used: limit };
+      }
+      // 23505: the row already exists, which is the normal case for every
+      // request after the first. Not an error.
+    }
+
+    // TWO GUARDS PER SLOT, not one compound `slot IS NULL OR slot < window`.
+    // Each is a plain AND, so neither the statement nor its result depends on
+    // AND/OR precedence being interpreted identically everywhere — a subtlety
+    // that a test double and production Postgres need not agree on, and which
+    // would make the admission decision unreadable. Both are single guarded
+    // statements, so the concurrency property is unchanged: the database still
+    // decides which caller wins the slot.
+    // A guarded UPDATE per slot, with TWO guards each.
+    //
+    // The slot is addressed by its COLUMN NAME string, which is what every other
+    // writer in this file does (`set({ status: ..., verified_at: ... })`).
+    // Passing the Drizzle column object under a computed key does NOT work:
+    // JavaScript coerces it with String(), and a column stringifies to
+    // "[object Object]", so the assignment is silently dropped, the row never
+    // records the hit, and the limit never binds.
+    //
+    // Each guard is a plain AND rather than one compound `IS NULL OR < window`,
+    // so admission does not depend on AND/OR precedence being read identically
+    // everywhere. Concurrency is still resolved by the DATABASE: two callers
+    // racing for one slot produce exactly one RETURNING row.
+    const claim = async (slot: string, isFree: (c: any) => any): Promise<boolean> => {
+      const column = (smsRateLimitBucketsTable as any)[slot];
+      const rows = await drizzleDb
+        .update(smsRateLimitBucketsTable)
+        .set({ [slot]: now, updated_at: now } as any)
+        .where(and(eq(smsRateLimitBucketsTable.bucket_key, bucketKey), isFree(column)))
+        .returning({ key: smsRateLimitBucketsTable.bucket_key });
+      return rows.length > 0;
+    };
+
+    const isUnset = (c: any) => isNull(c);
+    const hasAgedOut = (c: any) => lt(c, windowStart);
+
+    for (const slot of slots) {
+      try {
+        // 1. Never-used slot.
+        if (await claim(slot, isUnset)) return { allowed: true, retryAfterSeconds: 0, used: 0 };
+        // 2. Slot whose previous hit has aged out of the window — the part that
+        //    makes this a ROLLING window rather than a fixed clock bucket.
+        if (await claim(slot, hasAgedOut)) return { allowed: true, retryAfterSeconds: 0, used: 0 };
+      } catch (error) {
+        console.error('[SMS RATE LIMIT] Slot admission failed:', error);
+        return { allowed: false, retryAfterSeconds: Math.ceil(windowMs / 1000), used: limit };
+      }
+    }
+
+    // Quota exhausted. Report when the OLDEST in-window hit frees its slot, which
+    // is the first moment another request could legitimately be admitted.
+    const current = await this.getSmsRateLimitBucket(bucketKey);
+    const hits = (current ? [current.slot_1_at, current.slot_2_at, current.slot_3_at] : [])
+      .filter((value): value is Date => value instanceof Date && value.getTime() > windowStart.getTime())
+      .map((value) => value.getTime())
+      .sort((a, b) => a - b);
+    const oldest = hits.length > 0 ? hits[0] : now.getTime() + windowMs;
+    const retryAfterSeconds = Math.max(1, Math.ceil((oldest + windowMs - now.getTime()) / 1000));
+    return { allowed: false, retryAfterSeconds, used: hits.length };
+  }
+
+  /** Test/inspection helper: the raw bucket row. Never contains a raw identity. */
+  public async getSmsRateLimitBucket(bucketKey: string): Promise<any | undefined> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(smsRateLimitBucketsTable)
+        .where(eq(smsRateLimitBucketsTable.bucket_key, bucketKey))
+        .limit(1);
+      return rows[0];
+    } catch (error) {
+      console.error('[SMS RATE LIMIT] Failed to read bucket:', error);
+      return undefined;
+    }
+  }
+
+  // --- AGENT EMAIL ACTIVATION (N4) ---
+
+  /**
+   * N4 — marks an AGENT's email verified, and NOTHING ELSE.
+   *
+   * THE DELIBERATE OMISSION IS THE POINT. Unlike activateCustomerAccount(),
+   * this does NOT write `status`. Business approval is a separate axis owned
+   * exclusively by approveAgent()/suspendAgent(), and conflating the two would
+   * let anyone who can receive an email promote themselves to an approved
+   * Return4me agent — a materially stronger claim than proving they own a
+   * mailbox, and one an admin must still make deliberately.
+   *
+   *   pending   + verified  -> still pending, still blocked
+   *   active    + verified  -> actionable
+   *   suspended + verified  -> still blocked
+   *
+   * The write is a compare-and-swap guarded on the column still being NULL, so
+   * a second redemption of the same account — or any call against an agent that
+   * was never unverified — updates nothing and returns false. Same shape as
+   * every other guarded writer in this file.
+   */
+  public async verifyAgentEmail(agentId: string): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(agentsTable)
+        .set({ email_verified_at: new Date() })
+        .where(and(eq(agentsTable.id, agentId), isNull(agentsTable.email_verified_at)))
+        .returning({ id: agentsTable.id });
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Failed to verify agent email:", error);
+      return false;
+    }
+  }
+
+  /**
+   * N4 — the agent equivalent of getCustomerByEmail, used only to give a
+   * duplicate registration a clean 409 before the insert races the unique
+   * index. Equality is on the already-normalized stored value, which is exact
+   * for the same reason the customers lookup is.
+   */
+  public async getAgentByEmail(email: string): Promise<Agent | undefined> {
+    try {
+      const normalized = String(email || '').trim().toLowerCase();
+      if (!normalized) return undefined;
+      const rows = await drizzleDb
+        .select()
+        .from(agentsTable)
+        .where(eq(agentsTable.contact_email, normalized))
+        .limit(1);
+      return rows.length > 0 ? parseAgent(rows[0]) : undefined;
+    } catch (error) {
+      console.error("Failed to get agent by email:", error);
+      return undefined;
+    }
+  }
+
+  // --- NOTIFICATION EVENTS (N5) ---
+  //
+  // The N2 table existed with no production writer. These are the first, and
+  // they are deliberately narrow: one insert-or-return-existing (idempotency),
+  // one accept, one failure. No retry scheduler, no fallback creation — N9 owns
+  // fallback, and nothing here loops.
+  //
+  // NOTHING IN THIS SECTION EVER ACCEPTS A MESSAGE BODY. The only fields written
+  // are the event's identity, its opaque recipient reference and its lifecycle
+  // status. A notification_events row is a permanent operational record, and an
+  // activation email body contains a live activation link — so there is no
+  // parameter through which a caller could persist one even by mistake.
+
+  /**
+   * Create the durable record for a logical notification, or return the existing
+   * one if this idempotency key has been seen before.
+   *
+   * The pre-check plus the 23505 handler is the whole design, and BOTH halves are
+   * required: the pre-check makes the common duplicate fast and quiet, and the
+   * 23505 handler is what makes it correct when two requests race, which an
+   * application-level check alone cannot do. `inserted` is reported so a caller
+   * can tell "I created this event" from "this event already existed" — which is
+   * the distinction N6's SMS idempotency will be built on.
+   */
+  public async createNotificationEvent(params: {
+    eventType: string;
+    channel: 'sms' | 'email';
+    provider?: string | null;
+    idempotencyKey: string;
+    recipientReference: string;
+    // N9. Both are policy, not content: an opaque domain id used to re-resolve
+    // the recipient and body at retry time, and whether the event is retryable
+    // at all. Neither is a recipient, a secret, or rendered content.
+    businessReference?: string | null;
+    retryClass?: 'reconstructable' | 'not_retryable' | null;
+  }): Promise<{ event: any; inserted: boolean }> {
+    try {
+      const existing = await this.getNotificationEventByIdempotencyKey(params.idempotencyKey);
+      if (existing) return { event: existing, inserted: false };
+    } catch (e) {
+      // A read failure must not become a silent duplicate send. Fall through and
+      // let the insert decide.
+    }
+
+    try {
+      const rows = await drizzleDb
+        .insert(notificationEventsTable)
+        .values({
+          id: 'NTF-' + Math.random().toString(36).substr(2, 12).toUpperCase(),
+          event_type: params.eventType,
+          channel: params.channel,
+          provider: params.provider ?? null,
+          idempotency_key: params.idempotencyKey,
+          recipient_reference: params.recipientReference,
+          status: 'pending',
+          attempt_count: 0,
+          // N9. Nullable on purpose: a historical row with NULL business_reference
+          // is simply not retryable, which is what keeps pre-N9 rows safe.
+          business_reference: params.businessReference ?? null,
+          retry_class: params.retryClass ?? null,
+          retry_attempt_count: 0,
+          next_attempt_at: null,
+        })
+        .returning();
+      return { event: rows[0], inserted: true };
+    } catch (error: any) {
+      // 23505: a concurrent dispatch of this same logical event won the race.
+      // Return THEIR row — deduplication is the point, and sending again would
+      // defeat the entire architecture.
+      if (isUniqueViolation(error)) {
+        const existing = await this.getNotificationEventByIdempotencyKey(params.idempotencyKey);
+        if (existing) return { event: existing, inserted: false };
+      }
+      throw error;
+    }
+  }
+
+  public async getNotificationEventByIdempotencyKey(idempotencyKey: string): Promise<any | undefined> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(notificationEventsTable)
+        .where(eq(notificationEventsTable.idempotency_key, idempotencyKey))
+        .limit(1);
+      return rows[0];
+    } catch (error) {
+      console.error("Failed to read notification event:", error);
+      return undefined;
+    }
+  }
+
+  /**
+   * Record provider ACCEPTANCE.
+   *
+   * `sent_at` is the moment the provider accepted the message, never the moment
+   * the recipient received it — those are different facts and the column is
+   * named for the one that can actually be proven. attempt_count is incremented
+   * here rather than at creation so it counts real delivery attempts.
+   */
+  public async markNotificationEventAccepted(
+    id: string,
+    providerMessageId?: string | null
+  ): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(notificationEventsTable)
+        .set({
+          status: 'sent',
+          provider_message_id: providerMessageId ?? null,
+          sent_at: new Date(),
+          updated_at: new Date(),
+          last_error: null,
+        })
+        .where(eq(notificationEventsTable.id, id))
+        .returning({ id: notificationEventsTable.id });
+      if (rows.length === 0) return false;
+      await drizzleDb
+        .update(notificationEventsTable)
+        // Read-modify-write in JS, the idiom used elsewhere in this file
+        // (incrementOtpAttempts, incrementClaimOtpAttempts). Both `sql`-template
+        // arithmetic and a bare drizzle column silently produced NULL here,
+        // which would have left attempt_count permanently unknown.
+        .set({ attempt_count: await this.currentCount(notificationEventsTable.attempt_count, id) + 1 })
+        .where(eq(notificationEventsTable.id, id));
+      return true;
+    } catch (error) {
+      console.error("Failed to mark notification event accepted:", error);
+      return false;
+    }
+  }
+
+  /**
+   * Record a delivery failure. `error` must already be sanitized and bounded by
+   * the caller (see sanitizeProviderError) — this method deliberately does not
+   * try to be safe about content, because a column cannot un-leak a secret.
+   */
+  public async markNotificationEventFailed(id: string, error: string): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(notificationEventsTable)
+        .set({
+          status: 'failed',
+          last_error: error.slice(0, 200),
+          updated_at: new Date(),
+        })
+        .where(eq(notificationEventsTable.id, id))
+        .returning({ id: notificationEventsTable.id });
+      return rows.length > 0;
+    } catch (err) {
+      console.error("Failed to mark notification event failed:", err);
+      return false;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // N9 — NOTIFICATION FAILURE RECOVERY.
+  //
+  // Concurrency model: every mutation below is a SINGLE compare-and-swap UPDATE
+  // whose WHERE clause names the exact state being transitioned out of. This is
+  // the same idiom this codebase already uses in attemptClaimEscrowHold,
+  // attemptSettlementRelease and claimSocialPublicationSlot — deliberately NOT
+  // SELECT ... FOR UPDATE, which appears nowhere in this repository.
+  //
+  // Multi-instance safety comes from the database, not from any in-process lock:
+  // two instances may SELECT the same due row, but only one can win the
+  // transition, and only the winner is told it owns the retry.
+  // ---------------------------------------------------------------------------
+
+  public async getNotificationEventById(id: string): Promise<any | undefined> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(notificationEventsTable)
+        .where(eq(notificationEventsTable.id, id))
+        .limit(1);
+      return rows[0];
+    } catch (error) {
+      console.error("Failed to read notification event by id:", error);
+      return undefined;
+    }
+  }
+
+  /**
+   * N9 — reads one integer counter for a notification, treating NULL as 0.
+   *
+   * Exists so counter increments are done as an absolute value in JS rather
+   * than as SQL arithmetic. Both `col + 1` passed as a bare drizzle column AND
+   * the `sql` template form silently produced NULL against the sandbox database
+   * this suite runs on, which would leave every counter permanently unknown.
+   * Read-modify-write is the idiom already used by incrementOtpAttempts and
+   * incrementClaimOtpAttempts in this file, so this introduces nothing new.
+   */
+  private async currentCount(column: any, id: string): Promise<number> {
+    try {
+      const rows = await drizzleDb
+        .select({ value: column })
+        .from(notificationEventsTable)
+        .where(eq(notificationEventsTable.id, id))
+        .limit(1);
+      const raw = rows[0]?.value;
+      const parsed = Number(raw);
+      return Number.isFinite(parsed) ? parsed : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * Mark a durable notification as DISPATCHING, before the provider is called.
+   *
+   * This is the write that makes 'sending' mean something. Without it a row is
+   * indistinguishable whether it is about to be sent, is being sent, or was sent
+   * and the process died before recording it — and the third case is exactly the
+   * one that must never be blindly resent.
+   */
+  public async markNotificationEventSending(id: string): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(notificationEventsTable)
+        .set({ status: 'sending', updated_at: new Date() })
+        .where(and(
+          eq(notificationEventsTable.id, id),
+          eq(notificationEventsTable.status, 'pending'),
+        ))
+        .returning({ id: notificationEventsTable.id });
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Failed to mark notification event sending:", error);
+      return false;
+    }
+  }
+
+  /**
+   * Record a definite, classifiable failure and, when it is retryable, schedule
+   * the next attempt.
+   *
+   * `nextAttemptAt` is supplied by the caller (which owns the backoff policy)
+   * and is NULL for a terminal outcome, which is what permanently removes a row
+   * from the sweep's selection set.
+   */
+  public async markNotificationEventFailedWithClass(
+    id: string,
+    error: string,
+    status: 'retryable_failure' | 'permanent_failure' | 'unknown',
+    nextAttemptAt: Date | null,
+  ): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(notificationEventsTable)
+        .set({
+          status,
+          last_error: error.slice(0, 200),
+          next_attempt_at: nextAttemptAt,
+          updated_at: new Date(),
+        })
+        .where(eq(notificationEventsTable.id, id))
+        .returning({ id: notificationEventsTable.id });
+      return rows.length > 0;
+    } catch (err) {
+      console.error("Failed to classify notification event failure:", err);
+      return false;
+    }
+  }
+
+  /**
+   * N9 — the retry sweep's discovery + claim, as ONE statement.
+   *
+   * Claims every due retry and returns ONLY the rows this caller won. The WHERE
+   * clause is the concurrency control: status='retryable_failure' AND
+   * next_attempt_at <= now(). Two instances running this concurrently both see
+   * the same due rows, but only one can perform each transition, so only one
+   * ever receives an id and only one ever dispatches.
+   *
+   * next_attempt_at IS NULL for every historical row, and IS NULL for terminal
+   * outcomes, so `lte` can never match either — legacy and terminal rows are
+   * structurally unreachable by the sweep rather than excluded by a filter
+   * someone could forget.
+   */
+  public async claimDueNotificationRetries(limit: number): Promise<string[]> {
+    try {
+      const dueRows = await drizzleDb
+        .select({ id: notificationEventsTable.id })
+        .from(notificationEventsTable)
+        .where(and(
+          eq(notificationEventsTable.status, 'retryable_failure'),
+          lte(notificationEventsTable.next_attempt_at, new Date()),
+        ))
+        .limit(limit);
+
+      if (dueRows.length === 0) return [];
+
+      // THE claim. Selecting the due rows and then transitioning them are two
+      // statements because the SELECT alone cannot claim anything — this UPDATE
+      // is the compare-and-swap that decides ownership, and only the instance
+      // whose statement actually changed a row receives its id.
+      const claimed = await drizzleDb
+        .update(notificationEventsTable)
+        .set({ status: 'sending', updated_at: new Date() })
+        .where(and(
+          eq(notificationEventsTable.status, 'retryable_failure'),
+          lte(notificationEventsTable.next_attempt_at, new Date()),
+          inArray(notificationEventsTable.id, dueRows.map((r) => r.id)),
+        ))
+        .returning({ id: notificationEventsTable.id });
+      return claimed.map((r) => r.id);
+    } catch (error) {
+      console.error("Failed to claim due notification retries:", error);
+      return [];
+    }
+  }
+
+  /**
+   * N9 — claim ONE specific notification for retry, by id (operator action).
+   *
+   * The identical compare-and-swap as the sweep, so an operator pressing retry
+   * while the sweep is mid-run still yields exactly one dispatch.
+   */
+  public async claimNotificationRetry(id: string): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(notificationEventsTable)
+        .set({ status: 'sending', updated_at: new Date() })
+        .where(and(
+          eq(notificationEventsTable.id, id),
+          eq(notificationEventsTable.status, 'retryable_failure'),
+          lte(notificationEventsTable.next_attempt_at, new Date()),
+        ))
+        .returning({ id: notificationEventsTable.id });
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Failed to claim notification retry:", error);
+      return false;
+    }
+  }
+
+  /**
+   * Record the outcome of a RETRY attempt.
+   *
+   * Deliberately separate from markNotificationEventFailed: a retry increments
+   * retry_attempt_count (attempts at retrying), not attempt_count (successful
+   * provider acceptances). Conflating them would rewrite the meaning of a column
+   * N5/N6/N7/N8 already depend on.
+   *
+   * Guarded on status='sending' so only the worker that WON the claim may write
+   * the outcome — a losing worker's late write is rejected rather than corrupting
+   * a row another instance now owns.
+   */
+  public async recordNotificationRetryOutcome(params: {
+    id: string;
+    accepted: boolean;
+    providerMessageId?: string | null;
+    error?: string | null;
+    nextAttemptAt: Date | null;
+  }): Promise<boolean> {
+    try {
+      if (params.accepted) {
+        const rows = await drizzleDb
+          .update(notificationEventsTable)
+          .set({
+            status: 'sent',
+            provider_message_id: params.providerMessageId ?? null,
+            sent_at: new Date(),
+            updated_at: new Date(),
+            last_error: null,
+            next_attempt_at: null,
+            retry_attempt_count: await this.currentCount(notificationEventsTable.retry_attempt_count, params.id) + 1,
+          })
+          .where(and(
+            eq(notificationEventsTable.id, params.id),
+            eq(notificationEventsTable.status, 'sending'),
+          ))
+          .returning({ id: notificationEventsTable.id });
+        if (rows.length > 0) {
+          await drizzleDb
+            .update(notificationEventsTable)
+            // SQL arithmetic must be expressed with `sql`, not by handing drizzle a
+            // bare column object. The bare form silently wrote NULL, which would
+            // have left attempt_count permanently unknown.
+            .set({ attempt_count: sql`${notificationEventsTable.attempt_count} + 1` })
+            .where(eq(notificationEventsTable.id, params.id));
+          return true;
+        }
+        return false;
+      }
+
+      const rows = await drizzleDb
+        .update(notificationEventsTable)
+        .set({
+          // No next attempt means the budget is exhausted: terminal, and
+          // structurally invisible to the sweep because next_attempt_at is NULL.
+          status: params.nextAttemptAt ? 'retryable_failure' : 'permanent_failure',
+          last_error: (params.error ?? 'retry_failed').slice(0, 200),
+          next_attempt_at: params.nextAttemptAt,
+          updated_at: new Date(),
+          retry_attempt_count: await this.currentCount(notificationEventsTable.retry_attempt_count, params.id) + 1,
+        })
+        .where(and(
+          eq(notificationEventsTable.id, params.id),
+          eq(notificationEventsTable.status, 'sending'),
+        ))
+        .returning({ id: notificationEventsTable.id });
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Failed to record notification retry outcome:", error);
+      return false;
+    }
+  }
+
+  /**
+   * Operator list of notification failures. SAFE COLUMNS ONLY — this feeds an
+   * admin view, so it selects explicitly rather than `select *`. There is no
+   * body/subject/secret column to leak, and the MASKED recipient is included
+   * precisely because it is the only recipient-derived value that exists.
+   */
+  public async listNotificationEventsByStatus(params: {
+    statuses: string[];
+    eventType?: string | null;
+    channel?: string | null;
+    limit: number;
+  }): Promise<any[]> {
+    try {
+      const conditions = [inArray(notificationEventsTable.status, params.statuses)];
+      if (params.eventType) conditions.push(eq(notificationEventsTable.event_type, params.eventType));
+      if (params.channel) conditions.push(eq(notificationEventsTable.channel, params.channel));
+      const rows = await drizzleDb
+        .select({
+          id: notificationEventsTable.id,
+          event_type: notificationEventsTable.event_type,
+          channel: notificationEventsTable.channel,
+          provider: notificationEventsTable.provider,
+          status: notificationEventsTable.status,
+          recipient_reference: notificationEventsTable.recipient_reference,
+          last_error: notificationEventsTable.last_error,
+          attempt_count: notificationEventsTable.attempt_count,
+          retry_attempt_count: notificationEventsTable.retry_attempt_count,
+          business_reference: notificationEventsTable.business_reference,
+          retry_class: notificationEventsTable.retry_class,
+          created_at: notificationEventsTable.created_at,
+          updated_at: notificationEventsTable.updated_at,
+          sent_at: notificationEventsTable.sent_at,
+          next_attempt_at: notificationEventsTable.next_attempt_at,
+        })
+        .from(notificationEventsTable)
+        .where(and(...conditions))
+        .orderBy(desc(notificationEventsTable.created_at))
+        .limit(params.limit);
+      return rows;
+    } catch (error) {
+      console.error("Failed to list notification events:", error);
+      return [];
+    }
+  }
+
   // --- CUSTOMER OTP CHALLENGES ---
   // Only a hash is ever passed in or stored. Issuing a new challenge burns any
   // prior unconsumed challenge for the same phone+purpose.
@@ -5053,12 +6218,36 @@ class DatabaseEngine {
 
   // --- CUSTOMER SESSIONS ---
   // The raw token is never persisted; only its hash reaches this method.
-
-  public async createCustomerSession(id: string, customerId: string, tokenHash: string, expiresAt: Date): Promise<any> {
+  //
+  // BATCH 2 (H9-a): `userAgent` is OPTIONAL and defaults to null, so every
+  // existing caller keeps working unchanged. It is stored verbatim because it is
+  // the only honest record of which device a session belongs to; it is never
+  // returned to a customer — routes/customerAccount.ts derives a short device
+  // label from it instead. Authentication semantics are unchanged: the token
+  // hash, expiry and activity clock behave exactly as before.
+  public async createCustomerSession(
+    id: string,
+    customerId: string,
+    tokenHash: string,
+    expiresAt: Date,
+    userAgent?: string | null,
+  ): Promise<any> {
     try {
       const rows = await drizzleDb
         .insert(customerSessionsTable)
-        .values({ id, customer_id: customerId, token_hash: tokenHash, expires_at: expiresAt, last_seen_at: new Date() })
+        .values({
+          id,
+          customer_id: customerId,
+          token_hash: tokenHash,
+          expires_at: expiresAt,
+          last_seen_at: new Date(),
+          // Bounded to the column width so an over-long header is truncated
+          // rather than rejected, which would fail the login itself.
+          user_agent:
+            typeof userAgent === 'string' && userAgent.length > 0
+              ? userAgent.slice(0, 512)
+              : null,
+        })
         .returning();
       return rows[0];
     } catch (error) {
@@ -5098,6 +6287,450 @@ class DatabaseEngine {
     } catch (error) {
       console.error("Failed to revoke customer session:", error);
       return false;
+    }
+  }
+
+  // ==========================================================================
+  // BATCH 2 — CUSTOMER SESSIONS (H9-a, H9-b)
+  // ==========================================================================
+
+  /**
+   * Every session belonging to ONE customer, newest first.
+   *
+   * Scoped by customer_id in the query itself, not by filtering in the caller:
+   * there is no way to ask this method for "somebody's sessions", so a wrong or
+   * guessed customer id yields an empty list rather than another customer's
+   * devices. `token_hash` is selected only because the caller projects it away —
+   * see routes/customerAccount.ts, which never puts it in a response.
+   */
+  public async listCustomerSessions(customerId: string): Promise<any[]> {
+    try {
+      return await drizzleDb
+        .select()
+        .from(customerSessionsTable)
+        .where(eq(customerSessionsTable.customer_id, customerId));
+    } catch (error) {
+      console.error("Failed to list customer sessions:", error);
+      return [];
+    }
+  }
+
+  /**
+   * Revoke every session of this customer EXCEPT one (H9-b).
+   *
+   * Both the customer_id and the "not this one" condition live in the WHERE
+   * clause, so there is no ordering in which another customer's session could be
+   * touched, and the caller's own session survives by construction rather than by
+   * being revoked-then-restored.
+   *
+   * `revoked_at IS NULL` keeps it safely repeatable: a second call matches
+   * nothing and reports 0 rather than restamping already-revoked rows.
+   *
+   * Returns the number of sessions actually revoked.
+   */
+  public async revokeAllOtherCustomerSessions(
+    customerId: string,
+    exceptSessionId: string,
+    now: Date = new Date(),
+  ): Promise<number> {
+    try {
+      const rows = await drizzleDb
+        .update(customerSessionsTable)
+        .set({ revoked_at: now })
+        .where(
+          and(
+            eq(customerSessionsTable.customer_id, customerId),
+            isNull(customerSessionsTable.revoked_at),
+            ne(customerSessionsTable.id, exceptSessionId),
+          ),
+        )
+        .returning({ id: customerSessionsTable.id });
+      return rows.length;
+    } catch (error) {
+      console.error("Failed to revoke other customer sessions:", error);
+      return 0;
+    }
+  }
+
+  // ==========================================================================
+  // BATCH 2 — CUSTOMER DATA EXPORT (G1)
+  // ==========================================================================
+
+  /**
+   * Everything about ONE customer that is theirs to take away (G1).
+   *
+   * Assembled from the customer's OWN rows only. Claims come through the explicit
+   * customer_claim_links relationship — never a phone match — which is the same
+   * scoping rule the dashboard and Batch 1 use, so "my claims" cannot silently
+   * widen to "every claim this number appears on".
+   *
+   * NOTE ON WHAT IS ABSENT, which is the point of this method: the projection is
+   * an ALLOW-LIST built here from named fields. It cannot leak a token hash, an
+   * OTP code hash, a provider payload or a delivery error, because no such field
+   * is ever selected — a column added to one of these tables later cannot appear
+   * in an export that never asks for it.
+   */
+  public async exportCustomerData(customerId: string): Promise<any> {
+    const customer = await this.getCustomerById(customerId);
+    if (!customer) return null;
+
+    const links = await drizzleDb
+      .select({ claimId: customerClaimLinksTable.claim_id })
+      .from(customerClaimLinksTable)
+      .where(eq(customerClaimLinksTable.customer_id, customerId));
+    const claimIds = links.map((l: any) => l.claimId);
+
+    const claimRows = claimIds.length
+      ? await drizzleDb.select().from(claimsTable).where(inArray(claimsTable.id, claimIds))
+      : [];
+
+    const lostReportRows = await drizzleDb
+      .select()
+      .from(lostReportsTable)
+      .where(eq(lostReportsTable.customer_id, customerId));
+
+    // Items the customer REPORTED as found, selected field by field so nothing
+    // belonging to a third party (the owner's identity, the assigned agent) can
+    // ride along.
+    const foundItems = await drizzleDb
+      .select({
+        id: itemsTable.id,
+        category_id: itemsTable.category_id,
+        status: itemsTable.status,
+        // The customer's own description of what they reported. No OCR output,
+        // no owner identity and no agent assignment is selected.
+        location_description: itemsTable.location_description,
+        created_at: itemsTable.created_at,
+      })
+      .from(itemsTable)
+      .where(eq(itemsTable.finder_phone, customer.phone));
+
+    // Session metadata WITHOUT anything that authenticates: no token hash, and no
+    // raw User-Agent — only the derived device label the customer already sees.
+    const sessionRows = await drizzleDb
+      .select({
+        id: customerSessionsTable.id,
+        user_agent: customerSessionsTable.user_agent,
+        created_at: customerSessionsTable.created_at,
+        last_seen_at: customerSessionsTable.last_seen_at,
+        expires_at: customerSessionsTable.expires_at,
+        revoked_at: customerSessionsTable.revoked_at,
+      })
+      .from(customerSessionsTable)
+      .where(eq(customerSessionsTable.customer_id, customerId));
+
+    return {
+      exportedAt: new Date().toISOString(),
+      account: {
+        id: customer.id,
+        full_name: customer.full_name,
+        phone: customer.phone,
+        email: customer.email,
+        email_verified_at: customer.email_verified_at,
+        status: customer.status,
+        created_at: customer.created_at,
+        updated_at: customer.updated_at,
+      },
+      claims: claimRows.map((c: any) => ({
+        id: c.id,
+        item_id: c.item_id,
+        status: c.status,
+        created_at: c.created_at,
+        // Payment FACTS the customer is entitled to see about their own claim.
+        paid_at: c.paid_at,
+        payment_reference: c.payment_reference,
+      })),
+      lostReports: lostReportRows.map((r: any) => ({
+        id: r.id,
+        category_id: r.category_id,
+        status: r.status,
+        county: r.county,
+        location_area: r.location_area,
+        lost_at_from: r.lost_at_from,
+        created_at: r.created_at,
+      })),
+      foundReports: foundItems.map((i: any) => ({
+        id: i.id,
+        category_id: i.category_id,
+        status: i.status,
+        location_description: i.location_description,
+        created_at: i.created_at,
+      })),
+      sessions: sessionRows.map((s: any) => ({
+        id: s.id,
+        device: deriveDeviceLabel(s.user_agent).label,
+        created_at: s.created_at,
+        last_seen_at: s.last_seen_at,
+        expires_at: s.expires_at,
+        revoked_at: s.revoked_at,
+      })),
+    };
+  }
+
+  // ==========================================================================
+  // BATCH 2 — CUSTOMER PROFILE (G3)
+  // ==========================================================================
+
+  /**
+   * Record a CLAIMED but unverified email or phone (G3).
+   *
+   * The authoritative `customers` row is deliberately NOT touched here: the old
+   * identifier keeps working until the new one is proven, which is the whole
+   * point of the identity-change table.
+   *
+   * Only the CODE HASH is stored. Re-issuing supersedes any earlier unconsumed
+   * change for the same kind, so a customer who starts a second change cannot
+   * later redeem the first one.
+   */
+  public async createCustomerIdentityChange(params: {
+    id: string;
+    customerId: string;
+    kind: 'email' | 'phone';
+    targetValue: string;
+    codeHash: string;
+    expiresAt: Date;
+  }): Promise<any> {
+    try {
+      // Retire anything previously claimed for this kind but never verified, so
+      // exactly one live change exists per identifier.
+      await drizzleDb
+        .update(customerIdentityChangesTable)
+        .set({ consumed_at: new Date() })
+        .where(
+          and(
+            eq(customerIdentityChangesTable.customer_id, params.customerId),
+            eq(customerIdentityChangesTable.kind, params.kind),
+            isNull(customerIdentityChangesTable.consumed_at),
+          ),
+        );
+      const rows = await drizzleDb
+        .insert(customerIdentityChangesTable)
+        .values({
+          id: params.id,
+          customer_id: params.customerId,
+          kind: params.kind,
+          target_value: params.targetValue,
+          code_hash: params.codeHash,
+          expires_at: params.expiresAt,
+          consumed_at: null,
+          created_at: new Date(),
+        })
+        .returning();
+      return rows[0];
+    } catch (error) {
+      console.error("Failed to record customer identity change:", error);
+      throw new Error("Failed to record identity change.");
+    }
+  }
+
+  /** The customer's live (unconsumed, unexpired) change for one identifier. */
+  public async getLiveCustomerIdentityChange(
+    customerId: string,
+    kind: 'email' | 'phone',
+    now: Date = new Date(),
+  ): Promise<any | undefined> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(customerIdentityChangesTable)
+        .where(
+          and(
+            eq(customerIdentityChangesTable.customer_id, customerId),
+            eq(customerIdentityChangesTable.kind, kind),
+            isNull(customerIdentityChangesTable.consumed_at),
+          ),
+        );
+      return rows.find((r: any) => new Date(r.expires_at).getTime() > now.getTime());
+    } catch (error) {
+      console.error("Failed to read customer identity change:", error);
+      return undefined;
+    }
+  }
+
+  /**
+   * Redeem an identity change by burning the code, as a compare-and-swap on
+   * (id, customer_id, consumed_at IS NULL) so two concurrent redemptions cannot
+   * both succeed.
+   *
+   * The customer_id is part of the predicate: a change id belonging to somebody
+   * else matches nothing, which is the same cross-customer rule the rest of this
+   * batch uses.
+   */
+  public async consumeCustomerIdentityChange(params: {
+    id: string;
+    customerId: string;
+  }): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(customerIdentityChangesTable)
+        .set({ consumed_at: new Date() })
+        .where(
+          and(
+            eq(customerIdentityChangesTable.id, params.id),
+            eq(customerIdentityChangesTable.customer_id, params.customerId),
+            isNull(customerIdentityChangesTable.consumed_at),
+          ),
+        )
+        .returning();
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Failed to consume customer identity change:", error);
+      return false;
+    }
+  }
+
+  /**
+   * Apply a verified identifier to the customer row.
+   *
+   * Deliberately narrow: it writes ONE column, and clears the email verification
+   * stamp when the email changes, so a new address is never treated as already
+   * proven. Callers must have redeemed the change first.
+   */
+  public async applyVerifiedCustomerIdentifier(
+    customerId: string,
+    kind: 'email' | 'phone',
+    value: string,
+  ): Promise<boolean> {
+    try {
+      const patch =
+        kind === 'email'
+          ? { email: value, email_verified_at: null, updated_at: new Date() }
+          : { phone: value, updated_at: new Date() };
+      const rows = await drizzleDb
+        .update(customersTable)
+        .set(patch)
+        .where(eq(customersTable.id, customerId))
+        .returning({ id: customersTable.id });
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Failed to apply verified customer identifier:", error);
+      return false;
+    }
+  }
+
+  /** Name is not an identity credential, so it updates immediately. */
+  public async updateCustomerName(customerId: string, fullName: string): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(customersTable)
+        .set({ full_name: fullName, updated_at: new Date() })
+        .where(eq(customersTable.id, customerId))
+        .returning({ id: customersTable.id });
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Failed to update customer name:", error);
+      return false;
+    }
+  }
+
+  /** True when this email/phone is already claimed by a DIFFERENT account. */
+  public async isCustomerIdentifierTaken(
+    kind: 'email' | 'phone',
+    value: string,
+    exceptCustomerId?: string,
+  ): Promise<boolean> {
+    try {
+      const existing =
+        kind === 'email' ? await this.getCustomerByEmail(value) : await this.getCustomerByPhone(value);
+      if (!existing) return false;
+      return existing.id !== exceptCustomerId;
+    } catch (error) {
+      // Fail CLOSED: if we cannot prove the identifier is free, refuse it. The
+      // cost is an honest "try again"; the alternative is silently handing one
+      // customer's identifier to another.
+      console.error("Failed to check customer identifier availability:", error);
+      return true;
+    }
+  }
+
+  /**
+   * One identity change, scoped to its owner.
+   *
+   * Both the id and the customer_id are in the WHERE clause, so a change id
+   * belonging to another account simply does not resolve. That is what makes the
+   * redeem endpoint safe without a separate ownership check the caller could
+   * forget.
+   */
+  public async getIdentityChangeById(
+    id: string,
+    customerId: string,
+  ): Promise<any | undefined> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(customerIdentityChangesTable)
+        .where(
+          and(
+            eq(customerIdentityChangesTable.id, id),
+            eq(customerIdentityChangesTable.customer_id, customerId),
+          ),
+        )
+        .limit(1);
+      return rows[0];
+    } catch (error) {
+      console.error("Failed to read customer identity change:", error);
+      return undefined;
+    }
+  }
+
+  /**
+   * The customer's live one-time challenge for a purpose.
+   *
+   * Used by the Batch 2 erasure route to require re-authentication with the
+   * account's CURRENT phone, reusing the existing login challenge rather than
+   * inventing a second verification mechanism. Returns the most recent
+   * unconsumed, unexpired challenge, or undefined.
+   */
+  public async getCustomerOtpForPurpose(
+    phone: string,
+    purpose: string,
+  ): Promise<any | undefined> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(customerOtpsTable)
+        .where(and(eq(customerOtpsTable.phone, phone), eq(customerOtpsTable.purpose, purpose)))
+        .orderBy(desc(customerOtpsTable.created_at));
+      const now = Date.now();
+      return rows.find(
+        (r: any) => !r.used_at && new Date(r.expires_at).getTime() > now,
+      );
+    } catch (error) {
+      console.error("Failed to read customer OTP challenge:", error);
+      return undefined;
+    }
+  }
+
+  /**
+   * BATCH 2 (G2) — remove this customer's notification rows.
+   *
+   * Batch 1 added customer_notifications AFTER purgeUserData was written, so the
+   * existing erasure path does not know about them and would otherwise leave a
+   * full history of one customer's messages behind on an erased account.
+   *
+   * Called ONLY from the erasure route. Batch 1's own expiry, history, read-state
+   * and preference semantics are untouched — this removes rows, it does not
+   * reinterpret them.
+   *
+   * Preferences and their audit trail go with it: both are keyed to the same
+   * person and have no meaning once the account is erased.
+   */
+  public async purgeCustomerNotifications(customerId: string): Promise<void> {
+    try {
+      await drizzleDb
+        .delete(customerNotificationsTable)
+        .where(eq(customerNotificationsTable.customer_id, customerId));
+      await drizzleDb
+        .delete(customerNotificationPrefAuditTable)
+        .where(eq(customerNotificationPrefAuditTable.customer_id, customerId));
+      await drizzleDb
+        .delete(customerNotificationPrefsTable)
+        .where(eq(customerNotificationPrefsTable.customer_id, customerId));
+    } catch (error) {
+      console.error("Failed to purge customer notifications:", error);
+      // Non-fatal: the erasure continues to the PII redaction, which is the
+      // legally significant part. Logging rather than throwing keeps a failure
+      // here from blocking a request the customer is entitled to make.
     }
   }
 

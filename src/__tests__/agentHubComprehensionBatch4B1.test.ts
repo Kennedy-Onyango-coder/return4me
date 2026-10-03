@@ -6,7 +6,13 @@ const repoRoot = path.resolve(__dirname, '../..');
 const read = (relativePath: string) => fs.readFileSync(path.resolve(repoRoot, relativePath), 'utf8');
 
 const hub = read('src/components/agent/AgentHub.tsx');
-const view = read('src/components/AgentView.tsx');
+// BATCH B: the verification/rejection panels are now presentation-only children,
+// so markup contracts read the COMPOSED Hub surface (parent + both panels).
+const panels = `${read('src/components/agent/AgentVerificationPanel.tsx')}\n${read('src/components/agent/AgentRejectionPanel.tsx')}`;
+const hubRender = `${hub}\n${panels}`;
+// Operational workflow state/sequencing lives in the feature-local
+// useAgentOperations hook; AgentView remains the composition root.
+const view = `${read('src/components/AgentView.tsx')}\n${read('src/hooks/useAgentOperations.ts')}`;
 const types = read('src/types.ts');
 const claimStatus = read('src/components/claimStatus.ts');
 
@@ -33,7 +39,8 @@ describe('Phase 16.1 Batch 4B-1 Agent Hub comprehension', () => {
     expect(view).toMatch(/setProcessingItemId\(dropoffCode\)/);
     expect(view).toMatch(/setProcessingItemId\(claimId\)/);
     expect(hub).toMatch(/const isItemBusy = \(id: string \| null \| undefined\) =>\s*Boolean\(id\) && props\.processingItemId === id/);
-    expect(hub).toMatch(/disabled=\{isItemBusy\(item\.id\)\}[\s\S]{0,100}aria-busy=\{isItemBusy\(item\.id\)\}/);
+    // BATCH B: the drop-off action button moved into AgentVerificationPanel.
+    expect(hubRender).toMatch(/disabled=\{isItemBusy\(item\.id\)\}[\s\S]{0,100}aria-busy=\{isItemBusy\(item\.id\)\}/);
     expect(hub).toMatch(/disabled=\{isItemBusy\(item\.associatedClaim\.id\)\}[\s\S]{0,100}aria-busy=\{isItemBusy\(item\.associatedClaim\.id\)\}/);
     // The global operation flag remains available for the lookup/modal UX and Batch 3 contracts.
     expect(view).toContain('const [actionProcessing, setActionProcessing] = useState(false);');
@@ -52,11 +59,14 @@ describe('Phase 16.1 Batch 4B-1 Agent Hub comprehension', () => {
 
   it('B21 keeps queue, verification, and operational failures in their established channels', () => {
     const queueErrorBranch = hub.slice(hub.indexOf('{props.queueError &&'), hub.indexOf('{/* Quick Confirmation Actions */}'));
-    const verifyErrorBranch = hub.slice(hub.indexOf('{props.verifyError &&'), hub.indexOf('<div className="flex flex-wrap gap-2 justify-end pt-1">'));
+    // BATCH B: the verification-error branch now renders in AgentVerificationPanel,
+    // so it is read from the composed Hub surface. The contract is unchanged: the
+    // error is shown inline in the panel, before its own action row.
+    const verifyErrorBranch = hubRender.slice(hubRender.indexOf('{verifyError &&'), hubRender.indexOf('<div className="flex flex-wrap gap-2 justify-end pt-1">'));
     const operationErrorBranch = hub.slice(hub.indexOf('{props.operationError &&'), hub.indexOf('{/* REFRESH FAILURE WHILE THE HUB IS ALREADY OPEN'));
     expect(queueErrorBranch).toContain('props.queueError');
     expect(queueErrorBranch).toContain('onClick={props.retryQueue}');
-    expect(verifyErrorBranch).toContain('props.verifyError');
+    expect(verifyErrorBranch).toContain('verifyError');
     expect(operationErrorBranch).toContain('props.operationError');
     expect(operationErrorBranch).toContain("setOperationError('')");
     expect(view).toMatch(/catch \(e: any\)[\s\S]{0,120}setVerifyError\(e\.message\)/);
@@ -96,7 +106,9 @@ describe('Phase 16.1 Batch 4B-1 Agent Hub comprehension', () => {
     expect(hub).toContain('props.queueLoading');
     expect(hub).toContain('onClick={props.retryQueue}');
     expect(hub).toContain('props.operationError');
-    expect(hub).toContain('props.verifyError');
+    // BATCH B: the verification error is rendered by AgentVerificationPanel, so
+    // the Hub still surfaces it through the composed surface.
+    expect(hubRender).toContain('verifyError && (');
     expect(hub).toContain('props.queueError');
     expect(hub).not.toContain('No Claim Yet');
     expect(hub).not.toContain('expectedDropups');

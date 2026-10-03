@@ -13,20 +13,26 @@ import path from 'path';
 // claimGuessRateLimit.test.ts) since server.ts doesn't export its Express
 // app separately from startServer()'s bootstrap.
 
+// P2-A3.2: these eight claim payment/status handlers were moved verbatim into
+// routes/claimPayments.ts so an HTTP integration test can mount them without
+// importing server.ts (which boots the listener at import time). The resolver
+// below therefore reads the route body from its NEW owner. Every assertion is
+// unchanged — only the file the route is read from moved.
 const serverTs = fs.readFileSync(path.resolve(__dirname, '../server.ts'), 'utf8');
+const claimPaymentsTs = fs.readFileSync(path.resolve(__dirname, '../routes/claimPayments.ts'), 'utf8');
 
 function routeBody(method: 'get' | 'post', route: string): string {
   const marker = `app.${method}('${route}'`;
-  const start = serverTs.indexOf(marker);
-  expect(start, `route ${method.toUpperCase()} ${route} not found in server.ts`).toBeGreaterThan(-1);
+  const start = claimPaymentsTs.indexOf(marker);
+  expect(start, `route ${method.toUpperCase()} ${route} not found in routes/claimPayments.ts`).toBeGreaterThan(-1);
   // Grab a generous slice — enough to cover the whole handler body without
   // needing to balance braces.
-  return serverTs.slice(start, start + 4000);
+  return claimPaymentsTs.slice(start, start + 4000);
 }
 
 describe('claim payment authorization gates POST /api/claims/:id/pay', () => {
   it('payment-auth route exists and is rate-limited', () => {
-    expect(serverTs).toMatch(/app\.post\('\/api\/claims\/:id\/payment-auth',\s*claimGuessLimiter,/);
+    expect(claimPaymentsTs).toMatch(/app\.post\('\/api\/claims\/:id\/payment-auth',\s*claimGuessLimiter,/);
   });
 
   it('payment-auth route requires a phone number in the body', () => {

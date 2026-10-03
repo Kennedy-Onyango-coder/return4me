@@ -25,7 +25,12 @@ interface Props {
 }
 
 type Mode = 'register' | 'login';
-type Step = 'details' | 'otp';
+// N3: 'pendingActivation' is a REGISTER-ONLY terminal step. Registration no
+// longer ends in an SMS code — the backend creates an INACTIVE account and
+// emails a single-use activation link (POST /api/customer/activate is the only
+// path that can create a session). 'otp' therefore now belongs to LOGIN alone;
+// the old '/api/customer/register/verify' step no longer exists in the product.
+type Step = 'details' | 'otp' | 'pendingActivation';
 
 interface Customer {
   id: string;
@@ -64,6 +69,9 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
   const [step, setStep] = useState<Step>('details');
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
+  // N3: registration now requires an email address — it is the channel the
+  // activation link is delivered on. Login is unaffected and does not use it.
+  const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(true);
@@ -102,8 +110,16 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
   const requestCode = async (e: React.FormEvent) => {
     e.preventDefault();
     resetMessages();
-    if (mode === 'register' && fullName.trim().length < 2) {
+    const registering = mode === 'register';
+    if (registering && fullName.trim().length < 2) {
       setError(t('Enter your full name.', 'Weka jina lako kamili.'));
+      return;
+    }
+    // N3: the activation link is delivered BY EMAIL, so an address is now
+    // required to register. The server validates and normalises it too; this is
+    // only immediate feedback, and the server remains the source of truth.
+    if (registering && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setError(t('Enter a valid email address.', 'Weka barua pepe sahihi.'));
       return;
     }
     const normalized = normalizeKenyanPhone(phone);
@@ -113,9 +129,9 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
     }
     setBusy(true);
     try {
-      const endpoint = mode === 'register' ? '/api/customer/register' : '/api/customer/login';
-      const body = mode === 'register'
-        ? { fullName: fullName.trim(), phone: normalized }
+      const endpoint = registering ? '/api/customer/register' : '/api/customer/login';
+      const body = registering
+        ? { fullName: fullName.trim(), phone: normalized, email: email.trim() }
         : { phone: normalized };
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -129,6 +145,22 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
         return;
       }
       setPhone(normalized);
+      if (registering) {
+        // N3 — SUCCESS IS NOT A SESSION. The server has created an INACTIVE
+        // account and emailed a single-use activation link. There is nothing to
+        // verify here and nobody is signed in: the surface moves to a terminal
+        // "check your email" state instead of pretending the user is
+        // authenticated. `customer` is deliberately left null.
+        setStep('pendingActivation');
+        setNotice(
+          data?.message ||
+          t(
+            'Account created. Check your email for a link to activate it.',
+            'Akaunti imeundwa. Angalia barua pepe yako kwa kiungo cha kuamilisha.'
+          )
+        );
+        return;
+      }
       setStep('otp');
       setNotice(
         data?.message ||
@@ -142,6 +174,9 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
   };
 
   const verifyCode = async (e: React.FormEvent) => {
+    // N3: this step is reachable ONLY from the sign-in tab. Registration has no
+    // code step at all, so the old register/verify branch is gone rather than
+    // left behind pointing at an endpoint the server no longer serves.
     e.preventDefault();
     resetMessages();
     if (!/^\d{6}$/.test(code.trim())) {
@@ -150,15 +185,11 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
     }
     setBusy(true);
     try {
-      const endpoint = mode === 'register' ? '/api/customer/register/verify' : '/api/customer/login/verify';
-      const body = mode === 'register'
-        ? { fullName: fullName.trim(), phone, code: code.trim() }
-        : { phone, code: code.trim() };
-      const res = await fetch(endpoint, {
+      const res = await fetch('/api/customer/login/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
-        body: JSON.stringify(body),
+        body: JSON.stringify({ phone, code: code.trim() }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -311,21 +342,100 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
                 autoComplete="tel"
                 maxLength={16}
                 placeholder="07XX XXX XXX"
-                hint={t(
-                  "We'll text a one-time verification code to this number.",
-                  'Tutatuma msimbo wa uthibitisho wa mara moja kwa nambari hii kwa SMS.'
-                )}
+                hint={mode === 'register'
+                  // N3: registration no longer texts this number. The honest
+                  // hint is what the number is now actually FOR.
+                  ? t(
+                      'You will sign in with this number after activating your account.',
+                      'Utaingia kwa nambari hii baada ya kuiwasha akaunti yako.'
+                    )
+                  : t(
+                      "We'll text a one-time verification code to this number.",
+                      'Tutatuma msimbo wa uthibitisho wa mara moja kwa nambari hii kwa SMS.'
+                    )}
               />
+
+              {mode === 'register' && (
+                <Input
+                  id="customer-email"
+                  label={t('Email address', 'Barua pepe')}
+                  type="email"
+                  inputMode="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  autoComplete="email"
+                  maxLength={254}
+                  placeholder="you@example.com"
+                  hint={t(
+                    "We'll email you a link to activate your account.",
+                    'Tutakutumia kiungo cha kuamilisha akaunti yako kwa barua pepe.'
+                  )}
+                />
+              )}
 
               {notice && <Banner kind="info">{notice}</Banner>}
               {error && <Banner kind="error">{error}</Banner>}
 
               <Button type="submit" variant="primary" size="lg" loading={busy} className="w-full">
                 {busy
-                  ? t('Sending code…', 'Inatuma msimbo…')
-                  : t('Send verification code', 'Tuma msimbo wa uthibitisho')}
+                  ? (mode === 'register'
+                    ? t('Creating your account…', 'Inatengeneza akaunti yako…')
+                    : t('Sending code…', 'Inatuma msimbo…'))
+                  : (mode === 'register'
+                    ? t('Create account', 'Tengeneza akaunti')
+                    : t('Send verification code', 'Tuma msimbo wa uthibitisho'))}
               </Button>
             </form>
+          ) : step === 'pendingActivation' ? (
+            /* N3 — ACTIVATION PENDING. A terminal, read-only state: there is no
+               code to enter and no session to establish here. The account exists
+               but is INACTIVE until the emailed link is opened, so the surface
+               must not show the dashboard, must not call onAuthenticated(), and
+               must not imply the visitor is signed in. */
+            <div className="mt-5 space-y-4">
+              {notice && <Banner kind="info">{notice}</Banner>}
+
+              <div className="space-y-2 text-sm text-brand-muted-text leading-relaxed">
+                <p className="font-bold text-brand-dark-text">
+                  {t('What happens next', 'Hatua inayofuata')}
+                </p>
+                <p>
+                  {t(
+                    '1. Open the activation email we sent to your email address.',
+                    '1. Fungua barua pepe ya kuamilisha tuliotuma kwenye barua pepe yako.'
+                  )}
+                </p>
+                <p>
+                  {t(
+                    '2. Follow the link in that email to verify your address and activate your account.',
+                    '2. Fuata kiungo kilichomo ndani ya barua pepe hiyo kuthibitisha anwani yako na kuiwasha akaunti yako.'
+                  )}
+                </p>
+                <p>
+                  {t(
+                    '3. Come back and sign in with your phone number.',
+                    '3. Rudi na uingie kwa kutumia nambari yako ya simu.'
+                  )}
+                </p>
+              </div>
+
+              <Banner kind="warning">
+                {t(
+                  'You are not signed in yet. Your account stays inactive until you use the activation link, and the link can only be used once.',
+                  'Bado hujaingia. Akaunti yako itabaki isiyotumika hadi utumie kiungo cha kuamilisha, na kiungo hicho kinaweza kutumika mara moja tu.'
+                )}
+              </Banner>
+
+              <Button
+                type="button"
+                variant="ghost"
+                size="md"
+                onClick={() => { setMode('login'); setStep('details'); setCode(''); resetMessages(); }}
+                className="w-full"
+              >
+                {t('I have activated my account — sign in', 'Nimeamilisha akaunti yangu — ingia')}
+              </Button>
+            </div>
           ) : (
             <form onSubmit={verifyCode} className="mt-5 space-y-4" noValidate>
               {notice && <Banner kind="info">{notice}</Banner>}

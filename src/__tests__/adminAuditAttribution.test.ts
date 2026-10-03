@@ -106,6 +106,8 @@ describe('audit attribution: phone reputation clearing records the acting admini
 describe('audit attribution wiring: callers pass an explicit identity', () => {
   const repoRoot = path.resolve(__dirname, '../..');
   const serverTs = fs.readFileSync(path.resolve(repoRoot, 'src/server.ts'), 'utf8');
+// P2-A3.4A: the four agent operational routes moved to routes/agentOps.ts.
+const agentOpsTs = fs.readFileSync(path.resolve(repoRoot, 'src/routes/agentOps.ts'), 'utf8');
   const databaseTs = fs.readFileSync(path.resolve(repoRoot, 'src/db/database.ts'), 'utf8');
 
   it('the admin item-rejection route passes the authenticated admin identity', () => {
@@ -126,9 +128,13 @@ describe('audit attribution wiring: callers pass an explicit identity', () => {
   });
 
   it('the agent drop-off rejection route no longer impersonates a system action', () => {
-    const start = serverTs.indexOf("app.post('/api/agents/reject-dropoff'");
+    // P2-A3.4A: this route moved verbatim to routes/agentOps.ts, so it is read
+    // from its new owner. The assertion is unchanged - an authenticated Agent
+    // action must still be attributed to 'AGENT', never collapsed into SYSTEM.
+    const src = agentOpsTs.indexOf("app.post('/api/agents/reject-dropoff'") > -1 ? agentOpsTs : serverTs;
+    const start = src.indexOf("app.post('/api/agents/reject-dropoff'");
     expect(start).toBeGreaterThan(-1);
-    const body = serverTs.slice(start, start + 2000);
+    const body = src.slice(start, start + 2000);
     expect(body).toMatch(/db\.rejectItem\(dropoffCode,\s*reason,\s*'AGENT'\)/);
   });
 

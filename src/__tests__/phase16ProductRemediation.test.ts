@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+
+// P2-A3.2: the eight claim payment/status handlers moved verbatim into
+// routes/claimPayments.ts (so an HTTP integration test can mount them without
+// importing server.ts, which boots its listener at import time). Route lookups
+// below now search the new owner first and fall back to server.ts, so an
+// assertion still fails if the handler disappears from BOTH files. No assertion
+// was weakened or removed.
+const CLAIM_PAYMENTS_TS = fs.readFileSync(path.resolve(__dirname, '../routes/claimPayments.ts'), 'utf8');
 import {
   lostTrackPath,
   lostTrackSignInPath,
@@ -112,9 +120,9 @@ describe('16-A: Track My Claim is behind the customer authentication boundary', 
   });
 
   it('the SERVER enforces the same boundary — hiding the form is not the control', () => {
-    expect(serverTs).toMatch(/app\.post\('\/api\/claims\/lookup',\s*requireCustomerAuth,\s*claimGuessLimiter,/);
+    expect(CLAIM_PAYMENTS_TS).toMatch(/app\.post\('\/api\/claims\/lookup',\s*requireCustomerAuth,\s*claimGuessLimiter,/);
     // The ownership proof (the registered phone) is still required on top.
-    expect(serverTs).toMatch(/claimPhoneClean !== cleanPhone/);
+    expect(CLAIM_PAYMENTS_TS).toMatch(/claimPhoneClean !== cleanPhone/);
     // ...and it is the same middleware that guards every other customer route.
     expect(serverTs).toMatch(/import \{[^}]*\brequireCustomerAuth\b[^}]*\} from '\.\/services\/customerAuth'/);
   });

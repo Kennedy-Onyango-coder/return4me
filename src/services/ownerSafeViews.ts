@@ -26,6 +26,8 @@ export function toOwnerSafeAgentView(agent: any): any {
     location_address: agent.location_address,
     latitude: agent.latitude,
     longitude: agent.longitude,
+    // Ownership-gated pickup details retain exact operational coordinates for
+    // legitimate handover directions; public item/search DTOs do not.
     rating: agent.rating,
     rating_count: agent.rating_count,
   };

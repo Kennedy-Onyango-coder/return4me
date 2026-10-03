@@ -7,7 +7,8 @@ import { agentClaimBadge } from '../components/claimStatus';
 const root = path.resolve(import.meta.dirname, '../..');
 const read = (relative: string) => fs.readFileSync(path.resolve(root, relative), 'utf8');
 const hub = read('src/components/agent/AgentHub.tsx');
-const view = read('src/components/AgentView.tsx');
+// Operational state moved to the feature-local useAgentOperations hook in Step 2.
+const view = `${read('src/components/AgentView.tsx')}\n${read('src/hooks/useAgentOperations.ts')}`;
 const types = read('src/types.ts');
 
 const count = (source: string, value: string) => source.split(value).length - 1;
@@ -62,7 +63,12 @@ describe('Phase 16.1 Batch 4B-3 Agent Hub modernization', () => {
   });
 
   it('emphasizes Review, keeps Reject destructive, and preserves per-item busy identity', () => {
-    expect(hub).toMatch(/<Button onClick=\{\(\) => props\.openVerificationPanel\(item\)\}>/);
+    // BATCH 1: the Review action additionally carries a stable per-item id so
+    // focus can be returned to it when the panel closes. The pre-existing
+    // onClick contract is asserted first, then the new focus-return id, so the
+    // original guarantee is preserved and the new one added.
+    expect(hub).toMatch(/onClick=\{\(\) => props\.openVerificationPanel\(item\)\}/);
+    expect(hub).toMatch(/id=\{panelTriggerId\(item\.id, 'verify'\)\}/);
     expect(hub).toMatch(/<Button variant="danger"[\s\S]{0,250}setRejectingItemId\(item\.id\)/);
     expect(view).toContain('const [processingItemId, setProcessingItemId] = useState<string | null>(null);');
     expect(view).toContain('const [actionProcessing, setActionProcessing] = useState(false);');

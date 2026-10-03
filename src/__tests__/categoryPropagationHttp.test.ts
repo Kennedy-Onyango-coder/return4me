@@ -332,7 +332,15 @@ describe('10-D: AgentView reads the App-level category source and refreshes it o
   // stayed in AgentView. Contracts that span the extraction are judged on the
   // composed surface, exactly as agentHubReliabilityBatch3.test.ts does.
   const AGENT_HUB = stripComments(read('src/components/agent/AgentHub.tsx'));
-  const HUB_SURFACE = `${AGENT_VIEW}\n${AGENT_HUB}`;
+  // STEP 2: the verification panel's OPEN logic and the category refresh moved
+  // into the feature-local useAgentOperations hook, so this contract is judged on
+  // the composed Agent surface (view + hook) rather than the view file alone.
+  const AGENT_SURFACE = `${AGENT_VIEW}\n${stripComments(read('src/hooks/useAgentOperations.ts'))}`;
+  // BATCH B: the verification/rejection panels are presentation-only children of
+  // AgentHub, so the Hub render surface now spans three files.
+  const AGENT_VERIFICATION_PANEL = stripComments(read('src/components/agent/AgentVerificationPanel.tsx'));
+  const AGENT_REJECTION_PANEL = stripComments(read('src/components/agent/AgentRejectionPanel.tsx'));
+  const HUB_SURFACE = `${AGENT_SURFACE}\n${AGENT_HUB}\n${AGENT_VERIFICATION_PANEL}\n${AGENT_REJECTION_PANEL}`;
   const APP = stripComments(read('src/App.tsx'));
 
   it('the private category fetch and its state are GONE — not merely bypassed', () => {
@@ -363,12 +371,12 @@ describe('10-D: AgentView reads the App-level category source and refreshes it o
     // `refreshCategories?.()` re-runs App.fetchCategories — the same function
     // AdminView receives as `onCategoriesChanged`. Exactly one call site, so no
     // extra category traffic was introduced.
-    expect((AGENT_VIEW.match(/refreshCategories\?\.\(\)/g) || []).length).toBe(1);
+    expect((AGENT_SURFACE.match(/refreshCategories\?\.\(\)/g) || []).length).toBe(1);
 
-    const open = AGENT_VIEW.indexOf('const openVerificationPanel = (item: any) => {');
-    expect(open, 'openVerificationPanel not found in AgentView.tsx').toBeGreaterThan(-1);
-    const call = AGENT_VIEW.indexOf('refreshCategories?.()', open);
-    const panelOpens = AGENT_VIEW.indexOf('setVerifyingItemId(item.id)', open);
+    const open = AGENT_SURFACE.indexOf('const openVerificationPanel = (item: any) => {');
+    expect(open, 'openVerificationPanel not found on the Agent surface').toBeGreaterThan(-1);
+    const call = AGENT_SURFACE.indexOf('refreshCategories?.()', open);
+    const panelOpens = AGENT_SURFACE.indexOf('setVerifyingItemId(item.id)', open);
     expect(panelOpens, 'the panel must still open').toBeGreaterThan(open);
     // The refresh must precede the panel opening in the same tick — it may not be
     // moved behind a guard that can skip it.
@@ -376,10 +384,10 @@ describe('10-D: AgentView reads the App-level category source and refreshes it o
 
     // The selector renders from the App-level prop, so it offers exactly the
     // catalogue the rest of the app sees. BATCH 4 moved that <select> into
-    // AgentHub, which reads the list as `props.categories`; asserting the
-    // composed surface AND the single occurrence keeps the "no second owner"
-    // guarantee §10-D was written to protect.
-    expect(AGENT_HUB).toContain('{props.categories.map((c: any) => (');
+    // AgentHub; BATCH B moved the panel body into AgentVerificationPanel, which
+    // reads the list as `categories`. Asserting the composed surface AND the
+    // single occurrence keeps the "no second owner" guarantee §10-D protects.
+    expect(AGENT_VERIFICATION_PANEL).toContain('{categories.map((c: any) => (');
     expect((HUB_SURFACE.match(/categories\.map\(\(c: any\) => \(/g) || []).length).toBe(1);
     // …and AgentView is what hands the App-level list across to the Hub.
     expect(AGENT_VIEW).toContain('categories={categories}');

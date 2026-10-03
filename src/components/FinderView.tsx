@@ -13,6 +13,7 @@ import { translations } from '../types';
 // expected. The exact-location field stays free text.
 import { countiesByUxGroup } from '../config/kenyaCounties';
 import { administrativeUnitsForCounty } from '../config/kenyaAdministrativeUnits';
+import { detectBrowserLocation, type DetectedLocation } from '../services/browserLocation';
 import { Camera, Upload, AlertCircle, AlertTriangle, MapPin, CheckCircle, Shield, ArrowRight, Loader2, RefreshCw, X } from 'lucide-react';
 
 // Computed once at module scope: the 47 counties, grouped by the UX-only
@@ -55,6 +56,9 @@ export default function FinderView({ lang, categories, categoriesLoading = false
   const [latitude, setLatitude] = useState<number | null>(null);
   const [longitude, setLongitude] = useState<number | null>(null);
   const [gpsLoading, setGpsLoading] = useState(false);
+  const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
+  const [detectedLocation, setDetectedLocation] = useState<DetectedLocation | null>(null);
+  const [gpsMessage, setGpsMessage] = useState('');
   const [finderPhone, setFinderPhone] = useState('');
   const [finderEmail, setFinderEmail] = useState('');
   // REQUEST 10 — the "Estimated Replacement Value, KES (Optional)" field was
@@ -230,29 +234,29 @@ export default function FinderView({ lang, categories, categoriesLoading = false
     }
   };
 
-  // Retrieve GPS Coordinates
-  const getCoordinates = () => {
+  const getCoordinates = async () => {
     setGpsLoading(true);
     setErrorMsg('');
-    if (!navigator.geolocation) {
-      setErrorMsg('Geolocation not supported by your browser.');
-      setGpsLoading(false);
-      return;
+    setGpsMessage('');
+    const result = await detectBrowserLocation();
+    if (result.status === 'error') {
+      setGpsMessage(result.message);
+    } else {
+      setLatitude(result.location.latitude);
+      setLongitude(result.location.longitude);
+      setGpsAccuracy(result.location.accuracy);
+      setDetectedLocation(result.location);
+      setGpsMessage(result.location.county ? 'Detected location applied. You can still edit any field.' : 'GPS coordinates captured. We could not reliably determine your county or sub-county; enter them manually.');
     }
+    setGpsLoading(false);
+  };
 
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setLatitude(pos.coords.latitude);
-        setLongitude(pos.coords.longitude);
-        setGpsLoading(false);
-      },
-      (err) => {
-        console.error(err);
-        setErrorMsg(lang === 'en' ? 'GPS permission denied. Falling back to area search.' : 'Ufikiaji wa GPS umekataliwa. Tutatumia maelezo ya eneo.');
-        setGpsLoading(false);
-      },
-      { timeout: 10000 }
-    );
+  const useDetectedLocation = () => {
+    if (!detectedLocation?.county) return;
+    setFoundCounty(detectedLocation.county);
+    setFoundAdministrativeUnit(detectedLocation.subCountyId ?? '');
+    if (detectedLocation.place && !locationDescription.trim()) setLocationDescription(detectedLocation.place);
+    setGpsMessage(detectedLocation.subCountyId ? 'Detected location applied. You can still edit any field.' : 'We detected your county but could not reliably determine your sub-county. Please select it manually.');
   };
 
   // Submit complete found item report
@@ -828,6 +832,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                   )}
                 </button>
               </div>
+
             ) : (
               <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex gap-3 items-center">
                 <div className="bg-emerald-100 p-2 rounded-xl text-emerald-600 shrink-0">
@@ -875,6 +880,17 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                 : 'Weka barabara, mtaa, jengo, alama ya eneo au mahali pengine unapojua.'}
             </span>
           </div>
+            {gpsMessage && <p className="text-caption text-ink-muted" role="status">{gpsMessage}</p>}
+            {detectedLocation && (
+              <div className="rounded-xl border border-emerald-200 bg-white p-3 text-xs text-ink space-y-2" role="status">
+                <p className="font-bold">Location detected</p>
+                {detectedLocation.county && <p>County: <strong>{detectedLocation.county}</strong></p>}
+                {detectedLocation.subCountyId ? <p>Sub-county: <strong>{foundAdministrativeUnits.find(unit => unit.id === detectedLocation.subCountyId)?.name ?? 'Please confirm'}</strong></p> : detectedLocation.county && <p>We detected your county, but couldn't reliably determine your sub-county. Please select it manually.</p>}
+                {detectedLocation.place && <p>Detected place: {detectedLocation.place}</p>}
+                {gpsAccuracy !== null && <p>GPS accuracy: approximately {Math.round(gpsAccuracy)} metres</p>}
+                {detectedLocation.county && <div className="flex flex-wrap gap-2"><button type="button" onClick={useDetectedLocation} className="font-bold text-primary-green underline">Use this location</button><button type="button" onClick={() => setDetectedLocation(null)} className="font-bold text-ink-muted underline">Edit</button><button type="button" onClick={() => setGpsMessage('Keep your selected county, sub-county and exact place.')} className="font-bold text-ink-muted underline">Keep my selected location</button></div>}
+              </div>
+            )}
 
           {/* REQUEST 12/26 — truthful statement of what the location is actually
               used for. The browser supplies coordinates only; there is no

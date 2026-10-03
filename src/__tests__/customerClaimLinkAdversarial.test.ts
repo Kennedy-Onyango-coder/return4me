@@ -1,6 +1,31 @@
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import express from 'express';
 import { db } from '../db/database';
+// ---------------------------------------------------------------------------
+// N7 — isolate the durable SMS rate limiter out of these business-logic tests.
+//
+// These routes now carry N6's limiter, which enforces 3 SMS requests per
+// rolling 10 minutes on BOTH the client IP AND the verified principal
+// (`req.customer.id`). Each of these files drives one shared customer through
+// many OTP operations across many tests, so that customer's bucket exhausted
+// partway through and the tests began failing with 429s that had nothing to do
+// with what they assert.
+//
+// That is the limiter working correctly, not a defect in the flows: a real
+// customer doing the same thing would be limited too. What these files exist to
+// test is the logic BEHIND the limiter — OTP binding, freshness, single use,
+// cross-claim and cross-customer authorization — and that logic is only
+// observable with a non-exhausting budget.
+//
+// Rate limiting itself is verified exhaustively, and over real HTTP, by
+// src/__tests__/smsIdempotencyRateLimitN6.test.ts, which drives the same
+// middleware through requests 1-4 and asserts the 4th is refused BEFORE any
+// provider call. Nothing is asserted more weakly here; the limiter is stubbed
+// the same way the SMS gateway, storage and email service already are in these
+// files.
+const __n7RealConsumeSlot = (db as any).consumeSmsRateLimitSlot;
+(db as any).consumeSmsRateLimitSlot = async () => ({ allowed: true, retryAfterSeconds: 0 });
+afterAll(() => { (db as any).consumeSmsRateLimitSlot = __n7RealConsumeSlot; });
 import { hashCode } from '../services/auth';
 import { ensureTestCategory, testRunId } from '../db/__tests__/ensureTestCategory';
 import {
@@ -60,6 +85,26 @@ const ANSWERS_B = { lastDigits: '9876', fullName: 'Brian Otieno' };
 
 let server: any;
 let baseUrl = '';
+// ---------------------------------------------------------------------------
+// N7 â€” per-test client identity for the durable SMS rate limiter.
+//
+// The SMS routes now carry N6's DURABLE per-IP limiter: 3 requests per rolling
+// 10 minutes. The app sets `trust proxy`, so `req.ip` is derived from
+// X-Forwarded-For. Before N7 every test in this file shared the single loopback
+// address, so the quota was global to the FILE: one test's SMS requests drained
+// the budget of every later test and legitimate multi-step flows began returning
+// 429. That was cross-test bleed, not the limiter misbehaving.
+//
+// Each test now presents its own client IP. This is what the limiter expects,
+// and it also restores real isolation between tests.
+let __n7IpCounter = 0;
+let TEST_CLIENT_IP = '10.90.0.1';
+beforeEach(() => {
+  __n7IpCounter += 1;
+  const a = Math.floor(__n7IpCounter / 250) % 250;
+  const b = (__n7IpCounter % 250) + 1;
+  TEST_CLIENT_IP = `10.90.${a}.${b}`;
+});
 
 function claimRow(id: string, itemId: string, ownerPhone: string, answers: any) {
   return {
@@ -123,6 +168,9 @@ afterAll(async () => {
 
 async function api(method: string, urlPath: string, token?: string, body?: any) {
   const headers: Record<string, string> = {};
+    // N7: a distinct client IP per test, so the durable SMS limiter budgets
+    // each test independently (see TEST_CLIENT_IP above).
+    headers['X-Forwarded-For'] = TEST_CLIENT_IP;
   if (token) headers.cookie = 'r4m_customer_session=' + token;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   const res = await fetch(baseUrl + urlPath, {

@@ -4,43 +4,43 @@ import { agentClaimBadge, getClaimStatusDisplay } from '../claimStatus';
 import Badge from '../ui/Badge';
 import Button from '../ui/Button';
 import { ShieldCheck, CheckCircle, AlertCircle, Loader2, Eye, RefreshCw } from 'lucide-react';
+import AgentVerificationPanel from './AgentVerificationPanel';
+import AgentRejectionPanel from './AgentRejectionPanel';
+// BATCH 1 (UX-02): focus-return target ids for the inline panels. Pure DOM
+// helpers only; the Hub remains hook-free and presentation-only.
+import { panelTriggerId } from './panelFocus';
 
-export interface AgentHubProps {
-  lang: 'en' | 'sw';
-  t: any;
+/**
+ * AGENTHUB STRUCTURAL EXTRACTION — BATCH A (typed domain prop contracts).
+ *
+ * These four interfaces are PURE PROP GROUPING. They document which workflow
+ * owns which prop; they do NOT relocate state, change ownership, or alter any
+ * setter/callback signature. Every value below still arrives from
+ * `useAgentOperations` (or `App`, for `lang`/`t`/`categories`) exactly as
+ * before, and AgentHub remains presentation-only (0 useState, 0 useEffect,
+ * 0 fetch).
+ */
+
+/** Queue lifecycle: profile/earnings read model, both queues, lookup, retry. */
+export interface AgentHubQueueProps {
   agentProfile: any | null;
   agentEarnings: any | null;
-  actionSuccessMsg: string;
-  operationError: string;
-  setOperationError: (m: string) => void;
+  expectedDropoffs: any[];
+  holdingPickups: any[];
   queueError: string;
   queueLoading: boolean;
   retryQueue: () => void;
-  expectedDropoffs: any[];
   dropoffCodeInput: string;
   setDropoffCodeInput: (v: string) => void;
-  actionProcessing: boolean;
-  /**
-   * PHASE 16.1 BATCH 4B-1 (B3) - THE PER-ITEM BUSY IDENTITY.
-   *
-   * `actionProcessing` is a single global flag, so one card's action used to
-   * disable and spin every card in the Hub. This prop carries WHICH record is
-   * actually in flight, and it is populated by AgentView (the Hub stays
-   * presentational and hook-free):
-   *   * drop-off actions  (verify/correct, reject)      -> the item's drop-off
-   *     code (`item.id`, an R4M- code)
-   *   * held-item actions (confirm viewing, handover)   -> the claim id
-   *     (`item.associatedClaim.id`, a CLM- id)
-   * Those two namespaces are disjoint, so one field is unambiguous here.
-   *
-   * This is a UX guard only: it never authorizes anything. The server-side
-   * ownership guards, the claim-status CAS in transitionClaimStatus, and the
-   * pickup-code check remain the authoritative protections against a duplicate
-   * or unauthorized submission - and `actionProcessing` is retained alongside
-   * it for the modal-driven operations whose global protection is deliberate.
-   */
-  processingItemId: string | null;
   handleLookupDropoff: (e: React.FormEvent) => void;
+}
+
+/**
+ * Item-verification form. `categories` lives here deliberately: its ONLY
+ * consumer in this file is the verification category `<select>`, so it is a
+ * verification concern rather than a generic configuration prop.
+ */
+export interface AgentHubVerificationProps {
   verifyingItemId: string | null;
   setVerifyingItemId: (id: string | null) => void;
   openVerificationPanel: (item: any) => void;
@@ -63,6 +63,11 @@ export interface AgentHubProps {
   verifyError: string;
   hasCorrections: (item: any) => boolean;
   handleSubmitVerification: (item: any, outcome: 'confirmed' | 'corrected') => void;
+  categories: any[];
+}
+
+/** Drop-off rejection panel: reason, `Other` custom text, submit, cancel. */
+export interface AgentHubRejectionProps {
   rejectingItemId: string | null;
   setRejectingItemId: (id: string | null) => void;
   rejectionReason: string;
@@ -70,11 +75,59 @@ export interface AgentHubProps {
   rejectionCustomText: string;
   setRejectionCustomText: (v: string) => void;
   handleRejectDropoff: (dropoffCode: string) => void;
-  handleConfirmHandover: (claimId: string) => void;
+}
+
+/**
+ * Cross-cutting operational feedback and busy state. `actionProcessing` and
+ * `processingItemId` drive the shared per-item busy predicate used by ALL three
+ * workflows, and the viewing/handover handlers are the two handover-queue
+ * events, so this group is intentionally cross-cutting rather than a strict
+ * single-workflow domain.
+ */
+export interface AgentHubFeedbackProps {
+  actionSuccessMsg: string;
+  operationError: string;
+  setOperationError: (m: string) => void;
+  actionProcessing: boolean;
+  /**
+   * PHASE 16.1 BATCH 4B-1 (B3) - THE PER-ITEM BUSY IDENTITY.
+   *
+   * `actionProcessing` is a single global flag, so one card's action used to
+   * disable and spin every card in the Hub. This prop carries WHICH record is
+   * actually in flight, and it is populated by AgentView (the Hub stays
+   * presentational and hook-free):
+   *   * drop-off actions  (verify/correct, reject)      -> the item's drop-off
+   *     code (`item.id`, an R4M- code)
+   *   * held-item actions (confirm viewing, handover)   -> the claim id
+   *     (`item.associatedClaim.id`, a CLM- id)
+   * Those two namespaces are disjoint, so one field is unambiguous here.
+   *
+   * This is a UX guard only: it never authorizes anything. The server-side
+   * ownership guards, the claim-status CAS in transitionClaimStatus, and the
+   * pickup-code check remain the authoritative protections against a duplicate
+   * or unauthorized submission - and `actionProcessing` is retained alongside
+   * it for the modal-driven operations whose global protection is deliberate.
+   */
+  processingItemId: string | null;
   handleConfirmViewing: (claimId: string) => void;
-  categories: any[];
-  holdingPickups: any[];
-  refreshCategories?: () => void;
+  handleConfirmHandover: (claimId: string) => void;
+}
+
+/**
+ * The composed AgentHub contract. It is exactly the union of the four domain
+ * contracts plus the two application-level props App owns (`lang`, `t`).
+ *
+ * `refreshCategories` is intentionally ABSENT: it was passed in but never read
+ * here. It remains an operational concern of `useAgentOperations`, which still
+ * calls it when opening the verification panel.
+ */
+export interface AgentHubProps
+  extends AgentHubQueueProps,
+    AgentHubVerificationProps,
+    AgentHubRejectionProps,
+    AgentHubFeedbackProps {
+  lang: 'en' | 'sw';
+  t: any;
 }
 
 export default function AgentHub({ t, ...props }: AgentHubProps) {
@@ -123,38 +176,6 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
 
   return (        <div className="space-y-8 fade-in">
           
-          {/* Hub Profile Banner */}
-          <div className="bg-primary-green text-white p-6 rounded-2xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-            <div>
-              <span className="bg-emerald-800 text-accent-orange border border-emerald-700 text-xs font-extrabold px-3 py-1 rounded-full uppercase tracking-wider inline-block mb-2">
-                Verified Return4me Partner Point
-              </span>
-              <h1 className="text-2xl font-extrabold">{props.agentProfile.business_name}</h1>
-              <p className="text-stone-300 text-xs mt-0.5">{props.agentProfile.location_address}</p>
-            </div>
-            <div className="bg-white/10 p-4 rounded-2xl border border-white/5 text-right font-mono">
-              <span className="text-xs text-stone-300 block uppercase font-sans font-bold">Payout via {props.agentProfile.payout_method_type || "Till Number"}</span>
-              <span className="text-lg font-extrabold text-accent-orange">{props.agentProfile.mpesa_till_or_paybill}</span>
-            </div>
-          </div>
-
-          {/* Total Earnings Card — your commission share after each escrow release */}
-          {props.agentEarnings && (
-            <div className="bg-white border border-stone-100 rounded-2xl p-6 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
-              <div>
-                <span className="text-stone-400 text-xs font-extrabold uppercase tracking-widest block">
-                  {props.lang === 'en' ? 'Total Earned (your commission share)' : 'Jumla Uliyopata (sehemu yako ya kamisheni)'}
-                </span>
-                <span className="text-3xl font-black text-primary-green block mt-1">
-                  KES {props.agentEarnings.totalEarned.toLocaleString()}
-                </span>
-              </div>
-              <div className="bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-2xl px-4 py-2 text-xs font-bold">
-                {props.agentEarnings.completedPayoutsCount} {props.lang === 'en' ? 'completed handovers paid out' : 'kukabidhi zilizolipwa'}
-              </div>
-            </div>
-          )}
-
           {props.actionSuccessMsg && (
             <div
               className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 rounded-2xl flex items-center space-x-2 text-sm font-semibold"
@@ -219,7 +240,15 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
                 type="button"
                 onClick={props.retryQueue}
                 aria-busy={props.queueLoading}
-                className="shrink-0 underline font-bold"
+                // PROD BATCH 3 / P2-03: the retry action itself was the one real gap.
+                // The error presentation was already correct (role="alert" +
+                // aria-live="assertive", bilingual body and label), so no cosmetic
+                // change was made there. But the control did not disable itself
+                // while the refresh was in flight, so a rapid double-tap could fire
+                // two queue reloads. `disabled` gives it the same double-submit
+                // guard the shared Button applies via `loading`.
+                disabled={props.queueLoading}
+                className="shrink-0 underline font-bold disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {props.lang === 'en' ? 'Retry' : 'Jaribu tena'}
               </button>
@@ -333,244 +362,85 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
                           </div>
                           {props.rejectingItemId !== item.id && props.verifyingItemId !== item.id && (
                             <div className="flex flex-wrap gap-2">
-                              <Button onClick={() => props.openVerificationPanel(item)}>{t.agentReview}</Button>
-                              <Button variant="danger" size="sm" onClick={() => {
+                              {/* BATCH 1 (UX-02): stable, PER-ITEM trigger ids are
+                                  the focus-return targets for the panels these
+                                  actions open. Keying by item id means focus can
+                                  never be returned to a different card's button
+                                  when several items are queued. Attribute order
+                                  keeps the pre-existing Button literals intact.
+                                  Behaviour of both actions is unchanged. */}
+                              <Button onClick={() => props.openVerificationPanel(item)} id={panelTriggerId(item.id, 'verify')}>{t.agentReview}</Button>
+                              {/* BATCH 2 (UX-04): Review and Reject stay in the
+                                  same row and in the same order, and both keep
+                                  their existing handler and per-item focus-return
+                                  id, but the destructive action is no longer
+                                  flush against the normal one. A vertical rule
+                                  separates them from `sm` up; below `sm` the
+                                  wrapper takes the full width and right-aligns,
+                                  so the destructive action drops to its own line
+                                  instead of crowding Review on a 320px screen. */}
+                              <span className="flex w-full items-center justify-end sm:w-auto sm:border-l sm:border-stone-200 sm:pl-3">
+                              <Button variant="danger" size="sm" id={panelTriggerId(item.id, 'reject')} onClick={() => {
                                 props.setRejectingItemId(item.id);
                                 props.setRejectionReason("Not a real item");
                                 props.setRejectionCustomText("");
                               }}>{t.agentReject}</Button>
+                              </span>
                             </div>
                           )}
 
                         {/* ITEM VERIFICATION — Original vs Verified. This is the
                             required review step before the item can be
                             physically approved; confirm-dropoff refuses to run
-                            until it's completed (server-enforced). */}
+                            until it's completed (server-enforced). Batch B: the
+                            panel body now lives in
+                            components/agent/AgentVerificationPanel.tsx; the
+                            render gate and every prop stay here. */}
                         {props.verifyingItemId === item.id && (
-                          <div className="bg-brand-beige/60 p-4 rounded-xl border border-stone-200 space-y-3">
-                            <h4 className="text-xs font-extrabold text-primary-green uppercase tracking-wide">
-                              {props.lang === 'en' ? 'Item Verification' : 'Uthibitisho wa Bidhaa'}
-                            </h4>
-
-                            {/* PHASE 16.1 BATCH 3 (A-2) — programmatic label
-                                association. This label had no `htmlFor` and the
-                                select no `id`, so assistive technology announced
-                                an unlabelled combobox. Static ids are safe: the
-                                panel renders for at most ONE item at a time
-                                (props.verifyingItemId === item.id), the same reasoning
-                                the P14C-5B fix below already relies on. */}
-                            <div className="space-y-1">
-                              <label htmlFor="agent-verify-category" className="text-xs font-bold text-stone-500 uppercase block">Category</label>
-                              <select
-                                id="agent-verify-category"
-                                value={props.verifyCategoryId}
-                                onChange={(e) => props.setVerifyCategoryId(e.target.value)}
-                                className="w-full border border-stone-200 rounded-lg p-2 text-xs bg-white"
-                              >
-                                {props.categories.map((c: any) => (
-                                  <option key={c.id} value={c.id}>{props.lang === 'en' ? c.name_en : c.name_sw}</option>
-                                ))}
-                              </select>
-                              {props.verifyCategoryId !== (item.category_id || '') && (
-                                <p className="text-xs text-stone-400">Finder: {item.category_id}</p>
-                              )}
-                            </div>
-
-                            {item.is_sensitive_document && (
-                              <>
-                                <div className="space-y-1">
-                                  <label htmlFor="agent-verify-doc-name" className="text-xs font-bold text-stone-500 uppercase block">Name on document</label>
-                                  <input
-                                    id="agent-verify-doc-name"
-                                    type="text"
-                                    value={props.verifyName}
-                                    onChange={(e) => props.setVerifyName(e.target.value)}
-                                    className="w-full border border-stone-200 rounded-lg p-2 text-xs"
-                                  />
-                                  {props.verifyName !== (item.ocr_extracted_name || '') && (
-                                    <p className="text-xs text-stone-400">Finder: {item.ocr_extracted_name || '(none)'}</p>
-                                  )}
-                                </div>
-                                <div className="space-y-1">
-                                  <label htmlFor="agent-verify-doc-number" className="text-xs font-bold text-stone-500 uppercase block">Document number</label>
-                                  <input
-                                    id="agent-verify-doc-number"
-                                    type="text"
-                                    value={props.verifyDocNumber}
-                                    onChange={(e) => props.setVerifyDocNumber(e.target.value)}
-                                    className="w-full border border-stone-200 rounded-lg p-2 text-xs font-mono"
-                                  />
-                                  {props.verifyDocNumber !== (item.ocr_extracted_number || '') && (
-                                    <p className="text-xs text-stone-400">Finder: {item.ocr_extracted_number || '(none)'}</p>
-                                  )}
-                                </div>
-                              </>
-                            )}
-
-                            <div className="space-y-1">
-                              <label htmlFor="agent-verify-description" className="text-xs font-bold text-stone-500 uppercase block">Description</label>
-                              <input
-                                id="agent-verify-description"
-                                type="text"
-                                value={props.verifyDescription}
-                                onChange={(e) => props.setVerifyDescription(e.target.value)}
-                                className="w-full border border-stone-200 rounded-lg p-2 text-xs"
-                              />
-                              {props.verifyDescription !== (item.description || '') && (
-                                <p className="text-xs text-stone-400">Finder: {item.description || '(none)'}</p>
-                              )}
-                            </div>
-
-                            {/* P14C-5B — this label had no `htmlFor` and the input
-                                no `id`, so assistive technology saw an unlabelled
-                                text box. The panel renders for at most ONE item at
-                                a time (`props.verifyingItemId === item.id`), so a static
-                                id cannot collide. The "Finder: …" note is itself
-                                conditionally rendered, so the `aria-describedby`
-                                reference is attached under the SAME condition — a
-                                reference is never left dangling. Label text only:
-                                the state, the `foundArea` payload and the
-                                `verified_found_area` column are unchanged. */}
-                            <div className="space-y-1">
-                              <label htmlFor="agent-verify-exact-place" className="text-xs font-bold text-stone-500 uppercase block">Exact place</label>
-                              <input
-                                id="agent-verify-exact-place"
-                                type="text"
-                                value={props.verifyFoundArea}
-                                onChange={(e) => props.setVerifyFoundArea(e.target.value)}
-                                className="w-full border border-stone-200 rounded-lg p-2 text-xs"
-                                aria-describedby={
-                                  props.verifyFoundArea !== (item.location_description || '')
-                                    ? 'agent-verify-exact-place-finder-note'
-                                    : undefined
-                                }
-                              />
-                              {props.verifyFoundArea !== (item.location_description || '') && (
-                                <p id="agent-verify-exact-place-finder-note" className="text-xs text-stone-400">Finder: {item.location_description}</p>
-                              )}
-                            </div>
-
-                            {props.hasCorrections(item) && (
-                              <div className="space-y-1">
-                                {/* PHASE 16.1 BATCH 3 (A-2) — the select had no
-                                    `htmlFor`/`id`, and the detail input below had
-                                    NO LABEL AT ALL (only a placeholder, which is
-                                    not an accessible name). Both are now properly
-                                    associated. */}
-                                <label htmlFor="agent-verify-reason" className="text-xs font-bold text-stone-500 uppercase block">Reason for correction</label>
-                                <select
-                                  id="agent-verify-reason"
-                                  value={props.verifyReason}
-                                  onChange={(e) => props.setVerifyReason(e.target.value)}
-                                  className="w-full border border-stone-200 rounded-lg p-2 text-xs bg-white"
-                                >
-                                  <option value="Finder entered wrong information">Finder entered wrong information</option>
-                                  <option value="Finder information incomplete">Finder information incomplete</option>
-                                  <option value="Physical item differs from report">Physical item differs from report</option>
-                                  <option value="Wrong category">Wrong category</option>
-                                  <option value="Wrong description">Wrong description</option>
-                                  <option value="Wrong location">Wrong location</option>
-                                  <option value="Other">Other</option>
-                                </select>
-                                <label htmlFor="agent-verify-reason-detail" className="text-xs font-bold text-stone-500 uppercase block">Correction reason detail</label>
-                                <input
-                                  id="agent-verify-reason-detail"
-                                  type="text"
-                                  value={props.verifyReasonDetail}
-                                  onChange={(e) => props.setVerifyReasonDetail(e.target.value)}
-                                  placeholder="Optional explanation..."
-                                  className="w-full border border-stone-200 rounded-lg p-2 text-xs"
-                                />
-                              </div>
-                            )}
-
-                            <label className="flex items-center space-x-2 text-xs text-stone-700 font-semibold">
-                              <input
-                                type="checkbox"
-                                checked={props.verifyPhysicallyChecked}
-                                onChange={(e) => props.setVerifyPhysicallyChecked(e.target.checked)}
-                              />
-                              <span>{props.lang === 'en' ? 'I have physically inspected this item' : 'Nimekagua bidhaa hii kimwili'}</span>
-                            </label>
-                            {item.is_sensitive_document && (props.verifyName !== (item.ocr_extracted_name || '') || props.verifyDocNumber !== (item.ocr_extracted_number || '')) && !props.verifyPhysicallyChecked && (
-                              <p className="text-xs text-red-600 font-semibold">
-                                {props.lang === 'en' ? 'Correcting name/ID number on a sensitive document requires physical inspection — check the box above.' : 'Kurekebisha jina/nambari ya hati nyeti kunahitaji ukaguzi wa kimwili — weka alama kwenye kisanduku hapo juu.'}
-                              </p>
-                            )}
-
-                            {props.verifyError && (
-                              <p className="text-xs text-red-600 font-semibold">{props.verifyError}</p>
-                            )}
-
-                            <div className="flex flex-wrap gap-2 justify-end pt-1">
-                              <button type="button" onClick={() => props.setVerifyingItemId(null)}
-                                className="text-stone-500 hover:text-stone-700 text-xs px-3 py-1.5 rounded-lg"
-                              >
-                                Cancel
-                              </button>
-                              <button
-                                disabled={isItemBusy(item.id)}
-                                aria-busy={isItemBusy(item.id)}
-                                onClick={() => props.handleSubmitVerification(item, props.hasCorrections(item) ? 'corrected' : 'confirmed')}
-                                className="bg-primary-green hover:bg-primary-hover text-white text-xs font-bold px-4 py-1.5 rounded-xl transition disabled:opacity-50 flex items-center gap-1.5"
-                              >
-                                {isItemBusy(item.id) ? <Loader2 className="animate-spin" size={12} aria-hidden={true} /> : null}
-                                {props.hasCorrections(item)
-                                  ? (props.verifyPhysicallyChecked ? 'Save Corrections & Approve' : 'Save Corrections & Continue')
-                                  : (props.verifyPhysicallyChecked ? 'Confirm As Reported & Approve' : 'Confirm As Reported')}
-                              </button>
-                            </div>
-                          </div>
+                          <AgentVerificationPanel
+                            item={item}
+                            lang={props.lang}
+                            t={t}
+                            categories={props.categories}
+                            verifyCategoryId={props.verifyCategoryId}
+                            setVerifyCategoryId={props.setVerifyCategoryId}
+                            verifyName={props.verifyName}
+                            setVerifyName={props.setVerifyName}
+                            verifyDocNumber={props.verifyDocNumber}
+                            setVerifyDocNumber={props.setVerifyDocNumber}
+                            verifyDescription={props.verifyDescription}
+                            setVerifyDescription={props.setVerifyDescription}
+                            verifyFoundArea={props.verifyFoundArea}
+                            setVerifyFoundArea={props.setVerifyFoundArea}
+                            verifyPhysicallyChecked={props.verifyPhysicallyChecked}
+                            setVerifyPhysicallyChecked={props.setVerifyPhysicallyChecked}
+                            verifyReason={props.verifyReason}
+                            setVerifyReason={props.setVerifyReason}
+                            verifyReasonDetail={props.verifyReasonDetail}
+                            setVerifyReasonDetail={props.setVerifyReasonDetail}
+                            verifyError={props.verifyError}
+                            setVerifyingItemId={props.setVerifyingItemId}
+                            hasCorrections={props.hasCorrections}
+                            handleSubmitVerification={props.handleSubmitVerification}
+                            isItemBusy={isItemBusy}
+                          />
                         )}
 
+                        {/* Batch B: the rejection panel body now lives in
+                            components/agent/AgentRejectionPanel.tsx; the render
+                            gate and every prop stay here. */}
                         {props.rejectingItemId === item.id && (
-                          <div className="bg-red-50/50 p-3 rounded-xl border border-red-100/50 space-y-3">
-                            <label htmlFor={`reject-reason-${item.id}`} className="text-xs font-bold text-red-800 block">Reject Drop-off Reason:</label>
-                            <div className="space-y-2">
-                              <select
-                                id={`reject-reason-${item.id}`}
-                                value={props.rejectionReason}
-                                onChange={(e) => props.setRejectionReason(e.target.value)}
-                                className="w-full border border-stone-200 rounded-lg p-2 text-xs bg-white focus:outline-none focus:border-red-500"
-                              >
-                                <option value="Not a real item">Not a real item</option>
-                                <option value="Item doesn't match description">Item doesn't match description</option>
-                                <option value="Suspected test/spam">Suspected test/spam</option>
-                                <option value="Other">Other (Please specify)</option>
-                              </select>
-
-                              {props.rejectionReason === "Other" && (
-                                <input
-                                  type="text"
-                                  value={props.rejectionCustomText}
-                                  onChange={(e) => props.setRejectionCustomText(e.target.value)}
-                                  placeholder="Enter custom rejection reason..."
-                                  aria-label="Custom rejection reason"
-                                  className="w-full border border-stone-200 rounded-lg p-2 text-xs focus:outline-none focus:border-red-500"
-                                  required
-                                />
-                              )}
-                            </div>
-
-                            <div className="flex space-x-2 justify-end">
-                              <button type="button" onClick={() => props.setRejectingItemId(null)}
-                                className="text-stone-500 hover:text-stone-700 text-xs px-3 py-1 rounded-lg"
-                              >
-                                Cancel
-                              </button>
-                              <button type="button" onClick={() => props.handleRejectDropoff(item.id)}
-                                disabled={isItemBusy(item.id) || (props.rejectionReason === "Other" && props.rejectionCustomText.trim() === "")}
-                                aria-busy={isItemBusy(item.id)}
-                                className="bg-red-600 text-white hover:bg-red-700 text-xs font-bold px-3 py-1 rounded-lg transition flex items-center justify-center space-x-1 disabled:opacity-50"
-                              >
-                                {isItemBusy(item.id) ? (
-                                  <Loader2 className="animate-spin" size={12} aria-hidden={true} />
-                                ) : (
-                                  <span>Submit Rejection</span>
-                                )}
-                              </button>
-                            </div>
-                          </div>
+                          <AgentRejectionPanel
+                            item={item}
+                            t={t}
+                            rejectionReason={props.rejectionReason}
+                            setRejectionReason={props.setRejectionReason}
+                            rejectionCustomText={props.rejectionCustomText}
+                            setRejectionCustomText={props.setRejectionCustomText}
+                            setRejectingItemId={props.setRejectingItemId}
+                            handleRejectDropoff={props.handleRejectDropoff}
+                            isItemBusy={isItemBusy}
+                          />
                         )}
                         </div>
                       </article>
@@ -737,6 +607,60 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
 
             </div>
           </div>
+
+          {/* BATCH 3 (UX-07) — OPERATIONAL WORK LEADS THE PAGE.
+              The profile banner and the earnings card are IDENTITY and
+              COMPENSATION information: useful, but static, and unchanged by
+              anything the agent does on this screen. They used to render first,
+              so an agent landing on the Hub saw a business card and a KES
+              figure before the actual work waiting for them.
+
+              The two queues now come first, in their established workflow order
+              — Receive (drop-offs) before Release (pickups/handover) — and the
+              identity/earnings block follows them. This is a PRESENTATION-ONLY
+              reordering of two existing blocks inside the same wrapper:
+
+                * no section was added, removed, duplicated, or re-authored;
+                * no data, calculation, or API input changed (the banner still
+                  reads agentProfile.*, the card still reads agentEarnings.*);
+                * Receive/Release order is untouched;
+                * the transient success/operational-error/queue-error banners
+                  stay at the very top, because those are the messages the agent
+                  must see immediately, and they render only when set.
+
+              Ownership is unchanged: this component is still hook-free
+              presentation over values owned by useAgentOperations. */}
+          {/* Hub Profile Banner */}
+          <div className="bg-primary-green text-white p-6 rounded-2xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <div>
+              <span className="bg-emerald-800 text-accent-orange border border-emerald-700 text-xs font-extrabold px-3 py-1 rounded-full uppercase tracking-wider inline-block mb-2">
+                Verified Return4me Partner Point
+              </span>
+              <h1 className="text-2xl font-extrabold">{props.agentProfile.business_name}</h1>
+              <p className="text-stone-300 text-xs mt-0.5">{props.agentProfile.location_address}</p>
+            </div>
+            <div className="bg-white/10 p-4 rounded-2xl border border-white/5 text-right font-mono">
+              <span className="text-xs text-stone-300 block uppercase font-sans font-bold">Payout via {props.agentProfile.payout_method_type || "Till Number"}</span>
+              <span className="text-lg font-extrabold text-accent-orange">{props.agentProfile.mpesa_till_or_paybill}</span>
+            </div>
+          </div>
+
+          {/* Total Earnings Card — your commission share after each escrow release */}
+          {props.agentEarnings && (
+            <div className="bg-white border border-stone-100 rounded-2xl p-6 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+              <div>
+                <span className="text-stone-400 text-xs font-extrabold uppercase tracking-widest block">
+                  {props.lang === 'en' ? 'Total Earned (your commission share)' : 'Jumla Uliyopata (sehemu yako ya kamisheni)'}
+                </span>
+                <span className="text-3xl font-black text-primary-green block mt-1">
+                  KES {props.agentEarnings.totalEarned.toLocaleString()}
+                </span>
+              </div>
+              <div className="bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-2xl px-4 py-2 text-xs font-bold">
+                {props.agentEarnings.completedPayoutsCount} {props.lang === 'en' ? 'completed handovers paid out' : 'kukabidhi zilizolipwa'}
+              </div>
+            </div>
+          )}
 
         </div>
   );

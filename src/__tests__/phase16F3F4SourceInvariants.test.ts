@@ -2,6 +2,14 @@ import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 
+// P2-A3.2: the eight claim payment/status handlers moved verbatim into
+// routes/claimPayments.ts (so an HTTP integration test can mount them without
+// importing server.ts, which boots its listener at import time). Route lookups
+// below now search the new owner first and fall back to server.ts, so an
+// assertion still fails if the handler disappears from BOTH files. No assertion
+// was weakened or removed.
+const CLAIM_PAYMENTS_TS = fs.readFileSync(path.resolve(__dirname, '../routes/claimPayments.ts'), 'utf8');
+
 // ===========================================================================
 // PHASE 16.1 — S4 SOURCE-LEVEL INVARIANTS (ROUTE / MONEY-PATH WIRING)
 // ===========================================================================
@@ -34,13 +42,28 @@ function stripComments(source: string): string {
 }
 
 const SERVER_RAW = read('src/server.ts');
+// P2-A2: the public discovery search route now lives in routes/publicSearch.ts.
+const PUBLIC_SEARCH_RAW = read('src/routes/publicSearch.ts');
+// P2-A3.4A: the four agent operational routes moved to routes/agentOps.ts.
+const AGENT_OPS_RAW = read('src/routes/agentOps.ts');
 const DATABASE_RAW = read('src/db/database.ts');
 
 /** One inline route handler: from its registration to the next one. */
 function routeBody(anchor: string): string {
-  const start = SERVER_RAW.indexOf(anchor);
-  expect(start, `${anchor} not found in server.ts`).toBeGreaterThan(-1);
-  const rest = SERVER_RAW.slice(start);
+  // P2-A2: GET /api/items/search was extracted VERBATIM from server.ts into
+  // routes/publicSearch.ts so it can be mounted for real HTTP integration
+  // testing. The body is read from whichever file now owns the anchor, so this
+  // slicer keeps testing the same handler it always tested — only the file the
+  // body lives in moved. No behavioural assertion is weakened.
+  // P2-A2 moved GET /api/items/search into routes/publicSearch.ts, and P2-A3.2
+  // moved the eight claim payment/status handlers into routes/claimPayments.ts
+  // — both VERBATIM, so they can be mounted for real HTTP integration tests.
+  // The body is read from whichever file now owns the anchor: this slicer keeps
+  // testing the same handler it always tested. No assertion is weakened.
+  const src = SERVER_RAW.includes(anchor) ? SERVER_RAW : (CLAIM_PAYMENTS_TS.includes(anchor) ? CLAIM_PAYMENTS_TS : (PUBLIC_SEARCH_RAW.includes(anchor) ? PUBLIC_SEARCH_RAW : AGENT_OPS_RAW));
+  const start = src.indexOf(anchor);
+  expect(start, `${anchor} not found in server.ts, routes/claimPayments.ts, routes/publicSearch.ts or routes/agentOps.ts`).toBeGreaterThan(-1);
+  const rest = src.slice(start);
   const next = rest.slice(1).search(/\n {2}app\.[a-z]+\(/);
   return stripComments(next === -1 ? rest : rest.slice(0, next + 1));
 }
@@ -69,6 +92,7 @@ describe("S4-B: agent verification is gated to 'awaiting_dropoff'", () => {
     const statusGuard = body.indexOf("item.status !== 'awaiting_dropoff'");
     const mutation = body.indexOf('db.recordItemVerification(');
     expect(statusGuard).toBeGreaterThan(-1);
+
     expect(mutation).toBeGreaterThan(statusGuard);
   });
 
@@ -156,12 +180,14 @@ describe('S3: the two claimant-facing money routes resolve the fee through one h
   });
 
   it('the helper itself keeps locked-total-fee precedence over the category fee', () => {
-    const start = SERVER_RAW.indexOf('function resolveAuthoritativePaymentFee(');
+    // P2-A3.2: this helper moved to routes/claimPayments.ts (it was used ONLY by the
+    // eight extracted handlers), so the slice is taken from whichever file owns it.
+    const feeSrc = CLAIM_PAYMENTS_TS.indexOf('function resolveAuthoritativePaymentFee(') >= 0 ? CLAIM_PAYMENTS_TS : SERVER_RAW;
+    const start = feeSrc.indexOf('function resolveAuthoritativePaymentFee(');
+    const end = feeSrc.indexOf('return fee;', start);
     expect(start, 'resolveAuthoritativePaymentFee not found').toBeGreaterThan(-1);
-    const end = SERVER_RAW.indexOf('return fee;', start);
     expect(end, 'the helper body could not be located').toBeGreaterThan(start);
-    const body = stripComments(SERVER_RAW.slice(start, end));
-    // Category fee first...
+    const body = stripComments(feeSrc.slice(start, end));
     expect(body).toContain('category.total_fee');
     // ...then the locked value overrides it when present and > 0.
     expect(body).toContain('locked_total_fee');
@@ -181,9 +207,17 @@ describe('S3: the two claimant-facing money routes resolve the fee through one h
 // ---------------------------------------------------------------------------
 describe('S4-G: the webhook reconciliation expectation uses the reported category', () => {
   function reconciliationBlock(): string {
-    const start = SERVER_RAW.indexOf('const categoriesForReconciliation = await db.getCategories();');
+    // P2-A3.2: this P1 reconciliation block still lives in server.ts (the
+    // IntaSend webhook was deliberately NOT extracted), so it is read there.
+    const marker = 'const categoriesForReconciliation = await db.getCategories();';
+    const start = SERVER_RAW.indexOf(marker);
     expect(start, 'the reconciliation expectation block was not found').toBeGreaterThan(-1);
-    const end = SERVER_RAW.indexOf('if (confirmedAmount !== undefined', start);
+    // P1 (B-1): this block no longer terminates at the old
+    // `if (confirmedAmount !== undefined` guard — the 'unknown' branch now has
+    // its own provider-verification path, so the block runs to the escrow CAS.
+    // The contract being protected is unchanged: the expectation is derived
+    // from the REPORTED category's fee, never from the verified category.
+    const end = CLAIM_PAYMENTS_TS.indexOf('attemptClaimEscrowHold(claimId, invoiceId)', start) >= 0 ? CLAIM_PAYMENTS_TS.indexOf('attemptClaimEscrowHold(claimId, invoiceId)', start) : SERVER_RAW.indexOf('attemptClaimEscrowHold(claimId, invoiceId)', start);
     expect(end).toBeGreaterThan(start);
     return stripComments(SERVER_RAW.slice(start, end));
   }
@@ -197,11 +231,16 @@ describe('S4-G: the webhook reconciliation expectation uses the reported categor
     expect(body).not.toContain('verified_category_id');
   });
 
-  it('compares the provider amount through the shared tolerance helper', () => {
+    // P1 (B-1) webhook reconciliation still lives in server.ts (the IntaSend
+    // webhook route was deliberately NOT extracted by P2-A3.2).
     const start = SERVER_RAW.indexOf('const categoriesForReconciliation = await db.getCategories();');
+  it('compares the provider amount through the shared tolerance helper', () => {
     expect(start).toBeGreaterThan(-1);
     const body = stripComments(SERVER_RAW.slice(start, start + 3000));
-    expect(body).toContain('reconcileWebhookAmount(confirmedAmount, expectedFee)');
+    // P1 (B-1): `confirmedAmount` was renamed `authoritativeAmount` so it can
+    // hold either the callback's own value or the provider-confirmed one after
+    // the escalation. The helper is still the single comparison point.
+    expect(body).toContain('reconcileWebhookAmount(authoritativeAmount, expectedFee)');
   });
 });
 

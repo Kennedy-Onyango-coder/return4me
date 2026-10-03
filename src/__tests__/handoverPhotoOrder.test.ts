@@ -19,12 +19,17 @@ import path from 'path';
 // startServer()'s bootstrap.
 
 const serverTs = fs.readFileSync(path.resolve(__dirname, '../server.ts'), 'utf8');
+// P2-A3.4B: confirm-handover moved verbatim into routes/agentOps.ts, so the
+// resolver below reads the route from whichever file owns it. The assertions
+// in this file are unchanged — this is a source-LOCATION change only.
+const agentOpsTs = fs.readFileSync(path.resolve(__dirname, '../routes/agentOps.ts'), 'utf8');
 
 function routeBody(method: 'get' | 'post', route: string): string {
   const marker = `app.${method}('${route}'`;
-  const start = serverTs.indexOf(marker);
-  expect(start, `route ${method.toUpperCase()} ${route} not found in server.ts`).toBeGreaterThan(-1);
-  return serverTs.slice(start, start + 7000);
+  const src = agentOpsTs.includes(marker) ? agentOpsTs : serverTs;
+  const start = src.indexOf(marker);
+  expect(start, `route ${method.toUpperCase()} ${route} not found in server.ts or routes/agentOps.ts`).toBeGreaterThan(-1);
+  return src.slice(start, start + 7000);
 }
 
 describe('confirm-handover validates the pickup code hash BEFORE uploading any photo', () => {

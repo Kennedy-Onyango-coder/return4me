@@ -74,9 +74,12 @@ describe('Batch E appearance tokens and selector', () => {
   });
 
 
-  it('integrates the one shared control in desktop, drawer, and authenticated surfaces', () => {
+  it('integrates the one shared control in desktop, compact header, drawer, and authenticated surfaces', () => {
     expect(navbar).toContain("import AppearanceControl from './AppearanceControl'");
-    expect((navbar.match(/<AppearanceControl /g) || [])).toHaveLength(2);
+    // BATCH 1 (navbar): 3 Navbar instances - the desktop utility tray, the
+    // sub-lg compact header, and the drawer. Previously 2; the compact header
+    // had no appearance control, so appearance required opening the drawer.
+    expect((navbar.match(/<AppearanceControl /g) || [])).toHaveLength(3);
     expect(navbar).toContain('fullWidth');
     expect(shell).toContain("import AppearanceControl from '../AppearanceControl'");
     expect((shell.match(/<AppearanceControl /g) || [])).toHaveLength(1);

@@ -34,10 +34,22 @@ function stripComments(source: string): string {
 
 const AGENTVIEW_RAW = read('src/components/AgentView.tsx');
 const AGENTHUB_RAW = read('src/components/agent/AgentHub.tsx');
+const AGENT_OPERATIONS = stripComments(read('src/hooks/useAgentOperations.ts'));
 const AGENTVIEW = stripComments(AGENTVIEW_RAW);
 const AGENTHUB = stripComments(AGENTHUB_RAW);
 /** The composed surface an agent actually sees — the Hub split across two files. */
-const HUB_SURFACE = `${AGENTVIEW}\n${AGENTHUB}`;
+// BATCH B: the verification and rejection panel markup moved into two
+// presentation-only children. Behavioural contracts that assert on rendered
+// markup must read the COMPOSED Hub surface (parent + both children), exactly
+// as Step 2 composed AgentView + useAgentOperations.
+const AGENT_PANELS = stripComments(
+  read('src/components/agent/AgentVerificationPanel.tsx') +
+  '\n' +
+  read('src/components/agent/AgentRejectionPanel.tsx')
+);
+/** Parent + both Batch B children: the markup an agent actually sees. */
+const HUB_RENDER = `${AGENTHUB}\n${AGENT_PANELS}`;
+const HUB_SURFACE = `${AGENTVIEW}\n${HUB_RENDER}`;
 
 const count = (haystack: string, needle: string) => haystack.split(needle).length - 1;
 /** Every Hub section header, in render order. */
@@ -87,23 +99,103 @@ describe('B4-structure: AgentView owns state, AgentHub renders the Hub once', ()
     expect(count(HUB_SURFACE, 'holdingPickups.map(')).toBe(1);
   });
 
+  it('Batch B extracted the verification and rejection panels into presentation-only children', () => {
+    const readIf = (rel: string) => fs.existsSync(path.resolve(repoRoot, rel)) ? read(rel) : '';
+    const ver = readIf('src/components/agent/AgentVerificationPanel.tsx');
+    const rej = readIf('src/components/agent/AgentRejectionPanel.tsx');
+
+    // Both children exist and export a default component.
+    expect(ver, 'AgentVerificationPanel.tsx must exist').not.toBe('');
+    expect(rej, 'AgentRejectionPanel.tsx must exist').not.toBe('');
+    expect(ver).toMatch(/export default function AgentVerificationPanel\(/);
+    expect(rej).toMatch(/export default function AgentRejectionPanel\(/);
+
+    // The inline panel markup is GONE from the parent, and the parent renders
+    // the children instead — a real extraction, not a copy.
+    expect(AGENTHUB).not.toContain('bg-brand-beige/60');
+    expect(AGENTHUB).not.toContain('bg-red-50/50');
+    expect(AGENTHUB).toMatch(/<AgentVerificationPanel/);
+    expect(AGENTHUB).toMatch(/<AgentRejectionPanel/);
+
+    // The parent keeps BOTH render gates: extraction must not change when the
+    // panels appear.
+    expect(AGENTHUB).toMatch(/\{props\.verifyingItemId === item\.id && \(\s*<AgentVerificationPanel/);
+    expect(AGENTHUB).toMatch(/\{props\.rejectingItemId === item\.id && \(\s*<AgentRejectionPanel/);
+  });
+
+  it('Batch B wires the children explicitly and never via a props spread', () => {
+    const verCall = AGENTHUB.slice(AGENTHUB.indexOf('<AgentVerificationPanel'), AGENTHUB.indexOf('/>', AGENTHUB.indexOf('<AgentVerificationPanel')) + 2);
+    const rejCall = AGENTHUB.slice(AGENTHUB.indexOf('<AgentRejectionPanel'), AGENTHUB.indexOf('/>', AGENTHUB.indexOf('<AgentRejectionPanel')) + 2);
+
+    // Explicit wiring, so the boundary stays auditable in source.
+    expect(verCall).not.toMatch(/\{\.\.\./);
+    expect(rejCall).not.toMatch(/\{\.\.\./);
+
+    // Every verification member the panel actually consumes is passed.
+    for (const member of [
+      'item', 'lang', 'categories',
+      'verifyCategoryId', 'setVerifyCategoryId',
+      'verifyName', 'setVerifyName',
+      'verifyDocNumber', 'setVerifyDocNumber',
+      'verifyDescription', 'setVerifyDescription',
+      'verifyFoundArea', 'setVerifyFoundArea',
+      'verifyPhysicallyChecked', 'setVerifyPhysicallyChecked',
+      'verifyReason', 'setVerifyReason',
+      'verifyReasonDetail', 'setVerifyReasonDetail',
+      'verifyError', 'setVerifyingItemId',
+      'hasCorrections', 'handleSubmitVerification', 'isItemBusy',
+    ]) {
+      expect(verCall, `AgentVerificationPanel must receive ${member}`).toMatch(new RegExp(`\\b${member}=`));
+    }
+
+    // Every rejection member the panel actually consumes is passed.
+    for (const member of [
+      'item', 'rejectionReason', 'setRejectionReason',
+      'rejectionCustomText', 'setRejectionCustomText',
+      'setRejectingItemId', 'handleRejectDropoff', 'isItemBusy',
+    ]) {
+      expect(rejCall, `AgentRejectionPanel must receive ${member}`).toMatch(new RegExp(`\\b${member}=`));
+    }
+  });
+
+  it('Batch B children own no state, effects, or transport', () => {
+    const code = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+    const readIf = (rel: string) => fs.existsSync(path.resolve(repoRoot, rel)) ? code(read(rel)) : '';
+    for (const rel of [
+      'src/components/agent/AgentVerificationPanel.tsx',
+      'src/components/agent/AgentRejectionPanel.tsx',
+    ]) {
+      const src = readIf(rel);
+      expect(src, `${rel} must exist`).not.toBe('');
+      // Operational ownership must NOT have migrated into a presentation child.
+      expect(src, `${rel} must not hold state`).not.toMatch(/\buse(State|Effect|Reducer|Ref|Memo|Callback)\s*\(/);
+      expect(src, `${rel} must not call transport`).not.toMatch(/\bfetch\s*\(/);
+      expect(src, `${rel} must not import agentApi`).not.toMatch(/agentApi/);
+      expect(src, `${rel} must not import the operations hook`).not.toMatch(/useAgentOperations/);
+      // …and no child may import the parent, which would be a cycle.
+      expect(src, `${rel} must not import AgentHub`).not.toMatch(/from\s+['"][^'"]*AgentHub/);
+    }
+  });
+
   it('no element id is duplicated across the composed Hub surface', () => {
-    const ids = [...staticIds(AGENTVIEW), ...staticIds(AGENTHUB)];
+    const ids = [...staticIds(AGENTVIEW), ...staticIds(HUB_RENDER)];
     expect(ids.length).toBeGreaterThanOrEqual(20);
     expect(ids.filter((id, i) => ids.indexOf(id) !== i)).toEqual([]);
-    // The verification panel's ids now live only in AgentHub…
-    expect(staticIds(AGENTHUB)).toContain('agent-verify-exact-place');
+    // The verification panel's ids now live only in the Batch B child…
+    expect(staticIds(HUB_RENDER)).toContain('agent-verify-exact-place');
     expect(staticIds(AGENTVIEW)).not.toContain('agent-verify-exact-place');
     // …and the auth/form/modal ids stayed in AgentView.
     expect(staticIds(AGENTVIEW)).toContain('agent-phone');
-    expect(staticIds(AGENTHUB)).not.toContain('agent-phone');
+    expect(staticIds(HUB_RENDER)).not.toContain('agent-phone');
   });
 
-  it('AgentHub is presentational: AgentView alone owns every hook', () => {
+  it('AgentHub is presentational: the Agent surface (view + operations hook) owns every hook', () => {
     expect(AGENTHUB).not.toMatch(/use(?:State|Effect|Ref|Callback|Memo|Reducer|Context|LayoutEffect)\(/);
     expect(AGENTHUB).toContain("import React from 'react';");
-    expect(AGENTVIEW).toContain("const [expectedDropoffs, setExpectedDropoffs] = useState<any[]>([]);");
-    expect(AGENTVIEW).toContain("const [holdingPickups, setHoldingPickups] = useState<any[]>([]);");
+    // Operational state moved to the feature-local useAgentOperations hook in
+    // Step 2; the Hub still receives everything as props.
+    expect(AGENT_OPERATIONS).toContain("const [expectedDropoffs, setExpectedDropoffs] = useState<any[]>([]);");
+    expect(AGENT_OPERATIONS).toContain("const [holdingPickups, setHoldingPickups] = useState<any[]>([]);");
   });
 
   it('AgentHub carries no cp1252 round-trip damage (mojibake) in its copy', () => {
@@ -187,12 +279,31 @@ describe('B4-structure: expectedDropoffs is the canonical prop name', () => {
 });
 
 describe('B4-structure: AgentHubProps is fully wired from AgentView', () => {
-  /** The prop names declared by the extracted Hub contract. */
+  /**
+   * The prop names declared by the extracted Hub contract.
+   *
+   * Batch A composed `AgentHubProps` from four domain contracts plus the
+   * application-level props, so the contract must be traversed across those
+   * interfaces rather than read from one flat block. The INTENT is unchanged:
+   * enumerate every prop the Hub actually declares, so the wiring test below
+   * can prove none is left unwired.
+   */
   const declaredProps = (() => {
-    const start = AGENTHUB.indexOf('export interface AgentHubProps {');
-    expect(start).toBeGreaterThan(-1);
-    const body = AGENTHUB.slice(start, AGENTHUB.indexOf('\n}', start));
-    return [...body.matchAll(/^\s{2}([A-Za-z][A-Za-z0-9]*)(\?)?:/gm)].map((m) => ({
+    const interfaceBody = (name: string) => {
+      const start = AGENTHUB.indexOf(`export interface ${name}`);
+      expect(start).toBeGreaterThan(-1);
+      return AGENTHUB.slice(start, AGENTHUB.indexOf('\n}', start));
+    };
+    const bodies = [
+      interfaceBody('AgentHubQueueProps'),
+      interfaceBody('AgentHubVerificationProps'),
+      interfaceBody('AgentHubRejectionProps'),
+      interfaceBody('AgentHubFeedbackProps'),
+      // The composed contract itself declares only `lang` and `t`; the rest
+      // arrive through `extends`. Reading its own body is therefore correct.
+      interfaceBody('AgentHubProps'),
+    ].join('\n');
+    return [...bodies.matchAll(/^\s{2}([A-Za-z][A-Za-z0-9]*)(\?)?:/gm)].map((m) => ({
       name: m[1],
       optional: Boolean(m[2]),
     }));
@@ -204,7 +315,9 @@ describe('B4-structure: AgentHubProps is fully wired from AgentView', () => {
   })();
 
   it('parses the full contract (guards against a vacuous loop)', () => {
-    expect(declaredProps.length).toBeGreaterThanOrEqual(48);
+    // 46 domain props + `lang` + `t`. The dead `refreshCategories` prop was
+    // removed in Batch A, so the contract is one smaller than before.
+    expect(declaredProps.length).toBeGreaterThanOrEqual(47);
     for (const required of [
       'lang',
       't',
@@ -222,8 +335,30 @@ describe('B4-structure: AgentHubProps is fully wired from AgentView', () => {
     ]) {
       expect(declaredProps.map((p) => p.name)).toContain(required);
     }
-    // Only the categories refresher is optional; everything else is required.
-    expect(declaredProps.filter((p) => p.optional).map((p) => p.name)).toEqual(['refreshCategories']);
+    // Batch A removed the only optional prop, so the Hub contract is now
+    // entirely required. Grouping must not have silently made anything optional.
+    expect(declaredProps.filter((p) => p.optional).map((p) => p.name)).toEqual([]);
+    // The dead prop must not reappear through any of the four domains.
+    expect(declaredProps.map((p) => p.name)).not.toContain('refreshCategories');
+  });
+
+  it('composes AgentHubProps from the four domain contracts plus lang and t', () => {
+    // Batch A is PURE PROP GROUPING: the compiler, not a comment, enforces
+    // which workflow owns which prop.
+    expect(AGENTHUB).toMatch(/export interface AgentHubQueueProps\s*\{/);
+    expect(AGENTHUB).toMatch(/export interface AgentHubVerificationProps\s*\{/);
+    expect(AGENTHUB).toMatch(/export interface AgentHubRejectionProps\s*\{/);
+    expect(AGENTHUB).toMatch(/export interface AgentHubFeedbackProps\s*\{/);
+    expect(AGENTHUB).toMatch(
+      /export interface AgentHubProps\s*\n?\s*extends AgentHubQueueProps,\s*\n?\s*AgentHubVerificationProps,\s*\n?\s*AgentHubRejectionProps,\s*\n?\s*AgentHubFeedbackProps\s*\{/
+    );
+    const composed = AGENTHUB.slice(
+      AGENTHUB.indexOf('export interface AgentHubProps'),
+      AGENTHUB.indexOf('\n}', AGENTHUB.indexOf('export interface AgentHubProps'))
+    );
+    // The composed contract adds ONLY the application-level props App owns.
+    expect(composed).toMatch(/lang: 'en' \| 'sw';/);
+    expect(composed).toMatch(/t: any;/);
   });
 
   it('AgentView passes every declared prop, so no Hub feature is unwired', () => {
@@ -235,6 +370,75 @@ describe('B4-structure: AgentHubProps is fully wired from AgentView', () => {
 
   it('AgentHubProps keeps `t` loosely typed for the nested verify labels', () => {
     expect(AGENTHUB).toContain('t: any;');
+  });
+
+  it('places every expected member in its owning domain contract', () => {
+    const block = (name: string) => {
+      const start = AGENTHUB.indexOf(`export interface ${name}`);
+      expect(start).toBeGreaterThan(-1);
+      return AGENTHUB.slice(start, AGENTHUB.indexOf('\n}', start));
+    };
+
+    const queue = block('AgentHubQueueProps');
+    for (const member of [
+      'agentProfile', 'agentEarnings', 'expectedDropoffs', 'holdingPickups',
+      'queueError', 'queueLoading', 'retryQueue', 'dropoffCodeInput',
+      'setDropoffCodeInput', 'handleLookupDropoff',
+    ]) {
+      expect(queue, `${member} must be declared on AgentHubQueueProps`).toMatch(new RegExp(`\\b${member}\\b`));
+    }
+
+    const verification = block('AgentHubVerificationProps');
+    for (const member of [
+      'verifyingItemId', 'setVerifyingItemId', 'openVerificationPanel',
+      'verifyCategoryId', 'setVerifyCategoryId', 'verifyName', 'setVerifyName',
+      'verifyDocNumber', 'setVerifyDocNumber', 'verifyDescription', 'setVerifyDescription',
+      'verifyFoundArea', 'setVerifyFoundArea', 'verifyPhysicallyChecked',
+      'setVerifyPhysicallyChecked', 'verifyReason', 'setVerifyReason',
+      'verifyReasonDetail', 'setVerifyReasonDetail', 'verifyError',
+      'hasCorrections', 'handleSubmitVerification', 'categories',
+    ]) {
+      expect(verification, `${member} must be declared on AgentHubVerificationProps`).toMatch(new RegExp(`\\b${member}\\b`));
+    }
+
+    const rejection = block('AgentHubRejectionProps');
+    for (const member of [
+      'rejectingItemId', 'setRejectingItemId', 'rejectionReason',
+      'setRejectionReason', 'rejectionCustomText', 'setRejectionCustomText',
+      'handleRejectDropoff',
+    ]) {
+      expect(rejection, `${member} must be declared on AgentHubRejectionProps`).toMatch(new RegExp(`\\b${member}\\b`));
+    }
+
+    const feedback = block('AgentHubFeedbackProps');
+    for (const member of [
+      'actionSuccessMsg', 'operationError', 'setOperationError',
+      'actionProcessing', 'processingItemId', 'handleConfirmViewing',
+      'handleConfirmHandover',
+    ]) {
+      expect(feedback, `${member} must be declared on AgentHubFeedbackProps`).toMatch(new RegExp(`\\b${member}\\b`));
+    }
+  });
+
+  it('keeps `categories` in verification, not in a generic config group', () => {
+    // categories' ONLY consumer in the Hub is the verification category
+    // <select>, so it must be declared on the verification contract.
+    expect(
+      AGENTHUB.slice(
+        AGENTHUB.indexOf('export interface AgentHubVerificationProps'),
+        AGENTHUB.indexOf('export interface AgentHubRejectionProps')
+      )
+    ).toMatch(/\bcategories: any\[\];/);
+  });
+
+  it('no longer passes the dead refreshCategories prop into AgentHub', () => {
+    // It was declared on AgentHubProps and passed at the call site but never
+    // read here. Eliminating the crossing is Batch A's only edit to the
+    // behavioural surface; useAgentOperations still owns and calls it.
+    expect(AGENTVIEW).not.toMatch(/<AgentHub[\s\S]*?refreshCategories=/);
+    // ...and it must still exist where operational logic genuinely needs it.
+    expect(AGENT_OPERATIONS).toMatch(/refreshCategories\?\.\(\);/);
+    expect(AGENTVIEW).toMatch(/useAgentOperations\(\{ token, lang, refreshCategories \}\)/);
   });
 });
 
@@ -261,8 +465,8 @@ describe('B4-structure: Batch 3 badge contract preserved via neutral home', () =
   });
 
   it('Batch 3 reliability suite still targets the live contracts', () => {
-    expect(AGENTVIEW).toContain('const [operationError, setOperationError]');
-    expect(AGENTVIEW).toContain('refreshCategories?.()');
+    expect(AGENT_OPERATIONS).toContain('const [operationError, setOperationError]');
+    expect(AGENT_OPERATIONS).toContain('refreshCategories?.()');
   });
 
   it('the Batch 3 suite reads the badge from the neutral home, not from a view', () => {
