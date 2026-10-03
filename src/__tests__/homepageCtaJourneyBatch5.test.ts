@@ -131,11 +131,17 @@ describe('BATCH 5 — Earn & Return label and hierarchy', () => {
   });
 
   it('MF-5 — the found CTA is outline and the lost CTA stays primary', () => {
+    // UX-03 removed the two redundant `min-h-[48px]` overrides that used to sit
+    // in these pins: the shared Button at `size="lg"` is already 52px, so the
+    // literal restated a floor the primitive owns — the same consolidation
+    // UX-02 made for Sign In ("the floor lives in the primitive, not in a local
+    // literal"). What this test protects is unchanged: the found CTA is
+    // `outline`, the lost CTA is `primary`, and neither handler moved.
     expect(EARN).toContain(
-      'variant="outline" size="lg" onClick={() => setView(\'finder\')} className="min-h-[48px]"'
+      'variant="outline" size="lg" onClick={() => setView(\'finder\')}>'
     );
     expect(EARN).toContain(
-      'variant="primary" size="lg" onClick={() => setView(\'owner\')} className="min-h-[48px]"'
+      'variant="primary" size="lg" onClick={() => setView(\'owner\')}>'
     );
   });
 

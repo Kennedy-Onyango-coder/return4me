@@ -4,7 +4,9 @@ import {
   Key, Gem, BookOpen, Package, Search, ChevronDown, MapPin,
 } from 'lucide-react';
 import { resolveTaxonomy } from '../../config/categoryTaxonomy';
+import { translations } from '../../types';
 import Button from '../ui/Button';
+import { ICON_SIZE } from '../ui/iconSize';
 
 /**
  * CATEGORY EXPLORER (Phase 9 — Request 06)
@@ -51,6 +53,7 @@ const DEFAULT_VISIBLE_GROUPS = 4;
 
 export default function CategoryExplorer({ categories, lang, onReportLost, onReportFound }: CategoryExplorerProps) {
   const en = lang === 'en';
+  const t = translations[lang];
   const [query, setQuery] = useState('');
   const [showAll, setShowAll] = useState(false);
 
@@ -82,11 +85,22 @@ export default function CategoryExplorer({ categories, lang, onReportLost, onRep
     <div className="mt-8">
       {/* Search over the REAL category names (both languages). */}
       <div className="max-w-md">
-        <label htmlFor="category-explorer-search" className="block text-caption font-bold uppercase tracking-wider text-ink-muted">
+        <label htmlFor="category-explorer-search" className="block text-caption font-bold uppercase tracking-wider text-[var(--appearance-text-muted)]">
           {en ? 'Search categories' : 'Tafuta kategoria'}
         </label>
-        <div className="mt-1.5 flex items-center gap-2 rounded-xl border border-line-subtle bg-white px-3 focus-within:border-primary-green">
-          <Search size={16} className="text-ink-muted shrink-0" aria-hidden={true} />
+        {/* UX-03 — the field is now the shared 44px input treatment itself
+            (border, radius, height and the semantic focus colour live ON the
+            control), instead of a 40px borderless input inside a separately
+            bordered wrapper. The old shape stacked the wrapper's focus-within
+            border on the control and suppressed the control's own outline; this
+            one keeps the single global :focus-visible indicator and meets the
+            44px touch floor the wrapper's padding never reached. */}
+        <div className="relative mt-2">
+          <Search
+            size={ICON_SIZE.ui}
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--appearance-text-muted)]"
+            aria-hidden={true}
+          />
           <input
             id="category-explorer-search"
             type="search"
@@ -94,7 +108,7 @@ export default function CategoryExplorer({ categories, lang, onReportLost, onRep
             onChange={(e) => setQuery(e.target.value)}
             placeholder={en ? 'e.g. passport, phone, keys' : 'Mfano: pasipoti, simu, funguo'}
             aria-describedby="category-explorer-summary"
-            className="w-full border-0 bg-transparent py-2.5 text-sm text-ink outline-none"
+            className="h-11 w-full rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface)] pl-10 pr-3 text-body text-[var(--appearance-text-primary)] placeholder:text-[var(--appearance-text-muted)] focus:border-[var(--appearance-focus)]"
           />
         </div>
       </div>
@@ -106,7 +120,7 @@ export default function CategoryExplorer({ categories, lang, onReportLost, onRep
           DOM). The clause is added ONLY when something is actually hidden, and it
           names the button by its own label ("Show all …" / "Onyesha makundi
           yote …") so the instruction points at the real control. */}
-      <p id="category-explorer-summary" aria-live="polite" className="mt-3 text-small text-ink-muted">
+      <p id="category-explorer-summary" aria-live="polite" className="mt-3 text-small text-[var(--appearance-text-muted)]">
         {isSearching
           ? (en
             ? `${totalCategories} matching ${totalCategories === 1 ? 'category' : 'categories'} in ${groups.length} ${groups.length === 1 ? 'group' : 'groups'}.`
@@ -123,8 +137,8 @@ export default function CategoryExplorer({ categories, lang, onReportLost, onRep
           no CSS-only hiding and no aria-hidden — so this id always points at the
           list that is actually rendered. */}
       {groups.length === 0 ? (
-        <div className="mt-6 rounded-xl border border-line-subtle bg-white p-6 text-center">
-          <p className="text-sm text-ink-muted">
+        <div className="mt-6 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface)] p-6 text-center">
+          <p className="text-body text-[var(--appearance-text-muted)]">
             {en ? 'No category matches that search.' : 'Hakuna kategoria inayolingana na utafutaji huo.'}
           </p>
           <Button variant="outline" size="sm" className="mt-4" onClick={() => setQuery('')}>
@@ -136,23 +150,23 @@ export default function CategoryExplorer({ categories, lang, onReportLost, onRep
           {visibleGroups.map((group) => {
             const Icon = GROUP_ICONS[group.key] ?? Package;
             return (
-              <li key={group.key} className="border border-line-subtle rounded-xl bg-white p-5">
+              <li key={group.key} className="border border-[var(--appearance-border)] rounded-standard bg-[var(--appearance-surface)] p-5">
                 <div className="flex items-start gap-3">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-green/10">
-                    <Icon size={18} className="text-primary-green" aria-hidden={true} />
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-small bg-primary-green/10">
+                    <Icon size={ICON_SIZE.emphasis} className="text-[var(--appearance-text-primary)]" aria-hidden={true} />
                   </span>
                   <div className="min-w-0">
-                    <h3 className="text-sm font-bold text-ink">{en ? group.labelEn : group.labelSw}</h3>
-                    <p className="mt-1 text-caption text-ink-muted leading-relaxed">
+                    <h3 className="text-body-large font-bold text-[var(--appearance-text-primary)]">{en ? group.labelEn : group.labelSw}</h3>
+                    <p className="mt-1 text-caption text-[var(--appearance-text-muted)] leading-relaxed">
                       {en ? group.blurbEn : group.blurbSw}
                     </p>
                   </div>
                 </div>
-                <ul className="mt-4 flex flex-wrap gap-1.5">
+                <ul className="mt-4 flex flex-wrap gap-2">
                   {group.categories.map((category: any) => (
                     <li
                       key={category.id}
-                      className="rounded-full border border-line-subtle bg-canvas-muted px-2.5 py-1 text-caption font-semibold text-ink"
+                      className="rounded-full border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] px-3 py-1 text-caption font-semibold text-[var(--appearance-text-primary)]"
                     >
                       {categoryName(category)}
                     </li>
@@ -180,20 +194,23 @@ export default function CategoryExplorer({ categories, lang, onReportLost, onRep
             aria-controls="category-explorer-groups"
           >
             {en ? `Show all ${groups.length} groups` : `Onyesha makundi yote ${groups.length}`}
-            <ChevronDown size={16} aria-hidden={true} />
+            <ChevronDown size={ICON_SIZE.ui} aria-hidden={true} />
           </Button>
         </div>
       )}
 
       {/* Two honest calls to action — each one reports an item, which is the
-          only capability the backend actually implements today. */}
+          only capability the backend actually implements today. UX-03 — the
+          labels are the canonical public-navigation pair (t.ownerBtn /
+          t.finderBtn) the Navbar, the hero and the Final CTA already use, so
+          the same two journeys are never offered under four vocabularies. */}
       <div className="mt-8 flex flex-col sm:flex-row gap-3">
         <Button variant="primary" size="lg" onClick={onReportLost}>
-          {en ? 'I lost something' : 'Nimepoteza kitu'}
+          {t.ownerBtn}
         </Button>
         <Button variant="outline" size="lg" onClick={onReportFound}>
-          <MapPin size={18} aria-hidden={true} />
-          {en ? 'I found something' : 'Nimepata kitu'}
+          <MapPin size={ICON_SIZE.emphasis} aria-hidden={true} />
+          {t.finderBtn}
         </Button>
       </div>
     </div>

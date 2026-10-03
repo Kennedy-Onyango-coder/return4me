@@ -11,6 +11,15 @@ interface SectionHeadingProps {
    *  aria-labelledby at a real heading element instead of at a wrapper div.
    *  Purely additive: omitted here means exactly the previous markup. */
   titleId?: string;
+  /** Optional extra classes for the rendered <h2> only.
+   *  Purely additive and opt-in: omitted means exactly the previous markup, so
+   *  every existing consumer is byte-for-byte unaffected. It exists because the
+   *  default `text-heading` step (18/26) is the CARD-heading rung of the UX-01
+   *  ladder, while a page-level section heading belongs on `text-section`
+   *  (24/32). A page that needs the bigger rung — the public homepage — passes
+   *  it here instead of forking the primitive or hand-rolling a second header. */
+  titleClassName?: string;
+  /** Wrapper (layout) classes, not the heading itself. */
   className?: string;
 }
 
@@ -20,7 +29,7 @@ interface SectionHeadingProps {
  * views stop hand-rolling their own (currently 5+ slightly different
  * patterns in App.tsx / OwnerView / AgentView / AdminView).
  */
-export default function SectionHeading({ eyebrow, title, description, titleId, className = '' }: SectionHeadingProps) {
+export default function SectionHeading({ eyebrow, title, description, titleId, titleClassName = '', className = '' }: SectionHeadingProps) {
   return (
     <div className={`space-y-1.5 ${className}`}>
       {eyebrow && (
@@ -28,7 +37,7 @@ export default function SectionHeading({ eyebrow, title, description, titleId, c
           {eyebrow}
         </p>
       )}
-      <h2 id={titleId} className="text-heading font-extrabold tracking-tight text-[var(--appearance-text-primary)]">{title}</h2>
+      <h2 id={titleId} className={`text-heading font-extrabold tracking-tight text-[var(--appearance-text-primary)] ${titleClassName}`}>{title}</h2>
       {description && (
         <p className="text-body text-[var(--appearance-text-muted)] leading-relaxed max-w-2xl">{description}</p>
       )}

@@ -9,6 +9,7 @@ import {
 import Button from './ui/Button';
 import Badge from './ui/Badge';
 import SectionHeading from './ui/SectionHeading';
+import { ICON_SIZE } from './ui/iconSize';
 // REQUEST 06 — the homepage category explorer. It is a PRESENTATION layer over
 // the live /api/categories list (see src/config/categoryTaxonomy.ts); the old
 // inline, hand-typed group list it replaces lived at the bottom of this file.
@@ -77,20 +78,33 @@ export default function HomeView(props: HomeViewProps) {
   const [current, setCurrent] = useState(0);
   const reducedMotion = typeof window !== 'undefined'
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  /* WCAG 2.2.2 (Pause, Stop, Hide) — the hero rotates on its own every 6.5s
+     and never stopped before, so a visitor reading a slide could be moved off
+     it with no way to hold it. Two flags now cover the two honest reasons to
+     stop, and neither removes the ability to change slides:
+       rotationPaused  — the visitor is reading it (pointer over the region, or
+                         keyboard focus inside it); released when they leave.
+       rotationStopped — the visitor took control (a dot, an arrow, a swipe or
+                         an arrow key): rotation does not resume behind them.
+     `prefers-reduced-motion` keeps its existing full pause, unchanged. */
+  const [rotationPaused, setRotationPaused] = useState(false);
+  const [rotationStopped, setRotationStopped] = useState(false);
   const goToSlide = useCallback((i: number) => {
+    setRotationStopped(true);
     setCurrent(((i % 4) + 4) % 4);
   }, []);
   const nextSlide = useCallback(() => goToSlide(current + 1), [goToSlide, current]);
   const prevSlide = useCallback(() => goToSlide(current - 1), [goToSlide, current]);
 
-  // Pause auto-advance for users who prefer reduced motion.
+  // Pause auto-advance for users who prefer reduced motion, while the visitor
+  // is reading the hero, and once they have taken control of it.
   useEffect(() => {
-    if (reducedMotion) return;
+    if (reducedMotion || rotationPaused || rotationStopped) return;
     const id = window.setInterval(() => {
       setCurrent((c) => (c + 1) % 4);
     }, 6500);
     return () => window.clearInterval(id);
-  }, [reducedMotion]);
+  }, [reducedMotion, rotationPaused, rotationStopped]);
 
   const scrollToHowItWorks = () => {
     document.getElementById('how-it-works')?.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth' });
@@ -256,9 +270,16 @@ export default function HomeView(props: HomeViewProps) {
         aria-label={lang === 'en' ? 'How Return4me works' : 'Jinsi Return4me inavyofanya kazi'}
         onKeyDown={handleCarouselKeyDown}
         tabIndex={-1}
-        className="relative isolate overflow-hidden bg-primary-green focus:outline-none"
+        className="relative isolate overflow-hidden bg-primary-green"
         onTouchStart={onTouchStart}
         onTouchEnd={onTouchEnd}
+        /* WCAG 2.2.2 — reading the hero holds it still; leaving it resumes. No
+           local focus or outline treatment is added: the region is not a
+           control, and focus inside it keeps the single global indicator. */
+        onMouseEnter={() => setRotationPaused(true)}
+        onMouseLeave={() => setRotationPaused(false)}
+        onFocus={() => setRotationPaused(true)}
+        onBlur={() => setRotationPaused(false)}
       >
         {/* Crossfading photo layers: FIND, CONNECT, HANDOVER, RETURN */}
         {slides.map((s, i) => {
@@ -311,7 +332,7 @@ export default function HomeView(props: HomeViewProps) {
                   key={s.img}
                   initial={{ opacity: 0, y: 12 }}
                   animate={active ? { opacity: 1, y: 0 } : { opacity: 0, y: 8 }}
-                  transition={{ duration: 0.4, ease: 'easeOut' }}
+                  transition={{ duration: reducedMotion ? 0 : 0.4, ease: 'easeOut' }}
                   className={active ? '' : 'hidden'}
                   /* BATCH 6B — this wrapper is the slide's PANEL: it holds the
                      eyebrow, the <h1>, the copy and both CTAs, which is exactly
@@ -338,23 +359,30 @@ export default function HomeView(props: HomeViewProps) {
                 >
                   <div className="mb-4 flex items-center gap-2">
                     <span className="inline-block h-0.5 w-8 bg-accent-orange rounded-full" />
-                    <span className="text-xs font-bold uppercase tracking-widest text-white/90">{s.eyebrow}</span>
+                    <span className="text-caption font-bold uppercase tracking-widest text-white/90">{s.eyebrow}</span>
                   </div>
-                  <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-white leading-[1.1] sm:leading-tight">
+                  {/* UX-01 ladder: page (32/40) → display (40/48) → hero (48/56).
+                      The old 3xl/4xl/5xl steps were the same sizes under Tailwind
+                      names, with an extra arbitrary leading-[1.1]; the ladder
+                      steps carry their own line heights. */}
+                  <h1 className="text-page sm:text-display lg:text-hero font-extrabold tracking-tight text-white">
                     {s.h1}
                   </h1>
-                  <p className="mt-5 text-sm sm:text-base text-white/90 max-w-xl leading-relaxed">
+                  <p className="mt-5 text-body sm:text-body-large text-white/90 max-w-xl leading-relaxed">
                     {s.copy}
                   </p>
+                  {/* One obvious primary action per slide; the secondary is the
+                      subordinate variant on the same rung. Both are the shared
+                      Button at `lg` (52px), so the 44px floor is the primitive's
+                      and no local min-height/px override restates it. */}
                   <div className="mt-8 flex flex-col sm:flex-row gap-3">
-                    <Button variant="primary" size="lg" onClick={() => handleSlideAction(s.primary)} className="min-h-[48px] px-8">
+                    <Button variant="primary" size="lg" onClick={() => handleSlideAction(s.primary)}>
                       {s.primary.label}
                     </Button>
                     <Button
                       variant="inverse"
                       size="lg"
                       onClick={() => handleSlideAction(s.secondary)}
-                      className="min-h-[48px] px-6"
                     >
                       {s.secondary.label}
                     </Button>
@@ -365,22 +393,23 @@ export default function HomeView(props: HomeViewProps) {
           </div>
         </div>
 
-        {/* Previous / next controls */}
+        {/* Previous / next controls — 44px targets (UX-03 §11). The colours are
+            fixed imagery overlays over the photographs, not theme surfaces. */}
         <button
           type="button"
           onClick={prevSlide}
           aria-label={lang === 'en' ? 'Previous slide' : 'Slaidi iliyotangulia'}
-          className="absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 z-10 w-10 h-10 rounded-full bg-black/30 hover:bg-black/50 text-white flex items-center justify-center transition-colors motion-reduce:transition-none"
+          className="absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 z-10 h-11 w-11 rounded-full bg-black/30 hover:bg-black/50 text-white flex items-center justify-center transition-colors motion-reduce:transition-none"
         >
-          <ChevronLeft size={22} aria-hidden="true" />
+          <ChevronLeft size={ICON_SIZE.feature} aria-hidden="true" />
         </button>
         <button
           type="button"
           onClick={nextSlide}
           aria-label={lang === 'en' ? 'Next slide' : 'Slaidi inayofuata'}
-          className="absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 z-10 w-10 h-10 rounded-full bg-black/30 hover:bg-black/50 text-white flex items-center justify-center transition-colors motion-reduce:transition-none"
+          className="absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 z-10 h-11 w-11 rounded-full bg-black/30 hover:bg-black/50 text-white flex items-center justify-center transition-colors motion-reduce:transition-none"
         >
-          <ChevronRight size={22} aria-hidden="true" />
+          <ChevronRight size={ICON_SIZE.feature} aria-hidden="true" />
         </button>
 
         {/* BATCH 6A — this `role="tablist"` was the ONLY user-facing or
@@ -394,7 +423,7 @@ export default function HomeView(props: HomeViewProps) {
             already Kiswahili.
             No new translation key, architecture, helper, state or prop is
             introduced — this reuses the pattern the file already uses. */}
-        <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2" role="tablist" aria-label={lang === 'en' ? 'Slide indicator' : 'Kiashiria cha slaidi'}>
+        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1" role="tablist" aria-label={lang === 'en' ? 'Slide indicator' : 'Kiashiria cha slaidi'}>
           {slides.map((s, i) => (
             <button
               key={s.img}
@@ -411,10 +440,19 @@ export default function HomeView(props: HomeViewProps) {
               role="tab"
               aria-selected={i === current}
               aria-controls={`r4m-hero-panel-${i}`}
-              aria-label={lang === 'en' ? `Go to slide ${i + 1}` : `Nenda kwenye slaidi ${i + 1}`}
+              aria-label={lang === 'en' ? `Go to slide ${i + 1} of ${slides.length}` : `Nenda kwenye slaidi ${i + 1} kati ya ${slides.length}`}
               aria-current={i === current ? 'true' : undefined}
-              className={`rounded-full transition-all duration-300 motion-reduce:transition-none ${i === current ? 'w-8 h-2 bg-accent-orange' : 'w-2 h-2 bg-white/40 hover:bg-white/70'}`}
-            />
+              /* UX-03 — the tab is a 44px target and the DOT is its child. The
+                 dot keeps the size-and-colour difference (never colour alone),
+                 which is what the contrast suite pins; the target around it now
+                 meets the touch floor instead of being an 8px dot. */
+              className="group flex h-11 min-w-11 items-center justify-center rounded-full transition-colors motion-reduce:transition-none hover:bg-white/10"
+            >
+              <span
+                aria-hidden="true"
+                className={`rounded-full transition-all duration-300 motion-reduce:transition-none ${i === current ? 'w-8 h-2 bg-accent-orange' : 'w-2 h-2 bg-white/40 hover:bg-white/70'}`}
+              />
+            </button>
           ))}
         </div>
       </section>
@@ -422,23 +460,23 @@ export default function HomeView(props: HomeViewProps) {
       {/* ───────── TRUST STRIP ───────── */}
       <section className="bg-[var(--appearance-surface)] border-b border-[var(--appearance-border)]">
         <div className="mx-auto max-w-7xl px-5 sm:px-12 py-5">
-          <div className="flex flex-wrap items-center justify-center gap-x-8 gap-y-3 text-xs sm:text-sm font-semibold text-[var(--appearance-text-muted)]">
+          <div className="flex flex-wrap items-center justify-center gap-x-8 gap-y-3 text-caption sm:text-body font-semibold text-[var(--appearance-text-muted)]">
             <span className="flex items-center gap-2">
-              <ShieldCheck size={16} className="text-status-success" aria-hidden="true" />
+              <ShieldCheck size={ICON_SIZE.ui} className="text-status-success" aria-hidden="true" />
               {lang === 'en' ? 'Vetted Agents Only' : 'Mawakala Waliothibitishwa Pekee'}
             </span>
             <span className="flex items-center gap-2">
-              <Users size={16} className="text-status-success" aria-hidden="true" />
+              <Users size={ICON_SIZE.ui} className="text-status-success" aria-hidden="true" />
               {activeAgentsCount !== null
                 ? (lang === 'en' ? `${activeAgentsCount} Active Agents` : `Wakala ${activeAgentsCount} Hai`)
                 : (lang === 'en' ? 'Growing Agent Network' : 'Mtandao wa Wakala Unaokua')}
             </span>
             <span className="flex items-center gap-2">
-              <CreditCard size={16} className="text-status-success" aria-hidden="true" />
+              <CreditCard size={ICON_SIZE.ui} className="text-status-success" aria-hidden="true" />
               {lang === 'en' ? 'M-Pesa Supported' : 'Inatumia M-Pesa'}
             </span>
             <span className="flex items-center gap-2">
-              <Lock size={16} className="text-status-success" aria-hidden="true" />
+              <Lock size={ICON_SIZE.ui} className="text-status-success" aria-hidden="true" />
               {lang === 'en' ? 'Payment held safely' : 'Pesa inashikiliwa kwa usalama'}
             </span>
           </div>
@@ -453,6 +491,7 @@ export default function HomeView(props: HomeViewProps) {
         <div className="mx-auto max-w-7xl px-5 sm:px-12">
           <SectionHeading
             titleId="discover-heading"
+            titleClassName="text-section"
             eyebrow={lang === 'en' ? 'What can we help recover?' : 'Tunaweza kusaidia nini kurejeshwa?'}
             title={lang === 'en' ? 'Common items people lose' : 'Vitu vinavyopotea sana'}
             description={lang === 'en' ? 'From identification documents and cards to money and vehicle records.' : 'Kutoka kwa hati na kadi hadi pesa na rekodi za magari.'}
@@ -471,8 +510,8 @@ export default function HomeView(props: HomeViewProps) {
                this section keeps ONE presentation for "nothing to show" (and
                the Finder/Owner category selects already state this condition
                too). */
-            <div className="mt-8 rounded-xl border border-[var(--appearance-border)] bg-[var(--appearance-surface)] p-6 text-center">
-              <p className="text-sm text-[var(--appearance-text-muted)]">
+            <div className="mt-8 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface)] p-6 text-center">
+              <p className="text-body text-[var(--appearance-text-muted)]">
                 {lang === 'en'
                   ? 'We could not load the list of item types. Please refresh the page to try again.'
                   : 'Hatukuweza kupakia orodha ya aina za vitu. Tafadhali pakia upya ukurasa.'}
@@ -496,6 +535,8 @@ export default function HomeView(props: HomeViewProps) {
                 <img
                   src="/assets/return4me-earn-and-return.webp"
                   alt={lang === 'en' ? 'A Return4me agent safely returning a found item to its owner' : 'Wakala wa Return4me anarejeshza kilichopatikana kwa mmiliki wake'}
+                  width="1672"
+                  height="941"
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                   loading="lazy"
@@ -506,10 +547,10 @@ export default function HomeView(props: HomeViewProps) {
 
             {/* Content area */}
             <div className="order-1 lg:order-2">
-              <h2 id="earn-heading" className="text-2xl sm:text-3xl font-bold tracking-tight text-[var(--appearance-text-primary)]">
+              <h2 id="earn-heading" className="text-section font-bold tracking-tight text-[var(--appearance-text-primary)]">
                 {lang === 'en' ? 'Found something? Help it find its way home.' : 'Umepeleza saidi? Isaidie njia ya nyumbani.'}
               </h2>
-              <p className="mt-4 text-sm sm:text-base text-[var(--appearance-text-muted)] leading-relaxed">
+              <p className="mt-4 text-body sm:text-body-large text-[var(--appearance-text-muted)] leading-relaxed">
                 {lang === 'en'
                   ? "Every lost item has a story. Every person who finds something has an opportunity to make a difference — and be rewarded for doing the right thing."
                   : "Kila kitu kilichopotea kina hadithi. Kila mtu anayepeleza kitu ana fursa kufanya tofauti — na kutunzwa kwa kufanya kitu sahihi."}
@@ -518,15 +559,19 @@ export default function HomeView(props: HomeViewProps) {
               <div className="mt-8 space-y-6">
                 {/* If you find something */}
                 <div>
-                  <h3 className="text-sm font-semibold text-[var(--appearance-text-primary)] uppercase tracking-wide">
+                  {/* UX-03 — the two core intents are SUB-HEADINGS now (16px bold,
+                      sentence case) instead of 14px upper-case labels, so a
+                      visitor can tell "I found something" from "I lost
+                      something" at a glance. Text unchanged. */}
+                  <h3 className="text-body-large font-bold text-[var(--appearance-text-primary)]">
                     {lang === 'en' ? "If you find something" : "Ikiwa umepeleza kitu"}
                   </h3>
-                  <p className="mt-2 text-sm text-[var(--appearance-text-muted)] leading-relaxed">
+                  <p className="mt-2 text-body text-[var(--appearance-text-muted)] leading-relaxed">
                     {lang === 'en'
                       ? "Found someone's ID, phone, bag, certificate or other belonging? Don't leave it behind. Report it on Return4me and give its owner a chance to get it back."
                       : "Umepeleza kitambulisho, simu, mkoba, cheti au kitu cha mtu? Usiache nyuma. Ripoti kwenye Return4me na umpatie mmiliki wake nia ya kukirejesha."}
                   </p>
-                  <p className="mt-2 text-sm text-[var(--appearance-text-muted)]">
+                  <p className="mt-2 text-body text-[var(--appearance-text-muted)]">
                     {lang === 'en'
                       ? "Successful finders can earn when a reported item is safely returned."
                       : "Watafutaji wanaofaulu wanaweza kutunzwa inapotangazwa kitu kilichorejeshwa salama."}
@@ -541,8 +586,8 @@ export default function HomeView(props: HomeViewProps) {
                         the lost journey is the one this page is built around.
                         CALLER-SIDE ONLY: the shared Button is unmodified, and
                         `Search Found Items` below remains `primary` at /lost. */}
-                    <Button variant="outline" size="lg" onClick={() => setView('finder')} className="min-h-[48px]">
-                      <MapPin size={18} aria-hidden="true" />
+                    <Button variant="outline" size="lg" onClick={() => setView('finder')}>
+                      <MapPin size={ICON_SIZE.emphasis} aria-hidden="true" />
                       {/* BATCH 5 (MF-4) — "Report Something Found" was a private
                           synonym for the destination the Navbar, the four-roles
                           card and the Final CTA all label `t.finderBtn`.
@@ -554,17 +599,17 @@ export default function HomeView(props: HomeViewProps) {
 
                 {/* If you lose something */}
                 <div>
-                  <h3 className="text-sm font-semibold text-[var(--appearance-text-primary)] uppercase tracking-wide">
+                  <h3 className="text-body-large font-bold text-[var(--appearance-text-primary)]">
                     {lang === 'en' ? "If you lose something" : "Ikiwa umepoteza kitu"}
                   </h3>
-                  <p className="mt-2 text-sm text-[var(--appearance-text-muted)] leading-relaxed">
+                  <p className="mt-2 text-body text-[var(--appearance-text-muted)] leading-relaxed">
                     {lang === 'en'
                       ? "Lost something important? Search the items our agents are holding. If yours has been found, you can claim it and collect it in person."
                       : "Umepoteza kitu muhimu? Tafuta vitu vinavyohifadhiwa na mawakala wetu. Kama chako kimepatikana, unaweza kukidai na kukichukua ana kwa ana."}
                   </p>
                   <div className="mt-4">
-                    <Button variant="primary" size="lg" onClick={() => setView('owner')} className="min-h-[48px]">
-                      <Search size={18} aria-hidden="true" />
+                    <Button variant="primary" size="lg" onClick={() => setView('owner')}>
+                      <Search size={ICON_SIZE.emphasis} aria-hidden="true" />
                       {lang === 'en' ? 'Search Found Items' : 'Tafuta Vitu Vilivyopatikana'}
                     </Button>
                   </div>
@@ -573,7 +618,7 @@ export default function HomeView(props: HomeViewProps) {
 
               {/* Closing brand message */}
               <div className="mt-10 pt-6 border-t border-[var(--appearance-border)]">
-                <p className="text-sm text-[var(--appearance-text-primary)] leading-relaxed">
+                <p className="text-body text-[var(--appearance-text-primary)] leading-relaxed">
                   {lang === 'en' ? 'Lost something? Search for it.' : 'Umepoteza kitu? Kitafute.'}
                   <br />
                   {lang === 'en' ? 'Found something? Give it a chance to get home.' : 'Umepeleza kitu? Mpe nia ya kufika nyumbani.'}
@@ -599,20 +644,21 @@ export default function HomeView(props: HomeViewProps) {
         <div className="mx-auto max-w-7xl px-5 sm:px-12">
           <SectionHeading
             titleId="found-items-heading"
+            titleClassName="text-section"
             eyebrow={lang === 'en' ? 'Recently found' : 'Vilivyopatikana hivi karibuni'}
             title={lang === 'en' ? 'Items waiting for owners' : 'Vitu vinavyosubiri wamiliki'}
             description={lang === 'en' ? 'These items have been found and are safely held by verified agents.' : 'Hivi vitu vimepatikana na vimeshikiliwa na wakala waliothibitishwa.'}
           />
            <div className="mt-6 flex flex-wrap gap-3">
              <Button variant="primary" size="md" onClick={() => setView('owner')}>
-               <Search size={16} aria-hidden="true" />
+               <Search size={ICON_SIZE.ui} aria-hidden="true" />
                {lang === 'en' ? 'Browse Found Items' : 'Vinjari Vitu Vilivyopatikana'}
              </Button>
            </div>
           {/* The journey this section actually leads into, stated once and
               truthfully. It promises no ownership, no guaranteed recovery and
               no payment outcome — only what the existing surfaces do. */}
-          <p className="mt-3 text-sm leading-relaxed text-[var(--appearance-text-muted)] max-w-2xl">
+          <p className="mt-3 text-body leading-relaxed text-[var(--appearance-text-muted)] max-w-2xl">
             {lang === 'en'
               ? 'Browse found items → open an item to see its details → select “It’s Mine” to begin a claim.'
               : 'Vinjari vitu vilivyopatikana → fungua kitu kuona maelezo yake → chagua “Ni Yangu” kuanza dai.'}
@@ -623,7 +669,7 @@ export default function HomeView(props: HomeViewProps) {
           <p
             role="status"
             aria-live="polite"
-            className="mt-2 text-xs text-[var(--appearance-text-muted)]"
+            className="mt-2 text-caption text-[var(--appearance-text-muted)]"
           >
             {recentItemsLoading
               ? (lang === 'en' ? 'Loading recently found items…' : 'Inapakia vitu vilivyopatikana hivi karibuni…')
@@ -641,7 +687,7 @@ export default function HomeView(props: HomeViewProps) {
               className="mt-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
             >
               {[1, 2, 3].map((i) => (
-                <div key={i} className="bg-[var(--appearance-surface-muted)]/50 rounded-2xl border border-[var(--appearance-border)] overflow-hidden">
+                <div key={i} className="bg-[var(--appearance-surface-muted)]/50 rounded-panel border border-[var(--appearance-border)] overflow-hidden">
                   <Skeleton shape="rect" className="aspect-[4/3]" />
                   <div className="p-4 space-y-2">
                     <Skeleton shape="text" className="w-3/4 h-4" />
@@ -667,7 +713,7 @@ export default function HomeView(props: HomeViewProps) {
                      control disappears while the retry is in flight. */
                   onRetryRecentItems ? (
                     <Button variant="accent" size="sm" onClick={onRetryRecentItems}>
-                      <RefreshCw size={14} aria-hidden="true" />
+                      <RefreshCw size={ICON_SIZE.metadata} aria-hidden="true" />
                       {lang === 'en' ? 'Try Again' : 'Jaribu Tena'}
                     </Button>
                   ) : undefined
@@ -682,7 +728,7 @@ export default function HomeView(props: HomeViewProps) {
                 description={lang === 'en' ? 'Check back soon — new items are added regularly.' : 'Rudi hivi karibuni — vitu vipya vinaongezwa mara kwa mara.'}
                 action={
                   <Button variant="accent" size="sm" onClick={() => setView('finder')}>
-                    <MapPin size={14} aria-hidden="true" />
+                    <MapPin size={ICON_SIZE.metadata} aria-hidden="true" />
                     {lang === 'en' ? 'Report a Found Item' : 'Ripoti Kitu Kilichopatikana'}
                   </Button>
                 }
@@ -705,7 +751,7 @@ export default function HomeView(props: HomeViewProps) {
                     key={item.id}
                     whileHover={{ y: -4 }}
                     whileTap={{ scale: 0.98 }}
-                    className="group relative bg-[var(--appearance-surface)] rounded-2xl border border-[var(--appearance-border)] overflow-hidden transition-all hover:shadow-lg focus-within:ring-2 focus-within:ring-accent-orange motion-reduce:transition-none"
+                    className="group relative flex h-full flex-col bg-[var(--appearance-surface)] rounded-panel border border-[var(--appearance-border)] overflow-hidden transition-shadow hover:shadow-floating motion-reduce:transition-none"
                   >
                     {/* The whole card is one real link to the public item page
                         (/item/:id). The id — never a description or an array
@@ -719,7 +765,11 @@ export default function HomeView(props: HomeViewProps) {
                         e.preventDefault();
                         onOpenItem(item.id);
                       }}
-                      className="block h-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange rounded-2xl"
+                      /* UX-03 — no local focus ring and no ring on the group:
+                         the keyboard indicator is the single global
+                         :focus-visible rule, and the card's own radius is what
+                         the outline follows. */
+                      className="block h-full rounded-panel"
                       aria-label={lang === 'en'
                         ? `Open found item details: ${getCategoryName(item.category_id)}`
                         : `Fungua maelezo ya bidhaa iliyopatikana: ${getCategoryName(item.category_id)}`}
@@ -738,39 +788,59 @@ export default function HomeView(props: HomeViewProps) {
                         />
                       ) : (
                         <div className="absolute inset-0 flex flex-col items-center justify-center text-[var(--appearance-text-muted)] bg-[var(--appearance-surface-muted)]">
-                          <Lock size={28} aria-hidden="true" className="mb-2" />
-                          <span className="text-xs font-bold">
+                          <Lock size={ICON_SIZE.feature} aria-hidden="true" className="mb-2" />
+                          <span className="text-caption font-bold">
                             {isSensitive
                               ? (lang === 'en' ? 'Photo hidden for privacy' : 'Picha imefichwa kwa faragha')
                               : (lang === 'en' ? 'No photo available' : 'Hakuna picha')}
                           </span>
                         </div>
                       )}
-                      {/* Status badge */}
-                      <div className="absolute top-3 left-3">
-                        <Badge variant={statusVariant} icon={item.status === 'claimed' ? Lock : item.status === 'at_agent' ? ShieldCheck : Package}>
-                          {statusText}
-                        </Badge>
-                      </div>
+                      {/* Status badge — only when the item is in a lifecycle
+                          state that says something the section title does not.
+                          Every card here is already an item that was FOUND and
+                          is being held (the section and the eyebrow both say
+                          so), so a "Found" badge on every card was repetition,
+                          not information. The two states that ARE news keep
+                          their semantic badge, icon and text (never colour
+                          alone). */}
+                      {item.status === 'claimed' || item.status === 'at_agent' ? (
+                        <div className="absolute top-3 left-3">
+                          <Badge variant={statusVariant} icon={item.status === 'claimed' ? Lock : ShieldCheck}>
+                            {statusText}
+                          </Badge>
+                        </div>
+                      ) : null}
                       {/* Hover action hint */}
                       <div className="absolute inset-0 bg-primary-green/0 group-hover:bg-primary-green/5 transition-colors duration-300" />
                     </div>
                     
                     {/* Content */}
-                    <div className="p-4 flex-1 flex flex-col">
-                      <h3 className="text-sm font-semibold text-[var(--appearance-text-primary)] truncate">
+                    <div className="p-4 flex flex-1 flex-col">
+                      <h3 className="text-body-large font-semibold text-[var(--appearance-text-primary)] truncate">
                         {getCategoryName(item.category_id)}
                       </h3>
-                      <p className="text-xs text-[var(--appearance-text-muted)] mt-1 line-clamp-2 flex-1">
+                      <p className="mt-1 text-small text-[var(--appearance-text-muted)] leading-relaxed line-clamp-2">
                         {isSensitive
                           ? (lang === 'en' ? 'Details hidden for privacy' : 'Maelezo yamefichwa kwa faragha')
-                          : (item.description || item.location_description || (lang === 'en' ? 'No description available' : 'Hakuna maelezo'))}
+                          : (item.description || (lang === 'en' ? 'No description available' : 'Hakuna maelezo'))}
                       </p>
+                      {/* Where it was found. Real data only: the row renders
+                          when the public item payload already carries a
+                          location description, and it never exposes a
+                          coordinate or any other private field. */}
+                      {!isSensitive && item.location_description ? (
+                        <p className="mt-2 flex items-center gap-2 text-caption text-[var(--appearance-text-muted)]">
+                          <MapPin size={ICON_SIZE.metadata} aria-hidden="true" className="shrink-0" />
+                          <span className="truncate">{item.location_description}</span>
+                        </p>
+                      ) : null}
+                      <div className="mt-3 flex-1" />
                       <div className="mt-3 pt-3 border-t border-[var(--appearance-border)] flex items-center justify-between">
-                        <span className="text-xs text-[var(--appearance-text-muted)]">
+                        <span className="text-caption text-[var(--appearance-text-muted)]">
                           {new Date(item.created_at).toLocaleDateString(lang === 'en' ? 'en-US' : 'sw-KE', { month: 'short', day: 'numeric', year: 'numeric' })}
                         </span>
-                        <span className="text-xs font-mono text-[var(--appearance-text-primary)] bg-[var(--appearance-surface-muted)] px-2 py-1 rounded">
+                        <span className="text-caption font-mono text-[var(--appearance-text-primary)] bg-[var(--appearance-surface-muted)] px-2 py-1 rounded-compact">
                           {item.id.substring(0, 8).toUpperCase()}
                         </span>
                       </div>
@@ -797,7 +867,7 @@ export default function HomeView(props: HomeViewProps) {
         <div className="mx-auto max-w-7xl px-5 sm:px-12">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-14 items-center">
             {/* Image left — the physical handover */}
-            <div className="relative order-1 overflow-hidden rounded-3xl shadow-lg">
+            <div className="relative order-1 overflow-hidden rounded-hero shadow-floating">
               <img
                 src="/assets/return4me-agent-handover-1024w.webp"
                 srcSet="/assets/return4me-agent-handover-430w.webp 430w, /assets/return4me-agent-handover-768w.webp 768w, /assets/return4me-agent-handover-1024w.webp 1024w, /assets/return4me-agent-handover-1440w.webp 1440w"
@@ -814,6 +884,7 @@ export default function HomeView(props: HomeViewProps) {
             <div className="order-2">
               <SectionHeading
                 titleId="how-heading"
+                titleClassName="text-section"
                 eyebrow={lang === 'en' ? 'How it works' : 'Inavyofanya kazi'}
                 title={lang === 'en' ? 'Four simple steps' : 'Hatua nne rahisi'}
                 description={lang === 'en' ? 'From report to recovery — we handle the hard parts.' : 'Kutoka ripoti hadi urejeshaji — tunashughulikia magumu.'}
@@ -821,12 +892,18 @@ export default function HomeView(props: HomeViewProps) {
               <ol className="mt-6 space-y-5">
                 {steps.map((step, i) => (
                   <li key={i} className="flex items-start gap-4">
-                    <span className="w-7 h-7 rounded-full bg-accent-orange text-white text-xs font-extrabold flex items-center justify-center shrink-0">
+                    {/* UX-03 — the step number was white on the brand ORANGE,
+                        which measures 2.78:1 (below AA for any text size) and
+                        was the only place on the page where orange carried a
+                        label. It is now the semantic primary pair: the deep
+                        brand green with its own foreground in the light theme,
+                        and the light green with dark ink in the dark theme. */}
+                    <span className="w-8 h-8 rounded-full bg-[var(--appearance-primary)] text-[var(--appearance-primary-foreground)] text-caption font-extrabold flex items-center justify-center shrink-0">
                       {i + 1}
                     </span>
                     <div>
-                      <p className="text-sm font-semibold text-[var(--appearance-text-primary)]">{step.title}</p>
-                      <p className="text-xs text-[var(--appearance-text-muted)] mt-1 leading-relaxed">{step.desc}</p>
+                      <p className="text-body font-semibold text-[var(--appearance-text-primary)]">{step.title}</p>
+                      <p className="mt-1 text-small text-[var(--appearance-text-muted)] leading-relaxed">{step.desc}</p>
                     </div>
                   </li>
                 ))}
@@ -847,13 +924,14 @@ export default function HomeView(props: HomeViewProps) {
             <div>
               <SectionHeading
                 titleId="platform-heading"
+                titleClassName="text-section"
                 eyebrow={lang === 'en' ? 'Digital platform' : 'Jukwaa la kidijitali'}
                 title={lang === 'en' ? 'Everything starts with a report.' : 'Yote huanza na ripoti.'}
                 description={lang === 'en'
                   ? 'From your phone you can start and manage the return journey — no offices to visit, no forms to post.'
                   : 'Kutoka kwenye simu yako unaweza kuanza na kusimamia safari ya urejeshaji — hakuna ofisi za kuenda, hakuna fomu za kutuma.'}
               />
-              <ul className="mt-6 space-y-3 text-sm font-semibold text-[var(--appearance-text-primary)]">
+              <ul className="mt-6 space-y-3 text-body font-semibold text-[var(--appearance-text-primary)]">
           {[
             lang === 'en' ? 'Search items agents are holding' : 'Tafuta vitu vilivyo kwa mawakala',
             lang === 'en' ? 'Report a found item' : 'Ripoti kitu kilichopatikana',
@@ -861,8 +939,8 @@ export default function HomeView(props: HomeViewProps) {
             lang === 'en' ? 'Track a claim you have started' : 'Fuatilia daima uliyoianzisha',
             lang === 'en' ? 'Connect with a vetted agent for the handover' : 'Ungana na wakala aliyeidhinishwa kwa uwasilishaji',
           ].map((ft) => (
-            <li key={ft} className="flex items-center gap-2.5">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-accent-orange shrink-0" aria-hidden="true" />
+            <li key={ft} className="flex items-center gap-3">
+              <span className="inline-block h-2 w-2 rounded-full bg-accent-orange shrink-0" aria-hidden="true" />
               {ft}
             </li>
           ))}
@@ -870,7 +948,7 @@ export default function HomeView(props: HomeViewProps) {
       </div>
       {/* Image right — the app/platform experience */}
       <div className="relative">
-        <div className="overflow-hidden rounded-3xl shadow-lg">
+        <div className="overflow-hidden rounded-hero shadow-floating">
           <img
             src="/assets/return4me-app-user-nairobi-1024w.webp"
             srcSet="/assets/return4me-app-user-nairobi-430w.webp 430w, /assets/return4me-app-user-nairobi-768w.webp 768w, /assets/return4me-app-user-nairobi-1024w.webp 1024w, /assets/return4me-app-user-nairobi-1440w.webp 1440w"
@@ -893,7 +971,7 @@ export default function HomeView(props: HomeViewProps) {
         <div className="mx-auto max-w-7xl px-5 sm:px-12">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-14 items-center">
             {/* Image left — the human outcome */}
-            <div className="relative overflow-hidden rounded-3xl shadow-lg">
+            <div className="relative overflow-hidden rounded-hero shadow-floating">
               <img
                 src="/assets/return4me-successful-return-1024w.webp"
                 srcSet="/assets/return4me-successful-return-430w.webp 430w, /assets/return4me-successful-return-768w.webp 768w, /assets/return4me-successful-return-1024w.webp 1024w, /assets/return4me-successful-return-1440w.webp 1440w"
@@ -911,10 +989,10 @@ export default function HomeView(props: HomeViewProps) {
               <div className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)] mb-3">
                 {lang === 'en' ? 'Successful returns' : 'Urejeshaji uliofanikiwa'}
               </div>
-              <h2 id="returns-heading" className="text-2xl sm:text-3xl font-bold tracking-tight text-[var(--appearance-text-primary)]">
+              <h2 id="returns-heading" className="text-section font-bold tracking-tight text-[var(--appearance-text-primary)]">
                 {lang === 'en' ? 'Because getting something back matters.' : 'Kwa sababu kupata kitu kinarejeshwa ni muhimu.'}
               </h2>
-              <p className="mt-4 text-sm sm:text-base text-[var(--appearance-text-muted)] leading-relaxed max-w-xl">
+              <p className="mt-4 text-body sm:text-body-large text-[var(--appearance-text-muted)] leading-relaxed max-w-xl">
                 {lang === 'en'
                   ? 'Every lost item has a person behind it. Return4me exists to make the journey back possible — safely, transparently and with real people nearby.'
                   : 'Kila kitu kilichopotea kina mtu nyuma yake. Return4me ipo kurahisisha safari ya kurudi — kwa usalama, kwa uwazi na kwa watu halisi wa karibu.'}
@@ -945,14 +1023,14 @@ export default function HomeView(props: HomeViewProps) {
           />
 
           <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-5">
-            <div className="border border-[var(--appearance-border)] rounded-xl bg-[var(--appearance-surface)] p-6">
-              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary-green/10">
-                <Search size={20} className="text-[var(--appearance-text-primary)]" aria-hidden="true" />
+            <div className="border border-[var(--appearance-border)] rounded-panel bg-[var(--appearance-surface)] p-6">
+              <span className="flex h-10 w-10 items-center justify-center rounded-small bg-primary-green/10">
+                <Search size={ICON_SIZE.heading} className="text-[var(--appearance-text-primary)]" aria-hidden="true" />
               </span>
-              <h3 className="mt-4 text-base font-bold text-[var(--appearance-text-primary)]">
+              <h3 className="mt-4 text-body-large font-bold text-[var(--appearance-text-primary)]">
                 {lang === 'en' ? 'Lost something?' : 'Umepoteza kitu?'}
               </h3>
-              <p className="mt-2 text-sm text-[var(--appearance-text-muted)] leading-relaxed">
+              <p className="mt-2 text-body text-[var(--appearance-text-muted)] leading-relaxed">
                 {lang === 'en'
                   ? 'Describe what you lost, where you last had it and the details that make it identifiable. Found items reported to Return4me are searchable, so your description can help you recognise your own property.'
                   : 'Eleza ulichopoteza, mahali ulipokuwa mwisho na maelezo yanayokifanya kitambulike. Vitu vilivyopatikana Return4me vinatafutwa, hivyo maelezo yako yanaweza kukusaidia kutambua mali yako.'}
@@ -962,14 +1040,14 @@ export default function HomeView(props: HomeViewProps) {
               </Button>
             </div>
 
-            <div className="border border-[var(--appearance-border)] rounded-xl bg-[var(--appearance-surface)] p-6">
-              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary-green/10">
-                <MapPin size={20} className="text-[var(--appearance-text-primary)]" aria-hidden="true" />
+            <div className="border border-[var(--appearance-border)] rounded-panel bg-[var(--appearance-surface)] p-6">
+              <span className="flex h-10 w-10 items-center justify-center rounded-small bg-primary-green/10">
+                <MapPin size={ICON_SIZE.heading} className="text-[var(--appearance-text-primary)]" aria-hidden="true" />
               </span>
-              <h3 className="mt-4 text-base font-bold text-[var(--appearance-text-primary)]">
+              <h3 className="mt-4 text-body-large font-bold text-[var(--appearance-text-primary)]">
                 {lang === 'en' ? 'Found something?' : 'Umepata kitu?'}
               </h3>
-              <p className="mt-2 text-sm text-[var(--appearance-text-muted)] leading-relaxed">
+              <p className="mt-2 text-body text-[var(--appearance-text-muted)] leading-relaxed">
                 {lang === 'en'
                   ? 'Report what you found and where. The item is held with a vetted agent and the owner is verified before any handover. Where the platform rules provide for it, the finder receives a recovery appreciation share for a verified return.'
                   : 'Ripoti ulichokipata na mahali. Kitu huhifadhiwa kwa wakala aliyethibitishwa na mmiliki huthibitishwa kabla ya urejeshaji. Pale kanuni za jukwaa zinavyoruhusu, mpata hupokea sehemu ya shukrani kwa urejeshaji uliothibitishwa.'}
@@ -984,14 +1062,14 @@ export default function HomeView(props: HomeViewProps) {
               </Button>
             </div>
 
-            <div className="border border-[var(--appearance-border)] rounded-xl bg-[var(--appearance-surface)] p-6">
-              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary-green/10">
-                <Users size={20} className="text-[var(--appearance-text-primary)]" aria-hidden="true" />
+            <div className="border border-[var(--appearance-border)] rounded-panel bg-[var(--appearance-surface)] p-6">
+              <span className="flex h-10 w-10 items-center justify-center rounded-small bg-primary-green/10">
+                <Users size={ICON_SIZE.heading} className="text-[var(--appearance-text-primary)]" aria-hidden="true" />
               </span>
-              <h3 className="mt-4 text-base font-bold text-[var(--appearance-text-primary)]">
+              <h3 className="mt-4 text-body-large font-bold text-[var(--appearance-text-primary)]">
                 {lang === 'en' ? 'Become an Agent' : 'Kuwa Wakala'}
               </h3>
-              <p className="mt-2 text-sm text-[var(--appearance-text-muted)] leading-relaxed">
+              <p className="mt-2 text-body text-[var(--appearance-text-muted)] leading-relaxed">
                 {lang === 'en'
                   ? 'Agents receive found items, confirm them, and complete verified physical handovers in their own area. Agents earn a share of the recovery fee on the recoveries they actually complete, under the platform rules.'
                   : 'Mawakala hupokea vitu vilivyopatikana, huhakikisha, na hukamilisha urejeshaji uliothibitishwa katika eneo lao. Mawakala hupata sehemu ya ada ya urejeshaji kwa urejeshaji wanaokamilisha, kwa mujibu wa kanuni za jukwaa.'}
@@ -1006,14 +1084,14 @@ export default function HomeView(props: HomeViewProps) {
               </Button>
             </div>
 
-            <div className="border border-[var(--appearance-border)] rounded-xl bg-[var(--appearance-surface)] p-6">
-              <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary-green/10">
-                <Store size={20} className="text-[var(--appearance-text-primary)]" aria-hidden="true" />
+            <div className="border border-[var(--appearance-border)] rounded-panel bg-[var(--appearance-surface)] p-6">
+              <span className="flex h-10 w-10 items-center justify-center rounded-small bg-primary-green/10">
+                <Store size={ICON_SIZE.heading} className="text-[var(--appearance-text-primary)]" aria-hidden="true" />
               </span>
-              <h3 className="mt-4 text-base font-bold text-[var(--appearance-text-primary)]">
+              <h3 className="mt-4 text-body-large font-bold text-[var(--appearance-text-primary)]">
                 {lang === 'en' ? 'Businesses, venues & communities' : 'Biashara, maeneo na jamii'}
               </h3>
-              <p className="mt-2 text-sm text-[var(--appearance-text-muted)] leading-relaxed">
+              <p className="mt-2 text-body text-[var(--appearance-text-muted)] leading-relaxed">
                 {lang === 'en'
                   ? 'Offices, malls, campuses, matatu SACCOs and places of worship are where lost property actually accumulates. Registering the venue as an Agent lets items be handed over through the same verified process instead of being held indefinitely.'
                   : 'Ofisi, maduka makubwa, vyuo, SACCO za matatu na nyumba za ibada ndiko mali zilizopotea hukusanyika. Kusajili eneo kama Wakala huruhusu vitu kuwasilishwa kwa mchakato huo uliothibitishwa badala ya kuhifadhiwa bila kikomo.'}
@@ -1029,21 +1107,24 @@ export default function HomeView(props: HomeViewProps) {
       {/* ───────── FINAL CTA ───────── */}
       <section aria-labelledby="final-cta-heading" className="bg-primary-green py-14 sm:py-20">
         <div className="mx-auto max-w-3xl px-5 sm:px-12 text-center">
-          <h2 id="final-cta-heading" className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
+          <h2 id="final-cta-heading" className="text-section font-bold tracking-tight text-white">
             {lang === 'en' ? 'Ready to get started?' : 'Tayari kuanza?'}
           </h2>
-          <p className="mt-3 text-sm sm:text-base text-white/80 max-w-xl mx-auto">
+          <p className="mt-3 text-body sm:text-body-large text-white/80 max-w-xl mx-auto">
             {lang === 'en'
               ? 'Whether you lost something or found something, we\'re here to help.'
               : 'Iwe umepoteza kitu au umepata kitu, tuko hapa kukusaidia.'}
           </p>
+          {/* The band and this white-filled inverse button are the documented
+              FIXED brand-green pairing (Batch 3): they are the brand in both
+              themes and must not follow data-theme. */}
           <div className="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
-            <Button variant="secondary" size="lg" onClick={() => setView('owner')} className="min-h-[48px] bg-white hover:bg-brand-light-gray text-primary-green border-white">
-              <Search size={18} aria-hidden="true" />
+            <Button variant="secondary" size="lg" onClick={() => setView('owner')} className="bg-white hover:bg-brand-light-gray text-primary-green border-white">
+              <Search size={ICON_SIZE.emphasis} aria-hidden="true" />
               {t.ownerBtn}
             </Button>
-            <Button variant="inverse" size="lg" onClick={() => setView('finder')} className="min-h-[48px]">
-              <MapPin size={18} aria-hidden="true" />
+            <Button variant="inverse" size="lg" onClick={() => setView('finder')}>
+              <MapPin size={ICON_SIZE.emphasis} aria-hidden="true" />
               {t.finderBtn}
             </Button>
           </div>
