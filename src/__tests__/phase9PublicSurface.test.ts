@@ -14,6 +14,11 @@ const repoRoot = path.resolve(import.meta.dirname, '..', '..');
 const read = (rel: string) => fs.readFileSync(path.resolve(repoRoot, rel), 'utf8');
 const homeView = read('src/components/HomeView.tsx');
 const navbar = read('src/components/Navbar.tsx');
+// UX-02: the component deliberately documents the control it replaced, so every
+// "must not be present any more" assertion runs against the comment-stripped
+// source (the repository's established technique) and can never be satisfied by
+// prose.
+const navbarCode = navbar.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ');
 const indexCss = read('src/index.css');
 const explorer = read('src/components/home/CategoryExplorer.tsx');
 const taxonomy = read('src/config/categoryTaxonomy.ts');
@@ -120,17 +125,29 @@ describe('Request 06 — category explorer over the real category list', () => {
 });
 
 describe('Request 13 — Sign In is a distinct control, not a nav link', () => {
-  it('is rendered as an outlined, 44px-tall control with its own class', () => {
-    expect(navbar).toContain('signInButtonClass');
-    expect(navbar).toMatch(/const signInButtonClass =[\s\S]{0,300}min-h-\[44px\]/);
-    expect(navbar).toMatch(/const signInButtonClass =[\s\S]{0,400}border border-\[var\(--appearance-border-strong\)\]/);
+  it('is rendered with the shared Button primitive, not with a nav-link class', () => {
+    // UX-02: the hand-rolled `signInButtonClass` (its own 44px height, 13px type
+    // step, border and focus stack) is gone for good — Sign In is now the shared
+    // Button at `size="md"` (44px / text-body / rounded-standard). "A distinct
+    // control, not a nav link" is expressed by the ONE button vocabulary now
+    // instead of by a second local class, which is what UX-02 §15 requires.
+    expect(navbarCode).toContain("import Button from './ui/Button'");
+    expect(navbarCode).not.toContain('signInButtonClass');
+    const signInButton = navbarCode.slice(navbarCode.indexOf('<Button'), navbarCode.indexOf('</Button>'));
+    expect(signInButton).toContain('size="md"');
+    expect(signInButton).toContain('variant="primary"');
+    // The 44px floor lives in the primitive, not in a local literal.
+    expect(read('src/components/ui/Button.tsx')).toContain("md: 'h-11 px-5 text-body");
   });
 
   it('keeps readable text in every state (no white-on-light, no gradients)', () => {
-    const classBlock = navbar.slice(navbar.indexOf('const signInButtonClass'), navbar.indexOf('const accountLinkClass'));
-    expect(classBlock).not.toMatch(/text-white/);
-    expect(classBlock).not.toMatch(/gradient/);
-    expect(classBlock).toContain('text-primary-green hover:border-primary-green hover:bg-primary-green/10');
+    // The control no longer sets a text colour by hand at all: the foreground is
+    // the variant's (brand-green surface + its own foreground, ~12:1 in the light
+    // theme), so the "white-on-light" defect class cannot return here.
+    const signInButton = navbarCode.slice(navbarCode.indexOf('<Button'), navbarCode.indexOf('</Button>'));
+    expect(signInButton).toContain('variant="primary"');
+    expect(signInButton).not.toMatch(/text-(white|primary-green)|gradient|from-|to-/);
+    expect(read('src/components/ui/Button.tsx')).toContain('bg-primary-green hover:bg-primary-hover text-white');
   });
 
   it('stays reachable and announced', () => {

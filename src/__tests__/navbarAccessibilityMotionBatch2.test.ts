@@ -32,7 +32,7 @@ describe('NAVBAR BATCH 2 - accessibility + motion polish', () => {
   });
 
   it('keeps the logo on the Home destination with its accessible name', () => {
-    const start = code.indexOf('className="shrink-0 flex items-center rounded-lg');
+    const start = code.indexOf('className="shrink-0 flex items-center rounded-small');
     expect(start).toBeGreaterThan(-1);
     const logo = code.slice(start - 120, code.indexOf('</button>', start));
     expect(logo).toContain("handleNavClick('home')");
@@ -40,7 +40,7 @@ describe('NAVBAR BATCH 2 - accessibility + motion polish', () => {
   });
 
   it('drops the manual tabIndex and keydown emulation it no longer needs', () => {
-    const start = code.indexOf('className="shrink-0 flex items-center rounded-lg');
+    const start = code.indexOf('className="shrink-0 flex items-center rounded-small');
     const logo = code.slice(start - 120, code.indexOf('</button>', start));
     // Native buttons are focusable and activate on Enter/Space already.
     expect(logo).not.toContain('tabIndex');
@@ -65,7 +65,11 @@ describe('NAVBAR BATCH 2 - accessibility + motion polish', () => {
   });
 
   it('keeps the five-item public IA and still gates the admin item', () => {
-    const nav = code.slice(code.indexOf('<nav className="hidden lg:flex'), code.indexOf('</nav>'));
+    // UX-02: the desktop link group is `hidden xl:flex` now (the full row moved
+    // to the width where it fits the page grid); the group's CONTENTS — the four
+    // public destinations plus the session-gated admin item — are what this
+    // assertion protects and they are unchanged.
+    const nav = code.slice(code.indexOf('<nav className="hidden xl:flex'), code.indexOf('</nav>'));
     expect(nav).toContain("handleNavClick('home')");
     expect(nav).toContain("handleNavClick('owner')");
     expect(nav).toContain("handleNavClick('finder')");
@@ -123,7 +127,9 @@ describe('NAVBAR BATCH 2 - accessibility + motion polish', () => {
     expect(drawer).toContain('onClick={() => setIsOpen(false)}');
     expect(drawer).toContain('AnimatePresence');
     expect(drawer).toContain("initial={{ x: '100%' }}");
-    expect(drawer).toContain('lg:hidden');
+    // UX-02: the drawer/scrim pair is `xl:hidden` now, matching the compact
+    // header it belongs to (see navbarControlVisibilityBatch1's paired gate).
+    expect(drawer).toContain('xl:hidden');
     expect(code).toContain('setIsOpen(true)');
   });
 

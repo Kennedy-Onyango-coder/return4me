@@ -181,20 +181,18 @@ describe('design foundation (Phase 8.1)', () => {
 
 describe('accessibility + addressability of the new public screens (Phase 8.1)', () => {
   it('keeps desktop navigation text-led and keeps utility controls reachable at every desktop width', () => {
-    expect(navbarTsx).toContain('hidden lg:flex min-w-0 flex-1 items-center justify-center');
-    // BATCH 1 (navbar): the utility tray was pinned to `hidden xl:flex`, which
-    // combined with the `lg:hidden` compact header to leave 1024-1279px with a
-    // full desktop navbar and NO reachable language/appearance/session control.
-    // The tray now starts at `lg`; `xl` remains only a sizing refinement.
-    //
-    // SPACING REMEDIATION: the row was measured overflowing its own nav box at
-    // 1024px (`Home` rendered 89px INSIDE the logo). The tray's inner spacing
-    // was reduced `gap-1.5` -> `gap-1` and `p-1` -> `px-1.5 py-0.5` as part of
-    // making the whole row fit. The `lg` breakpoint and the tray's role as the
-    // always-reachable utility group are UNCHANGED — only the space around the
-    // controls inside it.
-    expect(navbarTsx).toContain('hidden lg:flex shrink-0 items-center gap-1 rounded-xl border');
-    expect(navbarTsx).not.toContain('hidden xl:flex');
+    // UX-02 moved the full desktop row from `lg` to `xl`: the header now shares
+    // the public page container (`max-w-7xl px-5 sm:px-12`, the same grid the
+    // public views use), and at 1024px that grid leaves 928px for a row that
+    // measures ~1000px at the smallest legible ladder step. The contract is
+    // unchanged — the desktop row is text-led, and the utility controls are
+    // reachable at EVERY width — because the compact header and the tray are
+    // gated at the SAME breakpoint, which is what the pair below pins.
+    expect(navbarTsx).toContain('hidden xl:flex min-w-0 flex-1 items-center justify-center');
+    expect(navbarTsx).toContain('flex xl:hidden items-center gap-1');
+    // BATCH 1's blackout came from two DIFFERENT gates (`hidden xl:flex` there,
+    // `lg:hidden` here); a gate wider than the fallback blacks out 1280-1535px.
+    expect(navbarTsx).not.toContain('hidden 2xl:flex');
     expect(navbarTsx).toContain('whitespace-nowrap');
     expect(navbarTsx).toContain('h-10 md:h-12 xl:h-[50px]');
     expect(navbarTsx).toContain('bg-[var(--appearance-surface)]');
@@ -208,7 +206,13 @@ describe('accessibility + addressability of the new public screens (Phase 8.1)',
     for (const button of buttons) {
       expect(button).toContain('type="button"');
       expect(button).toContain('min-h-[44px]');
-      expect(button).toContain('focus-visible:ring-2');
+      // UX-02 removed the tab bar's own `focus-visible:ring-2` + `outline-none`:
+      // it was the duplicated indicator PI-1/C5 (focusContract.test.ts) deleted
+      // from the shared primitives, stacked on the global :focus-visible rule.
+      // The keyboard indicator is therefore asserted as "not suppressed", which
+      // is the stronger of the two contracts.
+      expect(button).not.toContain('outline-none');
+      expect(button).not.toContain('focus-visible:ring');
     }
   });
 

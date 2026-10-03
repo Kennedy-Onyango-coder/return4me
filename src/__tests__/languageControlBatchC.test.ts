@@ -55,9 +55,15 @@ describe('Batch C authenticated language-control consistency', () => {
     expect(control).toContain("type=\"button\"");
     expect(control).toContain("size=\"md\"");
     expect(control).toContain('min-h-[44px]');
-    expect(control).toContain('focus-visible:ring-2');
-    expect(control).toContain('focus-visible:ring-white');
-    expect(control).toContain('focus-visible:ring-primary-green');
+    // UX-02: the local ring (`focus-visible:ring-2`, plus the hand-written white
+    // and brand-green variants that encoded the two surfaces) is GONE. The single
+    // global `:focus-visible` rule is the indicator, and it already repaints
+    // itself white inside `.bg-primary-green` — which is exactly the inverse
+    // (authenticated shell) case. Asserting "no local treatment at all" is the
+    // stronger contract, and it is the one PI-1/C5 applies to every shared
+    // primitive, so the control now matches them.
+    expect(controlCode).not.toMatch(/focus(-visible)?:(outline-none|ring)/);
+    expect(read('src/index.css')).toContain('.bg-primary-green :focus-visible');
     expect(control).toContain('<Globe size={16} aria-hidden="true" />');
   });
 

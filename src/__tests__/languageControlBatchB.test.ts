@@ -43,7 +43,13 @@ describe('Batch B public language-control consolidation', () => {
     expect((controlCode.match(/type="button"/g) || [])).toHaveLength(1);
     expect(controlCode).toContain("import Button from './ui/Button'");
     expect(read('src/components/ui/Button.tsx')).toContain("type = 'button'");
-    expect((controlCode.match(/focus-visible:ring-2/g) || []).length).toBeGreaterThanOrEqual(2);
+    // UX-02: the control no longer carries a LOCAL ring (`focus-visible:ring-2`
+    // + `outline-none`), which duplicated the global :focus-visible indicator
+    // (PI-1/C5, focusContract.test.ts). "Visible focus" is therefore asserted as
+    // the single global rule plus the absence of any local suppression — the
+    // same contract the shared primitives already meet.
+    expect(stripComments(controlCode)).not.toMatch(/focus(-visible)?:(outline-none|ring)/);
+    expect(read('src/index.css')).toContain('outline: 2px solid var(--color-accent-orange)');
     expect(controlCode).toContain('min-h-[44px]');
     expect(controlCode).toContain("size=\"md\"");
   });

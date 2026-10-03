@@ -19,44 +19,55 @@ const NAVBAR = read('components/Navbar.tsx');
 const code = NAVBAR.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
 
 describe('NAVBAR BATCH 1 - language + appearance control visibility', () => {
-  // ------------------------------------------------- the 1024-1279px blackout
-  it('never gates the utility tray at xl only', () => {
-    // The tray wrapper must start at `lg`. `hidden xl:flex` is the exact
-    // regression this batch reverses.
-    expect(code).not.toMatch(/hidden xl:flex/);
-    expect(code).toMatch(/hidden lg:flex[^"]*surface-muted/);
+  // ------------------------------------------------- the unreachable-control band
+  //
+  // UX-02 (public navigation + global chrome) moved the full desktop row from
+  // `lg` to `xl`: the header now shares the public page container
+  // (`max-w-7xl px-5 sm:px-12`), and at 1024px that leaves 928px for a row that
+  // measures ~1000px at the smallest legible ladder step.
+  //
+  // The CONTRACT this batch protects is unchanged and is still asserted — no
+  // width may lose its language / appearance / session controls — but the two
+  // gates it depends on are now `xl` on BOTH sides, so the assertions below pin
+  // the PAIR instead of the old `lg`-vs-`xl` split.
+  it('gates the utility tray where the compact fallback hands over', () => {
+    // `hidden xl:flex` on the tray and `xl:hidden` on the compact header, which
+    // carries the SAME two controls: the tray is never their only home.
+    expect(code).toMatch(/hidden xl:flex[^"]*surface-muted/);
+    // A gate wider than the fallback (`2xl`) would black out 1280-1535px.
+    expect(code).not.toMatch(/hidden 2xl:flex/);
+    // ...and no desktop-only group may be left behind at `lg` or below.
+    expect(code).not.toMatch(/hidden lg:flex/);
+    expect(code).not.toMatch(/hidden md:flex/);
   });
 
-  it('never gates the session block at xl only', () => {
-    expect(code).not.toMatch(/hidden xl:flex/);
+  it('gates the session block with the tray, never wider', () => {
     // The session block sits beside the tray and must share its breakpoint.
-    // SPACING REMEDIATION: the divider padding was reduced `pl-3` -> `pl-2`
-    // to return width to the overflowing row. The breakpoint contract this
-    // test protects — that the session block is never `xl`-only — is unchanged.
-    const session = code.match(/hidden lg:flex[^"]*border-l[^"]*pl-2/);
+    // (The divider padding is still the reduced `pl-2` from the earlier spacing
+    // pass; only the breakpoint moved.)
+    const session = code.match(/hidden xl:flex[^"]*border-l[^"]*pl-2/);
     expect(session).not.toBeNull();
+    expect(code).not.toMatch(/hidden 2xl:flex/);
   });
 
-  it('keeps the compact header as the sub-lg fallback', () => {
-    // If this ever became `xl:hidden` the two implementations would not
-    // overlap and the controls would vanish at every width.
-    // SPACING REMEDIATION: `gap-2` -> `gap-1` (the row overflowed a 375px
-    // viewport). The `lg:hidden` fallback contract is unchanged.
-    expect(code).toMatch(/flex lg:hidden items-center gap-1/);
+  it('keeps the compact header as the sub-xl fallback', () => {
+    // If this ever became `2xl:hidden` the two implementations would not
+    // overlap and the controls would vanish at every width in between.
+    expect(code).toMatch(/flex xl:hidden items-center gap-1/);
   });
 
-  it('keeps the desktop nav and drawer breakpoints unchanged', () => {
-    expect(code).toMatch(/hidden lg:flex min-w-0 flex-1 items-center justify-center/); // nav
-    expect(code).toMatch(/lg:hidden/);                                                  // drawer + scrim
+  it('keeps the desktop nav and the drawer on the same breakpoint', () => {
+    expect(code).toMatch(/hidden xl:flex min-w-0 flex-1 items-center justify-center/); // nav
+    expect(code).toMatch(/xl:hidden/);                                                 // drawer + scrim
   });
 
   // ------------------------------------------------------------ compact header
   it('gives the compact header BOTH utility controls', () => {
-    // SPACING REMEDIATION: the anchor follows the row's `gap-2` -> `gap-1`
-    // change. What this test protects — that the compact header carries BOTH
-    // utility controls, and that the drawer's own copies cannot satisfy the
-    // assertion — is unchanged.
-    const start = code.indexOf('flex lg:hidden items-center gap-1');
+    // UX-02: the compact header is now `flex xl:hidden items-center gap-1`, and
+    // the anchor follows the breakpoint move. What this test protects — that the
+    // compact header carries BOTH utility controls, and that the drawer's own
+    // copies cannot satisfy the assertion — is unchanged.
+    const start = code.indexOf('flex xl:hidden items-center gap-1');
     expect(start).toBeGreaterThan(-1);
     // Bound the slice to the compact header group only, so the drawer's own
     // copies cannot satisfy this assertion.
@@ -66,7 +77,7 @@ describe('NAVBAR BATCH 1 - language + appearance control visibility', () => {
   });
 
   it('reuses the shared controls with the existing App-owned props', () => {
-    const start = code.indexOf('flex lg:hidden items-center gap-1');
+    const start = code.indexOf('flex xl:hidden items-center gap-1');
     const compact = code.slice(start, code.indexOf('</header>', start));
     // The `compact` / `minWidth` props added by the spacing remediation are
     // PRESENTATION ONLY; the props that prove App still owns the state are

@@ -104,9 +104,16 @@ describe('Batch F incremental appearance surface migration', () => {
       expect(navbar).toContain(destination);
     }
     expect(navbar).not.toMatch(/t\.agentBtn/);
-    for (const token of ['surface', 'surface-muted', 'text-primary', 'text-muted', 'border', 'focus']) {
+    // UX-02: the focus token is no longer consumed HERE — the bar carries no local
+    // focus treatment at all (PI-1/C5), so the global :focus-visible rule in
+    // index.css is the single indicator. The list therefore asserts the semantic
+    // tokens the Navbar actually uses, including the primary pair its active
+    // states and the language pill are built from.
+    for (const token of ['surface', 'surface-muted', 'text-primary', 'text-muted', 'border', 'primary']) {
       expect(navbar).toContain(`--appearance-${token}`);
     }
+    expect(css).toContain('--appearance-focus:');
+    expect(css).toContain('outline: 2px solid var(--color-accent-orange)');
     expect((navbar.match(/<LanguageControl /g) || [])).toHaveLength(3);
     // BATCH 1 (navbar): 3 Navbar appearance instances - desktop utility tray,
     // sub-lg compact header, drawer. The compact header previously had none, so
