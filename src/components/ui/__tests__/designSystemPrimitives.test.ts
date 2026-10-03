@@ -225,6 +225,38 @@ describe('UX-01 button hierarchy', () => {
     }
   });
 
+  it('keeps the locked 36 / 44 / 52 height ladder (lg must never fall back to 48px)', () => {
+    type SizeKey = 'sm' | 'md' | 'lg';
+    const sizeBlock = button.slice(
+      button.indexOf('const sizeClasses'),
+      button.indexOf('const variantClasses'),
+    );
+    // The height utility is resolved through Tailwind's 4px spacing scale rather
+    // than string-matched, so a regression to 48px (h-12 — still a perfectly
+    // valid utility) fails here instead of shipping. An unknown utility resolves
+    // to undefined, so the ladder cannot be widened by inventing a class either.
+    const heightScale: Record<string, number> = { 'h-9': 36, 'h-11': 44, 'h-12': 48, 'h-13': 52 };
+    const heightFor = (size: SizeKey): number | undefined => {
+      const line = sizeBlock.split('\n').find((l) => l.trim().startsWith(`${size}:`)) ?? '';
+      const utility = line.match(/\bh-\d+\b/)?.[0];
+      return utility ? heightScale[utility] : undefined;
+    };
+
+    // The contract stated in docs/design-system.md §7.
+    expect(heightFor('sm')).toBe(36);
+    expect(heightFor('md')).toBe(44);
+    expect(heightFor('lg')).toBe(52);
+
+    // It stays an ascending ladder, and the default size keeps clearing the
+    // 44px touch-target floor.
+    expect(heightFor('sm')!).toBeLessThan(heightFor('md')!);
+    expect(heightFor('md')!).toBeLessThan(heightFor('lg')!);
+    expect(heightFor('md')!).toBeGreaterThanOrEqual(44);
+
+    // The heights come from the numeric scale, never from an arbitrary value.
+    expect(sizeBlock).not.toMatch(/h-\[[^\]]+\]/);
+  });
+
   it('has no forced uppercase and keeps the 44px floor on the default size', () => {
     // Comments are stripped: the component's own doc explains that the OLD
     // hand-rolled buttons forced uppercase, which is not a class in the code.

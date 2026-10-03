@@ -212,7 +212,7 @@ describe('accessibility + addressability of the new public screens (Phase 8.1)',
     }
   });
 
-  it('primary CTAs meet the 44px touch-target floor (Button size="lg" is 48px)', () => {
+  it('primary CTAs meet the 44px touch-target floor (Button size="lg" is 52px)', () => {
     for (const [name, code] of [['SignInView', signInCode], ['BecomeAgentView', becomeAgentCode]] as const) {
       expect(code, `${name} must use the shared Button primitive`).toContain("from './ui/Button'");
       const largeButtons = code.match(/size="lg"/g) || [];

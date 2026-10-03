@@ -29,7 +29,7 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 const sizeClasses: Record<ButtonSize, string> = {
   sm: 'h-9 px-3 text-caption gap-1.5 rounded-small',
   md: 'h-11 px-5 text-body rounded-standard',
-  lg: 'h-12 px-6 text-body-large rounded-standard',
+  lg: 'h-13 px-6 text-body-large rounded-standard',
 };
 
 // Each variant is self-contained (no compound selectors) so callers can
