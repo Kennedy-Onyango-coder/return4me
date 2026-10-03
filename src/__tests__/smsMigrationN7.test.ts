@@ -155,6 +155,61 @@ describe('N7-A ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢Ãƒ�
     }
   });
 
+  it('no call site can supply its own idempotency key - the derivation stays central', () => {
+    // P2-A follow-up to the TypeScript error at the customer phone-verification
+    // call site: that call still carried an `idempotencyKey` from an older SMS
+    // architecture. `idempotencyKey` is REQUIRED on NotificationService.notify(),
+    // so "fixing" that error by accepting the field on SmsNotificationInput would
+    // have created a SECOND, competing idempotency identity for the same send.
+    // The seam owns the derivation - buildNotificationIdempotencyKey(eventType,
+    // issuanceId) - so no production flow may supply a key of its own.
+    let inspected = 0;
+    for (const rel of PRODUCTION_SMS_FILES) {
+      const src = read(rel);
+      const blocks = src.match(/sendSmsNotification\(\{[\s\S]*?\n\s*\}\)/g) ?? [];
+      const hasCallSite = /sendSmsNotification\(\{/.test(src);
+      // The shape is uniform across every production call site, so a guard that
+      // silently matched nothing would be worse than no guard. (The DEFINITION in
+      // services/smsNotification.ts is not a call site and is therefore not
+      // required to produce a block.)
+      if (hasCallSite) {
+        expect(blocks.length, `${rel} produced no inspectable call block`).toBeGreaterThan(0);
+      }
+      for (const rawBlock of blocks) {
+        // Comments are stripped before the key assertion: this call site's own
+        // documentation (and this test's) names the field it forbids, so judging
+        // the CODE requires removing the prose - the same reason
+        // claimTrackingDisclosure.test.ts strips comments before its own
+        // field-name assertions.
+        const block = rawBlock
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .replace(/^[ \t]*\/\/.*$/gm, '');
+        expect(block, rel).not.toContain('idempotencyKey');
+      }
+      inspected += blocks.length;
+    }
+    // 7 today: server.ts x4, routes/claims.ts x1, routes/customerClaims.ts x2.
+    expect(inspected).toBeGreaterThanOrEqual(7);
+
+    // ...and the key is derived in exactly ONE place, from the caller's own
+    // issuance reference, never from a caller-supplied key.
+    const seam = read('../services/smsNotification.ts');
+    expect(seam).toContain('buildNotificationIdempotencyKey(input.eventType, input.issuanceId)');
+    expect(seam).not.toContain('input.idempotencyKey');
+
+    // The INPUT CONTRACT itself must not accept a key either: declaring the field
+    // is the change that would make a second, competing idempotency identity
+    // expressible again - and it is exactly the "correction" a TS2353 error at a
+    // call site invites.
+    const iface = seam.slice(
+      seam.indexOf('export interface SmsNotificationInput'),
+      seam.indexOf('export async function sendSmsNotification'),
+    );
+    expect(iface.length).toBeGreaterThan(0);
+    expect(iface).not.toMatch(/^\s*idempotencyKey\??:/m);
+  });
+
+
   it('the durable limiter is mounted on every SMS-triggering HTTP route', () => {
     expect(read('../server.ts')).toMatch(/'\/api\/auth\/request-otp',[\s\S]{0,200}smsRateLimit\(\)/);
     expect(read('../server.ts')).toMatch(/'\/api\/customer\/login',[\s\S]{0,200}smsRateLimit\(\)/);

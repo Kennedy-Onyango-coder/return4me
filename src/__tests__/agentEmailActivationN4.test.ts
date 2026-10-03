@@ -80,7 +80,14 @@ const sms = vi.hoisted(() => ({ sent: [] as Array<{ phone: string; code: string 
 // register agents end-to-end depend on.
 vi.mock('../services/auth', async (importOriginal) => {
   const actual = await importOriginal<any>();
-  const { db: realDb } = await import('../db/database.ts');
+  // The MODULE, not `{ db }`. Destructuring the export here is a BUG: this
+  // factory runs while the module graph is still being built, and
+  // db/database.ts can be MID-EVALUATION at this moment (its `db` export is the
+  // last statement in that file), so a destructure snapshots `undefined` for
+  // ever and every mocked requestOTP below throws instead of persisting a code
+  // (observed as NO OTP captured -> 500 -> 14 failed N4 tests). Reading the
+  // namespace's LIVE binding at call time always yields the real singleton.
+  const realDbModule: any = await import('../db/database.ts');
   const nodeCrypto = await import('crypto');
 
   const captureSms = vi.fn(async (phone: string, message: string) => {
@@ -98,7 +105,7 @@ vi.mock('../services/auth', async (importOriginal) => {
           if (!/^(\+254|0)(7|1)[0-9]{8}$/.test(cleanPhone)) return target[prop](phone);
           const e164 = actual.toE164Kenyan(cleanPhone);
           const code = nodeCrypto.randomInt(1000, 10000).toString();
-          await realDb.setOtp(e164, actual.hashCode(code), new Date(Date.now() + 5 * 60 * 1000));
+          await realDbModule.db.setOtp(e164, actual.hashCode(code), new Date(Date.now() + 5 * 60 * 1000));
           sms.sent.push({ phone: e164, code });
           return { success: true, message: 'captured in test' };
         };

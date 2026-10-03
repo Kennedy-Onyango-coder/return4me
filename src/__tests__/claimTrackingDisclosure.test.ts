@@ -45,7 +45,16 @@ function routeBody(method: 'get' | 'post', route: string, len = 4000): string {
   const src = serverTs.includes(marker) ? serverTs : (CLAIMS_ROUTE_TS.includes(marker) ? CLAIMS_ROUTE_TS : (CLAIM_PAYMENTS_TS.includes(marker) ? CLAIM_PAYMENTS_TS : AGENT_OPS_TS));
   const start = src.indexOf(marker);
   expect(start, `route ${method.toUpperCase()} ${route} not found in server.ts or any extracted route module`).toBeGreaterThan(-1);
-  return src.slice(start, start + len);
+  // P2-A3.1 follow-up: the body runs to the NEXT route registration in the same
+  // file rather than to a fixed character count. A handler that GROWS can
+  // otherwise push a real assertion past the window purely by gaining a
+  // docblock — which is exactly what happened when claim submit gained
+  // requireCustomerAuth (+ its comment) in the claim-authentication work, while
+  // a `not.toMatch` assertion on the same route can no longer be satisfied by
+  // neighbouring routes leaking into an over-long slice. `len` remains the cap
+  // for the LAST route in a file, which has no successor to bound it.
+  const nextRoute = src.indexOf('\n  app.', start + marker.length);
+  return nextRoute > -1 ? src.slice(start, nextRoute) : src.slice(start, start + len);
 }
 
 // The sensitive keys that must never be allowed to appear in an owner-facing

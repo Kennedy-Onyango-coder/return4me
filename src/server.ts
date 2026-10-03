@@ -1602,12 +1602,21 @@ async function createApp() {
         const outcome = await sendSmsNotification({
           eventType: 'PHONE_VERIFICATION_OTP',
           recipient: destination,
+          // A FRESH issuance reference per request is what keeps a RETRIED
+          // verification deliverable. N7 derives the idempotency key centrally
+          // as buildNotificationIdempotencyKey(eventType, issuanceId), so two
+          // requests for the same number are two genuinely different
+          // notifications (the second code overwrites the first) instead of one
+          // being suppressed as a duplicate. There is deliberately NO
+          // caller-supplied idempotencyKey here: this seam is the ONE place a key
+          // is derived, and a second derivation would compete with it.
           issuanceId: newSmsIssuanceId('PCHG'),
           seam: 'code',
           code,
-          // Derived from the destination, not a timestamp, so a retried
-          // verification is still delivered rather than deduplicated into silence.
-          idempotencyKey: 'CUSTOMER_IDENTITY_CHANGE:' + destination,
+          // Required by SmsNotificationInput for `seam: 'code'`: the dev/sandbox
+          // console line only. sendCodeViaSms builds the LIVE body from `code`
+          // itself, so this text never reaches a real handset.
+          message: `Msimbo wa uthibitisho wa Return4me ni ${code}. / Your Return4me verification code is ${code}.`,
         }).catch(() => null);
         return Boolean(outcome && (outcome as any).accepted);
       }
