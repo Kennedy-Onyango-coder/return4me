@@ -303,7 +303,11 @@ describe('GEO-16-03 — the canonical county is published through the ONE public
   it('every consumer renders the DTO field rather than re-deriving a county', () => {
     // Search results, the public item page and the possible-match card.
     expect(OWNER).toContain('item.found_county');
-    expect(PUBLIC_ITEM).toContain('item.found_county');
+    // UX-06 — the public item page derives its fact rows before the ready-state
+    // guard, where `item` can still be null, so it reads the SAME DTO field
+    // through optional chaining. The contract is unchanged: the page renders
+    // the DTO's county and never re-derives one from free text.
+    expect(PUBLIC_ITEM).toMatch(/item\??\.found_county/);
     expect(POSSIBLE_MATCHES).toContain('candidate.found_county');
     for (const [label, src] of [['OwnerView', OWNER], ['PublicItemView', PUBLIC_ITEM], ['PossibleMatches', POSSIBLE_MATCHES]] as const) {
       // No county is extracted, split or pattern-matched out of free text.

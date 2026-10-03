@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeft, AlertCircle, Lock, MapPin, Package, ShieldCheck, Loader2 } from 'lucide-react';
-import Button from './ui/Button';
-import Badge from './ui/Badge';
+import { AlertCircle, ArrowLeft, Loader2, Lock, Package, ShieldCheck } from 'lucide-react';
+// UX-06 — the shared foundation, imported through the design-system barrel the
+// same way every other migrated surface imports it (never an individual ui
+// file), with icons sized from the shared ICON_SIZE ladder.
+import { Badge, Button, ICON_SIZE, SectionHeading } from './ui';
 
 // PUBLIC ITEM DETAIL (/item/:id)
 // ==============================
@@ -22,6 +24,18 @@ import Badge from './ui/Badge';
 // The item id is carried in the URL, so the journey survives that boundary.
 // The ownership verification inside the claim flow (security answers + phone +
 // SMS OTP) is unchanged and remains the thing that actually proves ownership.
+//
+// UX-06 — PRESENTATION ONLY. This batch set the page's information hierarchy:
+//   1. return to discovery   2. item image (or its deliberate absence)
+//   3. item name + status    4. where it was found   5. when it was found
+//   6. what helps an owner recognise it   7. one primary claim action
+//   8. why some details stay private
+// It moved the surface onto the UX-01 typography/radius/icon/appearance ladders
+// and the shared primitives, and it made the ONE polite live region announce
+// every state instead of only the first one. The data contract is untouched:
+// the page still renders ONLY the fields services/publicItemView.ts publishes,
+// and the "It's Mine" session gate, the request it makes and the claim hand-off
+// it performs are the same code as before.
 
 type LoadState = 'loading' | 'ready' | 'not_found' | 'error';
 
@@ -101,11 +115,24 @@ export default function PublicItemView({
     };
   }, [loadItem]);
 
+  // The live category list is the ONLY source of a human-readable item name
+  // (P14A / P14-09): a category the list cannot resolve is honestly shown as
+  // the id itself, never as a hard-coded brand label.
+  const categoryName = (() => {
+    const cat = categories.find((c: any) => c.id === item?.category_id);
+    return cat ? (sw ? cat.name_sw : cat.name_en) : '';
+  })();
+
+  // The item's title. The discovery card the visitor arrived from titles the
+  // item with the same live category name, so the detail page continues that
+  // identity rather than inventing a second one.
+  const itemTitle = categoryName || item?.category_id || item?.document_name_fuzzy || '';
+
   // Screen readers announce document.title as the primary "the page changed"
   // signal; App owns the base title, so restore it on the way out.
   useEffect(() => {
     const previous = document.title;
-    const label = item?.document_name_fuzzy ? ` — ${item.document_name_fuzzy}` : '';
+    const label = itemTitle ? ` — ${itemTitle}` : '';
     document.title = t(
       `Found item${label} | Return4me`,
       `Bidhaa iliyopatikana${label} | Return4me`
@@ -113,12 +140,77 @@ export default function PublicItemView({
     return () => {
       document.title = previous;
     };
-  }, [item, lang]);
+  }, [itemTitle, lang]);
 
-  const categoryName = (() => {
-    const cat = categories.find((c: any) => c.id === item?.category_id);
-    return cat ? (sw ? cat.name_sw : cat.name_en) : (item?.category_id || '');
-  })();
+  // ---------------------------------------------------------------------------
+  // Derived display values. Every one of them reads a field the public DTO
+  // (services/publicItemView.ts) already publishes — nothing here re-derives,
+  // re-parses or re-classifies item data, and nothing reads a private field.
+  // ---------------------------------------------------------------------------
+
+  // WHERE it was found: the canonical county, the structured sub-county the
+  // public DTO names, and the coarse public area. Parts the item does not have
+  // are dropped rather than rendered as an empty separator, and an item with no
+  // location at all simply has no location row.
+  const locationLine = [item?.found_county, item?.administrative_unit_name, item?.location_description]
+    .filter((part: any) => typeof part === 'string' && part.trim().length > 0)
+    .join(' · ');
+
+  // WHEN it was found: created_at is the only date the public read model
+  // publishes, and it is the same value the owner-facing match card shows as
+  // the approximate found date (services/lostReportMatchView.ts -> found_at).
+  const foundDate = item?.created_at
+    ? new Date(item.created_at).toLocaleDateString(sw ? 'sw-KE' : 'en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      })
+    : '';
+
+  // WHAT helps an owner recognise it. A sensitive document's description is
+  // withheld by the server before this component ever sees it, so a missing
+  // value renders nothing — never a placeholder standing in for data.
+  const identifyingDetails = typeof item?.description === 'string' ? item.description.trim() : '';
+
+  // WHERE it is being held: the hub's business name and the coarse area the
+  // public DTO reduces the hub's address to. Its phone, exact address and
+  // coordinates are not part of this shape and are never requested here.
+  const heldAtLine = [item?.agent?.business_name, item?.agent?.rough_area]
+    .filter((part: any) => typeof part === 'string' && part.trim().length > 0)
+    .join(' · ');
+
+  // The item's own public reference. This is NOT an internal identifier: it is
+  // the id in the /item/<id> URL the visitor is already on, and the same mono
+  // chip the public discovery card shows.
+  const reference = String(item?.id || '')
+    .slice(0, 8)
+    .toUpperCase();
+
+  // The established status vocabulary, unchanged. The public read model only
+  // ever serves an item that is claimable (status 'at_agent'), so anything else
+  // falls back to the same word the discovery card uses for a found item.
+  const statusLabel =
+    item?.status === 'at_agent' ? t('Held by an agent', 'Inashikiliwa na wakala') : t('Found', 'Imepatikana');
+
+  // The view's ONE polite live region (publicExperience pins exactly one
+  // aria-live in this file). It announces the state the page is in, so a
+  // loading -> result transition is not silent for a screen reader. The error
+  // branch deliberately contributes nothing here: it announces itself through
+  // role="alert" on its own panel.
+  const stateAnnouncement =
+    state === 'loading'
+      ? t('Loading this found item…', 'Inapakia bidhaa hii iliyopatikana…')
+      : state === 'not_found'
+        ? t('Item not found', 'Bidhaa haipatikani')
+        : state === 'ready'
+          ? t('Found item loaded', 'Bidhaa imepakiwa')
+          : '';
+
+  // One label and one value treatment for every fact row, so a fact's label can
+  // never out-shout the item's own identity, and the 12px caption floor is
+  // declared in exactly one place.
+  const factLabelClass = 'text-caption font-bold uppercase tracking-wider text-[var(--appearance-text-muted)]';
+  const factValueClass = 'mt-1 break-words text-body-large leading-relaxed text-[var(--appearance-text-primary)]';
 
   // "It's Mine" — the authentication boundary. The session check is a plain
   // authenticated GET; no hidden client flag decides it.
@@ -142,6 +234,12 @@ export default function PublicItemView({
     }
   };
 
+  // Return to discovery. A real anchor to the homepage (which is where the
+  // found-item discovery section lives), so open-in-new-tab and keyboard
+  // activation behave the way a visitor expects, while `onBack` performs the
+  // same navigation inside the SPA. Visually subordinate to the item itself,
+  // and its only keyboard indicator is the single global :focus-visible rule
+  // (UX-01) — it used to stack its own outline-none + ring on top of it.
   const backLink = (
     <a
       href="/"
@@ -150,9 +248,9 @@ export default function PublicItemView({
         e.preventDefault();
         onBack();
       }}
-      className="inline-flex items-center gap-1.5 text-xs font-bold text-primary-green hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-green/40 rounded"
+      className="inline-flex min-h-11 items-center gap-2 text-small font-bold text-[var(--appearance-primary)] hover:underline"
     >
-      <ArrowLeft size={14} aria-hidden="true" />
+      <ArrowLeft size={ICON_SIZE.ui} aria-hidden="true" />
       {/* BATCH 4 — WORDING ONLY. The handler and destination are untouched:
           this link has always returned to the HOMEPAGE (onBack ->
           navigate('/', 'home')), and it is not being given a return-to-results
@@ -163,36 +261,45 @@ export default function PublicItemView({
   );
 
   return (
-    <div className="w-full flex-grow px-4 sm:px-8 py-6 sm:py-10">
-      <div className="mx-auto max-w-3xl">
+    <div className="w-full flex-grow bg-[var(--appearance-background)] px-5 sm:px-12 py-8 sm:py-12">
+      <div className="mx-auto max-w-5xl">
         {backLink}
 
+        {/* The view's single polite live region. It is mounted for the whole
+            life of the page and its text follows the state, so "loading" and
+            the result that replaces it are both announced; the region is
+            visually hidden because the visible panels below already carry the
+            same message for sighted visitors. */}
+        <div className="sr-only" role="status" aria-live="polite">
+          {stateAnnouncement}
+        </div>
+
         {state === 'loading' && (
-          <div
-            className="mt-5 bg-white border border-brand-border rounded-2xl p-12 flex flex-col items-center justify-center gap-3"
-            role="status"
-            aria-live="polite"
-          >
-            <Loader2 className="animate-spin text-primary-green" size={28} aria-hidden="true" />
-            <span className="text-sm font-medium text-brand-muted-text">
+          <div className="mt-6 flex flex-col items-center justify-center gap-3 rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)] px-6 py-16 text-center">
+            <Loader2
+              size={ICON_SIZE.feature}
+              aria-hidden="true"
+              className="animate-spin text-[var(--appearance-primary)]"
+            />
+            <p className="text-body text-[var(--appearance-text-muted)]">
               {t('Loading this found item…', 'Inapakia bidhaa hii iliyopatikana…')}
-            </span>
+            </p>
           </div>
         )}
 
         {state === 'not_found' && (
-          <div className="mt-5 bg-white border border-brand-border rounded-2xl p-8 sm:p-10 text-center">
-            <Package size={32} aria-hidden="true" className="mx-auto text-brand-muted-text" />
-            <h1 className="mt-4 text-xl font-bold text-brand-dark-text">
+          <div className="mt-6 flex flex-col items-center gap-3 rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)] px-6 py-14 text-center">
+            <Package size={ICON_SIZE.feature} aria-hidden="true" className="text-[var(--appearance-text-muted)]" />
+            <h1 className="text-section font-extrabold tracking-tight text-[var(--appearance-text-primary)]">
               {t('Item not found', 'Bidhaa haipatikani')}
             </h1>
-            <p className="mt-2 text-sm text-brand-muted-text leading-relaxed">
+            <p className="max-w-md text-body leading-relaxed text-[var(--appearance-text-muted)]">
               {t(
                 'This item may no longer be publicly available. It may have been claimed, withdrawn, or the link may be incorrect.',
                 'Bidhaa hii huenda haipatikani kwa umma tena. Inawezekana ilidaiwa, iliondolewa, au kiungo si sahihi.'
               )}
             </p>
-            <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+            <div className="mt-2">
               <Button variant="primary" size="md" onClick={onBack}>
                 {t('Browse found items', 'Angalia vitu vilivyopatikana')}
               </Button>
@@ -202,20 +309,24 @@ export default function PublicItemView({
 
         {state === 'error' && (
           <div
-            className="mt-5 bg-white border border-brand-border rounded-2xl p-8 sm:p-10 text-center"
             role="alert"
+            className="mt-6 flex flex-col items-center gap-3 rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)] px-6 py-14 text-center"
           >
-            <AlertCircle size={32} aria-hidden="true" className="mx-auto text-status-danger" />
-            <h1 className="mt-4 text-xl font-bold text-brand-dark-text">
+            <AlertCircle
+              size={ICON_SIZE.feature}
+              aria-hidden="true"
+              className="text-[var(--appearance-danger)]"
+            />
+            <h1 className="text-section font-extrabold tracking-tight text-[var(--appearance-text-primary)]">
               {t('We could not load this item', 'Hatukuweza kupakia bidhaa hii')}
             </h1>
-            <p className="mt-2 text-sm text-brand-muted-text leading-relaxed">
+            <p className="max-w-md text-body leading-relaxed text-[var(--appearance-text-muted)]">
               {t(
                 'Something went wrong on our side. Please try again.',
                 'Kuna hitilafu upande wetu. Tafadhali jaribu tena.'
               )}
             </p>
-            <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+            <div className="mt-2 flex flex-wrap items-center justify-center gap-3">
               <Button variant="primary" size="md" onClick={loadItem}>
                 {t('Try again', 'Jaribu tena')}
               </Button>
@@ -227,148 +338,156 @@ export default function PublicItemView({
         )}
 
         {state === 'ready' && item && (
-          <article className="mt-5 bg-white border border-brand-border rounded-2xl overflow-hidden">
-            <div className="grid grid-cols-1 sm:grid-cols-2">
-              {/* Media — a sensitive document's photo is never sent by the API,
-                  so the "hidden" panel below is a server-enforced fact, not a
-                  client-side choice. */}
-              <div className="aspect-[4/3] bg-brand-light-gray relative">
-                {item.photo_url ? (
-                  <img
-                    src={item.photo_url}
-                    alt={t(
-                      `${categoryName || 'Found item'} found and held by a Return4me agent`,
-                      `${categoryName || 'Bidhaa iliyopatikana'} iliyopatikana na kushikiliwa na wakala wa Return4me`
-                    )}
-                    loading="lazy"
-                    decoding="async"
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center text-brand-muted-text bg-brand-light-gray px-4 text-center">
-                    <Lock size={28} aria-hidden="true" className="mb-2" />
-                    <span className="text-xs font-bold leading-relaxed">
-                      {item.is_sensitive_document
-                        ? t('Photo hidden for privacy', 'Picha imefichwa kwa faragha')
-                        : t('No photo available', 'Hakuna picha')}
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              {/* Identity + recognition clues */}
-              <div className="p-5 sm:p-6 flex flex-col">
-                <p className="text-caption font-extrabold uppercase tracking-widest text-brand-muted-text">
-                  {t('Found item', 'Bidhaa iliyopatikana')}
-                </p>
-                <h1 className="mt-1 text-xl sm:text-2xl font-bold text-brand-dark-text">
-                  {categoryName || item.document_name_fuzzy}
-                </h1>
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <Badge variant="info" icon={ShieldCheck}>
-                    {item.status === 'at_agent'
-                      ? t('Held by an agent', 'Inashikiliwa na wakala')
-                      : t('Found', 'Imepatikana')}
-                  </Badge>
-                  <span className="text-caption font-semibold text-brand-muted-text">
-                    {item.document_name_fuzzy}
-                  </span>
+          <>
+            <article className="mt-6 overflow-hidden rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)] shadow-raised">
+              <div className="grid grid-cols-1 md:grid-cols-2">
+                {/* Media — a sensitive document's photo is never sent by the API,
+                    so the "hidden" panel below is a server-enforced fact, not a
+                    client-side choice. */}
+                <div className="relative aspect-[4/3] bg-[var(--appearance-surface-muted)] md:aspect-auto md:min-h-64">
+                  {item.photo_url ? (
+                    <img
+                      src={item.photo_url}
+                      alt={t(
+                        `${itemTitle || 'Found item'} found and held by a Return4me agent`,
+                        `${itemTitle || 'Bidhaa iliyopatikana'} iliyopatikana na kushikiliwa na wakala wa Return4me`
+                      )}
+                      loading="lazy"
+                      decoding="async"
+                      className="absolute inset-0 h-full w-full object-cover"
+                    />
+                  ) : (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-6 text-center text-[var(--appearance-text-muted)]">
+                      {item.is_sensitive_document ? (
+                        <>
+                          <Lock size={ICON_SIZE.feature} aria-hidden="true" />
+                          <p className="text-small font-bold">
+                            {t('Photo hidden for privacy', 'Picha imefichwa kwa faragha')}
+                          </p>
+                          <p className="max-w-xs text-caption leading-relaxed">
+                            {t(
+                              'This is a sensitive document, so its photograph is never published.',
+                              'Hii ni hati nyeti, kwa hivyo picha yake haichapishwi kamwe.'
+                            )}
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <Package size={ICON_SIZE.feature} aria-hidden="true" />
+                          <p className="text-small font-bold">
+                            {t('No photo available', 'Hakuna picha')}
+                          </p>
+                          <p className="max-w-xs text-caption leading-relaxed">
+                            {t(
+                              'The finder reported this item without a photograph, so the details below are the only way to recognise it.',
+                              'Aliyekipata aliripoti bidhaa hii bila picha, kwa hivyo maelezo yaliyo hapa chini ni njia pekee ya kuitambua.'
+                            )}
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
 
-                <dl className="mt-4 space-y-2 text-xs">
-                  {/* PHASE 16.1 (GEO-16-03): the canonical county, from the same
-                      public DTO. Shown only when the item has one — a legacy row
-                      with no declared county renders exactly what it did before. */}
-                  {item.found_county && (
-                    <div className="flex items-start gap-2">
-                      <dt className="sr-only">{t('County', 'Kaunti')}</dt>
-                      <MapPin size={13} aria-hidden="true" className="mt-0.5 shrink-0 text-accent-orange" />
-                      <dd className="text-brand-muted-text leading-relaxed break-words">
-                        {t('County', 'Kaunti')}: {item.found_county}
-                      </dd>
-                    </div>
-                  )}
-                  {item.administrative_unit_name && (
-                    <div className="flex items-start gap-2">
-                      <dt className="sr-only">{t('Sub-county', 'Kaunti ndogo')}</dt>
-                      <MapPin size={13} aria-hidden="true" className="mt-0.5 shrink-0 text-accent-orange" />
-                      <dd className="text-brand-muted-text leading-relaxed break-words">
-                        {t('Sub-county', 'Kaunti ndogo')}: {item.administrative_unit_name}
-                      </dd>
-                    </div>
-                  )}
-                  <div className="flex items-start gap-2">
-                    <dt className="sr-only">{t('General area', 'Eneo kwa ujumla')}</dt>
-                    <MapPin size={13} aria-hidden="true" className="mt-0.5 shrink-0 text-accent-orange" />
-                    <dd className="text-brand-muted-text leading-relaxed break-words">
-                      {item.location_description || t('Location not published', 'Mahali hakujachapishwa')}
-                    </dd>
-                  </div>
-                  {item.agent?.business_name && (
-                    <div className="flex items-start gap-2">
-                      <dt className="sr-only">{t('Held at', 'Inashikiliwa')}</dt>
-                      <Package size={13} aria-hidden="true" className="mt-0.5 shrink-0 text-accent-orange" />
-                      <dd className="text-brand-muted-text leading-relaxed break-words">
-                        {item.agent.business_name}
-                        {item.agent.rough_area ? ` · ${item.agent.rough_area}` : ''}
-                      </dd>
-                    </div>
-                  )}
-                  <div className="flex items-start gap-2">
-                    <dt className="sr-only">{t('Reference and date recorded', 'Kumbukumbu na tarehe')}</dt>
-                    <Lock size={13} aria-hidden="true" className="mt-0.5 shrink-0 text-accent-orange" />
-                    <dd className="text-brand-muted-text leading-relaxed">
-                      {t('Reference', 'Kumbukumbu')}:{' '}
-                      <span className="font-mono">
-                        {String(item.id || '').substring(0, 8).toUpperCase()}
+                {/* Identity: the item's name, its public status and its own
+                    public reference — nothing an owner would have to guess. */}
+                <div className="flex flex-col p-5 sm:p-8">
+                  <p className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">
+                    {t('Found item', 'Bidhaa iliyopatikana')}
+                  </p>
+                  <h1 className="mt-2 text-section font-extrabold tracking-tight text-[var(--appearance-text-primary)] sm:text-page">
+                    {itemTitle}
+                  </h1>
+
+                  <div className="mt-4 flex flex-wrap items-center gap-2">
+                    <Badge variant="info" icon={ShieldCheck}>
+                      {statusLabel}
+                    </Badge>
+                    {reference ? (
+                      <span className="inline-flex items-center rounded-compact border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] px-2 py-1 font-mono text-caption tracking-wide text-[var(--appearance-text-primary)]">
+                        <span className="sr-only">{t('Reference', 'Kumbukumbu')}</span>
+                        {reference}
                       </span>
-                      {item.created_at
-                        ? ` · ${new Date(item.created_at).toLocaleDateString(sw ? 'sw-KE' : 'en-US', {
-                            month: 'short',
-                            day: 'numeric',
-                            year: 'numeric',
-                          })}`
-                        : ''}
-                    </dd>
+                    ) : null}
                   </div>
-                </dl>
 
-                {!item.is_sensitive_document && item.description && (
-                  <p className="mt-4 text-xs text-brand-dark-text leading-relaxed line-clamp-4">
-                    {item.description}
-                  </p>
-                )}
+                  <dl className="mt-6 space-y-4">
+                    {/* PHASE 16.1 (GEO-16-03): the canonical county is one part of
+                        this line — the coarsest geography the product models. No
+                        coordinate, distance, ward or address detail is derived
+                        here, and an item with no location simply has no row. */}
+                    {locationLine ? (
+                      <div>
+                        <dt className={factLabelClass}>{t('Found location', 'Mahali ilipopatikana')}</dt>
+                        <dd className={factValueClass}>{locationLine}</dd>
+                      </div>
+                    ) : null}
 
-                <div className="mt-auto pt-5">
-                  <Button
-                    variant="accent"
-                    size="lg"
-                    className="w-full"
-                    loading={claimBusy}
-                    loadingLabel={t('Checking your session…', 'Inaangalia kipindi chako…')}
-                    onClick={handleClaimClick}
-                  >
-                    {t("It's Mine", 'Ni Yangu')}
-                  </Button>
-                  <p className="mt-2 text-caption text-brand-muted-text leading-relaxed">
-                    {t(
-                      'You will be asked to sign in or create an account, then continue the ownership claim. A claim still requires identity verification and a physical handover through an agent.',
-                      'Utatakiwa kuingia au kufungua akaunti, kisha uendelee kudai umiliki. Dai bado linahitaji uthibitisho wa utambulisho na kukabidhiwa ana kwa ana kupitia wakala.'
-                    )}
-                  </p>
+                    {foundDate ? (
+                      <div>
+                        <dt className={factLabelClass}>{t('Found date', 'Tarehe ilipopatikana')}</dt>
+                        <dd className={factValueClass}>{foundDate}</dd>
+                      </div>
+                    ) : null}
+
+                    {identifyingDetails ? (
+                      <div>
+                        <dt className={factLabelClass}>{t('Identifying details', 'Maelezo ya kutambua')}</dt>
+                        <dd className={factValueClass}>{identifyingDetails}</dd>
+                      </div>
+                    ) : null}
+
+                    {heldAtLine ? (
+                      <div>
+                        <dt className={factLabelClass}>{t('Held at', 'Inashikiliwa')}</dt>
+                        <dd className={factValueClass}>{heldAtLine}</dd>
+                      </div>
+                    ) : null}
+                  </dl>
+
+                  {/* ONE primary action: the existing "It's Mine" entry into the
+                      ownership claim. 52px tall, the full width of the details
+                      column, and the same session-gated handler as before. */}
+                  <div className="mt-auto pt-8">
+                    <Button
+                      variant="accent"
+                      size="lg"
+                      className="w-full"
+                      loading={claimBusy}
+                      loadingLabel={t('Checking your session…', 'Inaangalia kipindi chako…')}
+                      onClick={handleClaimClick}
+                    >
+                      {t("It's Mine", 'Ni Yangu')}
+                    </Button>
+                    <p className="mt-3 text-caption leading-relaxed text-[var(--appearance-text-muted)]">
+                      {t(
+                        'You will be asked to sign in or create an account, then continue the ownership claim. A claim still requires identity verification and a physical handover through an agent.',
+                        'Utatakiwa kuingia au kufungua akaunti, kisha uendelee kudai umiliki. Dai bado linahitaji uthibitisho wa utambulisho na kukabidhiwa ana kwa ana kupitia wakala.'
+                      )}
+                    </p>
+                  </div>
                 </div>
               </div>
-            </div>
+            </article>
 
-            <div className="border-t border-brand-border bg-brand-beige px-5 sm:px-6 py-3">
-              <p className="text-caption text-brand-muted-text leading-relaxed">
-                {t(
-                  'Return4me never publishes full names, document numbers, or a finder’s contact details. Exact ownership evidence is collected only inside the private claim process.',
-                  'Return4me haichapishi majina kamili, namba za hati, wala mawasiliano ya aliyekipata. Ushahidi kamili wa umiliki hukusanywa tu ndani ya mchakato wa faragha wa kudai.'
+            {/* Why some details stay private. Customer language only — no
+                escrow, API, database or verification-architecture vocabulary —
+                and it supports the ownership check the claim flow performs
+                rather than describing how that check is implemented. */}
+            <section
+              aria-labelledby="item-privacy-heading"
+              className="mt-6 rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] p-5 sm:p-6"
+            >
+              <SectionHeading
+                titleId="item-privacy-heading"
+                title={t('Why some details stay private', 'Kwa nini baadhi ya maelezo hayachapishwi')}
+                description={t(
+                  'Anyone can open this page, so it shows only what helps the rightful owner recognise the item. Full names, document numbers and a finder’s contact details are never published, and proof of ownership is collected only inside the private claim process.',
+                  'Mtu yeyote anaweza kufungua ukurasa huu, kwa hivyo unaonyesha tu yale yanayomsaidia mmiliki halisi kutambua bidhaa. Majina kamili, namba za hati na mawasiliano ya aliyekipata hayachapishwi kamwe, na uthibitisho wa umiliki hukusanywa tu ndani ya mchakato wa faragha wa kudai.'
                 )}
-              </p>
-            </div>
-          </article>
+              />
+            </section>
+          </>
         )}
       </div>
     </div>

@@ -246,10 +246,11 @@ These pockets are known, classified, and deliberately **not** touched by UX-01.
 | AgentView + agent/* | 51 × `stone-*`, 19 hand-built buttons, hand-rolled panels | MIGRATE LATER | UX-12 / UX-13 / UX-16 |
 | FinderView | UX-05 put the five-stage journey on the shared foundation (`Stepper` + `Input`/`Select`/`Button`) with the reviewed chrome on the appearance tokens. Still legacy: the category `<select>`, the photograph controls, the two GPS boxes and the legacy submit button | MIGRATE LATER | UX-16 |
 | OwnerView | 11 × `focus:outline-none`, 7 × `focus:ring-*`, `stone-*` | MIGRATE LATER | UX-04 / UX-09 / UX-16 |
-| HomeView / PublicItemView | hand-built buttons where the shared Button applies | MIGRATE LATER | UX-02 / UX-03 |
+| HomeView | hand-built buttons where the shared Button applies | MIGRATE LATER | UX-02 / UX-03 |
+| PublicItemView | `bg-white` / `brand-*` / `status-*` literals, `rounded-2xl`, sub-ladder icon sizes (13/28/32), a local `focus-visible:ring-2`, and 14px metadata | MIGRATED in UX-06 (public item detail) | — |
 | PrivacyView / TermsView | 88 / 11 × `stone-*`, ad-hoc headings | MIGRATE LATER | UX-17 |
 | Navbar | 24 hand-built buttons, 2 × `shadow-[…]` literals | MIGRATE LATER | UX-02 |
-| Authentication screens | sign-in / activation surfaces not yet on the primitives | MIGRATE LATER | UX-06 |
+| Authentication screens | sign-in / activation surfaces not yet on the primitives | MIGRATE LATER | NOT YET SCHEDULED (UX-06 became the public item detail instead) |
 | `Modal` scroll lock + focus trap | already correct | FOUNDATION | — |
 | `text-[11px]` in SectionHeading / StatCard | fixed in UX-01 (now `text-caption`) | FOUNDATION | — |
 | Agent verification/rejection panels | legacy inline error boxes, raw `red-600` text | MIGRATE LATER | UX-12 / UX-16 |
