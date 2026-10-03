@@ -227,8 +227,18 @@ describe('N3-F: the activation page redeems the token through the backend', () =
 
   it('reuses existing design tokens rather than inventing new ones', () => {
     expect(activationView).toContain('max-w-md');
-    expect(activationView).toContain('border-brand-border');
-    expect(activationView).toContain('text-brand-dark-text');
+    // UX-07 moved this page onto the shared appearance tokens, so the card is
+    // the raised surface from docs/design-system.md section 5: its fill, border
+    // and text colours are the same CSS variables every other migrated surface
+    // uses, defined once, and they follow the selected appearance. The literals
+    // this test used to pin here - a `border-brand-border` card with
+    // `text-brand-dark-text` - were exactly what UX-07 replaced, because a
+    // brand-* literal cannot follow the customer's theme choice.
+    expect(activationView).toContain('bg-[var(--appearance-surface)]');
+    expect(activationView).toContain('border-[var(--appearance-border)]');
+    expect(activationView).toContain('text-[var(--appearance-text-primary)]');
+    expect(activationView).toContain('rounded-panel');
+    expect(activationView).toContain('shadow-raised');
     // Responsive at phone, tablet and desktop via the same padding scale the
     // account surface already uses.
     expect(activationView).toContain('px-4 py-8 sm:py-12');

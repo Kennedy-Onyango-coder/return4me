@@ -170,6 +170,16 @@ marker, `<label htmlFor>` wiring, helper text, and an error state that sets
 `OTPInput` additionally keeps the numeric keyboard, paste-to-fill, and
 arrow/backspace navigation the security flow depends on.
 
+One exception is recorded here rather than left implicit. The customer sign-in
+code field (UX-07) is a labelled single `Input` with
+`autoComplete="one-time-code"`, **not** `OTPInput`, because `OTPInput` names
+each box in hardcoded English (`Digit n of m`), sets `autoComplete="off"` for
+every multi-box group — which is precisely what the platform SMS autofill the
+journey relies on needs — and has no helper-text slot. Adopting it as it stands
+would cost the customer journey its bilingual labelling and its hint. A later
+batch closes the gap by giving `OTPInput` a bilingual label and hint contract;
+until then the single labelled field is the deliberate choice, not an oversight.
+
 ## 9. Badges and status
 
 `src/components/ui/Badge.tsx`: `success` · `warning` · `pending` · `danger` ·
@@ -250,7 +260,7 @@ These pockets are known, classified, and deliberately **not** touched by UX-01.
 | PublicItemView | `bg-white` / `brand-*` / `status-*` literals, `rounded-2xl`, sub-ladder icon sizes (13/28/32), a local `focus-visible:ring-2`, and 14px metadata | MIGRATED in UX-06 (public item detail) | — |
 | PrivacyView / TermsView | 88 / 11 × `stone-*`, ad-hoc headings | MIGRATE LATER | UX-17 |
 | Navbar | 24 hand-built buttons, 2 × `shadow-[…]` literals | MIGRATE LATER | UX-02 |
-| Authentication screens | sign-in / activation surfaces not yet on the primitives | MIGRATE LATER | NOT YET SCHEDULED (UX-06 became the public item detail instead) |
+| Authentication screens | customer registration / sign-in / activation now on the primitives and the appearance tokens; **agent and admin authentication are a different audience and are untouched** | MIGRATED in UX-07 (customer authentication) | — |
 | `Modal` scroll lock + focus trap | already correct | FOUNDATION | — |
 | `text-[11px]` in SectionHeading / StatCard | fixed in UX-01 (now `text-caption`) | FOUNDATION | — |
 | Agent verification/rejection panels | legacy inline error boxes, raw `red-600` text | MIGRATE LATER | UX-12 / UX-16 |

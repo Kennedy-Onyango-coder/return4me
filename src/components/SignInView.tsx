@@ -2,6 +2,7 @@ import React from 'react';
 import { User, Package, ShieldCheck } from 'lucide-react';
 import Button from './ui/Button';
 import SectionHeading from './ui/SectionHeading';
+import { ICON_SIZE } from './ui';
 
 // PUBLIC SIGN-IN ENTRY (Phase 8.1)
 // =================================
@@ -54,38 +55,38 @@ export default function SignInView({ lang, onOwnerSignIn, onAgentSignIn, onBecom
       <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-5">
         {/* ── Owner / Claimant ───────────────────────────────────────────── */}
         <section
-          className="bg-white border border-line-subtle rounded-2xl p-6 flex flex-col"
+          className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-panel shadow-raised p-6 flex flex-col"
           aria-labelledby="signin-owner-title"
         >
-          <span className="inline-flex items-center justify-center w-11 h-11 rounded-xl bg-canvas-sunken text-ink">
-            <User size={20} aria-hidden="true" />
+          <span className="inline-flex items-center justify-center w-11 h-11 rounded-standard bg-[var(--appearance-surface-muted)] text-[var(--appearance-text-primary)]">
+            <User size={ICON_SIZE.heading} aria-hidden="true" />
           </span>
-          <h2 id="signin-owner-title" className="mt-4 text-heading font-bold text-ink">
+          <h2 id="signin-owner-title" className="mt-4 text-heading font-bold text-[var(--appearance-text-primary)]">
             {t('Owner / Claimant', 'Mmiliki / Mdai')}
           </h2>
-          <p className="mt-2 text-body text-ink-muted leading-relaxed">
+          <p className="mt-2 text-body text-[var(--appearance-text-muted)] leading-relaxed">
             {t(
               'For people who lost something, want to claim a found item, or are tracking a claim they already started.',
               'Kwa wale waliopoteza kitu, wanaotaka kudai kitu kilichopatikana, au wanafuatilia dai waliloanzisha.',
             )}
           </p>
-          <ul className="mt-4 space-y-2 text-body text-ink-muted">
+          <ul className="mt-4 space-y-2 text-body text-[var(--appearance-text-muted)]">
             {[
               t('Search for a lost item', 'Tafuta kitu kilichopotea'),
               t('Claim a found item you own', 'Dai kitu kilichopatikana ambacho ni chako'),
               t('Track or continue a claim', 'Fuatilia au endeleza dai'),
             ].map((line) => (
               <li key={line} className="flex items-start gap-2">
-                <span className="mt-2 inline-block w-1.5 h-1.5 rounded-full bg-accent-orange shrink-0" aria-hidden="true" />
+                <span className="mt-2 inline-block w-1.5 h-1.5 rounded-full bg-[var(--appearance-accent)] shrink-0" aria-hidden="true" />
                 <span>{line}</span>
               </li>
             ))}
           </ul>
-          <div className="mt-6 pt-5 border-t border-line-subtle">
+          <div className="mt-6 pt-5 border-t border-[var(--appearance-border)]">
             <Button variant="primary" size="lg" className="w-full" onClick={onOwnerSignIn}>
               {t('Continue as Owner / Claimant', 'Endelea kama Mmiliki / Mdai')}
             </Button>
-            <p className="mt-3 text-caption text-ink-muted">
+            <p className="mt-3 text-caption text-[var(--appearance-text-muted)]">
               {t(
                 'You sign in with your phone number and a one-time code sent by SMS.',
                 'Unaingia kwa nambari yako ya simu na msimbo wa mara moja unaotumwa kwa SMS.',
@@ -96,23 +97,23 @@ export default function SignInView({ lang, onOwnerSignIn, onAgentSignIn, onBecom
 
         {/* ── Agent ──────────────────────────────────────────────────────── */}
         <section
-          className="bg-white border border-line-subtle rounded-2xl p-6 flex flex-col"
+          className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-panel shadow-raised p-6 flex flex-col"
           aria-labelledby="signin-agent-title"
         >
-          <span className="inline-flex items-center justify-center w-11 h-11 rounded-xl bg-canvas-sunken text-ink">
-            <Package size={20} aria-hidden="true" />
+          <span className="inline-flex items-center justify-center w-11 h-11 rounded-standard bg-[var(--appearance-surface-muted)] text-[var(--appearance-text-primary)]">
+            <Package size={ICON_SIZE.heading} aria-hidden="true" />
           </span>
-          <h2 id="signin-agent-title" className="mt-4 text-heading font-bold text-ink">
+          <h2 id="signin-agent-title" className="mt-4 text-heading font-bold text-[var(--appearance-text-primary)]">
             {t('Agent', 'Wakala')}
           </h2>
-          <p className="mt-2 text-body text-ink-muted leading-relaxed">
+          <p className="mt-2 text-body text-[var(--appearance-text-muted)] leading-relaxed">
             {t(
               'For registered Return4me agents, or anyone applying to become one. Agents receive drop-offs, store items safely and hand them back to verified owners.',
               'Kwa mawakala wa Return4me waliosajiliwa, au wale wanaotaka kuwa wakala. Mawakala hupokea vitu, huvihifadhi salama na kuvikabidhi kwa wamiliki waliothibitishwa.',
             )}
           </p>
-          <div className="mt-4 flex items-start gap-2 text-body text-ink-muted">
-            <ShieldCheck size={18} className="mt-0.5 shrink-0 text-status-success" aria-hidden="true" />
+          <div className="mt-4 flex items-start gap-2 text-body text-[var(--appearance-text-muted)]">
+            <ShieldCheck size={ICON_SIZE.emphasis} className="mt-0.5 shrink-0 text-[var(--appearance-success)]" aria-hidden="true" />
             <span>
               {t(
                 'Agent applications are reviewed and vetted before an account is activated.',
@@ -120,11 +121,11 @@ export default function SignInView({ lang, onOwnerSignIn, onAgentSignIn, onBecom
               )}
             </span>
           </div>
-          <div className="mt-6 pt-5 border-t border-line-subtle">
+          <div className="mt-6 pt-5 border-t border-[var(--appearance-border)]">
             <Button variant="accent" size="lg" className="w-full" onClick={onAgentSignIn}>
               {t('Continue as Agent', 'Endelea kama Wakala')}
             </Button>
-            <p className="mt-3 text-caption text-ink-muted">
+            <p className="mt-3 text-caption text-[var(--appearance-text-muted)]">
               {t(
                 'Sign-in and new applications for agents are handled on the same secure page.',
                 'Kuingia na maombi mapya ya wakala hushughulikiwa kwenye ukurasa mmoja salama.',
@@ -134,10 +135,10 @@ export default function SignInView({ lang, onOwnerSignIn, onAgentSignIn, onBecom
         </section>
       </div>
 
-      <div className="mt-8 bg-canvas-sunken border border-line-subtle rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="mt-8 bg-[var(--appearance-surface-muted)] border border-[var(--appearance-border)] rounded-panel p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h2 className="text-heading font-bold text-ink">{t('Not an agent yet?', 'Bado si wakala?')}</h2>
-          <p className="mt-1 text-body text-ink-muted">
+          <h2 className="text-heading font-bold text-[var(--appearance-text-primary)]">{t('Not an agent yet?', 'Bado si wakala?')}</h2>
+          <p className="mt-1 text-body text-[var(--appearance-text-muted)]">
             {t(
               'See what the work involves and what is required before you apply.',
               'Ona kazi inayohusika na kile kinachohitajika kabla ya kuomba.',

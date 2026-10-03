@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Button, Banner, Spinner } from './ui';
+import { Button, Banner, ICON_SIZE, Spinner } from './ui';
 
 // =============================================================================
 // N3 — /activate-email  (public customer email-activation landing page)
@@ -128,9 +128,9 @@ export default function CustomerActivationView({ lang, onSignIn, onExit, hasToke
     return (
       <div className="flex-grow flex items-center justify-center w-full py-24">
         <Spinner
-          size={26}
+          size={ICON_SIZE.feature}
           label={t('Activating your account', 'Inaanzisha akaunti yako')}
-          className="text-primary-green"
+          className="text-[var(--appearance-primary)]"
         />
       </div>
     );
@@ -144,11 +144,11 @@ export default function CustomerActivationView({ lang, onSignIn, onExit, hasToke
   return (
     <div className="w-full flex-grow flex items-start justify-center px-4 py-8 sm:py-12">
       <div className="w-full max-w-md space-y-4">
-        <div className="bg-white border border-brand-border rounded-2xl p-5 sm:p-6">
-          <p className="text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">
+        <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-panel shadow-raised p-5 sm:p-6">
+          <p className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">
             {t('Return4me account', 'Akaunti ya Return4me')}
           </p>
-          <h1 className="mt-1 text-xl sm:text-2xl font-extrabold tracking-tight text-brand-dark-text">
+          <h1 className="mt-1 text-subsection sm:text-section font-extrabold tracking-tight text-[var(--appearance-text-primary)]">
             {activated
               ? t('Your account is ready', 'Akaunti yako iko tayari')
               : invalid
@@ -187,7 +187,7 @@ export default function CustomerActivationView({ lang, onSignIn, onExit, hasToke
             </Banner>
           )}
 
-          <p className="mt-4 text-sm text-brand-muted-text leading-relaxed">
+          <p className="mt-4 text-body-large text-[var(--appearance-text-muted)] leading-relaxed">
             {activated
               ? t(
                   'You can go to your account now, or continue to Return4me.',
