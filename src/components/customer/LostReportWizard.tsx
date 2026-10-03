@@ -1,6 +1,7 @@
-import React, { useMemo, useState } from 'react';
-import { AlertCircle, Check, MapPin, Package } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { AlertCircle, Check, MapPin, Package, Pencil, type LucideIcon } from 'lucide-react';
 import { Banner, Button, Input, Select, Stepper, Textarea } from '../ui';
+import { ICON_SIZE } from '../ui/iconSize';
 import { countiesByUxGroup } from '../../config/kenyaCounties';
 import { administrativeUnitsForCounty } from '../../config/kenyaAdministrativeUnits';
 import {
@@ -18,7 +19,7 @@ import {
 } from '../../services/lostReportsApi';
 
 // ===========================================================================
-// LOST-REPORT WIZARD (Phase 9C)
+// LOST-REPORT WIZARD (Phase 9C · UX-04 presentation pass)
 // ===========================================================================
 // Four bounded steps that mirror the server contract in routes/lostReports.ts:
 //  1. What was lost   — category (+ an optional identifier, hashed server-side)
@@ -26,7 +27,26 @@ import {
 //  3. Where and when  — county, area, landmark, and a lost TIME WINDOW
 //  4. Review          — a plain summary, then submit
 //
-// WHAT THIS FORM DOES NOT DO
+// UX-04 changed PRESENTATION AND FORM ERGONOMICS ONLY:
+//  * the four steps, their order, the field set, every validation rule, the
+//    payload and the single submit handler are unchanged (this batch is not
+//    allowed to move the workflow's state machine or its business logic);
+//  * each step now answers ONE question — a single step heading (18/26), one
+//    short explanation, only the fields that belong to that step, one primary
+//    action and one back action;
+//  * the step heading is the programmatic focus target for a step change, so a
+//    keyboard or screen-reader user is told where the journey moved to;
+//  * a validation failure is reported AT THE FIELD it belongs to (the shared
+//    Input/Select error channel, which already carries aria-invalid,
+//    aria-describedby and role="alert"), and focus moves to that field. There
+//    is therefore no duplicate "summary" message above the form;
+//  * the review step is grouped (what / where / when / identifying details) and
+//    every group offers an edit affordance that jumps back to its step;
+//  * type, radius, spacing, surface, border and focus now come from the UX-01
+//    ladders (src/index.css) instead of raw light-only values, so the workflow
+//    is legible in both light and dark appearance.
+//
+// WHAT THIS FORM STILL DOES NOT DO
 //  * It never sends a customer id or any contact detail. The report is bound to
 //    the authenticated session server-side, and the account's own verified
 //    number is the contact.
@@ -69,6 +89,15 @@ interface FormState {
   locationLandmark: string;
   lostAtFrom: string;
   lostAtTo: string;
+}
+
+/** A field the wizard validates before it will let a step advance. */
+type WizardField = keyof FormState;
+
+/** One validation failure: the message AND the field it belongs to. */
+interface StepError {
+  field: WizardField;
+  message: string;
 }
 
 const EMPTY_FORM: FormState = {
@@ -117,13 +146,17 @@ const MIN_LOST_AT = (() => {
 /**
  * Per-step validation, mirroring the SERVER's required fields exactly:
  * category, county, area and lost-from are required there; everything else in
- * this form is optional there and therefore optional here. Returns a bilingual
- * message, or null when the step may advance.
+ * this form is optional there and therefore optional here.
+ *
+ * It returns the failing field TOGETHER WITH its bilingual message, so the
+ * message can be rendered at that field (and focus moved to it) instead of
+ * being dumped into one form-level box. The rules, their order and their
+ * wording are unchanged from the original per-step check.
  */
-function validateStep(step: number, form: FormState, t: (en: string, sw: string) => string): string | null {
+function validateStep(step: number, form: FormState, t: (en: string, sw: string) => string): StepError | null {
   if (step === 0) {
     if (!form.categoryId) {
-      return t('Please choose what was lost.', 'Tafadhali chagua kilichopotea.');
+      return { field: 'categoryId', message: t('Please choose what was lost.', 'Tafadhali chagua kilichopotea.') };
     }
     return null;
   }
@@ -134,56 +167,83 @@ function validateStep(step: number, form: FormState, t: (en: string, sw: string)
 
   if (step === 2) {
     if (!form.county) {
-      return t('Please choose the county where you lost it.', 'Tafadhali chagua kaunti ulipopoteza.');
+      return {
+        field: 'county',
+        message: t('Please choose the county where you lost it.', 'Tafadhali chagua kaunti ulipopoteza.'),
+      };
     }
     if (!form.administrativeUnitId) {
-      return t('Please choose the sub-county where you lost it.', 'Tafadhali chagua kaunti ndogo ulipopoteza.');
+      return {
+        field: 'administrativeUnitId',
+        message: t('Please choose the sub-county where you lost it.', 'Tafadhali chagua kaunti ndogo ulipopoteza.'),
+      };
     }
     const area = form.locationArea.trim();
     if (area.length < LOST_REPORT_FIELD_MINIMUMS.locationArea) {
-      return t('Please enter the exact place where you lost it.', 'Tafadhali weka mahali halisi ulipopoteza.');
+      return {
+        field: 'locationArea',
+        message: t('Please enter the exact place where you lost it.', 'Tafadhali weka mahali halisi ulipopoteza.'),
+      };
     }
     if (area.length > LOST_REPORT_FIELD_LIMITS.locationArea) {
-      return t(
-        `Please shorten the exact place to ${LOST_REPORT_FIELD_LIMITS.locationArea} characters or fewer.`,
-        `Tafadhali fupisha mahali halisi hadi herufi ${LOST_REPORT_FIELD_LIMITS.locationArea} au chini.`
-      );
+      return {
+        field: 'locationArea',
+        message: t(
+          `Please shorten the exact place to ${LOST_REPORT_FIELD_LIMITS.locationArea} characters or fewer.`,
+          `Tafadhali fupisha mahali halisi hadi herufi ${LOST_REPORT_FIELD_LIMITS.locationArea} au chini.`
+        ),
+      };
     }
 
     if (!form.lostAtFrom) {
-      return t('Please tell us roughly when you lost it.', 'Tafadhali tuambie takriban ulipoteza lini.');
+      return {
+        field: 'lostAtFrom',
+        message: t('Please tell us roughly when you lost it.', 'Tafadhali tuambie takriban ulipoteza lini.'),
+      };
     }
     const fromIso = localInputToIso(form.lostAtFrom);
     if (!fromIso) {
-      return t('That date and time is not valid.', 'Tarehe na saa hiyo si sahihi.');
+      return { field: 'lostAtFrom', message: t('That date and time is not valid.', 'Tarehe na saa hiyo si sahihi.') };
     }
     const now = Date.now();
     const from = new Date(fromIso).getTime();
     if (from > now) {
-      return t('The time you lost it cannot be in the future.', 'Muda uliopoteza hauwezi kuwa baadaye.');
+      return {
+        field: 'lostAtFrom',
+        message: t('The time you lost it cannot be in the future.', 'Muda uliopoteza hauwezi kuwa baadaye.'),
+      };
     }
 
     if (form.lostAtTo) {
       const toIso = localInputToIso(form.lostAtTo);
       if (!toIso) {
-        return t('That end time is not valid.', 'Muda wa mwisho si sahihi.');
+        return { field: 'lostAtTo', message: t('That end time is not valid.', 'Muda wa mwisho si sahihi.') };
       }
       const to = new Date(toIso).getTime();
       if (to < from) {
-        return t(
-          'The end of the window has to come after the start.',
-          'Mwisho wa kipindi lazima uwe baada ya mwanzo.'
-        );
+        return {
+          field: 'lostAtTo',
+          message: t(
+            'The end of the window has to come after the start.',
+            'Mwisho wa kipindi lazima uwe baada ya mwanzo.'
+          ),
+        };
       }
       if (to > now) {
-        return t('The end of the window cannot be in the future.', 'Mwisho wa kipindi hauwezi kuwa baadaye.');
+        return {
+          field: 'lostAtTo',
+          message: t('The end of the window cannot be in the future.', 'Mwisho wa kipindi hauwezi kuwa baadaye.'),
+        };
       }
       if (to - from > LOST_REPORT_MAX_WINDOW_DAYS * 24 * 60 * 60 * 1000) {
         // Plain, non-technical: no engine tolerance is disclosed.
-        return t(
-          'Please choose a window of about a month or less — for example, between 2pm and 5pm on the same day.',
-          'Tafadhali chagua kipindi cha takriban mwezi mmoja au chini — kwa mfano, kati ya saa 8 na saa 11 jioni siku hiyo hiyo.'
-        );
+        return {
+          field: 'lostAtTo',
+          message: t(
+            'Please choose a window of about a month or less — for example, between 2pm and 5pm on the same day.',
+            'Tafadhali chagua kipindi cha takriban mwezi mmoja au chini — kwa mfano, kati ya saa 8 na saa 11 jioni siku hiyo hiyo.'
+          ),
+        };
       }
     }
     return null;
@@ -229,6 +289,14 @@ function submitErrorCopy(
   }
 }
 
+/**
+ * The id shared by the one visible step heading and the <section> that names
+ * itself with it. Only one step renders at a time, so a single constant id can
+ * never collide, and it gives assistive tech a stable "current step" landmark
+ * to announce after Next/Back.
+ */
+const STEP_HEADING_ID = 'lost-report-step-heading';
+
 export default function LostReportWizard({
   lang, categories, categoriesLoading, onCancel, onCreated,
 }: Props) {
@@ -237,9 +305,33 @@ export default function LostReportWizard({
 
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
-  const [stepError, setStepError] = useState<string | null>(null);
+  const [stepError, setStepError] = useState<StepError | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  /**
+   * Focus contract (UX-04): a step change moves focus to the new step heading,
+   * a validation failure moves focus to the field that failed. Both are
+   * predictable, single-purpose movements — nothing else in this workflow takes
+   * focus away from the customer.
+   */
+  const stepHeadingRef = useRef<HTMLHeadingElement>(null);
+  const fieldRefs = useRef<Partial<Record<WizardField, HTMLElement | null>>>({});
+  const setFieldRef = <T extends HTMLElement>(field: WizardField) => (node: T | null) => {
+    fieldRefs.current[field] = node;
+  };
+
+  const previousStepRef = useRef(step);
+  useEffect(() => {
+    if (previousStepRef.current === step) return;
+    previousStepRef.current = step;
+    stepHeadingRef.current?.focus();
+  }, [step]);
+
+  useEffect(() => {
+    if (!stepError) return;
+    fieldRefs.current[stepError.field]?.focus();
+  }, [stepError]);
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -259,6 +351,10 @@ export default function LostReportWizard({
     });
   };
 
+  /** The message for one field, or undefined when that field is fine. */
+  const fieldError = (field: WizardField) =>
+    stepError && stepError.field === field ? stepError.message : undefined;
+
   const goNext = () => {
     const error = validateStep(step, form, t);
     if (error) { setStepError(error); return; }
@@ -270,6 +366,13 @@ export default function LostReportWizard({
     setStepError(null);
     if (step === 0) { onCancel(); return; }
     setStep((s) => Math.max(s - 1, 0));
+  };
+
+  /** Presentation-only shortcut used by the review step's edit affordances. */
+  const goToStep = (target: number) => {
+    setStepError(null);
+    setSubmitError(null);
+    setStep(Math.max(0, Math.min(target, LOST_REPORT_WIZARD_STEPS.length - 1)));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -317,32 +420,35 @@ export default function LostReportWizard({
   const minLocal = toLocalInputValue(MIN_LOST_AT);
   const administrativeUnits = administrativeUnitsForCounty(form.county);
   const isLastStep = step === LOST_REPORT_WIZARD_STEPS.length - 1;
+  const currentStepLabel = stepperSteps[Math.max(0, Math.min(step, stepperSteps.length - 1))].label;
 
   return (
-    <form onSubmit={handleSubmit} noValidate className="space-y-6" aria-busy={submitting}>
+    <form onSubmit={handleSubmit} noValidate className="mx-auto w-full max-w-2xl space-y-6" aria-busy={submitting}>
       <Stepper
         steps={stepperSteps}
         currentStep={step}
         label={t('Report a lost item progress', 'Maendeleo ya kuripoti kitu kilichopotea')}
       />
 
-      {stepError && <Banner kind="error">{stepError}</Banner>}
+      {/* One polite announcement per step change, for screen readers that do not
+          track the progress rail's aria-current. */}
+      <p className="sr-only" role="status" aria-live="polite">
+        {t('Step', 'Hatua')} {step + 1} {t('of', 'kati ya')} {LOST_REPORT_WIZARD_STEPS.length}: {currentStepLabel}
+      </p>
+
       {submitError && <Banner kind="error">{submitError}</Banner>}
 
       {/* ---------------- STEP 1 — WHAT WAS LOST ---------------- */}
       {step === 0 && (
-        <div className="space-y-5">
-          <div>
-            <h3 className="text-base sm:text-lg font-extrabold tracking-tight text-brand-dark-text">
-              {t('What did you lose?', 'Ulipoteza nini?')}
-            </h3>
-            <p className="mt-1 text-xs text-brand-muted-text leading-relaxed">
-              {t(
-                'Choose the closest match. It is how we compare your report with found items of the same kind.',
-                'Chagua kinachokaribiana zaidi. Ni jinsi tunavyolinganisha ripoti yako na vitu vilivyopatikana vya aina hiyo.'
-              )}
-            </p>
-          </div>
+        <section aria-labelledby={STEP_HEADING_ID} className="space-y-5">
+          <StepIntro
+            headingRef={stepHeadingRef}
+            title={t('What did you lose?', 'Ulipoteza nini?')}
+            description={t(
+              'Choose the closest match. It is how we compare your report with found items of the same kind.',
+              'Chagua kinachokaribiana zaidi. Ni jinsi tunavyolinganisha ripoti yako na vitu vilivyopatikana vya aina hiyo.'
+            )}
+          />
 
           <Select
             label={t('Item category', 'Aina ya kitu')}
@@ -350,6 +456,8 @@ export default function LostReportWizard({
             value={form.categoryId}
             onChange={(e) => handleCategoryChange(e.target.value)}
             disabled={categoriesLoading || submitting}
+            error={fieldError('categoryId')}
+            ref={setFieldRef<HTMLSelectElement>('categoryId')}
           >
             <option value="">
               {categoriesLoading
@@ -363,12 +471,15 @@ export default function LostReportWizard({
             ))}
           </Select>
 
+          {/* Revealed only once a category exists, because an identifier class is
+              only meaningful for a chosen kind of item. No new rule is added: the
+              whole cluster is optional on the server. */}
           {form.categoryId && (
-            <fieldset className="space-y-4 rounded-xl border border-brand-border p-4">
-              <legend className="px-1 text-xs font-extrabold uppercase tracking-widest text-brand-muted-text">
+            <fieldset className="space-y-4 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] p-4 sm:p-5">
+              <legend className="px-1 text-body-large font-semibold text-[var(--appearance-text-primary)]">
                 {t('Identifying number (optional)', 'Namba ya utambulisho (si lazima)')}
               </legend>
-              <p className="text-xs text-brand-muted-text leading-relaxed">
+              <p className="text-small text-[var(--appearance-text-muted)] leading-relaxed">
                 {t(
                   'If the item has a document, card or serial number, adding it makes an exact match far more likely.',
                   'Kama kitu kina namba ya hati, kadi au serial, kuiweka huongeza sana uwezekano wa mechi kamili.'
@@ -406,30 +517,27 @@ export default function LostReportWizard({
               />
             </fieldset>
           )}
-        </div>
+        </section>
       )}
 
       {/* ---------------- STEP 2 — DESCRIBE IT ---------------- */}
       {step === 1 && (
-        <div className="space-y-5">
-          <div>
-            <h3 className="text-base sm:text-lg font-extrabold tracking-tight text-brand-dark-text">
-              {t('Describe the item', 'Eleza kitu')}
-            </h3>
-            <p className="mt-1 text-xs text-brand-muted-text leading-relaxed">
-              {t(
-                'Everything here is optional. The more detail you give, the easier it is to tell your item apart from similar ones.',
-                'Kila kitu hapa si lazima. Ukitoa maelezo zaidi, ni rahisi kutofautisha kitu chako na vingine vinavyofanana.'
-              )}
-            </p>
-          </div>
+        <section aria-labelledby={STEP_HEADING_ID} className="space-y-5">
+          <StepIntro
+            headingRef={stepHeadingRef}
+            title={t('Describe the item', 'Eleza kitu')}
+            description={t(
+              'Everything here is optional. The more detail you give, the easier it is to tell your item apart from similar ones.',
+              'Kila kitu hapa si lazima. Ukitoa maelezo zaidi, ni rahisi kutofautisha kitu chako na vingine vinavyofanana.'
+            )}
+          />
 
           {/* Named clusters so the step reads as groups of related questions.
               The fields, their order, their labels and their validation are
-              unchanged - only the grouping labels are new. */}
-          <p className="text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">
+              unchanged — only the grouping labels are new. */}
+          <h4 className="text-body-large font-semibold text-[var(--appearance-text-primary)]">
             {t('Item details', 'Maelezo ya kitu')}
-          </p>
+          </h4>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input
@@ -466,9 +574,9 @@ export default function LostReportWizard({
             />
           </div>
 
-          <p className="text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">
+          <h4 className="text-body-large font-semibold text-[var(--appearance-text-primary)]">
             {t('Notes', 'Maelezo ya ziada')}
-          </p>
+          </h4>
 
           <Textarea
             label={t('Description (optional)', 'Maelezo (si lazima)')}
@@ -498,71 +606,76 @@ export default function LostReportWizard({
               'Maelezo ambayo watu wengi hawangetambua husaidia kuepuka mechi zisizo sahihi.'
             )}
           />
-        </div>
+        </section>
       )}
 
       {/* ---------------- STEP 3 — WHERE AND WHEN ---------------- */}
       {step === 2 && (
-        <div className="space-y-5">
-          <div>
-            <h3 className="text-base sm:text-lg font-extrabold tracking-tight text-brand-dark-text">
-              {t('Where and when did you lose it?', 'Ulipopoteza na lini?')}
-            </h3>
-            <p className="mt-1 text-xs text-brand-muted-text leading-relaxed">
-              {t(
-                'A rough answer is fine. This is used to compare your report with items found in the same area and around the same time.',
-                'Jibu la kukisia linatosha. Hili hutumika kulinganisha ripoti yako na vitu vilivyopatikana eneo moja na wakati huo huo.'
-              )}
-            </p>
+        <section aria-labelledby={STEP_HEADING_ID} className="space-y-5">
+          <StepIntro
+            headingRef={stepHeadingRef}
+            title={t('Where and when did you lose it?', 'Ulipopoteza na lini?')}
+            description={t(
+              'A rough answer is fine. This is used to compare your report with items found in the same area and around the same time.',
+              'Jibu la kukisia linatosha. Hili hutumika kulinganisha ripoti yako na vitu vilivyopatikana eneo moja na wakati huo huo.'
+            )}
+          />
+
+          {/* The two halves of this step are named as two groups, so the customer
+              reads them as "where" and "when" rather than as one long form. */}
+          <h4 className="text-body-large font-semibold text-[var(--appearance-text-primary)]">
+            {t('Where you lost it', 'Palipopotea')}
+          </h4>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Select
+              label={t('County', 'Kaunti')}
+              required
+              value={form.county}
+              onChange={(e) => {
+                set('county', e.target.value);
+                set('administrativeUnitId', '');
+              }}
+              disabled={submitting}
+              error={fieldError('county')}
+              ref={setFieldRef<HTMLSelectElement>('county')}
+            >
+              <option value="">{t('Select a county', 'Chagua kaunti')}</option>
+              {countyGroups.map((group) => (
+                <optgroup key={group.group} label={group.group}>
+                  {group.counties.map((county) => (
+                    <option key={county.code} value={county.name}>
+                      {county.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </Select>
+
+            <Select
+              label={t('Sub-county', 'Kaunti ndogo')}
+              required
+              value={form.administrativeUnitId}
+              onChange={(e) => set('administrativeUnitId', e.target.value)}
+              disabled={submitting || !form.county}
+              hint={t('Select county first, then choose its sub-county.', 'Chagua kaunti kwanza, kisha chagua kaunti ndogo yake.')}
+              error={fieldError('administrativeUnitId')}
+              ref={setFieldRef<HTMLSelectElement>('administrativeUnitId')}
+            >
+              <option value="">{form.county ? t('Select a sub-county', 'Chagua kaunti ndogo') : t('Select county first', 'Chagua kaunti kwanza')}</option>
+              {administrativeUnits.map((unit) => (
+                <option key={unit.id} value={unit.id}>{unit.name}</option>
+              ))}
+            </Select>
           </div>
 
-          <p className="text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">
-            {t('Where you lost it', 'Palipopotea')}
-          </p>
-
-          <Select
-            label={t('County', 'Kaunti')}
-            required
-            value={form.county}
-            onChange={(e) => {
-              set('county', e.target.value);
-              set('administrativeUnitId', '');
-            }}
-            disabled={submitting}
-          >
-            <option value="">{t('Select a county', 'Chagua kaunti')}</option>
-            {countyGroups.map((group) => (
-              <optgroup key={group.group} label={group.group}>
-                {group.counties.map((county) => (
-                  <option key={county.code} value={county.name}>
-                    {county.name}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </Select>
-
-          <Select
-            label={t('Sub-county', 'Kaunti ndogo')}
-            required
-            value={form.administrativeUnitId}
-            onChange={(e) => set('administrativeUnitId', e.target.value)}
-            disabled={submitting || !form.county}
-            hint={t('Select county first, then choose its sub-county.', 'Chagua kaunti kwanza, kisha chagua kaunti ndogo yake.')}
-          >
-            <option value="">{form.county ? t('Select a sub-county', 'Chagua kaunti ndogo') : t('Select county first', 'Chagua kaunti kwanza')}</option>
-            {administrativeUnits.map((unit) => (
-              <option key={unit.id} value={unit.id}>{unit.name}</option>
-            ))}
-          </Select>
-
           {/* P14C-3A — the reporter's own description of where the item was lost,
-              so the label now says "Exact place" instead of "Town, area or
-              estate". The field is UNCHANGED in the data model: still free text,
-              still posted as `locationArea` → lost_reports.location_area, still
-              the same validator. The hint deliberately omits "landmark" because
-              the optional Landmark field directly below already covers that, and
-              repeating it invited the same words to be typed twice. */}
+              so the label says "Exact place". The field is UNCHANGED in the data
+              model: still free text, still posted as `locationArea` →
+              lost_reports.location_area, still the same validator. The hint
+              deliberately omits "landmark" because the optional Landmark field
+              directly below already covers that, and repeating it invited the
+              same words to be typed twice. */}
           <Input
             label={t('Exact place', 'Mahali halisi')}
             required
@@ -570,6 +683,8 @@ export default function LostReportWizard({
             onChange={(e) => set('locationArea', e.target.value)}
             maxLength={LOST_REPORT_FIELD_LIMITS.locationArea}
             disabled={submitting}
+            error={fieldError('locationArea')}
+            ref={setFieldRef<HTMLInputElement>('locationArea')}
             placeholder={t('e.g. Near Sarit Centre, Westlands', 'mfano Karibu na Sarit Centre, Westlands')}
             hint={t(
               'Enter the street, estate, building or nearby place you know.',
@@ -586,9 +701,9 @@ export default function LostReportWizard({
             placeholder={t('e.g. near Sarit Centre', 'mfano karibu na Sarit Centre')}
           />
 
-          <p className="text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">
+          <h4 className="pt-1 text-body-large font-semibold text-[var(--appearance-text-primary)]">
             {t('When you lost it', 'Ilipotea lini')}
-          </p>
+          </h4>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input
@@ -600,6 +715,8 @@ export default function LostReportWizard({
               max={nowLocal}
               onChange={(e) => set('lostAtFrom', e.target.value)}
               disabled={submitting}
+              error={fieldError('lostAtFrom')}
+              ref={setFieldRef<HTMLInputElement>('lostAtFrom')}
               hint={t(
                 'Roughly when you last had it.',
                 'Takriban wakati wa mwisho ulipokuwa nayo.'
@@ -613,6 +730,8 @@ export default function LostReportWizard({
               max={nowLocal}
               onChange={(e) => set('lostAtTo', e.target.value)}
               disabled={submitting}
+              error={fieldError('lostAtTo')}
+              ref={setFieldRef<HTMLInputElement>('lostAtTo')}
               hint={t(
                 'Leave blank if you are not sure.',
                 'Acha wazi kama huna uhakika.'
@@ -620,31 +739,35 @@ export default function LostReportWizard({
             />
           </div>
 
-          <p className="text-xs text-brand-muted-text leading-relaxed">
+          <p className="text-small text-[var(--appearance-text-muted)] leading-relaxed">
             {t(
               'Example: if you lost it sometime between 2pm and 5pm, put 2pm as "Lost from" and 5pm as "Lost until".',
               'Mfano: kama ulipoteza wakati fulani kati ya saa 8 na saa 11 jioni, weka saa 8 kwenye "Ilipotea kuanzia" na saa 11 kwenye "Ilipotea hadi".'
             )}
           </p>
-        </div>
+        </section>
       )}
 
       {/* ---------------- STEP 4 — REVIEW ---------------- */}
       {step === 3 && (
-        <div className="space-y-5">
-          <div>
-            <h3 className="text-base sm:text-lg font-extrabold tracking-tight text-brand-dark-text">
-              {t('Check your report', 'Hakiki ripoti yako')}
-            </h3>
-            <p className="mt-1 text-xs text-brand-muted-text leading-relaxed">
-              {t(
-                'You can go back and change anything before submitting.',
-                'Unaweza kurudi nyuma na kubadilisha chochote kabla ya kutuma.'
-              )}
-            </p>
-          </div>
+        <section aria-labelledby={STEP_HEADING_ID} className="space-y-5">
+          <StepIntro
+            headingRef={stepHeadingRef}
+            title={t('Check your report', 'Hakiki ripoti yako')}
+            description={t(
+              'You can go back and change anything before submitting.',
+              'Unaweza kurudi nyuma na kubadilisha chochote kabla ya kutuma.'
+            )}
+          />
 
-          <dl className="divide-y divide-brand-border rounded-xl border border-brand-border">
+          {/* Grouped, not one flat list: each group names the part of the journey
+              it came from and offers an edit affordance that jumps straight back
+              to that step, so nothing requires restarting the report. */}
+          <ReviewGroup
+            title={t('What you lost', 'Ulipoteza nini')}
+            editLabel={t('Edit', 'Badilisha')}
+            onEdit={() => goToStep(0)}
+          >
             <SummaryRow
               icon={Package}
               label={t('Item', 'Kitu')}
@@ -660,42 +783,65 @@ export default function LostReportWizard({
                 }`}
               />
             )}
-            {[form.brand, form.model, form.colour, form.material].some((v) => v.trim()) && (
-              <SummaryRow
-                label={t('Brand, model, colour, material', 'Chapa, modeli, rangi, nyenzo')}
-                value={[form.brand, form.model, form.colour, form.material]
-                  .map((v) => v.trim())
-                  .filter(Boolean)
-                  .join(' · ')}
-              />
-            )}
-            {form.description.trim() && (
-              <SummaryRow label={t('Description', 'Maelezo')} value={form.description.trim()} />
-            )}
-            {form.distinctiveMarks.trim() && (
-              <SummaryRow
-                label={t('Distinctive marks', 'Alama za kipekee')}
-                value={form.distinctiveMarks.trim()}
-              />
-            )}
+          </ReviewGroup>
+
+          {[form.brand, form.model, form.colour, form.material, form.description, form.distinctiveMarks].some((v) => v.trim()) && (
+            <ReviewGroup
+              title={t('Identifying details', 'Maelezo ya kutambua')}
+              editLabel={t('Edit', 'Badilisha')}
+              onEdit={() => goToStep(1)}
+            >
+              {[form.brand, form.model, form.colour, form.material].some((v) => v.trim()) && (
+                <SummaryRow
+                  label={t('Brand, model, colour, material', 'Chapa, modeli, rangi, nyenzo')}
+                  value={[form.brand, form.model, form.colour, form.material]
+                    .map((v) => v.trim())
+                    .filter(Boolean)
+                    .join(' · ')}
+                />
+              )}
+              {form.description.trim() && (
+                <SummaryRow label={t('Description', 'Maelezo')} value={form.description.trim()} />
+              )}
+              {form.distinctiveMarks.trim() && (
+                <SummaryRow
+                  label={t('Distinctive marks', 'Alama za kipekee')}
+                  value={form.distinctiveMarks.trim()}
+                />
+              )}
+            </ReviewGroup>
+          )}
+
+          <ReviewGroup
+            title={t('Where you lost it', 'Palipopotea')}
+            editLabel={t('Edit', 'Badilisha')}
+            onEdit={() => goToStep(2)}
+          >
             <SummaryRow
               icon={MapPin}
-              label={t('Where you lost it', 'Palipopotea')}
+              label={t('Place', 'Mahali')}
               value={[form.locationArea.trim(), form.locationLandmark.trim(), administrativeUnits.find((unit) => unit.id === form.administrativeUnitId)?.name, form.county]
                 .filter(Boolean)
                 .join(', ')}
             />
+          </ReviewGroup>
+
+          <ReviewGroup
+            title={t('When you lost it', 'Ilipotea lini')}
+            editLabel={t('Edit', 'Badilisha')}
+            onEdit={() => goToStep(2)}
+          >
             <SummaryRow
-              label={t('When you lost it', 'Ilipotea lini')}
+              label={t('Time window', 'Kipindi cha muda')}
               value={formatWindow(form.lostAtFrom, form.lostAtTo, sw)}
             />
-          </dl>
+          </ReviewGroup>
 
-          <div className="rounded-xl border border-brand-border bg-brand-light-gray/50 p-4 space-y-2">
-            <p className="text-xs font-extrabold text-brand-dark-text">
+          <div className="rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] p-4 sm:p-5 space-y-2">
+            <h4 className="text-body-large font-semibold text-[var(--appearance-text-primary)]">
               {t('What happens next', 'Kinachofuata')}
-            </p>
-            <ul className="space-y-1.5 text-xs text-brand-muted-text leading-relaxed">
+            </h4>
+            <ul className="space-y-1.5 text-small text-[var(--appearance-text-muted)] leading-relaxed">
               {[
                 t(
                   'We will use these details to look for found items that may correspond to what you described.',
@@ -711,12 +857,12 @@ export default function LostReportWizard({
                 ),
               ].map((line) => (
                 <li key={line} className="flex items-start gap-2">
-                  <Check size={13} aria-hidden="true" className="mt-0.5 shrink-0 text-primary-green" />
+                  <Check size={ICON_SIZE.metadata} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--appearance-success)]" />
                   <span>{line}</span>
                 </li>
               ))}
               <li className="flex items-start gap-2">
-                <AlertCircle size={13} aria-hidden="true" className="mt-0.5 shrink-0 text-accent-orange" />
+                <AlertCircle size={ICON_SIZE.metadata} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--appearance-warning)]" />
                 <span>
                   {t(
                     'A possible match is not proof of ownership. Claiming something still requires the normal verification.',
@@ -726,12 +872,12 @@ export default function LostReportWizard({
               </li>
             </ul>
           </div>
-        </div>
+        </section>
       )}
 
       {/* ---------------- NAVIGATION ---------------- */}
-      <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 border-t border-brand-border pt-5">
-        <Button type="button" variant="ghost" onClick={goBack} disabled={submitting}>
+      <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 border-t border-[var(--appearance-border)] pt-5">
+        <Button type="button" variant="ghost" size="md" onClick={goBack} disabled={submitting}>
           {step === 0 ? t('Cancel', 'Ghairi') : t('Back', 'Rudi')}
         </Button>
 
@@ -764,12 +910,84 @@ export default function LostReportWizard({
   );
 }
 
-function SummaryRow({ icon: Icon, label, value }: { icon?: any; label: string; value: string }) {
+/**
+ * The single question a step asks, plus its one-line explanation. The heading is
+ * the focus target for a step change, so it must exist once per render and be
+ * reachable by script (tabIndex -1) while staying out of the tab order. The
+ * global :focus-visible rule in src/index.css supplies the only focus
+ * indicator; nothing is suppressed here.
+ */
+function StepIntro({
+  headingRef,
+  title,
+  description,
+}: {
+  headingRef: React.Ref<HTMLHeadingElement>;
+  title: string;
+  description: string;
+}) {
+  return (
+    <div>
+      <h3
+        id={STEP_HEADING_ID}
+        ref={headingRef}
+        tabIndex={-1}
+        className="text-heading font-extrabold tracking-tight text-[var(--appearance-text-primary)]"
+      >
+        {title}
+      </h3>
+      <p className="mt-1.5 text-body-large text-[var(--appearance-text-muted)] leading-relaxed">{description}</p>
+    </div>
+  );
+}
+
+/**
+ * One review group: a named part of the journey, its recorded values, and a
+ * single edit affordance that returns to the step those values came from. The
+ * edit control is a plain button (never a submit), so the form still has exactly
+ * one submit action.
+ */
+function ReviewGroup({
+  title,
+  editLabel,
+  onEdit,
+  children,
+}: {
+  title: string;
+  editLabel: string;
+  onEdit: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="overflow-hidden rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)]">
+      <div className="flex items-center justify-between gap-3 border-b border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] px-4 py-2.5">
+        <h4 className="text-body-large font-semibold text-[var(--appearance-text-primary)]">{title}</h4>
+        <Button
+          type="button"
+          variant="ghost"
+          size="md"
+          onClick={onEdit}
+          /* The visible label is one word and repeats per group, so the
+             accessible name says WHICH group this edit returns to. WCAG 2.5.3
+             still holds: the visible label is the first word of the name. */
+          aria-label={`${editLabel}: ${title}`}
+          className="shrink-0"
+        >
+          <Pencil size={ICON_SIZE.metadata} aria-hidden="true" />
+          {editLabel}
+        </Button>
+      </div>
+      <dl className="divide-y divide-[var(--appearance-border)]">{children}</dl>
+    </section>
+  );
+}
+
+function SummaryRow({ icon: Icon, label, value }: { icon?: LucideIcon; label: string; value: string }) {
   return (
     <div className="flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-3 px-4 py-3">
-      {Icon && <Icon size={14} aria-hidden="true" className="mt-0.5 shrink-0 text-accent-orange" />}
-      <dt className="w-40 shrink-0 text-xs font-bold text-brand-muted-text">{label}</dt>
-      <dd className="min-w-0 flex-1 text-xs text-brand-dark-text leading-relaxed break-words whitespace-pre-wrap">
+      {Icon && <Icon size={ICON_SIZE.metadata} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--appearance-text-muted)]" />}
+      <dt className="w-40 shrink-0 text-caption font-bold text-[var(--appearance-text-muted)]">{label}</dt>
+      <dd className="min-w-0 flex-1 text-body text-[var(--appearance-text-primary)] leading-relaxed break-words whitespace-pre-wrap">
         {value}
       </dd>
     </div>
@@ -804,10 +1022,3 @@ function formatWindow(fromLocal: string, toLocal: string, sw: boolean): string {
   if (!from) return '';
   return to ? `${from} — ${to}` : from;
 }
-
-
-
-
-
-
-
