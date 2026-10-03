@@ -147,12 +147,18 @@ describe('pickup-code recovery — SMS failure UX (B-4)', () => {
     const src = serverTs.includes("'CLAIM OTP'") ? serverTs : CLAIMS_ROUTE_TS;
     const fnStart = src.indexOf("'CLAIM OTP'");
     expect(fnStart).toBeGreaterThan(-1);
-    const window = src.slice(fnStart, fnStart + 3000);
+    const window = src.slice(fnStart, fnStart + 6000);
     // N7: the window was widened from 1400 chars. The property under test — a
     // provider rejection is a retryable 503, never a 500 — is unchanged, and the
     // regex is unchanged; the distance simply grew because the delivery call is
     // now a one-line wrapper around the notification seam instead of an inline
     // 6-argument gateway call.
+    //
+    // WIDENED AGAIN (3000 → 6000) when /api/claims/submit gained a route-level
+    // security docblock a few lines above the claim-OTP route. That is pure
+    // prose between the anchor and the 503, so the distance grew while the
+    // guarantee did not move one character. The two regexes below are still the
+    // original ones and still the whole point of the test.
     expect(window).toMatch(/res\.status\(503\)/);
     expect(window).not.toMatch(/res\.status\(500\)/);
   });

@@ -156,10 +156,18 @@ beforeEach(() => {
   TEST_CLIENT_IP = `10.90.${a}.${b}`;
 });
 
-async function http(pathname: string, opts: { method?: string; body?: any; token?: string } = {}) {
+async function http(
+  pathname: string,
+  opts: { method?: string; body?: any; token?: string; cookie?: string } = {}
+) {
   const headers: Record<string, string> = {};
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
   if (opts.token) headers['Authorization'] = `Bearer ${opts.token}`;
+  // Customer-authenticated routes (requireCustomerAuth) authenticate from the
+  // httpOnly session cookie and from nothing else, so a caller that needs to be
+  // signed in must present it here. The raw token is only ever passed to this
+  // header — it is never logged, printed or asserted on.
+  if (opts.cookie) headers['Cookie'] = `r4m_customer_session=${opts.cookie}`;
   // N7: the SMS routes now carry N6's DURABLE per-IP limiter (3 per rolling 10
   // minutes). The app sets `trust proxy`, so req.ip derives from
   // X-Forwarded-For. Every test in this file used to share the single loopback
@@ -398,12 +406,50 @@ describe('stage 2 — public discovery exposes nothing sensitive', () => {
 //  * claims/:id/verify-otp takes { code } ONLY — no phone.
 //  * An unknown category falls back to the 'other-item' verification profile,
 //    which requires a `description` answer (config/verificationProfiles.ts).
+//  * claims/submit is now an AUTHENTICATED WRITE: every submission below
+//    presents the owner's REAL session cookie, because requireCustomerAuth is
+//    the first middleware on the route. Even the two VALIDATION-rejection cases
+//    are authenticated, so they still prove the 400 validation order instead of
+//    short-circuiting at the 401 boundary. The claim OTP steps stay
+//    deliberately cookie-less — the claim OTP, not an account, is what proves
+//    ownership of a claim — which is exactly the property the OTP tests below
+//    (and Stage 7A) continue to demonstrate.
 // ===========================================================================
 const claimAnswers = { description: 'Black phone in a dark case, scratched back.' };
+
+// ---------------------------------------------------------------------------
+// Shared OWNER identity for every customer-authenticated stage.
+//
+// Stage 3 submits the claim that Stages 4-6 later hand over, pay and settle, so
+// it needs a live session BEFORE Stage 7A establishes the customer and the
+// claim links. Rather than mint a second account (or a second session) for the
+// same owner, this creates the owner account and its session ONCE, on first
+// use, and caches the raw token. The raw token lives only in this variable; it
+// is never logged, printed or asserted on.
+//
+// The session row is created with the REAL primitive the login route uses
+// (db.createCustomerSession over hashCode(raw)), so requireCustomerAuth's real
+// cookie -> hash -> session lookup is what validates it. Nothing is mocked.
+// ---------------------------------------------------------------------------
+const OWNER_CUSTOMER_ID = `E2E-CUS-OWNER-${RUN}`;
+let ownerCookie = '';
+const ownerSession = async (): Promise<string> => {
+  if (ownerCookie) return ownerCookie;
+  let owner: any = await db.getCustomerByPhone(OWNER_PHONE);
+  if (!owner) owner = await db.createCustomer(OWNER_CUSTOMER_ID, 'E2E Owner', OWNER_PHONE);
+  const raw = crypto.randomBytes(32).toString('hex');
+  await db.createCustomerSession(
+    `E2E-CSES-${owner.id}-${RUN}`, owner.id, hashCode(raw),
+    new Date(Date.now() + 60 * 60 * 1000),
+  );
+  ownerCookie = raw;
+  return ownerCookie;
+};
 
 describe('stage 3 — owner claim, duplicate protection and claim OTP', () => {
   it('rejects a claim that omits the identifying detail', async () => {
     const r = await http('/api/claims/submit', {
+      cookie: await ownerSession(),
       body: { itemId, ownerPhone: OWNER_PHONE, securityAnswers: claimAnswers, termsAccepted: true },
     });
     expect(r.status).toBe(400);
@@ -411,6 +457,7 @@ describe('stage 3 — owner claim, duplicate protection and claim OTP', () => {
 
   it('rejects a claim with the wrong verification answers', async () => {
     const r = await http('/api/claims/submit', {
+      cookie: await ownerSession(),
       body: {
         itemId, ownerPhone: OWNER_PHONE, securityAnswers: {}, termsAccepted: true,
         ownerIdentifyingDetails: 'Serial 12345',
@@ -421,6 +468,7 @@ describe('stage 3 — owner claim, duplicate protection and claim OTP', () => {
 
   it('creates the claim in the initial verification state', async () => {
     const r = await http('/api/claims/submit', {
+      cookie: await ownerSession(),
       body: {
         itemId, ownerPhone: OWNER_PHONE, securityAnswers: claimAnswers,
         termsAccepted: true, ownerIdentifyingDetails: 'Serial 12345',
@@ -445,6 +493,8 @@ describe('stage 3 — owner claim, duplicate protection and claim OTP', () => {
     ).length;
 
     const r = await http('/api/claims/submit', {
+      // The SAME live session as the successful submission above.
+      cookie: await ownerSession(),
       body: {
         itemId, ownerPhone: OWNER_PHONE, securityAnswers: claimAnswers,
         termsAccepted: true, ownerIdentifyingDetails: 'Serial 12345',
@@ -520,6 +570,165 @@ describe('stage 3 — owner claim, duplicate protection and claim OTP', () => {
     expect(r.status).toBe(400);
     // The claim must not regress or advance a second time.
     expect((await db.getClaim(claimId))!.status).toBe('awaiting_agent_confirmation');
+  });
+});
+
+// ===========================================================================
+// STAGE 3b — CLAIM SUBMISSION IS A CUSTOMER-AUTHENTICATED WRITE.
+//
+// The hole being closed: a claim could be created with NO session at all. The
+// UI gated entry (PublicItemView checks /api/customer/me; OwnerView hands a
+// signed-out visitor to /account), the server never checked — so hiding the
+// form was the only thing standing between an anonymous caller and an
+// unbounded, unnotified point of claim creation.
+//
+// Everything below drives the REAL application over real HTTP with the REAL
+// requireCustomerAuth: it is not mocked, stubbed, monkey-patched or bypassed
+// anywhere in this file. Each rejection asserts the 401 AND the absence of
+// every side effect the caller would otherwise have caused (a claim row, an
+// SMS/notification fan-out, a lifecycle move) — "refused" only means something
+// if nothing happened.
+//
+// The positive half of the same contract is Stage 3 above: the accepted
+// submission there carries the owner's genuine cookie, and the claim-OTP steps
+// that follow it stay deliberately cookie-less, because the claim OTP — not an
+// account — is what proves ownership of a claim.
+// ===========================================================================
+describe('stage 3b — POST /api/claims/submit requires a real customer session', () => {
+  const claimCountFor = async (id: string) =>
+    (await db.getClaims()).filter((c: any) => c.item_id === id).length;
+  const submitBody = (id: string) => ({
+    itemId: id, ownerPhone: OWNER_PHONE, securityAnswers: claimAnswers,
+    termsAccepted: true, ownerIdentifyingDetails: 'Serial 12345',
+  });
+
+  it('3b.1 an ANONYMOUS caller is refused with 401 and NOTHING happens', async () => {
+    const before = await claimCountFor(itemId);
+    const smsBefore = sms.sent.length;
+    const statusBefore = (await db.getClaim(claimId))!.status;
+
+    const r = await http('/api/claims/submit', { body: submitBody(itemId) });
+
+    expect(r.status).toBe(401);
+    // A refusal, not a claim-shaped success: no claim, no id, no `success`.
+    expect(r.body?.success).not.toBe(true);
+    expect(r.body?.claim).toBeUndefined();
+    expect(r.text).not.toMatch(/CLM-\d/);
+
+    // No row, no SMS, no lifecycle movement: the handler body never ran.
+    expect(await claimCountFor(itemId)).toBe(before);
+    expect(sms.sent.length).toBe(smsBefore);
+    expect((await db.getClaim(claimId))!.status).toBe(statusBefore);
+  });
+
+  it('3b.2 the boundary runs BEFORE the item lookup — an unknown item is not an oracle', async () => {
+    const r = await http('/api/claims/submit', { body: submitBody('ITEM-DOES-NOT-EXIST') });
+    // 401, NOT the handler's own "not claimable" answer: an unauthenticated
+    // caller cannot use this route to probe which item ids exist.
+    expect(r.status).toBe(401);
+    expect(r.status).not.toBe(404);
+  });
+
+  it('3b.3 a forged or unknown session cookie is refused with 401', async () => {
+    const before = await claimCountFor(itemId);
+    const r = await http('/api/claims/submit', {
+      cookie: crypto.randomBytes(32).toString('hex'),
+      body: submitBody(itemId),
+    });
+    expect(r.status).toBe(401);
+    expect(r.body?.claim).toBeUndefined();
+    expect(await claimCountFor(itemId)).toBe(before);
+  });
+
+  it('3b.4 an EXPIRED session is refused with 401', async () => {
+    // A real session row, for the real owner account, whose TTL has passed:
+    // only the expiry differs from a valid session and nothing is forged. The
+    // cookie -> hash -> session lookup finds it, so this proves expiry is
+    // ENFORCED, not merely that unknown tokens are rejected.
+    const owner: any = await db.getCustomerByPhone(OWNER_PHONE);
+    expect(owner).toBeTruthy();
+    const raw = crypto.randomBytes(32).toString('hex');
+    await db.createCustomerSession(
+      `E2E-CSES-EXPIRED-${RUN}`, owner.id, hashCode(raw), new Date(Date.now() - 60_000),
+    );
+    const before = await claimCountFor(itemId);
+    const r = await http('/api/claims/submit', { cookie: raw, body: submitBody(itemId) });
+    expect(r.status).toBe(401);
+    expect(await claimCountFor(itemId)).toBe(before);
+  });
+
+  it('3b.5 a customer id supplied in the BODY cannot authenticate anyone', async () => {
+    // The obvious bypass: assert you are the owner by sending a REAL account id
+    // (and the real owner phone) instead of presenting a session. Identity is
+    // read exclusively from the httpOnly cookie, so this is still anonymous.
+    const owner: any = await db.getCustomerByPhone(OWNER_PHONE);
+    expect(owner).toBeTruthy();
+    const before = await claimCountFor(itemId);
+    const r = await http('/api/claims/submit', {
+      body: { ...submitBody(itemId), customerId: owner.id, customer_id: owner.id },
+    });
+    expect(r.status).toBe(401);
+    expect(r.body?.claim).toBeUndefined();
+    expect(await claimCountFor(itemId)).toBe(before);
+  });
+
+  it('3b.6 the SAME request fails anonymously and succeeds with the owner session (full flow)', async () => {
+    // A claimable item no other stage touches, produced by the real HTTP
+    // lifecycle: report -> agent verify -> agent dropoff.
+    const rep = await http('/api/items/report', {
+      body: reportBody({ description: 'Third item used for the auth-boundary proof' }),
+    });
+    expect(rep.status).toBe(200);
+    const freshItemId = String(rep.body?.itemId || rep.body?.item?.id || '');
+    expect(freshItemId).toBeTruthy();
+
+    const verify = await http('/api/agents/verify-item', {
+      token: agentToken(AGENT_ID),
+      body: {
+        dropoffCode: freshItemId, categoryId: CATEGORY,
+        foundArea: 'Kenyatta Avenue, Nairobi',
+        reason: 'Agent physical inspection of the third item.',
+        physicallyVerified: true,
+      },
+    });
+    expect(verify.status).toBe(200);
+    const drop = await http('/api/agents/confirm-dropoff', {
+      token: agentToken(AGENT_ID), body: { dropoffCode: freshItemId },
+    });
+    expect(drop.status).toBe(200);
+    expect((await db.getItem(freshItemId))!.status).toBe('at_agent');
+    expect(await claimCountFor(freshItemId)).toBe(0);
+
+    // (1) ANONYMOUS — refused, and not one claim was created.
+    const anon = await http('/api/claims/submit', { body: submitBody(freshItemId) });
+    expect(anon.status).toBe(401);
+    expect(await claimCountFor(freshItemId)).toBe(0);
+
+    // (2) AUTHENTICATED — the IDENTICAL body plus the owner's real session
+    // cookie. The session is the only difference between the two calls, which
+    // is exactly what the boundary is supposed to depend on.
+    const auth = await http('/api/claims/submit', {
+      cookie: await ownerSession(), body: submitBody(freshItemId),
+    });
+    expect(auth.status).toBe(200);
+    expect(auth.body?.success).toBe(true);
+    const freshClaimId = String(auth.body?.claim?.id || '');
+    expect(freshClaimId).toBeTruthy();
+    expect(await claimCountFor(freshItemId)).toBe(1);
+    const freshClaim: any = await db.getClaim(freshClaimId);
+    expect(freshClaim.status).toBe('pending_verification');
+    expect(freshClaim.owner_phone).toBe(OWNER_PHONE);
+
+    // (3) The claim-OTP journey is STILL anonymous: the new boundary stops at
+    // claim creation and deliberately does not follow the owner journey further.
+    const otp = await http(`/api/claims/${freshClaimId}/request-otp`, { body: { phone: OWNER_PHONE } });
+    expect(otp.status).toBe(200);
+    const code = lastCodeFor(OWNER_PHONE);
+    expect(code).toMatch(/^\d{4}$/);
+
+    const verified = await http(`/api/claims/${freshClaimId}/verify-otp`, { body: { code: code! } });
+    expect(verified.status).toBe(200);
+    expect((await db.getClaim(freshClaimId))!.status).toBe('awaiting_agent_confirmation');
   });
 });
 
@@ -723,6 +932,10 @@ describe('stage 5 — payment authorization, session and authoritative amount', 
     expect(d.status).toBe(200);
 
     const c = await http('/api/claims/submit', {
+      // Claim submission is customer-authenticated: the same owner account and
+      // the same live session as claim-1 (which is what makes the link in
+      // Stage 7A valid for both claims).
+      cookie: await ownerSession(),
       body: {
         itemId: secondItemId, ownerPhone: OWNER_PHONE, securityAnswers: claimAnswers,
         termsAccepted: true, ownerIdentifyingDetails: 'Serial 99999',
@@ -941,7 +1154,10 @@ describe('stage 6 — signed IntaSend webhook, reconciliation and escrow', () =>
 //   previous code) -> 200 { success: true } with no code, hash or phone.
 // ===========================================================================
 const COOKIE = 'r4m_customer_session';
-let ownerCookie = '';
+// `ownerCookie` is declared ONCE, in the Stage 3 section above: claim submission
+// is customer-authenticated, so the owner's session is created the first time a
+// submit needs it and Stage 7A reuses that exact session instead of minting a
+// second one for the same account. Only the SECOND identity is declared here.
 let otherCookie = '';
 
 /**
@@ -1006,7 +1222,12 @@ describe('stage 7A — owner-bound pickup-code resend over real HTTP', () => {
     // claim-2 is submitted by the same owner phone, so the same account owns it
     // — that is what makes it a valid fixture for the 7A.3 lifecycle test.
     expect((await linkVerifiedClaimToCustomer(owner, await db.getClaim(secondClaimId))).linked).toBe(true);
-    ownerCookie = await mkSession(owner.id);
+    // The owner's session already exists — Stage 3 needed it to submit both
+    // claims. This returns that same live session rather than minting a second
+    // one, so the /api/customer/me assertion below validates the very cookie the
+    // claims were submitted on.
+    ownerCookie = await ownerSession();
+    expect(ownerCookie).toBeTruthy();
 
     // A second, equally REAL customer account. Used for 7A.2 only; its session
     // is never reused for the owner.

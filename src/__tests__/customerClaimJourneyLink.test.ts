@@ -34,10 +34,13 @@ import { ensureTestCategory, testRunId } from '../db/__tests__/ensureTestCategor
 //  imported by a test — the same constraint documented in
 //  routes/customerClaims.ts's header. The route's wiring is therefore asserted
 //  against the route's own source text: that the hook runs strictly AFTER the
-//  committed transition and the single-use OTP consumption, that it never
-//  touches requireCustomerAuth, that it cannot fail the request, and that
-//  /api/claims/submit is untouched. Everything the hook delegates to is
-//  covered behaviourally by layers 1 and 2.
+//  committed transition and the single-use OTP consumption, that the hook
+//  cannot fail the request, and that the claim OTP journey stays anonymous
+//  (verify-otp keeps using resolveOptionalCustomer and must never require an
+//  account). /api/claims/submit is audited for the OPPOSITE reason — see the
+//  last test: it must take NO part in the link flow, while itself being an
+//  authenticated write. Everything the hook delegates to is covered
+//  behaviourally by layers 1 and 2.
 //
 // The HTTP harness in layer 1 is deliberately tiny: it mounts the REAL
 // resolver and the REAL link helper with the same additive glue server.ts
@@ -590,13 +593,28 @@ describe('F11 layer 3 — server.ts wiring (source audit)', () => {
     expect(verifyRoute).not.toContain('customer_id');
   });
 
-  it('/api/claims/submit is untouched: no session lookup, no link, no auth middleware', () => {
+  it('/api/claims/submit is customer-AUTHENTICATED and takes NO part in the link flow', () => {
     expect(submitStart).toBeGreaterThan(-1);
     expect(submitRoute.length).toBeGreaterThan(5000);
+    // CHANGED DELIBERATELY. This test used to assert that submit carried NO
+    // auth middleware whatsoever. That was accurate — and it was the hole: the
+    // UI gated claim entry, but the server accepted anonymous claim creation.
+    // submit is now an authenticated write behind requireCustomerAuth, the SAME
+    // primitive /lookup and /:id/rate use, mounted FIRST so nothing in the
+    // handler can run without a live session.
+    // NOTE: the window begins AT the path literal (submitStart is the index of
+    // "'/api/claims/submit'"), so the `app.post(` prefix is deliberately outside
+    // the slice and must not be asserted here — anchoring the pattern on the
+    // path keeps the assertion exact.
+    expect(submitRoute).toMatch(
+      /^'\/api\/claims\/submit', requireCustomerAuth, async \(req, res\) => \{/
+    );
+    // What F11 actually owns is untouched: submit never resolves the optional
+    // session and never links. The additive link stays exactly where it belongs
+    // — after the claim OTP, in verify-otp (pinned by the tests above).
     const forbidden = [
       'resolveOptionalCustomer',
       'linkVerifiedClaimToCustomer',
-      'requireCustomerAuth',
       'linkClaimToCustomer',
       'customer_claim_links',
     ];

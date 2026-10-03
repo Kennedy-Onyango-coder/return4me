@@ -50,6 +50,14 @@
 //  - The customer-account link is strictly ADDITIVE and runs only after the
 //    transition and OTP consumption, wrapped so linkage failure can never turn a
 //    successful verification into a 500.
+//
+// CHANGED SINCE THE EXTRACTION — the ONE deliberate deviation, called out here
+// because the note above promises byte-identical handlers:
+//  - POST /api/claims/submit is now an AUTHENTICATED write. requireCustomerAuth
+//    is its FIRST middleware, so the anonymous-claim hole is closed at the
+//    server rather than only in the UI. The three handlers are otherwise still
+//    byte-identical; the OTP journey (request-otp / verify-otp) deliberately
+//    stays anonymous. Full rationale and blast radius are on the route itself.
 import crypto from 'crypto';
 import { db } from '../db/database.ts';
 import { toE164Kenyan, hashCode, timingSafeEqualHex, SMS_UNAVAILABLE_MESSAGE } from '../services/auth.ts';
@@ -60,7 +68,7 @@ import { uploadBase64Image } from '../services/storage.ts';
 import { INACTIVE_CLAIM_STATUSES, CLAIM_UNAVAILABLE_MESSAGE } from '../config/claimStatuses.ts';
 import { PAYMENT_STRIKE_RESTRICTION_THRESHOLD } from '../config/paymentStrikePolicy.ts';
 import { validateVerificationAnswers, isAnswerValidationFailure } from '../services/verificationValidation.ts';
-import { resolveOptionalCustomer, linkVerifiedClaimToCustomer } from '../services/customerAuth.ts';
+import { requireCustomerAuth, resolveOptionalCustomer, linkVerifiedClaimToCustomer } from '../services/customerAuth.ts';
 import { produceClaimVerificationAccepted } from '../services/claimNotificationProducers.ts';
 
 import { toOwnerSafeClaimView } from '../services/ownerSafeViews.ts';
@@ -156,7 +164,41 @@ export function registerClaimRoutes(
     otpVerifyLimiter,
   } = deps;
   // 6. OWNER CLAIMS: TIERED IDENTITY VERIFICATION
-  app.post('/api/claims/submit', async (req, res) => {
+  //
+  // SECURITY BOUNDARY — this route is an AUTHENTICATED WRITE.
+  //
+  // The gap being closed: the UI already gated claim entry (PublicItemView
+  // checks GET /api/customer/me and hands a signed-out visitor to the /account
+  // boundary; OwnerView's search-result button refuses to enter the confidence
+  // gate without a live session). The SERVER did not. Hiding a form is not a
+  // control, so anyone with curl could still create claims anonymously: an
+  // unauthenticated, unmetered point of unbounded row growth, notification
+  // fan-out and support load, and a second code path where "who is claiming"
+  // was never established at all.
+  //
+  // The fix reuses the ONE primitive every other customer-authenticated route
+  // already uses — requireCustomerAuth (services/customerAuth.ts), the same
+  // middleware behind /api/claims/lookup, /api/claims/:id/rate and the whole
+  // /api/customer/* surface. No second authentication mechanism was introduced.
+  // It is an ordinary Express middleware mounted FIRST, so it either calls
+  // next() after a fully validated session or terminates the request itself:
+  // no item lookup, no claimability check, no verification-answer validation,
+  // no ID-proof upload, no duplicate/dispute scan and no insert can run for a
+  // caller without a live session. It reads identity EXCLUSIVELY from the
+  // httpOnly r4m_customer_session cookie (never the body, query or params), so
+  // a client-supplied customer id cannot select or impersonate an account, and
+  // a dependency failure is answered 500 instead of falling through — the
+  // boundary fails CLOSED in every branch.
+  //
+  // WHAT DELIBERATELY DID NOT CHANGE — the claim OTP journey below. The claim
+  // OTP, not an account, is what proves ownership of a claim, so request-otp
+  // and verify-otp stay reachable without a session; verify-otp keeps using
+  // resolveOptionalCustomer for the strictly additive post-verification account
+  // link, which is exactly the one purpose its own docblock permits it for
+  // ("Anything that REQUIRES authentication must keep using
+  // requireCustomerAuth"). Nothing about the OTP contract, the phone match,
+  // the state machine or the optional link is altered by this boundary.
+  app.post('/api/claims/submit', requireCustomerAuth, async (req, res) => {
     const { itemId, ownerPhone, securityAnswers, verificationTier, idProofBase64, termsAccepted, ownerIdentifyingDetails, ownerEmail } = req.body;
 
     if (await isPlatformOperationPaused(pauseSettingKey('claims'))) {

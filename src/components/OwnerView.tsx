@@ -696,8 +696,15 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
     }
 
     try {
+      // Claim submission is an AUTHENTICATED write on the server
+      // (requireCustomerAuth, the same boundary the tracking lookup below
+      // already sits behind), so the httpOnly r4m_customer_session cookie has
+      // to travel with this request. `same-origin` is the cookie policy — the
+      // cookie IS the session, and no token is read from or written to browser
+      // storage anywhere in this flow.
       const response = await fetch('/api/claims/submit', {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           itemId: selectedItem.id,
