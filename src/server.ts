@@ -2,6 +2,7 @@
 import path from 'path';
 import fs from 'fs';
 import https from 'https';
+import { fileURLToPath } from 'url';
 import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
@@ -4890,7 +4891,18 @@ function isServerEntrypoint(): boolean {
   try {
     const entry = process.argv[1];
     if (!entry) return false;
-    return path.resolve(entry) === __filename;
+    // `__filename` is a CommonJS binding: it exists in the esbuild production
+    // bundle (dist/server.cjs, `--format=cjs`) but NOT under tsx, which loads
+    // this file as ESM because package.json declares `"type": "module"`.
+    // Referencing it there raised ReferenceError, the catch below swallowed it,
+    // and the guard therefore reported "not the entrypoint" for `npm run dev` —
+    // so the app built no Express app and opened no socket at all. Falling back
+    // to `import.meta.url` gives the same module identity for the ESM runners;
+    // esbuild rewrites `import.meta.url` to the bundle's own file URL for the
+    // node/cjs production build, so both runners agree.
+    const selfPath =
+      typeof __filename === 'string' ? __filename : fileURLToPath(import.meta.url);
+    return path.resolve(entry) === path.resolve(selfPath);
   } catch {
     return false;
   }

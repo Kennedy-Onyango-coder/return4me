@@ -19,6 +19,14 @@ import path from 'path';
 // catches this entire class of ordering bug for every table, including
 // ones added after this test was written, not just the one that actually
 // broke.
+//
+// PARSER NOTE: the extraction below reads ONLY the backtick-quoted SQL
+// literals from the `const statements = [...]` array. An earlier version tried
+// to strip `//` comments with `line.replace(/\/\/.*$/, '')`, which silently
+// does nothing on a CRLF checkout — `.` does not match `\r`, and `$` without
+// the `m` flag does not match before it — so explanatory comments such as
+// "ALTER TABLE admin_users statement" were parsed as SQL and produced a false
+// ordering failure. Extracting the literals is immune to that.
 
 const indexTs = fs.readFileSync(path.resolve(__dirname, '../index.ts'), 'utf8');
 
@@ -26,24 +34,45 @@ function extractMigrationStatementsSource(): string {
   const startMarker = 'export async function ensureSchemaUpToDate';
   const startIdx = indexTs.indexOf(startMarker);
   if (startIdx === -1) throw new Error('Could not find ensureSchemaUpToDate in src/db/index.ts');
-  // The statement list ends at the closing `];` of the `const statements = [` array —
-  // grab a generous slice and rely on the CREATE/ALTER regexes below to only
-  // pick up real statement text, not unrelated code after the array.
+  // The statement list ends at the closing `];` of the `const statements = [` array.
   const arrayStart = indexTs.indexOf('const statements = [', startIdx);
   if (arrayStart === -1) throw new Error('Could not find the statements array in ensureSchemaUpToDate');
   const arrayEnd = indexTs.indexOf('\n  ];', arrayStart);
   if (arrayEnd === -1) throw new Error('Could not find the end of the statements array');
-  const raw = indexTs.slice(arrayStart, arrayEnd);
-  // Strip `//` line comments — without this, a comment merely MENTIONING
-  // a table name (e.g. this codebase's own explanatory comments, which
-  // frequently say things like "ALTER TABLE admin_users statement...")
-  // would be indistinguishable from an actual SQL statement, producing
-  // false positives. Only text inside the backtick-quoted SQL strings
-  // should count.
-  return raw
+
+  // Normalise line endings FIRST. This file is checked in with CRLF endings, and
+  // in a non-multiline regex `.` does not match `\r` while `$` matches only at
+  // the very end of input. On a Windows checkout a line therefore ends in `\r`,
+  // so `line.replace(/\/\/.*$/, '')` silently stripped NOTHING and every
+  // explanatory comment was then treated as SQL. That is what produced the false
+  // "ALTER TABLE admin_users precedes CREATE TABLE admin_users" failure: the
+  // ALTER was matched inside a comment, not in a real statement.
+  const arraySource = indexTs.slice(arrayStart, arrayEnd).replace(/\r\n?/g, '\n');
+
+  // Keep ONLY the backtick-quoted SQL literals in the array. Everything else in
+  // the slice is TypeScript scaffolding (commas, brackets) or an explanatory
+  // comment, and none of it is SQL. Comments are removed before the literals are
+  // collected so that a comment which itself quotes a statement (e.g.
+  // "`CREATE TABLE customers` above already precedes the ALTERs") can never be
+  // mistaken for a real statement — or for a statement boundary.
+  const withoutComments = arraySource
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
     .split('\n')
     .map(line => line.replace(/\/\/.*$/, ''))
     .join('\n');
+
+  const literals: string[] = [];
+  const literalRegex = /`([^`]*)`/g;
+  let literalMatch: RegExpExecArray | null;
+  while ((literalMatch = literalRegex.exec(withoutComments)) !== null) {
+    literals.push(literalMatch[1]);
+  }
+  if (literals.length === 0) {
+    throw new Error('Found no SQL statement literals in the statements array');
+  }
+  // Joined in source order, so the CREATE/ALTER positions below preserve the
+  // real execution order of the statements.
+  return literals.join('\n');
 }
 
 describe('incremental migration: CREATE TABLE always precedes ALTER TABLE for the same table', () => {
