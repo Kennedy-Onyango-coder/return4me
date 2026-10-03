@@ -2722,6 +2722,8 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                     (item.id && item.id.toLowerCase().includes(query)) ||
                     (item.ocr_extracted_number && item.ocr_extracted_number.toLowerCase().includes(query)) ||
                     (item.ocr_extracted_name && item.ocr_extracted_name.toLowerCase().includes(query)) ||
+                    (item.verified_document_number && item.verified_document_number.toLowerCase().includes(query)) ||
+                    (item.verified_name && item.verified_name.toLowerCase().includes(query)) ||
                     (item.location_description && item.location_description.toLowerCase().includes(query)) ||
                     (item.finder_phone && item.finder_phone.toLowerCase().includes(query)) ||
                     (item.description && item.description.toLowerCase().includes(query));
@@ -2824,16 +2826,41 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                                       <p className="text-stone-700 text-[11px] leading-normal italic font-medium">"{item.description}"</p>
                                     </div>
                                   ) : (
+                                    <>
+                                    {/* PI-1 / B3 — show the CURRENT operational identity, not just OCR.
+                                        When an Agent corrected a field, the verified value is the
+                                        operative name/number; the original OCR is retained below
+                                        with an unambiguous label so the correction is visible and
+                                        auditable, never silently overwritten. */}
                                     <div className="grid grid-cols-2 gap-2">
                                       <div>
-                                        <span className="text-[10px] text-stone-400 block">Extracted Number</span>
-                                        <span className="font-mono font-bold text-stone-800 break-all">{item.ocr_extracted_number || 'None'}</span>
+                                        <span className="text-[10px] text-stone-400 block">
+                                          {item.verified_document_number ? 'Verified Number' : 'Extracted Number'}
+                                        </span>
+                                        <span className="font-mono font-bold text-stone-800 break-all">
+                                          {item.verified_document_number || item.ocr_extracted_number || 'None'}
+                                        </span>
+                                        {item.verified_document_number && item.ocr_extracted_number && item.verified_document_number !== item.ocr_extracted_number && (
+                                          <span className="text-[10px] text-stone-400 block truncate">
+                                            Original OCR: {item.ocr_extracted_number}
+                                          </span>
+                                        )}
                                       </div>
                                       <div>
-                                        <span className="text-[10px] text-stone-400 block">Extracted Name</span>
-                                        <span className="font-sans font-extrabold text-stone-800 uppercase line-clamp-1">{item.ocr_extracted_name || 'None'}</span>
+                                        <span className="text-[10px] text-stone-400 block">
+                                          {item.verified_name ? 'Verified Name' : 'Extracted Name'}
+                                        </span>
+                                        <span className="font-sans font-extrabold text-stone-800 uppercase line-clamp-1">
+                                          {item.verified_name || item.ocr_extracted_name || 'None'}
+                                        </span>
+                                        {item.verified_name && item.ocr_extracted_name && item.verified_name !== item.ocr_extracted_name && (
+                                          <span className="text-[10px] text-stone-400 block truncate">
+                                            Original OCR: {item.ocr_extracted_name}
+                                          </span>
+                                        )}
                                       </div>
                                     </div>
+                                    </>
                                   )}
                                 </div>
 

@@ -60,7 +60,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
           disabled={disabled}
           aria-invalid={error ? true : undefined}
           aria-describedby={describedBy}
-          className={`w-full h-11 border rounded-xl px-3 text-sm text-[var(--appearance-text-primary)] transition-colors focus:outline-none focus:border-[var(--appearance-focus)] focus:ring-2 focus:ring-[var(--appearance-focus)]/30 disabled:opacity-50 disabled:cursor-not-allowed placeholder:text-[var(--appearance-text-muted)] ${
+          className={`w-full h-11 border rounded-xl px-3 text-sm text-[var(--appearance-text-primary)] transition-colors focus:border-[var(--appearance-focus)] disabled:opacity-50 disabled:cursor-not-allowed placeholder:text-[var(--appearance-text-muted)] ${
             error
               ? 'border-[var(--appearance-danger)] bg-[var(--appearance-surface)]'
               : 'border-[var(--appearance-border)] bg-[var(--appearance-surface)]'

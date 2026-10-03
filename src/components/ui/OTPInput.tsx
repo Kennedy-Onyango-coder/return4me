@@ -127,7 +127,7 @@ const OTPInput = forwardRef<HTMLDivElement, OTPInputProps>(
               onPaste={handlePaste}
               aria-label={length > 1 ? `Digit ${i + 1} of ${length}` : label}
               aria-invalid={error ? true : undefined}
-              className={`h-12 w-full text-center text-lg font-extrabold font-mono rounded-xl border px-0 text-[var(--appearance-text-primary)] transition-colors focus:outline-none focus:border-[var(--appearance-focus)] focus:ring-2 focus:ring-[var(--appearance-focus)]/30 disabled:opacity-50 disabled:cursor-not-allowed ${
+              className={`h-12 w-full text-center text-lg font-extrabold font-mono rounded-xl border px-0 text-[var(--appearance-text-primary)] transition-colors focus:border-[var(--appearance-focus)] disabled:opacity-50 disabled:cursor-not-allowed ${
                 error ? 'border-[var(--appearance-danger)] bg-[var(--appearance-surface)]' : 'border-[var(--appearance-border)] bg-[var(--appearance-surface)]'
               }`}
             />

@@ -55,7 +55,7 @@ const Select = forwardRef<HTMLSelectElement, SelectProps>(
             disabled={disabled}
             aria-invalid={error ? true : undefined}
             aria-describedby={describedBy}
-            className={`w-full h-11 border rounded-xl pl-3 pr-9 text-sm text-[var(--appearance-text-primary)] transition-colors focus:outline-none focus:border-[var(--appearance-focus)] focus:ring-2 focus:ring-[var(--appearance-focus)]/30 disabled:opacity-50 disabled:cursor-not-allowed appearance-none bg-[var(--appearance-surface)] ${
+            className={`w-full h-11 border rounded-xl pl-3 pr-9 text-sm text-[var(--appearance-text-primary)] transition-colors focus:border-[var(--appearance-focus)] disabled:opacity-50 disabled:cursor-not-allowed appearance-none bg-[var(--appearance-surface)] ${
               error ? 'border-[var(--appearance-danger)]' : 'border-[var(--appearance-border)]'
             }`}
             {...rest}

@@ -1300,6 +1300,19 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                           </span>
                           <button
                             onClick={() => {
+                              // PI-1 / A2 — ONE authentication policy for claiming.
+                              // The public /item/:id page already gates "It's Mine" on a
+                              // real session and returns the visitor to this item after
+                              // sign-in. This search-result "Claim" button used to jump
+                              // STRAIGHT into the claim's confidence gate, which would have
+                              // made it the only claim entry point that skipped the
+                              // customer-account boundary. Routing a signed-out visitor
+                              // through the same gated page keeps the two entries identical
+                              // without a second auth mechanism.
+                              if (!isSignedIn) {
+                                onOpenItem?.(item.id);
+                                return;
+                              }
                               setSelectedItem(item);
                               setVerificationStep('confidence_gate');
                             }}

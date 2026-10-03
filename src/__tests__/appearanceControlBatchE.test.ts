@@ -70,7 +70,10 @@ describe('Batch E appearance tokens and selector', () => {
     expect(control).toContain('onChange=');
     expect(select).toContain('<select');
     expect(select).toContain('h-11');
-    expect(select).toContain('focus:ring-2');
+    expect(select).toContain('focus:border-[var(--appearance-focus)]');
+    // PI-1 / C3: the duplicate box-shadow ring was removed so the shared global
+    // :focus-visible rule is the single keyboard indicator.
+    expect(select).not.toContain('focus:ring-2');
   });
 
 

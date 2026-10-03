@@ -176,6 +176,24 @@ export function toAdminSafeItemView(
     photo_url: item.photo_url,
     ocr_extracted_number: item.ocr_extracted_number ?? null,
     ocr_extracted_name: item.ocr_extracted_name ?? null,
+    // PI-1 / B3 — VERIFIED OPERATIONAL IDENTITY.
+    //
+    // These are the values an authorized Agent confirmed or corrected during
+    // item verification. They are the CURRENT operational identity of the item,
+    // which is a DIFFERENT fact from the original OCR/reported value above.
+    //
+    // The previous DTO omitted them, so the Found Items console could only show
+    // the stale OCR value as if it were the current identity — an Agent's
+    // correction (JOHN DOE → JOHN KAMAU) was invisible to admins. Exposing both
+    // lets the console deliberately choose: show the verified value as current
+    // AND keep the original OCR for review, never silently replacing one with
+    // the other. No OCR column is dropped and no historical value is destroyed.
+    verified_category_id: item.verified_category_id ?? null,
+    verified_name: item.verified_name ?? null,
+    verified_document_number: item.verified_document_number ?? null,
+    verified_description: item.verified_description ?? null,
+    verified_found_area: item.verified_found_area ?? null,
+    verification_status: item.verification_status ?? null,
     found_county: item.found_county ?? null,
     administrative_unit_id: item.administrative_unit_id ?? null,
     location_description: item.location_description,

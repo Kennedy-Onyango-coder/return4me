@@ -71,7 +71,10 @@ describe('Batch F incremental appearance surface migration', () => {
       expect(source).toContain('bg-[var(--appearance-surface)]');
       expect(source).toContain('text-[var(--appearance-text-primary)]');
       expect(source).toContain('border-[var(--appearance-border)]');
-      expect(source).toContain('focus:ring-[var(--appearance-focus)]');
+      // PI-1 / C3: focus is a single treatment — the border-color affordance plus
+      // the global :focus-visible outline. The duplicate ring was removed.
+      expect(source).toContain('focus:border-[var(--appearance-focus)]');
+      expect(source).not.toContain('focus:ring-[var(--appearance-focus)]');
       expect(source).toContain('disabled:opacity-50');
     }
   });
