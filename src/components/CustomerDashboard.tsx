@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Link2, Unlink, RefreshCw, LayoutDashboard, FileSearch, ArrowRight, MapPin, Store, CalendarDays, Clock, Bell, type LucideIcon } from 'lucide-react';
-import { Badge, Button, EmptyState, Input, OTPInput, Banner, StatCard, Skeleton } from './ui';
+// UX-08: ArrowRight left this import list with the Overview's section-link
+// cards, which were a second copy of the navigation already beside them.
+import { Link2, Unlink, RefreshCw, LayoutDashboard, FileSearch, MapPin, Store, CalendarDays, Clock, Bell, type LucideIcon } from 'lucide-react';
+import { Badge, Button, EmptyState, Input, OTPInput, Banner, StatCard, Skeleton, ICON_SIZE } from './ui';
 import { getClaimStatusDisplay } from './claimStatus';
 import { getVerificationFields } from '../config/verificationProfiles';
 import { verificationTranslation } from '../config/verificationTranslations';
@@ -68,8 +70,10 @@ interface AccountSectionCopy {
   title: string;
   description: string;
   /**
-   * Optional one-line purpose, used only by the section cards on the Overview.
-   * The section's own page heading keeps using `description`.
+   * One-line purpose. UX-08: the Overview reads the section it is sending the
+   * customer to next and shows that section's hint as the supporting line
+   * under its single next-step action; a section's own page heading keeps
+   * using `description`.
    */
   hint?: string;
 }
@@ -104,12 +108,12 @@ const ACCOUNT_SECTIONS: Record<AccountSectionKey, { icon: LucideIcon; en: Accoun
     en: {
       label: 'Overview',
       title: 'Overview',
-      description: 'Keep track of your lost reports and the claims linked to this account, all in one place.',
+      description: 'Where your lost reports and claims stand, and the one next step to take.',
     },
     sw: {
       label: 'Muhtasari',
       title: 'Muhtasari',
-      description: 'Fuatilia ripoti zako za vitu vilivyopotea na claims zilizounganishwa na akaunti hii, mahali pamoja.',
+      description: 'Hali ya ripoti zako na claims zako, na hatua moja inayofuata ya kuchukua.',
     },
   },
   lost: {
@@ -310,10 +314,28 @@ export default function CustomerDashboard({
   // any request or handler.
   const sectionCopy = ACCOUNT_SECTIONS[tab][lang];
 
+  // UX-08: the Overview's single next step. It is DERIVED from the claims this
+  // component has already loaded - nothing is fetched to decide it - and all it
+  // does is open the section that can move the account forward, through the
+  // same setTab the navigation uses. No workflow, step or state is entered from
+  // here, so the Overview stays a summary and each section keeps owning its own
+  // steps.
+  const hasWorkInProgress = activeClaims.length > 0;
+  const nextSection: AccountSectionKey = hasWorkInProgress ? 'claims' : 'lost';
+  const nextCopy = ACCOUNT_SECTIONS[nextSection][lang];
+  const NextSectionIcon = ACCOUNT_SECTIONS[nextSection].icon;
+
+  // Current state of an item that is already in progress, read through the
+  // shared claim-status vocabulary so the Overview can never describe a status
+  // differently from the claims list below it.
+  const leadClaimStatus = activeClaims.length > 0
+    ? getClaimStatusDisplay(activeClaims[0].status, lang)
+    : null;
+
   const renderClaimCard = (claim: any) => {
     const disp = getClaimStatusDisplay(claim.status, lang);
     return (
-            <li key={claim.id} className="bg-white border border-brand-border rounded-2xl p-4 sm:p-5">
+      <li key={claim.id} className="rounded-standard border border-[var(--appearance-border)] p-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0 flex-1 space-y-2.5">
             <div className="flex flex-wrap items-center gap-2">
@@ -322,25 +344,25 @@ export default function CustomerDashboard({
             </div>
 
             {claim.item && (
-              <p className="text-sm font-extrabold text-brand-dark-text break-words">
+              <p className="text-body font-extrabold text-[var(--appearance-text-primary)] break-words">
                 {claim.item.document_name_fuzzy || claim.item.category_id}
               </p>
             )}
 
             {/* The same fields as before, read as one metadata block instead of
                 a stack of equal-weight paragraphs. Every value is unchanged. */}
-            <dl className="space-y-1.5 text-xs text-brand-muted-text">
+            <dl className="space-y-1.5 text-small text-[var(--appearance-text-muted)]">
               {claim.item && claim.item.location_description && (
                 <div className="flex items-start gap-2">
                   <dt className="sr-only">{t('Where it was recorded', 'Ilipowekwa kumbukumbu')}</dt>
-                  <MapPin size={13} aria-hidden="true" className="mt-0.5 shrink-0 text-accent-orange" />
+                  <MapPin size={ICON_SIZE.metadata} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--appearance-accent)]" />
                   <dd className="leading-relaxed break-words">{claim.item.location_description}</dd>
                 </div>
               )}
               {claim.agent && (
                 <div className="flex items-start gap-2">
                   <dt className="sr-only">{t('Holding agent', 'Wakala anayeshikilia')}</dt>
-                  <Store size={13} aria-hidden="true" className="mt-0.5 shrink-0 text-accent-orange" />
+                  <Store size={ICON_SIZE.metadata} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--appearance-accent)]" />
                   <dd className="leading-relaxed break-words">
                     {claim.agent.business_name}
                     {claim.agent.location_address ? ', ' + claim.agent.location_address : ''}
@@ -349,7 +371,7 @@ export default function CustomerDashboard({
               )}
               <div className="flex items-start gap-2">
                 <dt className="sr-only">{t('When it was claimed', 'Iliyoundwa lini')}</dt>
-                <CalendarDays size={13} aria-hidden="true" className="mt-0.5 shrink-0 text-accent-orange" />
+                <CalendarDays size={ICON_SIZE.metadata} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--appearance-accent)]" />
                 <dd className="leading-relaxed">
                   {t('Claimed', 'Iliyoundwa')} {formatDate(claim.created_at, lang)}
                 </dd>
@@ -357,8 +379,8 @@ export default function CustomerDashboard({
               {claim.expires_at && (
                 <div className="flex items-start gap-2">
                   <dt className="sr-only">{t('Payment deadline', 'Tarehe ya mwisho ya kulipa')}</dt>
-                  <Clock size={13} aria-hidden="true" className="mt-0.5 shrink-0 text-status-warning" />
-                  <dd className="leading-relaxed font-semibold text-status-warning">
+                  <Clock size={ICON_SIZE.metadata} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--appearance-warning)]" />
+                  <dd className="leading-relaxed font-semibold text-[var(--appearance-warning)]">
                     {t('Pay before', 'Lipa kabla ya')} {formatDateTime(claim.expires_at, lang)}
                   </dd>
                 </div>
@@ -373,7 +395,7 @@ export default function CustomerDashboard({
             loading={rowBusy === claim.id}
             aria-label={t('Remove from my account', 'Ondoa kwenye akaunti yangu')}
           >
-            <Unlink size={16} />
+            <Unlink size={ICON_SIZE.ui} aria-hidden="true" />
           </Button>
         </div>
       </li>
@@ -384,11 +406,12 @@ export default function CustomerDashboard({
     <div className="w-full space-y-6">
       {/*
         PHASE 15 BATCH 1 - PRIVATE DASHBOARD WORKSPACE.
-        The navigation below contains exactly the three destinations this surface
+        The navigation below contains exactly the destinations this surface
         supports: Overview (the account itself), the lost-report experience that
-        already lived here, and the claims list that already lived here. Nothing
-        was invented for the navigation, and no handler, service call, API path
-        or piece of state changed - only where the existing content is rendered.
+        already lived here, the claims list that already lived here, and the
+        notification layer added in Batch 1. Nothing was invented for the
+        navigation, and no handler, service call, API path or piece of state
+        changed - only where the existing content is rendered.
 
         Desktop (lg+): a persistent left navigation beside the active section,
         matching the layout language of the already-modernized admin console.
@@ -396,10 +419,17 @@ export default function CustomerDashboard({
         phone never gets a cramped fixed sidebar and no drawer state has to be
         invented. The active item is marked by an accent bar, a tint AND weight
         (never by colour alone) and carries aria-current="page".
+
+        UX-08 unchanged this structure. It moved the whole workspace onto the
+        appearance tokens and the type/icon ladders, dropped the two local
+        focus rings in favour of the single global focus language, and rewrote
+        the Overview's middle band as "where your items stand / what to do
+        next" (one primary entry point instead of a second copy of this
+        navigation). No destination, handler, request or privacy rule moved.
       */}
       <div className="lg:grid lg:grid-cols-[236px_minmax(0,1fr)] lg:gap-8 lg:items-start">
         <nav
-          className="flex items-stretch overflow-x-auto border-b border-line-subtle [scrollbar-width:none] [&::-webkit-scrollbar]:hidden lg:sticky lg:top-6 lg:flex-col lg:items-stretch lg:gap-0.5 lg:overflow-visible lg:border-b-0 lg:border-r lg:border-line-subtle lg:pb-1 lg:pr-3"
+          className="flex items-stretch overflow-x-auto border-b border-[var(--appearance-border)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden lg:sticky lg:top-6 lg:flex-col lg:items-stretch lg:gap-0.5 lg:overflow-visible lg:border-b-0 lg:border-r lg:border-[var(--appearance-border)] lg:pb-1 lg:pr-3"
           aria-label={t('Account sections', 'Sehemu za akaunti')}
         >
           {ACCOUNT_SECTION_ORDER.map((key) => {
@@ -412,13 +442,13 @@ export default function CustomerDashboard({
                 type="button"
                 onClick={() => setTab(key)}
                 aria-current={active ? 'page' : undefined}
-                className={`flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap border-b-2 -mb-px px-3.5 text-xs font-bold transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange/40 sm:px-4 lg:w-full lg:mb-0 lg:justify-start lg:rounded-lg lg:border-b-0 lg:border-l-[3px] lg:px-3 lg:py-2.5 ${
+                className={`flex min-h-11 shrink-0 items-center gap-2 whitespace-nowrap border-b-2 -mb-px px-3.5 text-caption font-bold transition-colors cursor-pointer sm:px-4 lg:w-full lg:mb-0 lg:justify-start lg:rounded-standard lg:border-b-0 lg:border-l-[3px] lg:px-3 lg:py-2.5 ${
                   active
-                    ? 'border-primary-green bg-primary-green/10 text-primary-green font-extrabold lg:border-l-primary-green'
-                    : 'border-transparent text-brand-muted-text hover:bg-brand-light-gray hover:text-brand-dark-text lg:border-l-transparent'
+                    ? 'border-[var(--appearance-primary)] bg-[var(--appearance-surface-muted)] text-[var(--appearance-primary)] font-extrabold lg:border-l-[var(--appearance-primary)]'
+                    : 'border-transparent text-[var(--appearance-text-muted)] hover:bg-[var(--appearance-surface-muted)] hover:text-[var(--appearance-text-primary)] lg:border-l-transparent'
                 }`}
               >
-                <Icon size={14} aria-hidden="true" className="shrink-0" />
+                <Icon size={ICON_SIZE.metadata} aria-hidden="true" className="shrink-0" />
                 <span>{copy.label}</span>
               </button>
             );
@@ -430,34 +460,34 @@ export default function CustomerDashboard({
               the active section, so every rendered section has exactly one, and
               the title/description come from the same table that drives the
               navigation. */}
-          <div className="space-y-1 border-b border-brand-border pb-3">
+          <div className="space-y-1 border-b border-[var(--appearance-border)] pb-3">
             <h1
               id="account-section-heading"
-              className="text-xl sm:text-2xl font-extrabold tracking-tight text-brand-dark-text"
+              className="text-subsection sm:text-section font-extrabold tracking-tight text-[var(--appearance-text-primary)]"
             >
               {sectionCopy.title}
             </h1>
-            <p className="text-sm text-brand-muted-text leading-relaxed max-w-2xl">{sectionCopy.description}</p>
+            <p className="text-body text-[var(--appearance-text-muted)] leading-relaxed max-w-2xl">{sectionCopy.description}</p>
           </div>
 
-          {/* OVERVIEW - the account's own identity, a summary derived from data
-              this component already holds, and the way into the other two
-              sections. It makes no request of its own. */}
+          {/* OVERVIEW - the calm recovery workspace: who is signed in, where the
+              account's items stand, and the ONE next step. Every value here is
+              already in this component's state, so the Overview still makes no
+              request of its own and the sections keep owning their own steps. */}
           {tab === 'overview' && (
             <section className="space-y-6" aria-labelledby="account-section-heading">
-              {/* ACCOUNT BAND - the same fields, the same masking and the same
-                  single Sign out control this surface already had, promoted to
-                  a deliberate account summary. The name is a plain element, not
-                  a heading: the page title above owns that role, so a rendered
-                  section never carries two of them. */}
-              <div className="bg-white border border-brand-border rounded-2xl p-5 sm:p-6">
-                <h2 className="text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">
-                  {t('Your account', 'Akaunti yako')}
-                </h2>
+              {/* IDENTITY BAND - the same fields, the same masking and the same
+                  single Sign out control this surface already had. The name is a
+                  plain element, not a heading: the page title above owns that
+                  role, so a rendered section never carries two of them. */}
+              <div className="rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)] p-5 sm:p-6">
+                <p className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">
+                  {t('Signed in as', 'Umeingia kama')}
+                </p>
                 <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
-                    <p className="text-lg sm:text-xl font-extrabold text-brand-dark-text break-words">{customer.full_name}</p>
-                    <p className="mt-1 text-sm text-brand-muted-text tabular-nums">{maskPhone(customer.phone)}</p>
+                    <p className="text-subsection font-extrabold text-[var(--appearance-text-primary)] break-words">{customer.full_name}</p>
+                    <p className="mt-1 text-small text-[var(--appearance-text-muted)] tabular-nums">{maskPhone(customer.phone)}</p>
                     <div className="mt-2.5">
                       <Badge variant={customer.status === 'active' ? 'success' : 'danger'}>
                         {customer.status === 'active' ? t('Active', 'Hai') : customer.status}
@@ -476,19 +506,20 @@ export default function CustomerDashboard({
                 </div>
               </div>
 
-              {/* ACTIVITY SUMMARY - derived from the claims this component has
-                  ALREADY loaded; no request is made here. The lost-report
-                  collection is owned by LostReportsSection and is loaded only
-                  when that section is opened, so the Overview reports no count
-                  it does not have, and never fetches one twice. */}
+              {/* WHERE YOUR ITEMS STAND - the account's current state, derived
+                  from the claims this component has ALREADY loaded; no request
+                  is made here. The lost-report collection is owned by
+                  LostReportsSection and is loaded only when that section is
+                  opened, so the Overview reports no count it does not have, and
+                  never fetches one twice. */}
               <div className="space-y-3">
-                <h2 className="text-base font-extrabold text-brand-dark-text">{t('Your activity', 'Shughuli zako')}</h2>
+                <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">{t('Where your items stand', 'Hali ya vitu vyako')}</h2>
                 <div className="grid gap-3 sm:gap-4 sm:grid-cols-2">
                   {claims === null ? (
                     loading ? (
                       <Skeleton shape="card" />
                     ) : (
-                      <p className="text-xs text-brand-muted-text leading-relaxed max-w-xl">
+                      <p className="text-small text-[var(--appearance-text-muted)] leading-relaxed max-w-xl">
                         {t(
                           'Your claims summary is unavailable right now. Open My Claims to try again.',
                           'Muhtasari wa claims zako haupatikani kwa sasa. Fungua Claims Zangu ili kujaribu tena.'
@@ -498,7 +529,7 @@ export default function CustomerDashboard({
                   ) : (
                     <StatCard
                       icon={Link2}
-                      label={t('Claims', 'Claims')}
+                      label={t('Claims linked', 'Claims zilizounganishwa')}
                       value={claims.length}
                       description={t(
                         `${activeClaims.length} active, ${historyClaims.length} past`,
@@ -507,40 +538,50 @@ export default function CustomerDashboard({
                     />
                   )}
                 </div>
+                {/* The one line that answers "where is my item". It names the
+                    state of an item already in progress using the SAME label and
+                    tone the claims list uses, and it is rendered only when there
+                    is such an item - it asserts nothing for an empty account. */}
+                {leadClaimStatus && (
+                  <p className="flex flex-wrap items-center gap-2 text-small text-[var(--appearance-text-secondary)]">
+                    <span>{t('In progress now', 'Kinachoendelea sasa')}</span>
+                    <Badge variant={leadClaimStatus.variant}>{leadClaimStatus.label}</Badge>
+                  </p>
+                )}
               </div>
 
-              {/* SECTION LINKS - the local section switch established in Batch 1.
-                  No route and no shortcut into a workflow: each card opens the
-                  section, and the section stays responsible for its own steps. */}
+              {/* WHAT TO DO NEXT - ONE primary entry point, and it is the same
+                  local section switch the previous cards used: it opens the
+                  section, and the section stays responsible for its own steps.
+                  The destination follows the state above (something in progress
+                  -> the claims list; nothing in progress -> file a report), so
+                  the workspace always answers "what now" without asking the
+                  customer to work out which section applies. The other
+                  destinations stay one labelled click away in the navigation
+                  beside this workspace. */}
               <div className="space-y-3">
-                <h2 className="text-base font-extrabold text-brand-dark-text">{t('Your sections', 'Sehemu zako')}</h2>
-                <div className="grid gap-3 sm:gap-4 sm:grid-cols-2">
-                  {(['lost', 'claims'] as const).map((key) => {
-                    const copy = ACCOUNT_SECTIONS[key][lang];
-                    const Icon = ACCOUNT_SECTIONS[key].icon;
-                    return (
-                      <button
-                        key={key}
-                        type="button"
-                        onClick={() => setTab(key)}
-                        className="group flex min-h-11 items-start gap-3 rounded-2xl border border-brand-border bg-white p-4 text-left transition-colors cursor-pointer hover:border-primary-green focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange/40"
-                      >
-                        <span
-                          aria-hidden="true"
-                          className="w-9 h-9 shrink-0 rounded-xl bg-primary-green/10 text-primary-green flex items-center justify-center"
-                        >
-                          <Icon size={17} />
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-sm font-extrabold text-brand-dark-text">{copy.label}</span>
-                          {copy.hint && (
-                            <span className="mt-1 block text-xs text-brand-muted-text leading-snug">{copy.hint}</span>
-                          )}
-                        </span>
-                        <ArrowRight size={16} aria-hidden="true" className="shrink-0 self-center text-brand-muted-text group-hover:text-primary-green" />
-                      </button>
-                    );
-                  })}
+                <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">{t('What to do next', 'Cha kufanya baadaye')}</h2>
+                <div className="space-y-3 rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)] p-4 sm:p-5">
+                  <p className="max-w-2xl text-small leading-relaxed text-[var(--appearance-text-secondary)]">
+                    {hasWorkInProgress
+                      ? t(
+                          'Something of yours is already with us. Open your claims to see where it stands and what we need from you.',
+                          'Kitu chako kipo kwetu tayari. Fungua claims zako kuona hali yake kamili na kile tunachohitaji kutoka kwako.'
+                        )
+                      : t(
+                          'Nothing of yours is in progress yet. File a lost report and we will watch the found-item records for anything that looks like it.',
+                          'Hakuna kitu chako kinachoendelea bado. Wasilisha ripoti ya kitu kilichopotea na tutafuatilia kumbukumbu za vitu vilivyopatikana kwa chochote kinachofanana.'
+                        )}
+                  </p>
+                  <Button variant="primary" size="md" onClick={() => setTab(nextSection)}>
+                    <NextSectionIcon size={ICON_SIZE.ui} aria-hidden="true" />
+                    {hasWorkInProgress
+                      ? t('View my claims', 'Ona claims zangu')
+                      : t('Report a lost item', 'Ripoti kitu kilichopotea')}
+                  </Button>
+                  {nextCopy.hint && (
+                    <p className="text-caption leading-snug text-[var(--appearance-text-muted)]">{nextCopy.hint}</p>
+                  )}
                 </div>
               </div>
             </section>
@@ -549,10 +590,11 @@ export default function CustomerDashboard({
           {/* MY LOST REPORTS - reporting, the report list, and possible matches.
               The section renders the SAME component with the SAME props; it only
               stops printing its own title, because the page title above is now
-              the section's single heading. */}
+              the section's single heading. UX-08 changed only this wrapper's
+              surface tokens. */}
           {tab === 'lost' && (
             <section
-              className="bg-white border border-brand-border rounded-2xl p-4 sm:p-6"
+              className="rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)] p-4 sm:p-6"
               aria-labelledby="account-section-heading"
             >
               <LostReportsSection
@@ -564,41 +606,44 @@ export default function CustomerDashboard({
             </section>
           )}
 
-      {/* BATCH 1 - NOTIFICATIONS. The section renders the SAME component with the
-          SAME props; it only stops printing its own title, because the page title
-          above is already the section's single heading. */}
-      {tab === 'notifications' && (
-        <section
-          className="bg-white border border-brand-border rounded-2xl p-4 sm:p-6"
-          aria-labelledby="account-section-heading"
-        >
-          <NotificationCentre lang={lang} />
-        </section>
-      )}
+          {/* BATCH 1 - NOTIFICATIONS. The section renders the SAME component with
+              the SAME props; it only stops printing its own title, because the
+              page title above is already the section's single heading. */}
+          {tab === 'notifications' && (
+            <section
+              className="rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)] p-4 sm:p-6"
+              aria-labelledby="account-section-heading"
+            >
+              <NotificationCentre lang={lang} />
+            </section>
+          )}
 
-      {/* My claims */}
+      {/* My claims — UX-08: same section, same handlers and the same API calls;
+          only the surface tokens, the type ladder and the icon sizes changed. */}
       {tab === 'claims' && (
-      <section className="bg-white border border-brand-border rounded-2xl p-4 sm:p-6" aria-labelledby="account-section-heading">
+      <section className="rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)] p-4 sm:p-6" aria-labelledby="account-section-heading">
         <div className="flex flex-wrap items-center justify-end gap-2">
           <Button variant="ghost" size="md" onClick={loadClaims} aria-label={t('Refresh', 'Onyesha upya')}>
-            <RefreshCw size={16} />
+            <RefreshCw size={ICON_SIZE.ui} aria-hidden="true" />
           </Button>
           <Button
             variant="primary"
             size="md"
             onClick={() => { if (linkOpen) resetLink(); setLinkOpen(o => !o); }}
           >
-            <Link2 size={16} /> {t('Link a claim', 'Unganisha claim')}
+            <Link2 size={ICON_SIZE.ui} aria-hidden="true" /> {t('Link a claim', 'Unganisha claim')}
           </Button>
         </div>
 
-        {/* Link-a-claim panel */}
+        {/* Link-a-claim panel. UX-08: the `mt-4 max-w-2xl border` container
+            contract is unchanged — only its tokens moved onto the appearance
+            surface and the type ladder. */}
         {linkOpen && (
-          <div className="mt-4 max-w-2xl border border-brand-border rounded-2xl p-4 sm:p-5 bg-brand-light-gray/50">
-            <h2 className="text-base font-extrabold text-brand-dark-text">
+          <div className="mt-4 max-w-2xl border border-[var(--appearance-border)] rounded-panel p-4 sm:p-5 bg-[var(--appearance-surface-muted)]">
+            <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
               {t('Link an existing claim', 'Unganisha claim iliyopo')}
             </h2>
-            <p className="mt-1 text-xs text-brand-muted-text leading-relaxed">
+            <p className="mt-1 text-small text-[var(--appearance-text-muted)] leading-relaxed">
               {t(
                 'Enter an existing claim ID. To link it we will text a code to the phone number registered on that claim, and ask the ownership questions that were set when the claim was made.',
                 'Weka msimbo wa claim uliyo nayo. Ili kuunganisha, tutatuma msimbo kwa nambari ya simu iliyosajiliwa kwenye claim hiyo, na kukuuliza maswali ya umiliki yaliyowekwa wakati claim iliundwa.'
@@ -630,7 +675,7 @@ export default function CustomerDashboard({
               </form>
             ) : (
               <form onSubmit={submitLink} className="mt-3 space-y-4" noValidate>
-                <p className="text-xs font-mono text-brand-muted-text break-all">{linkClaimId}</p>
+                <p className="text-small font-mono text-[var(--appearance-text-muted)] break-all">{linkClaimId}</p>
 
                 <OTPInput
                   length={4}
@@ -694,7 +739,7 @@ export default function CustomerDashboard({
                   size="md"
                   onClick={() => { if (linkOpen) resetLink(); setLinkOpen(o => !o); }}
                 >
-                  <Link2 size={16} /> {t('Link a claim', 'Unganisha claim')}
+                  <Link2 size={ICON_SIZE.ui} aria-hidden="true" /> {t('Link a claim', 'Unganisha claim')}
                 </Button>
               )}
             />
@@ -702,14 +747,14 @@ export default function CustomerDashboard({
         ) : (
           <div className="mt-5 space-y-6">
             <div className="space-y-3">
-              <div className="flex flex-wrap items-center gap-2 border-b border-brand-border pb-2">
-                <h2 className="text-base font-extrabold text-brand-dark-text">
+              <div className="flex flex-wrap items-center gap-2 border-b border-[var(--appearance-border)] pb-2">
+                <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
                   {t('Active claims', 'Claims zinazoendelea')}
                 </h2>
                 <Badge variant="neutral">{activeClaims.length}</Badge>
               </div>
               {activeClaims.length === 0 ? (
-                <p className="rounded-xl border border-brand-border bg-brand-light-gray/60 px-4 py-3 text-xs text-brand-muted-text">
+                <p className="rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] px-4 py-3 text-small text-[var(--appearance-text-muted)]">
                   {t('No active claims.', 'Hakuna claim inayoendelea.')}
                 </p>
               ) : (
@@ -717,14 +762,14 @@ export default function CustomerDashboard({
               )}
             </div>
             <div className="space-y-3">
-              <div className="flex flex-wrap items-center gap-2 border-b border-brand-border pb-2">
-                <h2 className="text-base font-extrabold text-brand-dark-text">
+              <div className="flex flex-wrap items-center gap-2 border-b border-[var(--appearance-border)] pb-2">
+                <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
                   {t('Claim history', 'Historia ya claims')}
                 </h2>
                 <Badge variant="neutral">{historyClaims.length}</Badge>
               </div>
               {historyClaims.length === 0 ? (
-                <p className="rounded-xl border border-brand-border bg-brand-light-gray/60 px-4 py-3 text-xs text-brand-muted-text">
+                <p className="rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] px-4 py-3 text-small text-[var(--appearance-text-muted)]">
                   {t('No past claims yet.', 'Hakuna claim za nyuma bado.')}
                 </p>
               ) : (

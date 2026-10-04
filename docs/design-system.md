@@ -261,6 +261,7 @@ These pockets are known, classified, and deliberately **not** touched by UX-01.
 | PrivacyView / TermsView | 88 / 11 × `stone-*`, ad-hoc headings | MIGRATE LATER | UX-17 |
 | Navbar | 24 hand-built buttons, 2 × `shadow-[…]` literals | MIGRATE LATER | UX-02 |
 | Authentication screens | customer registration / sign-in / activation now on the primitives and the appearance tokens; **agent and admin authentication are a different audience and are untouched** | MIGRATED in UX-07 (customer authentication) | — |
+| CustomerDashboard | `bg-white` / `brand-*` / `line-subtle` / `status-*` literals, `rounded-2xl` + `rounded-xl`, off-ladder `text-xs`/`text-sm`/`text-base`, sub-ladder icon sizes (13/14/16/17), two local `focus-visible:ring-2` rings, and an Overview whose section cards duplicated the navigation beside them | MIGRATED in UX-08 (customer dashboard) | — |
 | `Modal` scroll lock + focus trap | already correct | FOUNDATION | — |
 | `text-[11px]` in SectionHeading / StatCard | fixed in UX-01 (now `text-caption`) | FOUNDATION | — |
 | Agent verification/rejection panels | legacy inline error boxes, raw `red-600` text | MIGRATE LATER | UX-12 / UX-16 |
