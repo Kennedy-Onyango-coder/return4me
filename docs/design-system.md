@@ -255,7 +255,8 @@ These pockets are known, classified, and deliberately **not** touched by UX-01.
 | Area | Finding | Classification | Future queue |
 | --- | --- | --- | --- |
 | AdminView | 63 × 9/10/11px text, 61 × `stone-*`, 60 hand-built `<button>`, 30 `<input>`, one `window.prompt()` at the reject-reason step | MIGRATE LATER | UX-15 / UX-16 |
-| AgentView + agent/* | 51 × `stone-*`, 19 hand-built buttons, hand-rolled panels; the signed-out agent **sign-in** card moved onto the primitives and the appearance tokens in UX-11 — the registration fields, the hub and the panels remain | MIGRATE LATER | UX-12 / UX-13 / UX-16 |
+| AgentView + agent/* | 51 × `stone-*`, 19 hand-built buttons, hand-rolled panels; the signed-out **sign-in card** moved onto the primitives and the appearance tokens in UX-11, and its **registration fields** followed as a guided five-step application in UX-12 — the hub and the Batch-B panels remain | MIGRATE LATER | UX-13 / UX-16 |
+| Agent registration (`/agent_portal`, signed-out card) | the registration fields became a five-step guided application — Account, Location, Verification, Payout, Review — on the shared `Stepper` rail, with one dominant action per step (the ONE existing submit), a per-step explanation of what is needed and why, a review that groups the same values and returns to any group, and bilingual copy throughout; the fields, their `required` rules, the N4 email guard, the 5MB photograph limits, the two endpoints, the 17-field verify-otp payload, the county/sub-county dependence, the document handling and the M-Pesa payout option values are all unchanged | MIGRATED in UX-12 (agent registration) | — |
 | FinderView | UX-05 put the five-stage journey on the shared foundation (`Stepper` + `Input`/`Select`/`Button`) with the reviewed chrome on the appearance tokens. Still legacy: the category `<select>`, the photograph controls, the two GPS boxes and the legacy submit button | MIGRATE LATER | UX-16 |
 | OwnerView | the customer claim / recovery journey (search → confidence gate → OTP → payment → handover) now sits on the shared primitives, the `Stepper` rail and the appearance tokens, with one dominant action per stage; residual: the Track-claim modal's hand-built button and the two `stone-*` shades on the dark thumbnail chip | MIGRATED in UX-09 (customer claim / recovery journey) | UX-16 |
 | HomeView | hand-built buttons where the shared Button applies | MIGRATE LATER | UX-02 / UX-03 |
@@ -268,7 +269,7 @@ These pockets are known, classified, and deliberately **not** touched by UX-01.
 | CustomerDashboard | `bg-white` / `brand-*` / `line-subtle` / `status-*` literals, `rounded-2xl` + `rounded-xl`, off-ladder `text-xs`/`text-sm`/`text-base`, sub-ladder icon sizes (13/14/16/17), two local `focus-visible:ring-2` rings, and an Overview whose section cards duplicated the navigation beside them | MIGRATED in UX-08 (customer dashboard) | — |
 | `Modal` scroll lock + focus trap | already correct | FOUNDATION | — |
 | `text-[11px]` in SectionHeading / StatCard | fixed in UX-01 (now `text-caption`) | FOUNDATION | — |
-| Agent verification/rejection panels | legacy inline error boxes, raw `red-600` text | MIGRATE LATER | UX-12 / UX-16 |
+| Agent verification/rejection panels | legacy inline error boxes, raw `red-600` text | MIGRATE LATER | UX-16 |
 
 ## 15. Adding something new
 

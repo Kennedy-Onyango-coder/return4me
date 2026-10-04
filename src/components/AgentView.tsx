@@ -9,6 +9,10 @@ import { administrativeUnitsForCounty } from '../config/kenyaAdministrativeUnits
 import { detectBrowserLocation, type DetectedLocation } from '../services/browserLocation';
 import { useAgentOperations } from '../hooks/useAgentOperations';
 import { Banner, Button, ICON_SIZE, Input } from './ui';
+// UX-12 imports the two shared primitives the registration steps need, by the
+// same direct path AdminView, OwnerView and BecomeAgentView already use.
+import Select from './ui/Select';
+import Stepper from './ui/Stepper';
 
 interface AgentViewProps {
   lang: 'en' | 'sw';
@@ -52,6 +56,25 @@ interface AgentViewProps {
  * existing import sites keep working.
  */
 export { agentClaimBadge } from './claimStatus';
+
+/**
+ * UX-12 — THE AGENT APPLICATION, AS A GUIDED SEQUENCE.
+ *
+ * The five steps of an agent application, in the order the applicant works
+ * through them, in both languages. `description` is used by nothing here; the
+ * rail renders a short label per step and the panel explains the current one.
+ *
+ * This is PRESENTATION data. It changes neither what is collected nor what is
+ * sent: each step renders fields the single submit already carried, and the
+ * same request still carries them.
+ */
+const AGENT_REGISTRATION_STEPS = [
+  { en: 'Account', sw: 'Akaunti' },
+  { en: 'Location', sw: 'Eneo' },
+  { en: 'Verification', sw: 'Uthibitisho' },
+  { en: 'Payout', sw: 'Malipo' },
+  { en: 'Review', sw: 'Kagua' },
+] as const;
 
 export default function AgentView({ lang, token, setToken, categories, refreshCategories }: AgentViewProps) {
   const t = translations[lang];
@@ -103,6 +126,10 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
   // that. Defaulting to false means every other entry path (an existing agent
   // signing in, a grandfathered pre-N4 agent) is unaffected.
   const [awaitingEmailVerification, setAwaitingEmailVerification] = useState(false);
+  // UX-12 — which step of the guided application is open. Presentation state
+  // only: it selects which of the SAME registration fields are rendered, and it
+  // never influences what is sent, when, or to which endpoint.
+  const [registrationStep, setRegistrationStep] = useState(0);
 
   const {
     agentStatus, queueError, queueLoading, expectedDropoffs, holdingPickups, agentProfile, agentEarnings,
@@ -160,6 +187,19 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
       }
     }
 
+    // UX-12 — THE GUIDED STEPS.
+    //
+    // While the applicant is still working through the application, this same
+    // form submit advances one step and returns WITHOUT touching the network.
+    // Only Review falls through to the request below, so the request itself is
+    // unchanged: the same endpoint, the same body, the same OTP sequencing, the
+    // same failures. No second submission path exists, and the submit button's
+    // loading guard still prevents a duplicate dispatch in flight.
+    if (isRegistering && registrationStep < AGENT_REGISTRATION_STEPS.length - 1) {
+      setRegistrationStep((step) => Math.min(step + 1, AGENT_REGISTRATION_STEPS.length - 1));
+      return;
+    }
+
     setAuthLoading(true);
 
     try {
@@ -202,11 +242,21 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
   const agentUnits = administrativeUnitsForCounty(agentCounty);
 
   const detectAgentLocation = async () => {
-    setAgentLocationMessage('Detecting your location…');
+    setAgentLocationMessage(tr('Detecting your location…', 'Inatambua eneo lako…'));
     const result = await detectBrowserLocation();
     if (result.status === 'error') { setAgentLocationMessage(result.message); return; }
     setAgentDetectedLocation(result.location);
-    setAgentLocationMessage(result.location.county ? 'Location detected. Confirm or edit the fields below.' : 'Coordinates captured, but the county could not be determined. Enter it manually.');
+    setAgentLocationMessage(
+      result.location.county
+        ? tr(
+            'Location detected. Confirm or edit the fields below.',
+            'Eneo limepatikana. Thibitisha au hariri sehemu zilizo hapa chini.'
+          )
+        : tr(
+            'Coordinates captured, but the county could not be determined. Enter it manually.',
+            'Kuratibu za eneo zimepatikana, lakini kaunti haikutambuliwa. Iandike mwenyewe.'
+          )
+    );
   };
 
   const applyDetectedAgentLocation = () => {
@@ -277,6 +327,391 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
       setAuthLoading(false);
     }
   };
+
+  const registrationSteps = AGENT_REGISTRATION_STEPS.map((s) => ({ label: lang === 'sw' ? s.sw : s.en }));
+  const isRegistrationReview = registrationStep === AGENT_REGISTRATION_STEPS.length - 1;
+  /** The sub-county NAME for the review; the id the select holds is not shown. */
+  const agentAdministrativeUnitName =
+    agentUnits.find((unit) => unit.id === agentAdministrativeUnitId)?.name ?? '';
+
+  /**
+   * One review row: the label the applicant filled in, and the value.
+   *
+   * Only what the applicant typed is echoed, and only where it is safe to echo.
+   * The identifiers an administrator must see but a bystander must not (the
+   * national ID, the payout code) are reported as provided or not provided
+   * instead of being printed — the same rule the lost-report review already
+   * follows on this platform.
+   */
+  const reviewRow = (label: string, value: string) => (
+    <div className="flex items-start justify-between gap-4">
+      <dt className="text-caption font-bold text-[var(--appearance-text-muted)]">{label}</dt>
+      <dd className="text-body font-bold text-right text-[var(--appearance-text-primary)]">{value || '—'}</dd>
+    </div>
+  );
+
+  /** One review group, with the way back to the step it came from. */
+  const reviewGroup = (title: string, step: number, rows: React.ReactNode) => (
+    <div className="rounded-standard border border-[var(--appearance-border)] p-4">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-body-large font-extrabold text-[var(--appearance-text-primary)]">{title}</h3>
+        <Button type="button" variant="ghost" size="sm" onClick={() => setRegistrationStep(step)}>
+          {tr('Change', 'Badilisha')}
+        </Button>
+      </div>
+      <dl className="mt-3 space-y-2">{rows}</dl>
+    </div>
+  );
+
+  /**
+   * UX-12 — THE GUIDED APPLICATION PANEL.
+   *
+   * The registration fields used to arrive as one wall of inputs inside the
+   * sign-in card. They are the SAME fields, inside the SAME single form, carried
+   * by the SAME single submit: what changed is that only the open step's fields
+   * are on screen, each step says what it needs and why, and Review gathers the
+   * same values with a way back to every group.
+   *
+   * This panel owns no business logic. It calls no endpoint, decides nothing
+   * about eligibility, approval, verification or payout, and renders no value
+   * the applicant did not enter. The phone field belongs to the Account step and
+   * stays in the form below it (it is shared with sign-in), so this panel is the
+   * steps themselves.
+   */
+  const registrationPanel = (
+    <div className="space-y-5 fade-in">
+      <Stepper
+        steps={registrationSteps}
+        currentStep={registrationStep}
+        label={tr('Agent application progress', 'Maendeleo ya maombi ya wakala')}
+      />
+
+      {/* One polite announcement per step, for assistive tech that does not
+          track the rail's aria-current. */}
+      <p className="sr-only" role="status" aria-live="polite">
+        {tr('Step', 'Hatua')} {registrationStep + 1} {tr('of', 'kati ya')}{' '}
+        {AGENT_REGISTRATION_STEPS.length}: {registrationSteps[registrationStep].label}
+      </p>
+
+      {/* 1. ACCOUNT */}
+      {registrationStep === 0 && (
+        <section className="space-y-4">
+          <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
+            {tr('Your account and your business', 'Akaunti yako na biashara yako')}
+          </h2>
+          <p className="text-body leading-relaxed text-[var(--appearance-text-muted)]">
+            {tr(
+              'The account is opened in your business name, and we text your phone number to confirm it. The email address is where your verification link is sent.',
+              'Akaunti hufunguliwa kwa jina la biashara yako, na tunatuma msimbo kwenye namba yako ya simu ili kuithibitisha. Barua pepe ni mahali kiungo chako cha uthibitishaji kinapotumwa.'
+            )}
+          </p>
+          <Input
+            id="agent-business-name"
+            label={t.businessName}
+            value={businessName}
+            onChange={(e) => setBusinessName(e.target.value)}
+            placeholder={tr('Enter your business or shop name', 'Weka jina la biashara au duka lako')}
+            required
+          />
+          <Input
+            id="agent-contact-email"
+            label="Email Address (Required / Barua Pepe - Inahitajika)"
+            type="email"
+            required
+            value={contactEmail}
+            onChange={(e) => setContactEmail(e.target.value)}
+            placeholder="agent@return4me.co.ke"
+            hint={t.agentEmailHelp}
+          />
+        </section>
+      )}
+      {/* 2. LOCATION */}
+      {registrationStep === 1 && (
+        <section className="space-y-4">
+          <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
+            {tr('Where you will work', 'Utakapofanya kazi')}
+          </h2>
+          <p className="text-body leading-relaxed text-[var(--appearance-text-muted)]">
+            {tr(
+              'Owners pick a county and sub-county when they hand an item in, so this is how your collection point is shown to the people nearest it.',
+              'Wamiliki huchagua kaunti na kaunti ndogo wanapokabidhi kitu, kwa hivyo hii ni jinsi kituo chako kinavyoonyeshwa kwa watu walio karibu nacho.'
+            )}
+          </p>
+          <Select
+            id="agent-county"
+            label={tr('Service county', 'Kaunti ya huduma')}
+            required
+            value={agentCounty}
+            onChange={(e) => {
+              setAgentCounty(e.target.value);
+              setAgentAdministrativeUnitId('');
+            }}
+          >
+            <option value="">{tr('Select county', 'Chagua kaunti')}</option>
+            {countyGroups.map((group) => (
+              <optgroup key={group.group} label={group.group}>
+                {group.counties.map((county) => (
+                  <option key={county.code} value={county.name}>{county.name}</option>
+                ))}
+              </optgroup>
+            ))}
+          </Select>
+          <Select
+            id="agent-sub-county"
+            label={tr('Service sub-county', 'Kaunti ndogo ya huduma')}
+            required
+            value={agentAdministrativeUnitId}
+            onChange={(e) => setAgentAdministrativeUnitId(e.target.value)}
+            disabled={!agentCounty}
+            hint={tr('Choose the county first.', 'Chagua kaunti kwanza.')}
+          >
+            <option value="">
+              {agentCounty
+                ? tr('Select sub-county', 'Chagua kaunti ndogo')
+                : tr('Select county first', 'Chagua kaunti kwanza')}
+            </option>
+            {agentUnits.map((unit) => (
+              <option key={unit.id} value={unit.id}>{unit.name}</option>
+            ))}
+          </Select>
+
+          <div className="space-y-2">
+            <Button type="button" variant="outline" size="md" className="w-full" onClick={detectAgentLocation}>
+              <MapPin size={ICON_SIZE.ui} aria-hidden="true" />
+              {tr('Use my current location', 'Tumia eneo nilipo sasa')}
+            </Button>
+            {agentLocationMessage && (
+              <p role="status" className="text-caption text-[var(--appearance-text-muted)]">{agentLocationMessage}</p>
+            )}
+            {agentDetectedLocation && (
+              <div className="space-y-2 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] p-3">
+                <p className="text-body font-bold text-[var(--appearance-text-primary)]">
+                  {tr('Location detected', 'Eneo limepatikana')}
+                </p>
+                {agentDetectedLocation.county && (
+                  <p className="text-caption text-[var(--appearance-text-secondary)]">
+                    {tr('County', 'Kaunti')}: {agentDetectedLocation.county}
+                  </p>
+                )}
+                {agentDetectedLocation.place && (
+                  <p className="text-caption text-[var(--appearance-text-secondary)]">
+                    {tr('Nearest place', 'Mahali palipo karibu')}: {agentDetectedLocation.place}
+                  </p>
+                )}
+                {agentDetectedLocation.accuracy !== null && (
+                  <p className="text-caption text-[var(--appearance-text-secondary)]">
+                    {tr('GPS accuracy', 'Usahihi wa GPS')}: ±{Math.round(agentDetectedLocation.accuracy)} {tr('metres', 'mita')}
+                  </p>
+                )}
+                <Button type="button" variant="secondary" size="md" className="w-full" onClick={applyDetectedAgentLocation}>
+                  {tr('Use this location', 'Tumia eneo hili')}
+                </Button>
+              </div>
+            )}
+          </div>
+
+          <Input
+            id="agent-location"
+            label={tr('Exact operational area', 'Eneo halisi la kazi')}
+            value={locationAddress}
+            onChange={(e) => setLocationAddress(e.target.value)}
+            placeholder={tr('e.g. Near the main shopping centre', 'k.m. Karibu na soko kuu')}
+            required
+            hint={tr('The spot an owner walks to. A landmark helps more than a street name.', 'Mahali mmiliki anapofika. Alama ya eneo husaidia zaidi ya jina la barabara.')}
+          />
+        </section>
+      )}
+      {/* 3. VERIFICATION */}
+      {registrationStep === 2 && (
+        <section className="space-y-4">
+          <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
+            {tr('Prove who you are', 'Thibitisha wewe ni nani')}
+          </h2>
+          <p className="text-body leading-relaxed text-[var(--appearance-text-muted)]">
+            {tr(
+              'An administrator checks these details before your application can be approved. Nothing you enter here is shown to owners or customers.',
+              'Msimamizi hukagua taarifa hizi kabla maombi yako kuidhinishwa. Hakuna unachoandika hapa kinachoonyeshwa kwa wamiliki au wateja.'
+            )}
+          </p>
+          <Input
+            id="agent-national-id"
+            label={t.nationalId}
+            value={nationalId}
+            onChange={(e) => setNationalId(e.target.value)}
+            placeholder={tr('e.g. Enter your national ID number', 'k.m. Weka namba yako ya kitambulisho')}
+            required
+          />
+
+          <div className="space-y-2">
+            <label htmlFor="agent-shop-photo" className="block text-caption font-bold text-[var(--appearance-text-primary)]">
+              {tr('Business or shop front photo', 'Picha ya mbele ya biashara au duka')}
+            </label>
+            <input
+              id="agent-shop-photo"
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/heic"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  if (file.size > 5 * 1024 * 1024) {
+                    setAuthError('Picha ya duka ni kubwa mno. Tafadhali chagua picha chini ya 5MB.');
+                    return;
+                  }
+                  const reader = new FileReader();
+                  reader.onloadend = () => setShopPhotoBase64(reader.result as string);
+                  reader.readAsDataURL(file);
+                }
+              }}
+              className="block min-h-11 w-full cursor-pointer text-caption text-[var(--appearance-text-muted)] file:mr-3 file:cursor-pointer file:rounded-small file:border-0 file:bg-[var(--appearance-surface-muted)] file:px-3 file:py-2 file:text-caption file:font-bold file:text-[var(--appearance-primary)]"
+            />
+            {shopPhotoBase64 && (
+              <p role="status" className="text-caption font-bold text-[var(--appearance-success)]">
+                {tr('Shop photo selected', 'Picha ya duka imechaguliwa')}
+              </p>
+            )}
+            <p className="text-caption text-[var(--appearance-text-muted)]">
+              {tr('Optional. Up to 5MB.', 'Hiari. Hadi 5MB.')}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <label htmlFor="agent-id-document-photo" className="block text-caption font-bold text-[var(--appearance-text-primary)]">
+              {tr('Agent ID document photo', 'Picha ya kitambulisho cha wakala')}
+            </label>
+            <input
+              id="agent-id-document-photo"
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/heic"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  if (file.size > 5 * 1024 * 1024) {
+                    setAuthError('Picha ya kitambulisho ni kubwa mno. Tafadhali chagua picha chini ya 5MB.');
+                    return;
+                  }
+                  const reader = new FileReader();
+                  reader.onloadend = () => setIdDocumentPhotoBase64(reader.result as string);
+                  reader.readAsDataURL(file);
+                }
+              }}
+              className="block min-h-11 w-full cursor-pointer text-caption text-[var(--appearance-text-muted)] file:mr-3 file:cursor-pointer file:rounded-small file:border-0 file:bg-[var(--appearance-surface-muted)] file:px-3 file:py-2 file:text-caption file:font-bold file:text-[var(--appearance-primary)]"
+            />
+            {idDocumentPhotoBase64 && (
+              <p role="status" className="text-caption font-bold text-[var(--appearance-success)]">
+                {tr('ID photo selected', 'Picha ya kitambulisho imechaguliwa')}
+              </p>
+            )}
+            <p className="text-caption text-[var(--appearance-text-muted)]">
+              {tr('Optional. Up to 5MB. Kept private.', 'Hiari. Hadi 5MB. Huhifadhiwa kwa faragha.')}
+            </p>
+          </div>
+        </section>
+      )}
+      {/* 4. PAYOUT */}
+      {registrationStep === 3 && (
+        <section className="space-y-4">
+          <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
+            {tr('Where your share is sent', 'Sehemu yako inatumwa wapi')}
+          </h2>
+          <p className="text-body leading-relaxed text-[var(--appearance-text-muted)]">
+            {tr(
+              'Your share of the service fee is paid to this M-Pesa account. Enter the details exactly as they appear in M-Pesa so the payment reaches you.',
+              'Sehemu yako ya ada ya huduma hulipwa kwenye akaunti hii ya M-Pesa. Weka taarifa kama zinavyoonekana kwenye M-Pesa ili malipo yakukanufaishe.'
+            )}
+          </p>
+          <Select
+            id="agent-payout-method"
+            label={tr('Payout method', 'Njia ya malipo')}
+            required
+            value={payoutMethodType}
+            onChange={(e) => setPayoutMethodType(e.target.value)}
+          >
+            <option value="Till Number">Till Number (M-Pesa Buy Goods)</option>
+            <option value="Paybill Number">Paybill Number</option>
+            <option value="Pochi la Biashara">Pochi la Biashara</option>
+            <option value="Personal M-Pesa">Personal M-Pesa (Send Money)</option>
+          </Select>
+          <Input
+            id="agent-till-number"
+            label={tr('Payout code or number', 'Namba au msimbo wa malipo')}
+            value={tillNumber}
+            onChange={(e) => setTillNumber(e.target.value)}
+            placeholder="Till / Paybill / Phone"
+            required
+            hint={tr('The number the money is sent to. Please check it twice.', 'Namba ambayo pesa inatumwa kwake. Tafadhali iangalie mara mbili.')}
+          />
+        </section>
+      )}
+      {/* 5. REVIEW */}
+      {registrationStep === 4 && (
+        <section className="space-y-4">
+          <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
+            {tr('Check your application', 'Angalia maombi yako')}
+          </h2>
+          <p className="text-body leading-relaxed text-[var(--appearance-text-muted)]">
+            {tr(
+              'This is what we received. Open any group to change it, then submit your application.',
+              'Haya ni tuliyopokea. Fungua kundi lolote ili kulibadilisha, kisha tuma maombi yako.'
+            )}
+          </p>
+
+          {reviewGroup(tr('Account', 'Akaunti'), 0, (
+            <>
+              {reviewRow(t.businessName, businessName)}
+              {reviewRow(tr('Phone number', 'Namba ya simu'), phone)}
+              {reviewRow(tr('Email address', 'Barua pepe'), contactEmail)}
+            </>
+          ))}
+
+          {reviewGroup(tr('Location', 'Eneo'), 1, (
+            <>
+              {reviewRow(tr('Service county', 'Kaunti ya huduma'), agentCounty)}
+              {reviewRow(tr('Service sub-county', 'Kaunti ndogo ya huduma'), agentAdministrativeUnitName)}
+              {reviewRow(tr('Exact operational area', 'Eneo halisi la kazi'), locationAddress)}
+            </>
+          ))}
+
+          {reviewGroup(tr('Verification', 'Uthibitisho'), 2, (
+            <>
+              {reviewRow(t.nationalId, nationalId ? tr('Provided', 'Imetolewa') : tr('Not provided', 'Haitolewa'))}
+              {reviewRow(
+                tr('Business or shop front photo', 'Picha ya mbele ya biashara au duka'),
+                shopPhotoBase64 ? tr('Provided', 'Imetolewa') : tr('Not provided', 'Haitolewa')
+              )}
+              {reviewRow(
+                tr('Agent ID document photo', 'Picha ya kitambulisho cha wakala'),
+                idDocumentPhotoBase64 ? tr('Provided', 'Imetolewa') : tr('Not provided', 'Haitolewa')
+              )}
+            </>
+          ))}
+
+          {reviewGroup(tr('Payout', 'Malipo'), 3, (
+            <>
+              {reviewRow(tr('Payout method', 'Njia ya malipo'), payoutMethodType)}
+              {reviewRow(
+                tr('Payout code or number', 'Namba au msimbo wa malipo'),
+                tillNumber ? tr('Provided', 'Imetolewa') : tr('Not provided', 'Haitolewa')
+              )}
+            </>
+          ))}
+        </section>
+      )}
+
+      {/* The secondary action of every step but the first. The dominant action is
+          the form's single submit below the panel, so no step carries two. */}
+      {registrationStep > 0 && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="lg"
+          className="w-full"
+          onClick={() => setRegistrationStep((step) => Math.max(0, step - 1))}
+        >
+          {tr('Back', 'Rudi')}
+        </Button>
+      )}
+    </div>
+  );
 
   return (
     <div className="w-full fade-in">
@@ -389,248 +824,89 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                 </button>
               </div>
 
-              {/* Registration Specific Fields */}
+              {/* UX-12 — the guided application replaces this one wall of fields.
+                  Same fields, same required attributes, same single submit; the
+                  panel above the card renders only the open step's controls. */}
               {isRegistering && (
-                <div className="space-y-4 fade-in">
-                  <div className="space-y-1">
-                    <label htmlFor="agent-business-name" className="block text-xs font-bold text-primary-green uppercase tracking-wider">{t.businessName} *</label>
+                registrationPanel
+              )}
+
+              {/* UX-12 · B — the phone field belongs to the Account step. It is the
+                  shared credential: the same `Input`, the same state, the same
+                  hint and the same payload field. It stays in the form (not in
+                  the panel) because sign-in uses it too, and it is shown for the
+                  Account step only, so a later step never shows a control that
+                  belongs to an earlier one. */}
+              {(!isRegistering || registrationStep === 0) && (
+                <Input
+                  id="agent-phone"
+                  label={tr('Phone number', 'Namba ya simu')}
+                  type="tel"
+                  inputMode="tel"
+                  autoComplete="tel"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="0712345678"
+                  required
+                  disabled={authLoading}
+                  hint={isRegistering
+                    ? tr(
+                        'We text a one-time code to this number to verify it.',
+                        'Tunatuma msimbo wa mara moja kwa nambari hii ili kuithibitisha.'
+                      )
+                    : tr(
+                        'Use the number you registered with us.',
+                        'Tumia nambari uliyojisajili nayo.'
+                      )}
+                />
+              )}
+
+              {/* UX-12 · C — consent belongs with the final review, so it is shown
+                  there and nowhere else. Same checkbox, same state, same payload
+                  field, same two existing navigation handles. */}
+              {isRegistering && (
+                isRegistrationReview ? (
+                  <div className="flex items-start gap-3 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] p-3">
                     <input
-                      id="agent-business-name"
-                      type="text"
-                      value={businessName}
-                      onChange={(e) => setBusinessName(e.target.value)}
-                      placeholder="Enter your business or shop name"
-                      className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm"
+                      id="agreed-terms"
+                      type="checkbox"
+                      checked={agreedTerms}
+                      onChange={(e) => setAgreedTerms(e.target.checked)}
+                      className="mt-0.5 h-5 w-5 shrink-0 cursor-pointer rounded-compact border-[var(--appearance-border-strong)] accent-[var(--appearance-primary)]"
                       required
                     />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label htmlFor="agent-county" className="block text-xs font-bold text-primary-green uppercase tracking-wider">Service County *</label>
-                    <select id="agent-county" value={agentCounty} onChange={e => { setAgentCounty(e.target.value); setAgentAdministrativeUnitId(''); }} className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-white" required>
-                      <option value="">Select county</option>
-                      {countyGroups.map(group => <optgroup key={group.group} label={group.group}>{group.counties.map(county => <option key={county.code} value={county.name}>{county.name}</option>)}</optgroup>)}
-                    </select>
-                  </div>
-                  <div className="space-y-1">
-                    <label htmlFor="agent-sub-county" className="block text-xs font-bold text-primary-green uppercase tracking-wider">Service Sub-county *</label>
-                    <select id="agent-sub-county" value={agentAdministrativeUnitId} onChange={e => setAgentAdministrativeUnitId(e.target.value)} disabled={!agentCounty} className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-white disabled:bg-stone-100" required>
-                      <option value="">{agentCounty ? 'Select sub-county' : 'Select county first'}</option>
-                      {agentUnits.map(unit => <option key={unit.id} value={unit.id}>{unit.name}</option>)}
-                    </select>
-                  </div>
-                  <div className="space-y-1">
-                    <button type="button" onClick={detectAgentLocation} className="w-full min-h-11 border border-primary-green rounded-xl px-3 py-2.5 text-sm font-bold text-primary-green inline-flex items-center justify-center gap-2"><MapPin size={16} aria-hidden="true" /> Use my current location</button>
-                    {agentLocationMessage && <p className="text-caption text-stone-600" role="status">{agentLocationMessage}</p>}
-                    {agentDetectedLocation && <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs space-y-2"><p className="font-bold">Location detected</p>{agentDetectedLocation.county && <p>County: {agentDetectedLocation.county}</p>}{agentDetectedLocation.place && <p>Detected place: {agentDetectedLocation.place}</p>}{agentDetectedLocation.accuracy !== null && <p>GPS accuracy: approximately {Math.round(agentDetectedLocation.accuracy)} metres</p>}<button type="button" onClick={applyDetectedAgentLocation} className="font-bold text-primary-green underline">Use this location</button></div>}
-                  </div>
-                  <div className="space-y-1">
-                    <label htmlFor="agent-location" className="block text-xs font-bold text-primary-green uppercase tracking-wider">Exact operational area *</label>
-                    <input
-                      id="agent-location"
-                      type="text"
-                      value={locationAddress}
-                      onChange={(e) => setLocationAddress(e.target.value)}
-                      placeholder="e.g. Near the main shopping centre"
-                      className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm"
-                      required
-                    />
-                  </div>
-
-                  <div className="space-y-4">
-                    <div className="space-y-1">
-                      <label htmlFor="agent-payout-method" className="block text-xs font-bold text-primary-green uppercase tracking-wider">Payout Method *</label>
-                      <select
-                        id="agent-payout-method"
-                        value={payoutMethodType}
-                        onChange={(e) => setPayoutMethodType(e.target.value)}
-                        className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-white"
-                        required
+                    <label htmlFor="agreed-terms" className="cursor-pointer select-none text-body leading-relaxed text-[var(--appearance-text-secondary)]">
+                      {tr('I have read and agree to the Return4me ', 'Nimesoma na nakubaliana na ')}
+                      <button
+                        type="button"
+                        onClick={() => (window as any).setView?.('terms')}
+                        className="inline font-bold text-[var(--appearance-primary)] hover:underline"
                       >
-                        <option value="Till Number">Till Number (M-Pesa Buy Goods)</option>
-                        <option value="Paybill Number">Paybill Number</option>
-                        <option value="Pochi la Biashara">Pochi la Biashara</option>
-                        <option value="Personal M-Pesa">Personal M-Pesa (Send Money)</option>
-                      </select>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <label htmlFor="agent-till-number" className="block text-xs font-bold text-primary-green uppercase tracking-wider">Payout Code / Number *</label>
-                        <input
-                          id="agent-till-number"
-                          type="text"
-                          value={tillNumber}
-                          onChange={(e) => setTillNumber(e.target.value)}
-                          placeholder="Till / Paybill / Phone"
-                          className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm font-mono"
-                          required
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label htmlFor="agent-national-id" className="block text-xs font-bold text-primary-green uppercase tracking-wider">{t.nationalId} *</label>
-                        <input
-                          id="agent-national-id"
-                          type="text"
-                          value={nationalId}
-                          onChange={(e) => setNationalId(e.target.value)}
-                          placeholder="e.g. Enter your national ID number"
-                          className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm font-mono"
-                          required
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-1">
-                      <label htmlFor="agent-contact-email" className="block text-xs font-bold text-primary-green uppercase tracking-wider">
-                        Email Address (Required / Barua Pepe - Inahitajika)
-                      </label>
-                      <input
-                        id="agent-contact-email"
-                        type="email"
-                        value={contactEmail}
-                        onChange={(e) => setContactEmail(e.target.value)}
-                        placeholder="e.g. agent@return4me.co.ke"
-                        // N4 — required, and `required` is a real HTML constraint,
-                        // not decoration: the browser blocks submission before
-                        // any network call. The backend independently rejects a
-                        // missing or malformed address, so this is a convenience
-                        // for the applicant, never the enforcement point.
-                        required
-                        aria-describedby="agent-contact-email-help"
-                        className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm font-sans"
-                      />
-                      {/* N4 — say WHY it is required. An applicant who does not
-                          know the address will be emailed and verified cannot
-                          act on the platform, so a bare "required" would read as
-                          arbitrary. */}
-                      <p id="agent-contact-email-help" className="text-[11px] text-stone-500 leading-relaxed">
-                        {t.agentEmailHelp}
-                      </p>
-                    </div>
-
-                    {/* Shop Photo Upload */}
-                    <div className="space-y-1">
-                      <label htmlFor="agent-shop-photo" className="block text-xs font-bold text-primary-green uppercase tracking-wider">
-                        Business / Shop Front Photo (Picha ya Duka/Biashara)
-                      </label>
-                      <input
-                        id="agent-shop-photo"
-                        type="file"
-                        accept="image/jpeg,image/png,image/webp,image/heic"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) {
-                            if (file.size > 5 * 1024 * 1024) {
-                              setAuthError('Picha ya duka ni kubwa mno. Tafadhali chagua picha chini ya 5MB.');
-                              return;
-                            }
-                            const reader = new FileReader();
-                            reader.onloadend = () => setShopPhotoBase64(reader.result as string);
-                            reader.readAsDataURL(file);
-                          }
-                        }}
-                        className="block w-full text-xs text-stone-500 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-emerald-50 file:text-primary-green hover:file:bg-emerald-100 cursor-pointer"
-                      />
-                      {shopPhotoBase64 && (
-                        <p className="text-[11px] text-emerald-600 font-semibold">Picha ya duka imepakiwa (Shop photo selected)</p>
-                      )}
-                    </div>
-
-                    {/* ID Document Photo Upload */}
-                    <div className="space-y-1">
-                      <label htmlFor="agent-id-document-photo" className="block text-xs font-bold text-primary-green uppercase tracking-wider">
-                        Agent ID Document Photo (Picha ya Kitambulisho cha Wakala)
-                      </label>
-                      <input
-                        id="agent-id-document-photo"
-                        type="file"
-                        accept="image/jpeg,image/png,image/webp,image/heic"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) {
-                            if (file.size > 5 * 1024 * 1024) {
-                              setAuthError('Picha ya kitambulisho ni kubwa mno. Tafadhali chagua picha chini ya 5MB.');
-                              return;
-                            }
-                            const reader = new FileReader();
-                            reader.onloadend = () => setIdDocumentPhotoBase64(reader.result as string);
-                            reader.readAsDataURL(file);
-                          }
-                        }}
-                        className="block w-full text-xs text-stone-500 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-orange-50 file:text-accent-orange hover:file:bg-orange-100 cursor-pointer"
-                      />
-                      {idDocumentPhotoBase64 && (
-                        <p className="text-[11px] text-emerald-600 font-semibold">Picha ya kitambulisho imepakiwa (ID photo selected)</p>
-                      )}
-                    </div>
+                        {tr('Terms of Service', 'Masharti ya Huduma')}
+                      </button>{' '}
+                      {tr('and the ', 'na ')}
+                      <button
+                        type="button"
+                        onClick={() => (window as any).setView?.('privacy')}
+                        className="inline font-bold text-[var(--appearance-primary)] hover:underline"
+                      >
+                        {tr('Privacy Policy', 'Sera ya Faragha')}
+                      </button>
+                    </label>
                   </div>
-                </div>
+                ) : null
               )}
 
-              {/* UX-11 · B — the credential field, shared by both modes. The same
-                  `phone` state, the same request payload and the shared Input
-                  primitive (visible label, tel keyboard, autofill semantics). */}
-              <Input
-                id="agent-phone"
-                label={tr('Phone number', 'Namba ya simu')}
-                type="tel"
-                inputMode="tel"
-                autoComplete="tel"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                placeholder="0712345678"
-                required
-                disabled={authLoading}
-                hint={isRegistering
-                  ? tr(
-                      'We text a one-time code to this number to verify it.',
-                      'Tunatuma msimbo wa mara moja kwa nambari hii ili kuithibitisha.'
-                    )
-                  : tr(
-                      'Use the number you registered with us.',
-                      'Tumia nambari uliyojisajili nayo.'
-                    )}
-              />
-
-              {isRegistering && (
-                <div className="flex items-start space-x-2 pt-2 pb-1 bg-brand-beige p-3 rounded-xl border border-stone-100">
-                  <input
-                    id="agreed-terms"
-                    type="checkbox"
-                    checked={agreedTerms}
-                    onChange={(e) => setAgreedTerms(e.target.checked)}
-                    className="mt-1 h-4 w-4 rounded border-stone-300 text-primary-green focus:ring-primary-green accent-primary-green cursor-pointer"
-                    required
-                  />
-                  <label htmlFor="agreed-terms" className="text-xs text-stone-600 leading-tight select-none cursor-pointer">
-                    I have read and agree to the Return4me{' '}
-                    <button
-                      type="button"
-                      onClick={() => (window as any).setView?.('terms')}
-                      className="text-primary-green hover:underline font-bold inline focus:outline-none"
-                    >
-                      Terms of Service
-                    </button>{' '}
-                    and{' '}
-                    <button
-                      type="button"
-                      onClick={() => (window as any).setView?.('privacy')}
-                      className="text-primary-green hover:underline font-bold inline focus:outline-none"
-                    >
-                      Privacy Policy
-                    </button>
-                    .
-                  </label>
-                </div>
-              )}
-
-              {/* UX-11 · C — the single dominant action. The same submit and the
-                  same handler; the shared Button primitive supplies the 52px
-                  target, the inline spinner and the aria-busy state. */}
+              {/* UX-12 · D — ONE dominant action for the whole application. It is
+                  the same single submit the card already had: same handler, same
+                  endpoint, same loading state. Before Review it advances a step
+                  and makes no request; on Review it dispatches the one-time code
+                  exactly as it always did. */}
               <Button type="submit" variant="primary" size="lg" loading={authLoading} className="w-full">
                 {isRegistering
-                  ? tr('Request Login OTP', 'Omba msimbo wa kuingia')
+                  ? (isRegistrationReview
+                      ? tr('Submit application', 'Tuma maombi')
+                      : tr('Continue', 'Endelea'))
                   : tr('Sign in', 'Ingia')}
               </Button>
             </form>
