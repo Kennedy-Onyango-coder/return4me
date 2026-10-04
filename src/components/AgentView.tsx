@@ -3,11 +3,12 @@ import { translations } from '../types';
 import ClaimVerificationEvidence from './ClaimVerificationEvidence';
 import { getClaimStatusDisplay, agentClaimBadge } from './claimStatus';
 import AgentHub from './agent/AgentHub';
-import { ShieldCheck, Plus, CheckCircle, PackageOpen, HelpCircle, Loader2, ArrowRight, AlertCircle, Phone, Lock, Eye, Camera, Upload, MapPin, Mail } from 'lucide-react';
+import { ShieldCheck, Plus, CheckCircle, PackageOpen, HelpCircle, Loader2, AlertCircle, Lock, Eye, Camera, Upload, MapPin, Mail } from 'lucide-react';
 import { countiesByUxGroup } from '../config/kenyaCounties';
 import { administrativeUnitsForCounty } from '../config/kenyaAdministrativeUnits';
 import { detectBrowserLocation, type DetectedLocation } from '../services/browserLocation';
 import { useAgentOperations } from '../hooks/useAgentOperations';
+import { Banner, Button, ICON_SIZE, Input } from './ui';
 
 interface AgentViewProps {
   lang: 'en' | 'sw';
@@ -54,6 +55,13 @@ export { agentClaimBadge } from './claimStatus';
 
 export default function AgentView({ lang, token, setToken, categories, refreshCategories }: AgentViewProps) {
   const t = translations[lang];
+
+  /**
+   * UX-11 — the agent sign-in copy, in both languages. The same `t(en, sw)`
+   * shape the Sign In chooser (UX-07) and the public agent page (UX-10) use, so
+   * a string introduced by the sign-in refinement can never ship English-only.
+   */
+  const tr = (en: string, swText: string) => (lang === 'sw' ? swText : en);
 
   // Auth States
   const [phone, setPhone] = useState('');
@@ -273,66 +281,111 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
   return (
     <div className="w-full fade-in">
       
-      {/* 1. NOT LOGGED IN / ONBOARDING VIEW */}
+      {/* 1. AGENT SIGN-IN CARD (refined in UX-11).
+          One focused, single-column authentication surface: who it is for, the
+          mode switch, the two credential steps, one dominant action, and the
+          restrained route for somebody who is not an Agent yet.
+          PRESENTATION ONLY — the endpoints, payloads, token handling, validation,
+          rate limiting and error semantics below are untouched. */}
       {!token && (
-        <div className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm max-w-lg mx-auto space-y-6">
-          <div className="text-center space-y-2">
-            <h1 className="text-3xl font-extrabold text-primary-green">{t.agentTitle}</h1>
-            <p className="text-stone-500 text-xs max-w-sm mx-auto">{t.agentSubtitle}</p>
+        <div className="mx-auto w-full max-w-md space-y-6 rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)] p-6 shadow-raised sm:p-8">
+          {/* UX-11 · A — identity: this is the Agent door, said plainly. */}
+          <div className="space-y-3 text-center">
+            <span className="mx-auto inline-flex h-11 w-11 items-center justify-center rounded-standard bg-[var(--appearance-surface-muted)] text-[var(--appearance-primary)]">
+              <ShieldCheck size={ICON_SIZE.heading} aria-hidden="true" />
+            </span>
+            <h1 className="text-section font-extrabold tracking-tight text-[var(--appearance-text-primary)] sm:text-page">
+              {showOtp
+                ? tr('Confirm your code', 'Thibitisha msimbo wako')
+                : isRegistering
+                  ? t.agentTitle
+                  : tr('Agent sign in', 'Kuingia kwa wakala')}
+            </h1>
+            <p className="mx-auto max-w-sm text-body leading-relaxed text-[var(--appearance-text-muted)]">
+              {showOtp
+                ? tr(
+                    'Enter the one-time code we sent to your phone by SMS.',
+                    'Weka msimbo wa mara moja tulioutuma kwa simu yako kwa SMS.'
+                  )
+                : isRegistering
+                  ? t.agentSubtitle
+                  : tr(
+                      'This page is for approved Return4me Agents. Sign in with the phone number you registered with us.',
+                      'Ukurasa huu ni wa mawakala wa Return4me walioidhinishwa. Ingia kwa namba ya simu uliyojisajili nayo.'
+                    )}
+            </p>
           </div>
 
+          {/* UX-11 · D — authentication feedback. The existing error semantics in
+              ONE live region: the message never says whether the number exists,
+              whether a code was correct, or what internal state an account is in. */}
           {authError && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-2.5 rounded-2xl flex items-center space-x-2 text-xs">
-              <AlertCircle size={16} />
+            <Banner kind="error">
               <span>{authError}</span>
-            </div>
+            </Banner>
           )}
 
-          {/* OTP verify form */}
+          {/* UX-11 · B/C — the credential step, then the one-time-code step. */}
           {showOtp ? (
-            <form onSubmit={handleOtpVerify} className="space-y-4">
+            <form onSubmit={handleOtpVerify} className="space-y-4" aria-busy={authLoading || undefined}>
 
-              <div className="space-y-1">
-                <label htmlFor="agent-otp" className="block text-xs font-bold text-primary-green uppercase tracking-wider">SMS OTP Verification Code</label>
-                <input
-                  id="agent-otp"
-                  type="text"
-                  value={otp}
-                  onChange={(e) => setOtp(e.target.value)}
-                  maxLength={4}
-                  placeholder="••••"
-                  className="w-full border-2 border-stone-200 rounded-xl py-3 text-center text-xl font-mono tracking-widest focus:outline-none focus:border-accent-orange"
-                  required
-                />
-              </div>
-              <button
-                type="submit"
+              <Input
+                id="agent-otp"
+                label={tr('Verification code', 'Msimbo wa uthibitisho')}
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                value={otp}
+                onChange={(e) => setOtp(e.target.value)}
+                maxLength={4}
+                placeholder="••••"
+                required
                 disabled={authLoading}
-                className="w-full bg-accent-strong hover:bg-accent-strong-hover text-white py-3.5 rounded-2xl font-bold transition flex items-center justify-center space-x-2"
+                hint={tr('Sent to', 'Umetumwa kwa') + ' ' + phone}
+              />
+              <Button type="submit" variant="primary" size="lg" loading={authLoading} className="w-full">
+                {authLoading
+                  ? tr('Verifying…', 'Inathibitisha…')
+                  : tr('Verify and continue', 'Thibitisha na uendelee')}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="md"
+                className="w-full"
+                onClick={() => { setShowOtp(false); setOtp(''); setAuthError(''); }}
               >
-                <span>Verify OTP & Open Dashboard</span>
-                <ArrowRight size={18} />
-              </button>
+                {tr('Use a different number', 'Tumia nambari nyingine')}
+              </Button>
             </form>
           ) : (
             /* Request OTP / Register form */
-            <form onSubmit={handleAuthRequest} className="space-y-4">
+            <form onSubmit={handleAuthRequest} className="space-y-4" aria-busy={authLoading || undefined}>
               
-              {/* Toggle new agent registration vs login */}
-              <div className="grid grid-cols-2 bg-brand-beige p-1 rounded-xl gap-1">
+              {/* UX-11 · B — the two access modes. Same two modes, same handlers
+                  and the same literal labels as before; only the presentation and
+                  the pressed-state semantics moved onto the shared tokens, and the
+                  target is now 44px. */}
+              <div
+                role="group"
+                aria-label={tr('Agent access', 'Ufikiaji wa wakala')}
+                className="grid grid-cols-2 gap-1 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] p-1"
+              >
                 <button
                   type="button"
+                  aria-pressed={!isRegistering}
                   onClick={() => setIsRegistering(false)}
-                  className={`py-2 rounded-lg text-xs font-bold transition ${!isRegistering ? 'bg-white text-primary-green shadow' : 'text-stone-500'}`}
+                  className={`min-h-11 rounded-small px-3 text-body font-bold transition-colors ${!isRegistering ? 'bg-[var(--appearance-surface)] text-[var(--appearance-primary)] shadow-raised' : 'text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'}`}
                 >
-                  Agent Login
+                  {tr('Agent Login', 'Kuingia kwa Wakala')}
                 </button>
                 <button
                   type="button"
+                  aria-pressed={isRegistering}
                   onClick={() => setIsRegistering(true)}
-                  className={`py-2 rounded-lg text-xs font-bold transition ${isRegistering ? 'bg-white text-primary-green shadow' : 'text-stone-500'}`}
+                  className={`min-h-11 rounded-small px-3 text-body font-bold transition-colors ${isRegistering ? 'bg-[var(--appearance-surface)] text-[var(--appearance-primary)] shadow-raised' : 'text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'}`}
                 >
-                  Apply to be Agent
+                  {tr('Apply to be Agent', 'Omba kuwa Wakala')}
                 </button>
               </div>
 
@@ -515,22 +568,30 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                 </div>
               )}
 
-              {/* General phone */}
-              <div className="space-y-1">
-                <label htmlFor="agent-phone" className="block text-xs font-bold text-primary-green uppercase tracking-wider">Phone Number *</label>
-                <div className="relative">
-                  <input
-                    id="agent-phone"
-                    type="tel"
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    placeholder="0712345678"
-                    className="w-full border border-stone-200 rounded-xl pl-10 pr-3 py-2.5 text-sm font-mono"
-                    required
-                  />
-                  <Phone size={14} className="absolute left-3 top-3.5 text-stone-400" />
-                </div>
-              </div>
+              {/* UX-11 · B — the credential field, shared by both modes. The same
+                  `phone` state, the same request payload and the shared Input
+                  primitive (visible label, tel keyboard, autofill semantics). */}
+              <Input
+                id="agent-phone"
+                label={tr('Phone number', 'Namba ya simu')}
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="0712345678"
+                required
+                disabled={authLoading}
+                hint={isRegistering
+                  ? tr(
+                      'We text a one-time code to this number to verify it.',
+                      'Tunatuma msimbo wa mara moja kwa nambari hii ili kuithibitisha.'
+                    )
+                  : tr(
+                      'Use the number you registered with us.',
+                      'Tumia nambari uliyojisajili nayo.'
+                    )}
+              />
 
               {isRegistering && (
                 <div className="flex items-start space-x-2 pt-2 pb-1 bg-brand-beige p-3 rounded-xl border border-stone-100">
@@ -564,21 +625,38 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                 </div>
               )}
 
-              <button
-                type="submit"
-                disabled={authLoading}
-                className="w-full bg-primary-green hover:bg-primary-hover text-white py-3.5 rounded-2xl font-bold transition flex items-center justify-center space-x-2"
-              >
-                {authLoading ? (
-                  <Loader2 className="animate-spin" size={18} />
-                ) : (
-                  <>
-                    <span>Request Login OTP</span>
-                    <ArrowRight size={18} />
-                  </>
-                )}
-              </button>
+              {/* UX-11 · C — the single dominant action. The same submit and the
+                  same handler; the shared Button primitive supplies the 52px
+                  target, the inline spinner and the aria-busy state. */}
+              <Button type="submit" variant="primary" size="lg" loading={authLoading} className="w-full">
+                {isRegistering
+                  ? tr('Request Login OTP', 'Omba msimbo wa kuingia')
+                  : tr('Sign in', 'Ingia')}
+              </Button>
             </form>
+          )}
+
+          {/* UX-11 · E — somebody who is not an Agent yet. A restrained secondary
+              route to the EXISTING public agent journey: the same 'becomeAgent'
+              view name the public route table maps to /become-an-agent, reached
+              through the same in-file navigation handle the registration Terms
+              and Privacy links above already use. No second registration flow
+              and nothing competing with Sign in. */}
+          {!showOtp && !isRegistering && (
+            <div className="space-y-3 border-t border-[var(--appearance-border)] pt-5 text-center">
+              <p className="text-caption font-bold uppercase tracking-widest text-[var(--appearance-text-muted)]">
+                {tr('Need to become an Agent?', 'Unahitaji kuwa Wakala?')}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="lg"
+                className="w-full"
+                onClick={() => (window as any).setView?.('becomeAgent')}
+              >
+                {tr('Become an Agent', 'Kuwa Wakala')}
+              </Button>
+            </div>
           )}
         </div>
       )}

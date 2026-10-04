@@ -179,6 +179,8 @@ journey relies on needs — and has no helper-text slot. Adopting it as it stand
 would cost the customer journey its bilingual labelling and its hint. A later
 batch closes the gap by giving `OTPInput` a bilingual label and hint contract;
 until then the single labelled field is the deliberate choice, not an oversight.
+The agent sign-in code field (UX-11) is the same labelled single `Input`, for the
+same three reasons and with the same `autoComplete="one-time-code"`.
 
 ## 9. Badges and status
 
@@ -253,7 +255,7 @@ These pockets are known, classified, and deliberately **not** touched by UX-01.
 | Area | Finding | Classification | Future queue |
 | --- | --- | --- | --- |
 | AdminView | 63 × 9/10/11px text, 61 × `stone-*`, 60 hand-built `<button>`, 30 `<input>`, one `window.prompt()` at the reject-reason step | MIGRATE LATER | UX-15 / UX-16 |
-| AgentView + agent/* | 51 × `stone-*`, 19 hand-built buttons, hand-rolled panels | MIGRATE LATER | UX-12 / UX-13 / UX-16 |
+| AgentView + agent/* | 51 × `stone-*`, 19 hand-built buttons, hand-rolled panels; the signed-out agent **sign-in** card moved onto the primitives and the appearance tokens in UX-11 — the registration fields, the hub and the panels remain | MIGRATE LATER | UX-12 / UX-13 / UX-16 |
 | FinderView | UX-05 put the five-stage journey on the shared foundation (`Stepper` + `Input`/`Select`/`Button`) with the reviewed chrome on the appearance tokens. Still legacy: the category `<select>`, the photograph controls, the two GPS boxes and the legacy submit button | MIGRATE LATER | UX-16 |
 | OwnerView | the customer claim / recovery journey (search → confidence gate → OTP → payment → handover) now sits on the shared primitives, the `Stepper` rail and the appearance tokens, with one dominant action per stage; residual: the Track-claim modal's hand-built button and the two `stone-*` shades on the dark thumbnail chip | MIGRATED in UX-09 (customer claim / recovery journey) | UX-16 |
 | HomeView | hand-built buttons where the shared Button applies | MIGRATE LATER | UX-02 / UX-03 |
@@ -261,7 +263,8 @@ These pockets are known, classified, and deliberately **not** touched by UX-01.
 | Public "Become an agent" page (`/becomeAgent`) | the public agent journey now explains the role in six ordered sections — the hero, why the role exists, the three responsibilities, the requirements, the three REAL approval stages on the shared `Stepper` rail, and one closing action — with one dominant apply action per screen and the fee share as the only economic claim; the only literals are the fixed brand pairing on the closing CTA band (`bg-primary-green` + `bg-white` / `brand-light-gray` / `primary-green`) | MIGRATED in UX-10 (public agent journey) | — |
 | PrivacyView / TermsView | 88 / 11 × `stone-*`, ad-hoc headings | MIGRATE LATER | UX-17 |
 | Navbar | 24 hand-built buttons, 2 × `shadow-[…]` literals | MIGRATE LATER | UX-02 |
-| Authentication screens | customer registration / sign-in / activation now on the primitives and the appearance tokens; **agent and admin authentication are a different audience and are untouched** | MIGRATED in UX-07 (customer authentication) | — |
+| Authentication screens | customer registration / sign-in / activation and the **agent sign-in surface** now on the primitives and the appearance tokens; **admin authentication is a different audience and is untouched** | MIGRATED in UX-07 (customer authentication) · MIGRATED in UX-11 (agent sign-in) | — |
+| Agent sign in (`/agent_portal`, signed-out card) | one focused single-column authentication surface on the shared `Button` / `Input` / `Banner` primitives and the appearance tokens: a 44px pressed-state mode switch, a labelled credential field with `autoComplete`, the existing one-time-code step, ONE dominant action with a loading state, ONE error live region, and the restrained secondary route to the existing public agent journey; the endpoints, payloads, token, validation and error semantics are unchanged | MIGRATED in UX-11 (agent sign-in) | — |
 | CustomerDashboard | `bg-white` / `brand-*` / `line-subtle` / `status-*` literals, `rounded-2xl` + `rounded-xl`, off-ladder `text-xs`/`text-sm`/`text-base`, sub-ladder icon sizes (13/14/16/17), two local `focus-visible:ring-2` rings, and an Overview whose section cards duplicated the navigation beside them | MIGRATED in UX-08 (customer dashboard) | — |
 | `Modal` scroll lock + focus trap | already correct | FOUNDATION | — |
 | `text-[11px]` in SectionHeading / StatCard | fixed in UX-01 (now `text-caption`) | FOUNDATION | — |
