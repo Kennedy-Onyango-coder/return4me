@@ -108,8 +108,10 @@ describe('agent access is preserved, not removed (Phase 8.1)', () => {
     expect(becomeAgentCode).not.toMatch(/fetch\(/);
     expect(becomeAgentCode).not.toMatch(/api\//);
     // No invented economics: the only economic claim made is "a share of the
-    // recovery fee" (which the fee engine implements) — never an amount.
-    expect(becomeAgentCode).not.toMatch(/KES|Ksh|\/=|shillings|%|per item/i);
+    // recovery fee" (which the fee engine implements) — never an amount. The
+    // currency patterns are word-bounded because the journey now explains
+    // itself in prose, and a bare /KES/i also matches the English word "makes".
+    expect(becomeAgentCode).not.toMatch(/\bKES\b|\bKsh\b|\/=|shillings|%|per item/i);
   });
 
   it('AgentView itself was not modified by this phase (its auth flow is untouched)', () => {
