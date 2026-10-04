@@ -51,6 +51,75 @@ const CLAIM_STEP_INDEX: Record<string, number> = {
   handover_success: 4,
 };
 
+/**
+ * UX-09 — the guided claim / recovery journey.
+ *
+ * A progress rail is not guidance. The rail tells the claimant WHICH stage they
+ * are on; each of the five screens underneath it still has to answer the two
+ * questions a claimant stranded mid-journey actually asks — "what happens now?"
+ * and "who moves next?". This table carries that answer per stage, in both
+ * languages, keyed by the SAME stage index the rail reads, so the rail and the
+ * guide can never disagree about which stage the claimant is on.
+ *
+ * It is guidance copy ONLY. It carries no lifecycle value, no status
+ * vocabulary, no price, no promise about outcome, no timer, and no agent or
+ * item field — every number and identifier on those screens still comes from
+ * the server DTO. Rewording an entry here cannot change what the server is
+ * asked to do.
+ *
+ * Copy convention (the same one the rest of this file already used): copy that
+ * exists as a matrix — every stage, both languages — lives in a typed bilingual
+ * table like this one and like CLAIM_STEPS; a one-off string stays an inline
+ * `lang === 'en' ? … : …` ternary. No new i18n mechanism and no new translation
+ * key were introduced by UX-09.
+ */
+const CLAIM_STAGE_GUIDE: {
+  title: { en: string; sw: string };
+  what: { en: string; sw: string };
+  actor: { en: string; sw: string };
+}[] = [
+  {
+    title: { en: 'Confirm the item is yours', sw: 'Thibitisha kuwa kitu hiki ni chako' },
+    what: {
+      en: 'Check the photo and description, confirm the phone number we should verify, then accept the terms.',
+      sw: 'Angalia picha na maelezo, uthibitishe nambari ya simu tutakayothibitisha, kisha kubali masharti.',
+    },
+    actor: { en: 'You', sw: 'Wewe' },
+  },
+  {
+    title: { en: 'Prove ownership', sw: 'Thibitisha umiliki' },
+    what: {
+      en: 'Answer the security questions, then enter the SMS code we send to your phone.',
+      sw: 'Jibu maswali ya usalama, kisha weka msimbo wa SMS tutakaotuma kwenye simu yako.',
+    },
+    actor: { en: 'You', sw: 'Wewe' },
+  },
+  {
+    title: { en: 'Visit the hub and inspect the item', sw: 'Tembelea kituo na ukague bidhaa' },
+    what: {
+      en: 'Go to the confirmed hub shown below, inspect the item in person, and let the agent confirm you have seen it.',
+      sw: 'Nenda kituo kilichothibitishwa hapa chini, kague bidhaa kwa macho, na umruhusu wakala athibitishe kuwa umeiona.',
+    },
+    actor: { en: 'You and the agent', sw: 'Wewe na wakala' },
+  },
+  {
+    title: { en: 'Pay the collection fee', sw: 'Lipa ada ya kuchukua' },
+    what: {
+      en: 'Send the M-Pesa prompt to the number below and complete it on your phone with your PIN.',
+      sw: 'Tuma ombi la M-Pesa kwa nambari iliyo hapa chini na ulikamilishe kwenye simu yako kwa PIN yako.',
+    },
+    actor: { en: 'You, on M-Pesa', sw: 'Wewe, kwenye M-Pesa' },
+  },
+  {
+    title: { en: 'Collect your item', sw: 'Chukua bidhaa yako' },
+    what: {
+      en: 'Show the agent your secret pickup code, collect your item, then rate the agent.',
+      sw: 'Mwonyeshe wakala msimbo wako wa siri, chukua bidhaa yako, kisha mtoe wakala alama.',
+    },
+    actor: { en: 'You and the agent', sw: 'Wewe na wakala' },
+  },
+];
+
 interface OwnerViewProps {
   lang: 'en' | 'sw';
   categories: any[];
@@ -352,6 +421,13 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
   const [verificationStep, setVerificationStep] = useState<
     'search' | 'confidence_gate' | 'tier1_security' | 'tier2_otp' | 'tier3_id' | 'payment' | 'payment_polling' | 'handover_success' | 'awaiting_agent_confirmation' | 'payment_window_expired'
   >('search');
+
+  // UX-09 — the stage the rail is on, and its guidance, both read from the
+  // SAME map, so the rail and the guide below it can never disagree. An unknown
+  // step falls back to stage 0 exactly as the rail does.
+  const claimStageIndex = CLAIM_STEP_INDEX[verificationStep] ?? 0;
+  const claimStageGuide = CLAIM_STAGE_GUIDE[claimStageIndex];
+  const stageOf = (v: { en: string; sw: string }) => (lang === 'en' ? v.en : v.sw);
 
   // Verification Form states
   const [ownerPhone, setOwnerPhone] = useState('');
@@ -1028,9 +1104,11 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           <div className="text-center space-y-3">
             <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-primary-green mb-2">{t.ownerTitle}</h1>
             <p className="text-ink-muted text-sm sm:text-base max-w-xl mx-auto leading-relaxed">{t.ownerSubtitle}</p>
-            <button
+            <Button
               ref={trackModalTriggerRef}
               type="button"
+              variant="secondary"
+              size="md"
               onClick={() => {
                 // PHASE 16 — Track My Claim is a customer-authenticated action.
                 // A signed-out visitor is handed to the EXISTING /account
@@ -1045,11 +1123,10 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 setTrackError('');
                 setTrackResult(null);
               }}
-              className="inline-flex items-center gap-2 min-h-11 bg-primary-green/5 hover:bg-primary-green/10 text-primary-green border border-primary-green/20 px-4 rounded-xl text-xs font-bold transition cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange/40"
             >
-              <Clock size={14} className="text-accent-orange" />
-              <span>{lang === 'sw' ? 'Fuatilia Ombi Lako' : 'Track My Existing Claim'}</span>
-            </button>
+              <Clock size={14} className="text-accent-orange" aria-hidden="true" />
+              <span>{lang === 'en' ? 'Track My Existing Claim' : 'Fuatilia Ombi Lako'}</span>
+            </Button>
             {!isSignedIn && (
               <p className="text-caption text-ink-muted">
                 {lang === 'sw'
@@ -1129,7 +1206,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               <label className="grid gap-2 sm:grid-cols-[9rem_1fr] sm:items-center">
                 <span className="text-xs font-extrabold uppercase tracking-wider text-primary-green">{lang === 'en' ? 'Item details' : 'Maelezo ya kitu'}</span>
                 <span className="relative">
-                  <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder={t.searchPlaceholder} aria-label={t.searchPlaceholder} className="w-full rounded-2xl border border-line-subtle bg-brand-beige py-3 pl-10 pr-4 text-sm focus:border-accent-orange focus:outline-none focus:ring-2 focus:ring-accent-orange/30" />
+                  <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder={t.searchPlaceholder} aria-label={t.searchPlaceholder} className="w-full rounded-2xl border border-line-subtle bg-brand-beige py-3 pl-10 pr-4 text-sm focus:border-accent-orange" />
                   <Search className="absolute left-3.5 top-3.5 text-ink-muted" size={18} aria-hidden="true" />
                 </span>
               </label>
@@ -1138,20 +1215,20 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 <legend className="mb-1 text-xs font-extrabold uppercase tracking-wider text-primary-green sm:col-span-2">{lang === 'en' ? 'Where was it found?' : 'Ilipopatikana wapi?'}</legend>
                 <label className="grid gap-1.5">
                   <span className="text-xs font-bold text-ink-muted">{lang === 'en' ? 'Category' : 'Kategoria'}</span>
-                  <select value={selectedCat} onChange={e => setSelectedCat(e.target.value)} aria-label={lang === 'en' ? 'Filter by category' : 'Chuja kwa kategoria'} className="w-full rounded-2xl border border-line-subtle bg-white px-3 py-3 text-sm focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30 disabled:bg-brand-light-gray disabled:text-brand-muted-text" disabled={categoriesLoading || categoriesError}>
+                  <select value={selectedCat} onChange={e => setSelectedCat(e.target.value)} aria-label={lang === 'en' ? 'Filter by category' : 'Chuja kwa kategoria'} className="w-full rounded-2xl border border-line-subtle bg-white px-3 py-3 text-sm focus:border-accent-orange disabled:bg-brand-light-gray disabled:text-brand-muted-text" disabled={categoriesLoading || categoriesError}>
                     {categoriesLoading ? <option value="">{lang === 'en' ? 'Loading categories...' : 'Inapakia kategoria...'}</option> : categoriesError ? <option value="">{lang === 'en' ? 'Categories unavailable — please refresh' : 'Kategoria hazipatikani - tafadhali pakia upya'}</option> : [<option key="all-categories" value="">{lang === 'en' ? 'All categories' : 'Kategoria zote'}</option>, ...categories.filter(cat => cat.name_en && cat.name_sw).map(cat => <option key={cat.id} value={cat.id}>{lang === 'en' ? cat.name_en : cat.name_sw}</option>)]}
                   </select>
                 </label>
                 <label className="grid gap-1.5">
                   <span className="text-xs font-bold text-ink-muted">{lang === 'en' ? 'County' : 'Kaunti'}</span>
-                  <select value={selectedCounty} onChange={e => { setSelectedCounty(e.target.value); setSelectedAdministrativeUnit(''); }} aria-label={lang === 'en' ? 'Filter by county' : 'Chuja kwa kaunti'} className="w-full rounded-2xl border border-line-subtle bg-white px-3 py-3 text-sm focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30">
+                  <select value={selectedCounty} onChange={e => { setSelectedCounty(e.target.value); setSelectedAdministrativeUnit(''); }} aria-label={lang === 'en' ? 'Filter by county' : 'Chuja kwa kaunti'} className="w-full rounded-2xl border border-line-subtle bg-white px-3 py-3 text-sm focus:border-accent-orange">
                     <option value="">{lang === 'en' ? 'All counties' : 'Kaunti zote'}</option>
                     {COUNTY_GROUPS.map(group => <optgroup key={group.group} label={group.group}>{group.counties.map(county => <option key={county.code} value={county.name}>{county.name}</option>)}</optgroup>)}
                   </select>
                 </label>
                 <label className="grid gap-1.5 sm:col-span-2">
                   <span className="text-xs font-bold text-ink-muted">{lang === 'en' ? 'Sub-county' : 'Kaunti ndogo'}</span>
-                  <select value={selectedAdministrativeUnit} onChange={e => setSelectedAdministrativeUnit(e.target.value)} disabled={!selectedCounty} aria-label={lang === 'en' ? 'Filter by sub-county' : 'Chuja kwa kaunti ndogo'} className="w-full rounded-2xl border border-line-subtle bg-white px-3 py-3 text-sm focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30 disabled:bg-brand-light-gray disabled:text-brand-muted-text">
+                  <select value={selectedAdministrativeUnit} onChange={e => setSelectedAdministrativeUnit(e.target.value)} disabled={!selectedCounty} aria-label={lang === 'en' ? 'Filter by sub-county' : 'Chuja kwa kaunti ndogo'} className="w-full rounded-2xl border border-line-subtle bg-white px-3 py-3 text-sm focus:border-accent-orange disabled:bg-brand-light-gray disabled:text-brand-muted-text">
                     <option value="">{lang === 'en' ? (selectedCounty ? 'All sub-counties' : 'Select county first') : (selectedCounty ? 'Kaunti ndogo zote' : 'Chagua kaunti kwanza')}</option>
                     {selectedCounty && administrativeUnitsForCounty(selectedCounty).map(unit => <option key={unit.id} value={unit.id}>{unit.name}</option>)}
                   </select>
@@ -1161,7 +1238,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               <label className="grid gap-2 sm:grid-cols-[9rem_1fr] sm:items-center">
                 <span className="text-xs font-extrabold uppercase tracking-wider text-primary-green">{lang === 'en' ? 'Exact place / area' : 'Mahali halisi / eneo'}</span>
                 <span className="relative">
-                  <input type="text" value={selectedArea} onChange={e => setSelectedArea(e.target.value)} aria-label={lang === 'en' ? 'Exact place or area' : 'Mahali halisi au eneo'} placeholder={lang === 'en' ? 'Street, estate, building, landmark, stage or market' : 'Barabara, eneo, jengo, alama, kituo au sokoni'} className="w-full rounded-2xl border border-line-subtle bg-brand-beige py-3 pl-10 pr-4 text-sm focus:border-accent-orange focus:outline-none focus:ring-2 focus:ring-accent-orange/30" />
+                  <input type="text" value={selectedArea} onChange={e => setSelectedArea(e.target.value)} aria-label={lang === 'en' ? 'Exact place or area' : 'Mahali halisi au eneo'} placeholder={lang === 'en' ? 'Street, estate, building, landmark, stage or market' : 'Barabara, eneo, jengo, alama, kituo au sokoni'} className="w-full rounded-2xl border border-line-subtle bg-brand-beige py-3 pl-10 pr-4 text-sm focus:border-accent-orange" />
                   <MapPin className="absolute left-3.5 top-3.5 text-ink-muted" size={18} aria-hidden="true" />
                 </span>
               </label>
@@ -1176,8 +1253,12 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           <div className="bg-status-info-surface border border-status-info-border rounded-2xl p-4 flex items-start gap-3 text-xs text-status-info">
             <ShieldAlert size={18} className="text-accent-orange shrink-0 mt-0.5" />
             <div>
-              <span className="font-bold block mb-0.5">Kenyan Privacy Shield Activated</span>
-              To safeguard owners, we never reveal exact document numbers, full names, or finder details in search. Exact matches require entering correct search queries (salted-hash matching).
+              <span className="font-bold block mb-0.5">
+                {lang === 'en' ? 'Kenyan Privacy Shield Activated' : 'Ngao ya Faragha ya Kenya Imewashwa'}
+              </span>
+              {lang === 'en'
+                ? 'To safeguard owners, we never reveal exact document numbers, full names, or finder details in search. Exact matches require entering correct search queries (salted-hash matching).'
+                : 'Kuwalinda wamiliki, hatuonyeshi nambari kamili za hati, majina kamili, au taarifa za mwopaji kwenye utafutaji. Ulinganisho kamili unahitaji kuandika hoja sahihi za utafutaji (ulinganisho wa salted-hash).'}
             </div>
           </div>
 
@@ -1188,7 +1269,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 <span>{lang === 'en' ? 'Searching secure registry...' : 'Kutafuta rejesta salama...'}</span>
               ) : (
                 <span>
-                  {searchResults.length} {searchResults.length === 1 ? (lang === 'en' ? 'found item' : 'bidhaa iliyopatikana') : (lang === 'en' ? 'found items' : 'vitu vilivyopatikana')} matching:
+                  {searchResults.length} {searchResults.length === 1 ? (lang === 'en' ? 'found item' : 'bidhaa iliyopatikana') : (lang === 'en' ? 'found items' : 'vitu vilivyopatikana')} {lang === 'en' ? 'matching:' : 'zinazolingana:'}
                 </span>
               )}
             </h2>
@@ -1238,10 +1319,10 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                         {item.is_sensitive_document ? (
                           <div className="flex flex-col items-center justify-center p-2 text-center h-full w-full bg-brand-light-gray text-brand-muted-text">
                             <Lock size={18} className="text-ink-muted mb-1 shrink-0" />
-                            <span className="text-caption font-bold leading-tight text-ink-muted">Photo hidden for privacy</span>
+                            <span className="text-caption font-bold leading-tight text-ink-muted">{lang === 'en' ? 'Photo hidden for privacy' : 'Picha imefichwa kwa faragha'}</span>
                           </div>
                         ) : (
-                          <img src={item.photo_url} alt="Found item" className="w-full h-full object-cover" />
+                          <img src={item.photo_url} alt={lang === 'en' ? 'Found item' : 'Kitu kilichopatikana'} className="w-full h-full object-cover" />
                         )}
                       </div>
 
@@ -1268,7 +1349,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                                 e.preventDefault();
                                 onOpenItem(item.id);
                               }}
-                              className="hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange rounded"
+                              className="hover:underline"
                               aria-label={lang === 'en'
                                 ? `Open details for found item: ${item.document_name_fuzzy}`
                                 : `Fungua maelezo ya bidhaa: ${item.document_name_fuzzy}`}
@@ -1338,17 +1419,40 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
         </div>
       )}
 
-      {/* Claim progress (Phase 8.2). Renders for every claim stage except the
-          search screen and the terminal expired state, so the claimant can see
-          which stage they are on and what comes next. Presentation only: it
-          reads the existing step state and changes nothing. */}
+      {/* The guided claim journey (Phase 8.2, refined in UX-09). Renders for
+          every claim stage except the search screen and the terminal expired
+          state. Two layers, one source: the shared Stepper rail says WHERE the
+          claimant is, and the guide beneath it says WHAT happens now and WHO
+          moves next — both read from the same CLAIM_STEP_INDEX map, so they
+          cannot disagree. Presentation only: it reads the existing step state,
+          carries no lifecycle value, and changes nothing the server is asked
+          to do. */}
       {verificationStep !== 'search' && verificationStep !== 'payment_window_expired' && (
-        <div className="max-w-xl mx-auto mb-6">
+        <div className="max-w-xl mx-auto mb-6 space-y-3">
           <Stepper
             steps={CLAIM_STEPS.map((s) => ({ label: lang === 'en' ? s.en : s.sw }))}
-            currentStep={CLAIM_STEP_INDEX[verificationStep] ?? 0}
+            currentStep={claimStageIndex}
             label={lang === 'en' ? 'Claim progress' : 'Maendeleo ya dai'}
           />
+          {/* The guide card. One dominant next action is stated in words before
+              the controls below repeat it, so the claimant never has to infer
+              from the buttons what the journey expects of them. */}
+          <section
+            aria-label={lang === 'en' ? 'What happens at this stage' : 'Kinachotokea katika hatua hii'}
+            className="bg-canvas-muted border border-line-subtle rounded-standard p-4 space-y-1 text-left"
+          >
+            <p className="text-caption font-extrabold uppercase tracking-widest text-ink-muted">
+              {lang === 'en'
+                ? `Stage ${claimStageIndex + 1} of ${CLAIM_STEPS.length}`
+                : `Hatua ${claimStageIndex + 1} ya ${CLAIM_STEPS.length}`}
+              {' · '}
+              {stageOf(claimStageGuide.title)}
+            </p>
+            <p className="text-small text-ink leading-snug">{stageOf(claimStageGuide.what)}</p>
+            <p className="text-caption text-ink-muted leading-snug">
+              {lang === 'en' ? 'Who acts next' : 'Anayefanya hatua inayofuata'}: {stageOf(claimStageGuide.actor)}
+            </p>
+          </section>
         </div>
       )}
 
@@ -1363,7 +1467,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           <div className="border border-line-subtle rounded-2xl p-4 bg-brand-beige space-y-3">
             <h3 className="font-extrabold text-sm text-ink border-b border-line-subtle pb-2">{lang === 'en' ? 'Item Information' : 'Maelezo ya Kitu'}</h3>
             <div className="flex gap-4">
-              <div className="w-16 h-16 rounded-xl bg-stone-50 border border-line-subtle overflow-hidden shrink-0 flex items-center justify-center">
+              <div className="w-16 h-16 rounded-xl bg-[var(--appearance-surface)] border border-line-subtle overflow-hidden shrink-0 flex items-center justify-center">
                 {selectedItem.is_sensitive_document ? (
                   <div className="flex flex-col items-center justify-center p-1 text-center h-full w-full bg-brand-light-gray text-brand-muted-text">
                     <Lock size={14} className="text-ink-muted mb-0.5 shrink-0" />
@@ -1403,7 +1507,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 autoComplete="tel"
                 value={ownerPhone}
                 onChange={(e) => setOwnerPhone(e.target.value)}
-                className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-brand-beige font-mono focus:outline-none focus:border-accent-orange"
+                className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-brand-beige font-mono focus:border-accent-orange"
                 placeholder="e.g. 0712345678"
                 required
               />
@@ -1419,62 +1523,75 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 type="email"
                 value={ownerEmail}
                 onChange={(e) => setOwnerEmail(e.target.value)}
-                className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-brand-beige font-sans focus:outline-none focus:border-accent-orange"
+                className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-brand-beige font-sans focus:border-accent-orange"
                 placeholder="e.g. claimant@gmail.com"
               />
               <span className="text-caption text-ink-muted block leading-tight">
-                Provide an email address if you wish to receive billing receipts and collection notices.
+                {lang === 'en'
+                  ? 'Provide an email address if you wish to receive billing receipts and collection notices.'
+                  : 'Toa barua pepe ikiwa ungependa kupokea risiti za malipo na taarifa za kuchukua bidhaa.'}
               </span>
             </div>
 
-            {/* General Terms/Privacy consent */}
+            {/* General Terms/Privacy consent. The checkbox keeps its visible
+                focus affordance via the single global :focus-visible rule
+                (the local ring was a second, weaker focus language); its
+                border uses the strong border token so the un-ticked control
+                stays distinguishable from the beige row it sits on. */}
             <div className="flex items-start space-x-2 pt-2 pb-1 bg-brand-beige p-3 rounded-xl border border-line-subtle">
               <input
                 id="owner-agreed-terms"
                 type="checkbox"
                 checked={agreedTerms}
                 onChange={(e) => setAgreedTerms(e.target.checked)}
-                className="mt-1 h-4 w-4 rounded border-stone-300 text-primary-green focus:ring-primary-green accent-primary-green cursor-pointer"
+                className="mt-1 h-4 w-4 rounded border-[var(--appearance-border-strong)] text-primary-green accent-primary-green cursor-pointer"
                 required
               />
               <label htmlFor="owner-agreed-terms" className="text-xs text-ink-muted leading-tight select-none cursor-pointer">
-                I have read and agree to the Return4me{' '}
+                {lang === 'en' ? 'I have read and agree to the Return4me' : 'Nimesoma na nakubali'}{' '}
                 <button
                   type="button"
                   onClick={() => (window as any).setView?.('terms')}
-                  className="text-primary-green hover:underline font-bold inline focus:outline-none"
+                  className="text-primary-green hover:underline font-bold inline"
                 >
-                  Terms of Service
+                  {lang === 'en' ? 'Terms of Service' : 'Vigezo na Masharti'}
                 </button>{' '}
-                and{' '}
+                {lang === 'en' ? 'and' : 'na'}{' '}
                 <button
                   type="button"
                   onClick={() => (window as any).setView?.('privacy')}
-                  className="text-primary-green hover:underline font-bold inline focus:outline-none"
+                  className="text-primary-green hover:underline font-bold inline"
                 >
-                  Privacy Policy
+                  {lang === 'en' ? 'Privacy Policy' : 'Sera ya Faragha'}
                 </button>
-                . *
               </label>
             </div>
           </div>
 
-          <div className="flex space-x-3 pt-3">
-            <button
+          {/* One dominant action per state: "Proceed to Claim" is the only
+              primary (accent) control here, and it stays disabled until the
+              consent + phone requirements the server re-checks are met. On a
+              narrow screen the dominant action sits on top. */}
+          <div className="flex flex-col-reverse gap-3 pt-3 sm:flex-row">
+            <Button
               type="button"
+              variant="secondary"
+              size="md"
               onClick={() => setVerificationStep('search')}
-              className="flex-1 bg-brand-light-gray hover:bg-brand-light-gray/70 text-brand-muted-text py-3 rounded-xl font-bold transition text-xs"
+              className="w-full sm:flex-1"
             >
-              Back
-            </button>
-            <button
+              {lang === 'en' ? 'Back' : 'Nyuma'}
+            </Button>
+            <Button
               type="button"
+              variant="accent"
+              size="md"
               disabled={!agreedTerms || !ownerPhone.trim()}
               onClick={() => setVerificationStep('tier1_security')}
-              className="flex-1 bg-accent-strong hover:bg-accent-strong-hover text-white py-3 rounded-xl font-bold transition text-xs disabled:opacity-50 cursor-pointer"
+              className="w-full sm:flex-1"
             >
-              Proceed to Claim
-            </button>
+              {lang === 'en' ? 'Proceed to Claim' : 'Endelea na Dai'}
+            </Button>
           </div>
         </div>
       )}
@@ -1505,8 +1622,14 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             <Smartphone size={24} />
           </div>
           <div>
-            <h2 className="text-xl font-extrabold text-primary-green mb-1">Verify SMS OTP Code</h2>
-            <p className="text-ink-muted text-xs">Enter the 4-digit code dispatched to {ownerPhone}.</p>
+            <h2 className="text-xl font-extrabold text-primary-green mb-1">
+              {lang === 'en' ? 'Verify your SMS code' : 'Thibitisha msimbo wako wa SMS'}
+            </h2>
+            <p className="text-ink-muted text-xs">
+              {lang === 'en'
+                ? `Enter the 4-digit code we sent to ${ownerPhone}.`
+                : `Weka msimbo wa tarakimu 4 tulioutuma kwa ${ownerPhone}.`}
+            </p>
           </div>
 
           {errorMsg && (
@@ -1526,26 +1649,23 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               value={otpCode}
               onChange={(e) => setOtpCode(e.target.value)}
               maxLength={4}
-              className="w-full border-2 border-line-subtle rounded-xl text-center py-3 text-xl font-mono tracking-widest focus:outline-none focus:border-accent-orange"
+              className="w-full border-2 border-line-subtle rounded-xl text-center py-3 text-xl font-mono tracking-widest focus:border-accent-orange"
               placeholder="••••"
               aria-label={lang === 'sw' ? 'Msimbo wa OTP wa tarakimu 4' : '4-digit OTP code'}
               required
             />
 
-            <button
+            <Button
               type="submit"
-              disabled={searchLoading}
-              className="w-full bg-primary-green hover:bg-primary-hover text-white py-3 rounded-xl font-bold transition text-xs flex items-center justify-center space-x-2 disabled:opacity-50"
+              variant="primary"
+              size="lg"
+              loading={searchLoading}
+              loadingLabel={lang === 'en' ? 'Verifying your code' : 'Inathibitisha msimbo wako'}
+              className="w-full"
             >
-              {searchLoading ? (
-                <Loader2 className="animate-spin" size={14} />
-              ) : (
-                <>
-                  <span>Verify Code</span>
-                  <ArrowRight size={14} />
-                </>
-              )}
-            </button>
+              {lang === 'en' ? 'Verify code' : 'Thibitisha msimbo'}
+              <ArrowRight size={18} aria-hidden="true" />
+            </Button>
           </form>
         </div>
       )}
@@ -1659,20 +1779,20 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             return (
               <div className="bg-brand-beige rounded-2xl border border-line-subtle p-5 text-left space-y-3">
                 <div className="flex justify-between items-center text-xs font-bold text-ink-muted uppercase tracking-wider">
-                  <span>Fee breakdown</span>
-                  <span>Amount</span>
+                  <span>{lang === 'en' ? 'Fee breakdown' : 'Mchanganuo wa ada'}</span>
+                  <span>{lang === 'en' ? 'Amount' : 'Kiasi'}</span>
                 </div>
                 <div className="h-px bg-line-subtle" />
                 <div className="flex justify-between text-sm">
-                  <span className="text-ink-muted font-medium">Finder Honorarium (Reward)</span>
+                  <span className="text-ink-muted font-medium">{lang === 'en' ? 'Finder Honorarium (Reward)' : 'Motisha ya Aliyepata (Zawadi)'}</span>
                   <span className="font-mono font-bold text-ink-muted">{money(finderShare)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-ink-muted font-medium">Physical Agent Hub Handling</span>
+                  <span className="text-ink-muted font-medium">{lang === 'en' ? 'Physical Agent Hub Handling' : 'Ushughulikiaji wa Kituo cha Wakala'}</span>
                   <span className="font-mono font-bold text-ink-muted">{money(agentShare)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-ink-muted font-medium">Return4me platform fee</span>
+                  <span className="text-ink-muted font-medium">{lang === 'en' ? 'Return4me platform fee' : 'Ada ya jukwaa la Return4me'}</span>
                   <span className="font-mono font-bold text-ink-muted">{money(platformShare)}</span>
                 </div>
                 <div className="h-px bg-line-subtle" />
@@ -1686,7 +1806,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
           {/* Checkout triggers */}
           <div className="space-y-3">
-            <span className="text-xs text-ink-muted block font-medium">Secured M-Pesa Payment</span>
+            <span className="text-xs text-ink-muted block font-medium">{lang === 'en' ? 'Secured M-Pesa Payment' : 'Malipo ya M-Pesa Salama'}</span>
 
             {/* M-Pesa number that will receive the STK Push prompt. The payer may use a
                 different valid M-Pesa number than the claim's registered phone
@@ -1704,20 +1824,20 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 value={payerPhone || ownerPhone}
                 onChange={(e) => setPayerPhone(e.target.value)}
                 placeholder="e.g. 0712 345 678"
-                className="w-full border border-line-subtle rounded-xl px-3 py-3 text-base font-mono bg-white focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30"
+                className="w-full border border-line-subtle rounded-xl px-3 py-3 text-base font-mono bg-white focus:border-accent-orange"
                 aria-invalid={(payerPhone || ownerPhone).trim() !== '' && !isValidKenyanPhoneForPayer(payerPhone || ownerPhone)}
               />
               <p className="text-ink-muted text-xs">
                 {lang === 'en'
                   ? 'Enter the Safaricom number that should receive the payment prompt. You may use a different M-Pesa number than the one registered on the claim — your payment stays securely linked to this claim.'
-                  : 'Wea nambari ya Safaricom itakayopokea ombi la malipo. Unaweza kutumia nambari tofauti ya M-Pesa kuliko ile iliyobaki kwenye claim — malipo yako yataunganishwa kwa usalama na claim hii.'}
+                  : 'Weka nambari ya Safaricom itakayopokea ombi la malipo. Unaweza kutumia nambari tofauti ya M-Pesa kuliko ile iliyobaki kwenye claim — malipo yako yataunganishwa kwa usalama na claim hii.'}
               </p>
               {(() => {
                 const candidate = (payerPhone || ownerPhone).trim();
                 if (candidate === '') {
                   return (
                     <p className="text-ink-muted text-xs">
-                      {lang === 'en' ? 'Enter an M-Pesa phone number.' : 'Wea nambari ya M-Pesa.'}
+                      {lang === 'en' ? 'Enter an M-Pesa phone number.' : 'Weka nambari ya M-Pesa.'}
                     </p>
                   );
                 }
@@ -1725,7 +1845,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                   return (
                     <p className="text-status-danger text-xs font-medium flex items-center gap-1" role="alert">
                       <AlertCircle size={14} className="shrink-0" />
-                      <span>{lang === 'en' ? 'Enter a valid Kenyan M-Pesa number.' : 'Wea nambari halali ya M-Pesa ya Kenya.'}</span>
+                      <span>{lang === 'en' ? 'Enter a valid Kenyan M-Pesa number.' : 'Weka nambari halali ya M-Pesa ya Kenya.'}</span>
                     </p>
                   );
                 }
@@ -1748,23 +1868,22 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 <span>{errorMsg}</span>
               </div>
             )}
-            <button
+            {/* The single dominant action of the Pay stage. Disabled state is a
+                courtesy mirror of the same Kenyan-number check the server
+                re-runs when it creates the session; the server stays the
+                authority. */}
+            <Button
               onClick={triggerEscrowPayment}
-              disabled={isPaying || !isValidKenyanPhoneForPayer(payerPhone || ownerPhone)}
-              className="w-full bg-accent-strong hover:bg-accent-strong-hover text-white py-3.5 rounded-2xl font-bold transition flex items-center justify-center space-x-2 shadow-lg shadow-orange-500/10 cursor-pointer disabled:opacity-50"
+              variant="accent"
+              size="lg"
+              disabled={!isValidKenyanPhoneForPayer(payerPhone || ownerPhone)}
+              loading={isPaying}
+              loadingLabel={lang === 'en' ? 'Sending the payment prompt' : 'Inatuma ombi la malipo'}
+              className="w-full"
             >
-              {isPaying ? (
-                <>
-                  <Loader2 className="animate-spin" size={18} />
-                  <span>{lang === 'en' ? 'Sending payment prompt...' : 'Inatuma ombi la malipo...'}</span>
-                </>
-              ) : (
-                <>
-                  <span>{lang === 'en' ? 'Send M-Pesa STK Push' : 'Tuma M-Pesa STK Push'}</span>
-                  <ArrowRight size={18} />
-                </>
-              )}
-            </button>
+              {lang === 'en' ? 'Send M-Pesa STK Push' : 'Tuma M-Pesa STK Push'}
+              <ArrowRight size={18} aria-hidden="true" />
+            </Button>
           </div>
         </div>
       )}
@@ -1809,29 +1928,31 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           )}
 
           <div className="space-y-3 pt-2">
-            <button
+            <Button
               onClick={checkPaymentStatus}
+              variant="accent"
+              size="lg"
               disabled={isPaying}
-              className="w-full bg-accent-strong hover:bg-accent-strong-hover text-white py-3 rounded-2xl font-bold text-xs transition cursor-pointer disabled:opacity-50"
+              className="w-full"
             >
-              <span>{lang === 'en' ? 'Check payment status' : 'Angalia hali ya malipo'}</span>
-            </button>
+              {lang === 'en' ? 'Check payment status' : 'Angalia hali ya malipo'}
+            </Button>
 
-            <button
+            <Button
               onClick={triggerEscrowPayment}
-              disabled={isPaying}
-              className="w-full bg-brand-light-gray hover:bg-brand-light-gray/70 text-brand-muted-text py-3 rounded-2xl font-bold text-xs transition cursor-pointer disabled:opacity-50"
+              variant="secondary"
+              size="md"
+              loading={isPaying}
+              loadingLabel={lang === 'en' ? 'Sending the payment prompt' : 'Inatuma ombi la malipo'}
+              className="w-full"
             >
-              {isPaying ? (
-                <div className="flex items-center justify-center space-x-2">
-                  <Loader2 className="animate-spin" size={14} />
-                  <span>{lang === 'en' ? 'Sending prompt...' : 'Inatuma ombi la malipo...'}</span>
-                </div>
-              ) : (
-                <span>{lang === 'en' ? "Didn't get the prompt? Resend" : 'Hukupokea ujumbe? Tuma tena'}</span>
-              )}
-            </button>
+              {lang === 'en' ? "Didn't get the prompt? Resend" : 'Hukupokea ujumbe? Tuma tena'}
+            </Button>
 
+            {/* Documented exception: the local test-mode simulator is
+                deliberately NOT the shared Button. It is not a brand action,
+                it is gated on /api/dev/test-mode so it never reaches
+                production, and it must stay visibly a test affordance. */}
             {testModeEnabled && (
               <button
                 onClick={simulatePaymentSuccess}
@@ -1862,7 +1983,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               distinct — and "Fetching..." only ever appears while a real
               request is in flight. */}
           <div className="bg-brand-beige p-5 rounded-2xl text-left border border-line-subtle space-y-2">
-            <h3 className="text-caption font-extrabold text-ink-muted uppercase tracking-widest">Pickup physical agent point</h3>
+            <h3 className="text-caption font-extrabold text-ink-muted uppercase tracking-widest">{lang === 'en' ? 'Pickup physical agent point' : 'Kituo cha wakala wa kuchukua'}</h3>
             <PickupDetailsPanel
               state={pickupDetails}
               lang={lang}
@@ -1911,16 +2032,16 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 That new code invalidates the previous one, which is stated
                 explicitly before the request is made. */}
             <div className="pt-2 border-t border-white/15">
-              <button
+              <Button
                 type="button"
+                variant="inverse"
+                size="sm"
                 onClick={requestPickupCodeResend}
-                disabled={pickupCodeResendState.status === 'sending'}
-                className="inline-flex items-center gap-2 rounded-xl border border-white/40 px-3 py-2 text-sm font-bold text-white hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange disabled:opacity-60 disabled:cursor-not-allowed"
+                loading={pickupCodeResendState.status === 'sending'}
+                loadingLabel={lang === 'sw' ? 'Inatuma msimbo mwingine' : 'Sending a new pickup code'}
               >
-                {pickupCodeResendState.status === 'sending'
-                  ? (lang === 'sw' ? 'Inatuma…' : 'Sending…')
-                  : (lang === 'sw' ? 'Tuma msimbo mwingine' : 'Resend my pickup code')}
-              </button>
+                {lang === 'sw' ? 'Tuma msimbo mwingine' : 'Resend my pickup code'}
+              </Button>
               <p className="text-caption text-stone-300 mt-2">
                 {lang === 'sw'
                   ? 'Ukitumia msimbo mwingine, msimbo wa awali hautumiki tena.'
@@ -1968,7 +2089,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           <div className="border-t border-line-subtle pt-5 space-y-3">
             <h4 className="text-xs font-extrabold text-primary-green uppercase tracking-wider">{t.rateAgentLabel}</h4>
             {ratingSubmitted ? (
-              <span className="text-xs text-status-success font-bold block">Thank you for supporting community trust in Kenya!</span>
+              <span className="text-xs text-status-success font-bold block">{lang === 'en' ? 'Thank you for supporting community trust in Kenya!' : 'Asante kwa kusaidia kuaminiana katika jamii nchini Kenya!'}</span>
             ) : (
               <div className="flex items-center justify-center space-x-2">
                 {[1, 2, 3, 4, 5].map((star) => (
@@ -1977,7 +2098,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                     type="button"
                     onClick={() => submitRating(star)}
                     aria-label={lang === 'en' ? ('Rate ' + star + ' out of 5') : ('Toa ' + star + ' kati ya 5')}
-                    className="min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-stone-300 hover:text-accent-orange transition rounded-lg cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange/40"
+                    className="min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-stone-300 hover:text-accent-orange transition rounded-small cursor-pointer"
                   >
                     <div
                       className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-extrabold ${userRating && userRating >= star ? 'bg-accent-strong text-white' : 'bg-line-subtle text-ink-muted'}`}
@@ -1990,7 +2111,10 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             )}
           </div>
 
-          <button
+          <Button
+            variant="secondary"
+            size="lg"
+            className="w-full"
             onClick={() => {
               setVerificationStep('search');
               setSelectedItem(null);
@@ -2003,10 +2127,9 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               setIsConfident(false);
               handleSearch(); // Refresh lists
             }}
-            className="w-full bg-brand-light-gray hover:bg-brand-light-gray/70 text-brand-muted-text py-3 rounded-2xl font-bold transition text-xs"
           >
-            Go Back to Search
-          </button>
+            {lang === 'en' ? 'Go Back to Search' : 'Rudi kwenye Kutafuta'}
+          </Button>
         </div>
       )}
 
@@ -2091,7 +2214,14 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             </p>
           </div>
 
-          <button
+          {/* One action, and it is not a repair: the window is closed, the item
+              is unlocked and the strike is recorded, so the only thing the
+              claimant can do is leave. It is the lowest-emphasis shared
+              control on purpose — nothing here should read as "try again". */}
+          <Button
+            variant="ghost"
+            size="md"
+            className="w-full"
             onClick={() => {
               setVerificationStep('search');
               setSelectedItem(null);
@@ -2103,10 +2233,9 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               setOwnerIdentifyingDetails('');
               setIsConfident(false);
             }}
-            className="w-full bg-brand-light-gray hover:bg-brand-light-gray/70 text-brand-muted-text py-3 rounded-xl font-bold transition text-xs"
           >
             {lang === 'en' ? 'Back to Search' : 'Rudi kwenye Kutafuta'}
-          </button>
+          </Button>
         </div>
       )}
 
@@ -2229,7 +2358,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             {trackResult && (
               <div className="mt-4 bg-canvas-muted border border-line-subtle p-4 rounded-2xl space-y-3 fade-in text-xs">
                 <div className="flex items-center justify-between">
-                  <span className="font-extrabold text-ink-muted">Status:</span>
+                  <span className="font-extrabold text-ink-muted">{lang === 'en' ? 'Status:' : 'Hali:'}</span>
                   <span className={`${getClaimStatusDisplay(trackResult.claim.status, lang).className} px-2.5 py-1 rounded-full font-bold uppercase tracking-wider text-caption`}>
                     {getClaimStatusDisplay(trackResult.claim.status, lang).label}
                   </span>
@@ -2237,14 +2366,14 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
                 {trackResult.item && (
                   <div className="space-y-1 border-t border-line-subtle pt-2">
-                    <p className="font-bold text-primary-green text-sm">{trackResult.item.document_name_fuzzy || 'Found Item'}</p>
-                    <p className="text-ink-muted">Location: {trackResult.item.location_description}</p>
+                    <p className="font-bold text-primary-green text-sm">{trackResult.item.document_name_fuzzy || (lang === 'en' ? 'Found Item' : 'Kitu Kilichopatikana')}</p>
+                    <p className="text-ink-muted">{lang === 'en' ? 'Location:' : 'Mahali:'} {trackResult.item.location_description}</p>
                   </div>
                 )}
 
                 {trackResult.agent && (
                   <div className="bg-white p-3 rounded-xl border border-line-subtle space-y-1">
-                    <p className="font-bold text-ink">Assigned Agent Hub:</p>
+                    <p className="font-bold text-ink">{lang === 'en' ? 'Assigned Agent Hub:' : 'Kituo cha Wakala Aliyepangiwa:'}</p>
                     <p className="text-primary-green font-extrabold">{trackResult.agent.business_name}</p>
                     <p className="text-ink-muted">{trackResult.agent.location_address}</p>
                     <p className="text-ink-muted font-mono">{trackResult.agent.contact_phone}</p>
@@ -2253,7 +2382,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
                 {trackResult.claim.collection_code && (
                   <div className="bg-status-success-surface border border-status-success-border p-3 rounded-xl text-center">
-                    <p className="text-caption text-status-success uppercase font-bold tracking-widest">Collection Verification Code</p>
+                    <p className="text-caption text-status-success uppercase font-bold tracking-widest">{lang === 'en' ? 'Collection Verification Code' : 'Msimbo wa Uthibitishaji wa Kuchukua'}</p>
                     <p className="text-2xl font-mono font-black text-primary-green tracking-widest mt-0.5">{trackResult.claim.collection_code}</p>
                   </div>
                 )}
