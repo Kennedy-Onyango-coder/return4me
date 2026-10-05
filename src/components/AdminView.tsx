@@ -4,7 +4,7 @@ import { translations } from '../types';
 // SAME authoritative engine the server uses, so the numbers an admin sees in
 // the console are the numbers the claim will actually be priced from.
 import { computeRecoveryFee } from '../services/feeEngine';
-import { ShieldCheck, BarChart2, Users, FileCheck, Coins, HelpCircle, Loader2, ArrowRight, AlertTriangle, RefreshCw, CheckCircle, ShieldAlert, Package, ClipboardList, FileSearch } from 'lucide-react';
+import { ShieldCheck, BarChart2, Users, FileCheck, Coins, HelpCircle, Loader2, ArrowRight, AlertTriangle, RefreshCw, CheckCircle, ShieldAlert, Package, ClipboardList, FileSearch, X } from 'lucide-react';
 // BATCH 1 (shared admin visual language) — the console reuses the SAME design
 // system every other surface uses. These are presentation primitives only:
 // they hold no data, make no requests and change no behaviour.
@@ -24,6 +24,13 @@ import { ICON_SIZE } from './ui';
 // already provides focus trapping, Escape-to-cancel, focus restoration and
 // aria-modal semantics. No second dialog component was introduced.
 import Modal from './ui/Modal';
+// UX-15H — the image lightbox keeps its own specialized presentation (see the
+// audit comment above the viewer itself), but it adopts the SAME overlay
+// mechanism the shared `Modal` uses — a portal to `document.body` — and the
+// SAME focus-trap util (`utils/modalFocus.ts`), so the codebase still has
+// exactly one portal target and exactly one focus trap.
+import { createPortal } from 'react-dom';
+import { trapModalFocus } from '../utils/modalFocus';
 // Phase 6F — Claims Administration lives in its own module so this view stays
 // integration/navigation only. The Claims surface is read-only and talks to the
 // 6E API through that module; it never imports the database or the DTO layer.
@@ -315,13 +322,35 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
   // The lightbox previously only closed via a mouse click on the backdrop —
   // no Escape key, and nothing to receive that keypress anyway since focus
   // never moved into the dialog when it opened. Moving focus onto the
-  // backdrop here means Escape (wired via onKeyDown on that div above)
+  // backdrop here means Escape (wired via onKeyDown on that div below)
   // actually reaches a listener, and a keyboard-only admin isn't stuck
   // once they've opened a full-size photo.
+  //
+  // UX-15H finished that work, in the shared primitive's own order: the opener
+  // is remembered so closing the viewer puts focus back on the thumbnail (or
+  // evidence photo) it was opened from, and body scroll is locked with
+  // scrollbar compensation while it is open (the veil is opaque and full
+  // screen, so an unlocked page would only drift invisibly behind the photo
+  // and the console would have jumped by the time the viewer closed). This is
+  // the `Modal`'s lifecycle, not a second focus system: the Tab trap itself is
+  // the shared `trapModalFocus` util, wired to this same container.
   useEffect(() => {
-    if (lightboxImage && lightboxCloseRef.current) {
-      lightboxCloseRef.current.focus();
-    }
+    if (!lightboxImage) return;
+
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    lightboxCloseRef.current?.focus();
+
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+    const previousOverflow = document.body.style.overflow;
+    const previousPaddingRight = document.body.style.paddingRight;
+    document.body.style.overflow = 'hidden';
+    if (scrollbarWidth > 0) document.body.style.paddingRight = `${scrollbarWidth}px`;
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.body.style.paddingRight = previousPaddingRight;
+      previouslyFocused?.focus?.();
+    };
   }, [lightboxImage]);
 
 
@@ -4732,33 +4761,109 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
 
       {/* Lightbox Image Zoom Portal */}
       {lightboxImage && (
-        <div 
-          onClick={() => setLightboxImage(null)}
-          className="fixed inset-0 z-[120] bg-black/90 flex items-center justify-center p-4 cursor-zoom-out fade-in"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Zoomed photograph"
-          tabIndex={-1}
-          ref={lightboxCloseRef}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              e.preventDefault();
-              setLightboxImage(null);
-            }
-          }}
-        >
-          <div className="relative max-w-4xl max-h-[90vh] w-full h-full flex flex-col items-center justify-center">
-            <img
-              src={lightboxImage}
-              alt="Zoomed Photograph"
-              className="max-w-full max-h-[80vh] object-contain rounded-2xl"
-              referrerPolicy="no-referrer"
-            />
-            <p className="text-[var(--appearance-text-muted)] text-caption mt-4 font-bold bg-black/70 px-4 py-2 rounded-full uppercase tracking-wider">
-              Click anywhere, or press Escape, to close full screen view
-            </p>
-          </div>
-        </div>
+        // =====================================================================
+        // UX-15H — WHY THIS REMAINS A SPECIALIZED OVERLAY, NOT THE SHARED MODAL
+        // =====================================================================
+        // The shared `Modal` is a CARD dialog: on phones it docks to the bottom
+        // of the screen; on desktop it is a bordered, rounded
+        // `--appearance-surface` panel capped at `sm:max-w-lg` (32rem / 512px)
+        // with a header bar (heading + close control), a padded scrollable body
+        // and an optional footer action row. Every one of those is wrong for
+        // this surface. The viewer exists so an admin can inspect a document or
+        // item photograph BIGGER than any card: the image is contained to
+        // `max-w-4xl` / `max-h-[80vh]` and laid directly on a near-opaque black
+        // veil — no card, no header, no footer, no padding around the photo and
+        // no bottom-sheet behaviour on a phone. Representing that through the
+        // primitive would mean `hideTitle` (leaving behind a visible empty
+        // header bar, whose border and padding live inside the primitive and
+        // cannot be removed from outside), plus a class-order-dependent
+        // `sm:max-w-*` override — fighting the primitive at every level, and
+        // shrinking the photograph while doing it. So the specialized overlay is
+        // KEPT, and only what could be brought into line without touching that
+        // contract has changed:
+        //
+        //   1. It IS a portal now, which is what the marker above has always
+        //      claimed. The veil is `fixed inset-0`, and its parent is the
+        //      `.fade-in` console root — whose `forwards` entrance animation
+        //      leaves `transform: translateY(0)` applied, and a transformed
+        //      ancestor is the containing block for `fixed` descendants. The
+        //      "full screen" veil was therefore sized to the console rather than
+        //      to the viewport (and only for admins whose OS does not request
+        //      reduced motion, since that animation is disabled there).
+        //      `document.body` carries no transform, so the viewer is now
+        //      genuinely viewport-anchored — the same target the shared `Modal`
+        //      portals to.
+        //   2. Tab is trapped through the EXISTING `utils/modalFocus.ts`, the
+        //      very util the primitive uses, so focus can no longer walk out of
+        //      the viewer into the console dimmed behind it.
+        //   3. A real close control gives that trapped focus somewhere to land,
+        //      and gives pointer and screen-reader users an explicit dismissal
+        //      beside the pre-existing "click anywhere" and Escape.
+        // Deliberately UNCHANGED, because these are not design-system defects:
+        //   * `bg-black/90` and the hint's `bg-black/70` — fixed photographic
+        //     presentation, not themed surfaces. The `--appearance-scrim` role is
+        //     0.6 opaque in the light theme, which would let the console show
+        //     through and compete with the photograph under investigation.
+        //   * `z-[120]` — above the sticky app header (z-40), the mobile drawer
+        //     and the shared dialogs (z-50), whichever page the admin is on.
+        //   * `fade-in` — the stylesheet's one sanctioned entrance, already
+        //     neutralised under `prefers-reduced-motion`, and 400ms, the top of
+        //     the documented deliberate-transition band.
+        //   * the hint's `uppercase tracking-wider` pill, which is the console's
+        //     accepted eyebrow idiom (the item thumbnail's "Zoom View" pill and
+        //     the escrow stat labels use the same one), not a button label.
+        //   * the copy: the alt text and the "click anywhere / press Escape"
+        //     sentence are preserved verbatim.
+        createPortal(
+          <div 
+            onClick={() => setLightboxImage(null)}
+            className="fixed inset-0 z-[120] bg-black/90 flex items-center justify-center p-4 cursor-zoom-out fade-in"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Zoomed photograph"
+            tabIndex={-1}
+            ref={lightboxCloseRef}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                setLightboxImage(null);
+                return;
+              }
+              // The same trap the shared `Modal` wires: Tab stays in the viewer.
+              if (lightboxCloseRef.current) trapModalFocus(e.nativeEvent, lightboxCloseRef.current);
+            }}
+          >
+            {/* Close control — a 44px target over the photograph (the same
+                fixed-imagery overlay idiom as the hero carousel controls) with
+                the same X at `ICON_SIZE.emphasis` the shared `Modal` uses. */}
+            <button
+              type="button"
+              onClick={() => setLightboxImage(null)}
+              aria-label={lang === 'en' ? 'Close full screen view' : 'Funga mwonekano wa skrini nzima'}
+              className="absolute top-4 right-4 z-10 h-11 w-11 rounded-full bg-black/30 hover:bg-black/50 text-white flex items-center justify-center cursor-pointer transition-colors motion-reduce:transition-none"
+            >
+              <X size={ICON_SIZE.emphasis} aria-hidden="true" />
+            </button>
+            <div className="relative max-w-4xl max-h-[90vh] w-full h-full flex flex-col items-center justify-center">
+              <img
+                src={lightboxImage}
+                alt="Zoomed Photograph"
+                className="max-w-full max-h-[80vh] object-contain rounded-panel"
+                referrerPolicy="no-referrer"
+              />
+              {/* White on the fixed black pill, not a theme text role: the
+                  appearance text roles flip with the theme and resolve to a
+                  mid-grey in the light theme, which reads well under 3:1 on a
+                  black veil. White over the photograph's own overlay is the
+                  existing, theme-independent treatment (the item thumbnail's
+                  "Zoom View" pill paints exactly this way). */}
+              <p className="text-white text-caption mt-4 font-bold bg-black/70 px-4 py-2 rounded-full uppercase tracking-wider">
+                Click anywhere, or press Escape, to close full screen view
+              </p>
+            </div>
+          </div>,
+          document.body,
+        )
       )}
 
     </div>
