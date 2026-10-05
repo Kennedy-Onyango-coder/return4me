@@ -101,8 +101,8 @@ finding the same row does nothing. See [operations.md](operations.md).
 
 - Keep `NODE_ENV=production`. Several fail-closed guards and the OTP bypass are
   conditional on it.
-- Confirm `RESEND_FROM_EMAIL` against the Resend dashboard, not by observing that
-  a send call returned success.
+- Confirm `EMAIL_FROM` (or the legacy `RESEND_FROM_EMAIL`) against the Resend
+  dashboard, not by observing that a send call returned success.
 - Set `PUBLIC_APP_URL` explicitly.
 - Provide secrets through the platform's secret store rather than a file in the
   image.
@@ -125,7 +125,7 @@ send an activation email.
 - [architecture.md](architecture.md) — provider boundaries
 
 |---|---|
-| `PUBLIC_APP_URL` | Unset produces activation links pointing at `localhost`. Accounts are created and can never be activated. It is not listed in `.env.example`. |
+| `PUBLIC_APP_URL` | Unset produces activation links pointing at `localhost`. Accounts are created and can never be activated. It is listed in `.env.example` as the localhost fallback, so an unedited copy still omits a real origin. |
 | `RESEND_FROM_EMAIL` | An unverified or Resend test sender restricts delivery to the API key owner. Activation and handover emails appear to send and never arrive. |
 | `JWT_SECRET` | Code-level fallback means a missing value starts the server with a publicly known signing key. |
 | `DOC_HASH_SALT` | Falls back to `JWT_SECRET`; rotating the JWT secret then changes every document hash and empties in-flight rate-limit buckets. |

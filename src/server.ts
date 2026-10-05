@@ -194,6 +194,7 @@ import { computeEscrowFundsHeld } from './services/escrowFunds';
 // unchanged â€” see config/devPaymentSimulation.ts.
 import { resolveDevPaymentSimulationEnabled } from './config/devPaymentSimulation';
 import { getAdminNotificationEmail } from './config/adminNotificationEmail';
+import { assertEmailTransportConfiguration } from './config/emailConfig';
 // BATCH 2 (G3) â€” the EXISTING email sender is reused for the email-change
 // verification message. Imported here rather than inside routes/customerAccount.ts
 // so that module stays free of any delivery dependency.
@@ -501,6 +502,29 @@ function assertBootSecrets() {
       throw new Error('FATAL: Africa\'s Talking configuration variables (AFRICASTALKING_API_KEY, AFRICASTALKING_USERNAME, AFRICASTALKING_SENDER_ID) are missing from .env. The app refuses to boot.');
     }
   }
+
+  // TRANSACTIONAL EMAIL (Resend). This is the SAME rule the sender applies,
+  // called from the same boot path as the secret assertions above.
+  //
+  // PRODUCTION: throws without a usable RESEND_API_KEY. There is no console
+  // outbox in production (the transport fails closed), so a deployment without
+  // a provider would serve traffic while unable to send ANY transactional
+  // email — not the activation link that verifies an account, not the payment
+  // confirmation that releases an item from an agent. Refusing to start is
+  // strictly safer than appearing healthy while silently unable to complete
+  // those flows, and this is exactly what the missing-secret checks above do.
+  //
+  // NON-PRODUCTION: never throws — it warns, because the dev/test transport has
+  // a deliberate console outbox, which makes an unconfigured machine fully
+  // workable. A resolvable-but-risky configuration (Resend's shared sandbox
+  // sender, or no Reply-To) warns in BOTH modes instead of throwing: it can
+  // still deliver, and a staging operator is allowed to choose it.
+  //
+  // Deliberately NOT re-implemented here: the definition of "usable key" lives
+  // in config/emailConfig.ts and is shared with the transport, because a guard
+  // that accepts what the sender rejects (or vice versa) is how a deployment
+  // ends up "validated" against a rule nothing follows.
+  assertEmailTransportConfiguration();
 }
 
 // PHASE 10 (F-1): the listen port is now configuration-driven.

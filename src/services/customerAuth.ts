@@ -18,6 +18,20 @@ import { db } from '../db/database.ts';
 // contradicted, by a route handler.
 import { CUSTOMER_ACCOUNT_STRINGS, isSessionIdle } from '../config/customerAccountPolicy.ts';
 import { hashCode, toE164Kenyan } from './auth.ts';
+// The SHARED transactional-email shell. These two activation builders were the
+// last messages on the platform assembling their own `<div style="...">` markup
+// instead of using it; see `emailTemplates.ts` for what the shell guarantees.
+import {
+  EMAIL_THEME,
+  buildEmailMessage,
+  emailButton,
+  emailDivider,
+  emailHeading,
+  emailKicker,
+  emailNote,
+  emailParagraph,
+  escapeHtml,
+} from './emailTemplates.ts';
 
 export const CUSTOMER_SESSION_COOKIE = 'r4m_customer_session';
 export const CUSTOMER_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -51,20 +65,37 @@ export function buildCustomerActivationUrl(rawToken: string): string {
  * 24h window knows to ask for a new link rather than to keep retrying.
  */
 export function buildCustomerActivationEmailHtml(fullName: string, activationUrl: string): string {
-  const safeName = String(fullName || '').replace(/[<>&"]/g, '');
-  return `
-<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;line-height:1.6;color:#1f2937">
-  <h2 style="color:#003820;margin:0 0 16px">Activate your Return4me account</h2>
-  <p>Hi ${safeName},</p>
-  <p>Thanks for registering. Confirm your email address to activate your account and start using Return4me.</p>
-  <p style="margin:24px 0">
-    <a href="${activationUrl}" style="background:#003820;color:#ffffff;padding:12px 20px;border-radius:8px;text-decoration:none;display:inline-block">Activate my account</a>
-  </p>
-  <p style="font-size:13px;color:#6b7280">This link works once and expires in 24 hours. If it expires, request a new activation link from the sign-in page.</p>
-  <p style="font-size:13px;color:#6b7280">If you did not create a Return4me account, you can safely ignore this email.</p>
-  <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">
-  <p style="font-size:13px;color:#6b7280"><strong>Hai salamu ${safeName},</strong><br>Asante kwa kujiandikisha. Thibitisha barua pepe yako kuiambisha akaunti yako na kuanza kutumia Return4me.<br>Kiungo hiki kinafanya kazi mara moja tu na kin expires baada ya saa 24. Ukishapokea, omba kiungo kipya kutoka ukurasa wa kuingia.</p>
-</div>`.trim();
+  // Escaped by the shared `escapeHtml`, which is the platform's one escaping
+  // boundary, rather than by a local character-stripper. Same outcome for every
+  // name the previous code handled, plus the `'` and control characters it did
+  // not.
+  const safeName = escapeHtml(fullName);
+  const content = [
+    emailKicker('Account activation'),
+    emailHeading('Activate your Return4me account'),
+    emailParagraph(`Hi ${safeName},`),
+    emailParagraph('Thanks for registering. Confirm your email address to activate your account and start using Return4me.'),
+    // `fallback: true` prints the raw link as well as the button: this is the
+    // only way into the account and there is no second channel to resend it on.
+    emailButton({ href: activationUrl, label: 'Activate my account', fallback: true }),
+    emailNote('This link works once and expires in 24 hours. If it expires, request a new activation link from the sign-in page.'),
+    emailNote('If you did not create a Return4me account, you can safely ignore this email.'),
+    emailDivider('Kiswahili'),
+    emailParagraph(`<strong>Hai salamu ${safeName},</strong>`),
+    emailParagraph('Asante kwa kujiandikisha. Thibitisha barua pepe yako kuiambisha akaunti yako na kuanza kutumia Return4me.'),
+    emailParagraph('Kiungo hiki kinafanya kazi mara moja tu na kin expires baada ya saa 24. Ukishapokea, omba kiungo kipya kutoka ukurasa wa kuingia.'),
+  ].join('\n');
+
+  // The subject is duplicated into the document as its <title>; the preheader is
+  // the preview line a client shows next to the subject, so it carries the two
+  // facts that make the message worth opening: what to do and how long for.
+  return buildEmailMessage({
+    subject: 'Activate your Return4me account',
+    preheader: 'Confirm your email address to activate your Return4me account. The link works once and expires in 24 hours.',
+    headerLabel: 'Email verification',
+    accent: EMAIL_THEME.green,
+    content,
+  }).html;
 }
 
 // Minimal cookie reader (no extra dependency) — used only for our own cookie.
@@ -113,19 +144,29 @@ export function buildAgentActivationUrl(rawToken: string): string {
  * still reviews the application), and the link works once and expires in 24h.
  */
 export function buildAgentActivationEmailHtml(businessName: string, activationUrl: string): string {
-  const safeName = String(businessName || '').replace(/[<>&\"]/g, '');
-  return `
-<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;line-height:1.6;color:#1f2937">
-  <h2 style="color:#003820;margin:0 0 16px">Verify your Return4me agent email</h2>
-  <p>Hi ${safeName},</p>
-  <p>Thank you for registering as a Return4me agent. Please confirm this email address so we know your business can receive mail from us.</p>
-  <p style="margin:24px 0">
-    <a href="${activationUrl}" style="background:#003820;color:#ffffff;padding:12px 20px;border-radius:8px;text-decoration:none;display:inline-block">Verify my agent email</a>
-  </p>
-  <p style="font-size:13px;color:#6b7280">This link works once and expires after 24 hours. Verifying your email is not the same as approval &mdash; an administrator still reviews your application before you can start work.</p>
-  <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">
-  <p style="font-size:13px;color:#6b7280"><strong>Hai salamu ${safeName},</strong><br>Asante kwa kujisajili kama Wakala wa Return4me. Tafadhali thibitisha barua pepe hii ili tujue biashara yako inaweza kupokea barua kutoka kwetu.<br>Kiungo hiki kinafanya kazi mara moja tu na kin expires baada ya saa 24. Kuthibitisha barua pepe si sawa na kukubaliwa &mdash; msimamizi bado anapaswa kupitia maombi yako kabla ya kuanza kazi.</p>
-</div>`.trim();
+  const safeName = escapeHtml(businessName);
+  const content = [
+    emailKicker('Agent email verification'),
+    emailHeading('Verify your Return4me agent email'),
+    emailParagraph(`Hi ${safeName},`),
+    emailParagraph('Thank you for registering as a Return4me agent. Please confirm this email address so we know your business can receive mail from us.'),
+    emailButton({ href: activationUrl, label: 'Verify my agent email', fallback: true }),
+    // The second sentence is not padding: an applicant who reads verification as
+    // approval stops checking their queue and starts waiting to be paid.
+    emailNote('This link works once and expires after 24 hours. Verifying your email is not the same as approval &mdash; an administrator still reviews your application before you can start work.'),
+    emailDivider('Kiswahili'),
+    emailParagraph(`<strong>Hai salamu ${safeName},</strong>`),
+    emailParagraph('Asante kwa kujisajili kama Wakala wa Return4me. Tafadhali thibitisha barua pepe hii ili tujue biashara yako inaweza kupokea barua kutoka kwetu.'),
+    emailParagraph('Kiungo hiki kinafanya kazi mara moja tu na kin expires baada ya saa 24. Kuthibitisha barua pepe si sawa na kukubaliwa &mdash; msimamizi bado anapaswa kupitia maombi yako kabla ya kuanza kazi.'),
+  ].join('\n');
+
+  return buildEmailMessage({
+    subject: 'Verify your Return4me agent email',
+    preheader: 'Confirm this address so your Return4me agent account can receive mail. Verifying your email is not the same as approval.',
+    headerLabel: 'Agent verification',
+    accent: EMAIL_THEME.green,
+    content,
+  }).html;
 }
 
 export function customerCookieOptions() {

@@ -122,11 +122,11 @@ where the event is reconstructable, and retry or resend deliberately.
 
 ### No emails are arriving
 
-Check, in order: `RESEND_API_KEY` is set; `RESEND_FROM_EMAIL` is a verified
-sender and not Resend's test sender; and the notification rows are `sent` rather
-than failed. The test sender restricts delivery to the API key owner, so a
-deployment left on it will show successful sends and deliver nothing. See
-[configuration.md](configuration.md).
+Check, in order: `RESEND_API_KEY` is set; `EMAIL_FROM` (or the legacy
+`RESEND_FROM_EMAIL`) is a verified sender and not Resend's test sender; and the
+notification rows are `sent` rather than failed. The test sender restricts
+delivery to the API key owner, so a deployment left on it will show successful
+sends and deliver nothing. See [configuration.md](configuration.md).
 
 ### No SMS is arriving
 
@@ -139,9 +139,10 @@ flows in quick succession will hit it, and that is expected.
 
 ### Activation links point at localhost
 
-`PUBLIC_APP_URL` is unset. It falls back to `http://localhost:3000`, and it is
-not listed in `.env.example`, so a deployment assembled only from that file will
-omit it. See [configuration.md](configuration.md).
+`PUBLIC_APP_URL` is unset. It falls back to `http://localhost:3000`. It is listed
+in `.env.example`, but the shipped value is that fallback, so a deployment
+assembled only from that file still omits a real origin. See
+[configuration.md](configuration.md).
 
 ## Pause controls
 

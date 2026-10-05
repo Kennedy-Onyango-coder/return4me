@@ -206,6 +206,12 @@ async function resolveAdminTransactionLog(businessReference: string): Promise<Re
   if (!item) return null;
   const agent = item.assigned_agent_id ? await db.getAgent(item.assigned_agent_id) : null;
   const amount = await resolveTransactionLogAmount(item.id);
+  // Render-time timestamp, exactly as the live call site computes it (the shared
+  // builder takes no clock, so there is nothing else it could be). A retry can
+  // therefore differ from the original email by the displayed timestamp — the
+  // same ACCEPTED cosmetic drift as ITEM_HANDED_OVER's date below, and stated
+  // here for the same reason: an operator comparing the two emails should know
+  // which field is the record and which is the moment of rendering.
   const rendered = renderSendAdminTransactionLogEmail(
     subtype as 'PAYMENT_CONFIRMED' | 'HANDOVER_CONFIRMED_PENDING_SETTLEMENT',
     claim.id,

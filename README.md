@@ -86,13 +86,16 @@ cp .env.example .env
 ```
 
 `.env.example` lists every supported environment variable with commentary. The
-minimum needed to start is `DATABASE_URL` and `JWT_SECRET`. SMS, email,
-payments, storage, OCR and geocoding each fail closed or degrade when their own
-configuration is absent, so an incomplete `.env` produces a running server with
-reduced capability rather than a startup error. Note that
-[docs/configuration.md](docs/configuration.md) documents one variable,
-`PUBLIC_APP_URL`, that the application reads but `.env.example` does not yet
-list.
+minimum needed to start is `DATABASE_URL` and `JWT_SECRET`. SMS, storage, OCR and
+geocoding each fail closed or degrade when their own configuration is absent, so
+an incomplete `.env` produces a running server with reduced capability rather
+than a startup error. Payments, SMS credentials, the email transport and the
+admin secrets are stricter: in production the server refuses to boot without
+them, because each of those paths fails closed at runtime and a missing value
+would otherwise look healthy.
+[docs/configuration.md](docs/configuration.md) lists every variable and which
+ones are required to boot; `PUBLIC_APP_URL` in particular must be set to the real
+public origin in production, or activation links point at localhost.
 
 ### 4. Start the development server
 

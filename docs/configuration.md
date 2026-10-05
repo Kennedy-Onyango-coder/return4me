@@ -33,9 +33,9 @@ changes every document hash.
 
 `PUBLIC_APP_URL` falls back to `http://localhost:3000` when unset. In production
 that produces activation links pointing at localhost, which the recipient cannot
-open — new accounts are created and can never be activated. It also is not
-currently listed in `.env.example`, so a deployment assembled purely from that
-file will omit it.
+open — new accounts are created and can never be activated. It is listed in
+`.env.example`, but the shipped value is the localhost fallback, so a deployment
+assembled from that file still has to set it to the real public origin.
 
 `APP_URL` is the inverse case: present in `.env.example`, read nowhere in the
 application. Setting it has no effect. It is listed here so the discrepancy is
@@ -76,14 +76,38 @@ Africa's Talking is the only SMS provider. There is no fallback provider.
 | Variable | Purpose | Secret |
 |---|---|---|
 | `RESEND_API_KEY` | Resend API key | Yes |
-| `RESEND_FROM_EMAIL` | Verified sender address | No |
+| `EMAIL_FROM` | Sender, including display name | No |
+| `RESEND_FROM_EMAIL` | Legacy name for `EMAIL_FROM`, still honoured | No |
+| `EMAIL_REPLY_TO` | Mailbox a reply is delivered to | No |
 | `ADMIN_NOTIFICATION_EMAIL` | Recipient of administrative notices | No |
 
 ### Sender requirement
 
-`RESEND_FROM_EMAIL` must be an address or domain Resend has verified. Resend
-provides a test sender address, which restricts delivery to the address that
-owns the API key — messages to real recipients are not delivered.
+`EMAIL_FROM` (or the legacy `RESEND_FROM_EMAIL`, which is still read so an
+existing deployment does not silently change sender — `EMAIL_FROM` wins when both
+are set) must be an address or domain Resend has verified. Resend provides a
+shared test sender, `onboarding@resend.dev`, which restricts delivery to the
+address that owns the API key — messages to real recipients are not delivered,
+while the send itself still reports success.
+
+`EMAIL_REPLY_TO` defaults to the support mailbox printed in every template
+footer, so a reply reaches a human instead of the unattended no-reply sender. An
+explicitly empty value, or `none`, suppresses the header for a deployment with no
+monitored mailbox.
+
+### Boot behaviour
+
+In production the server refuses to boot without a usable `RESEND_API_KEY`, on
+the same boot path as the other missing-secret checks. Outside development there
+is no console outbox, so a deployment with no provider would serve traffic while
+unable to send the activation link that verifies an account or the payment
+confirmation that releases an item from an agent. A placeholder value counts as
+missing. In development and test an absent key only warns: the message is written
+to the server console instead of being sent.
+
+Resend's shared test sender, and a suppressed Reply-To, are reported as problems
+at boot in every environment but never block startup — both can still deliver, and
+a staging operator may choose them deliberately.
 
 
 ## Payments
@@ -197,15 +221,16 @@ rather than by a developer.
 - In production, every `*_KEY`, `*_SECRET`, `*_PASSWORD`, `*_TOKEN` and
   `DATABASE_URL` value must come from the platform's secret store, not from a
   file in the image.
-- `RESEND_FROM_EMAIL` and `ADMIN_NOTIFICATION_EMAIL` are not secrets, but a
-  mis-set sender is a production incident. See the sender requirement above.
+- `EMAIL_FROM`, `EMAIL_REPLY_TO`, `RESEND_FROM_EMAIL` and
+  `ADMIN_NOTIFICATION_EMAIL` are not secrets, but a mis-set sender is a
+  production incident. See the sender requirement above.
 
 ## Known discrepancies
 
-Every variable above appears in `.env.example` except `PUBLIC_APP_URL` and
-`NODE_ENV`, and `APP_URL` appears in `.env.example` without being read by the
-application. These three are recorded here rather than corrected, because
-correcting them means editing a configuration file.
+Every variable above appears in `.env.example` except `NODE_ENV`, and `APP_URL`
+appears in `.env.example` without being read by the application. Both are
+recorded here rather than corrected, because correcting them means editing a
+configuration file.
 
 | Variable | Purpose | Secret |
 |---|---|---|
