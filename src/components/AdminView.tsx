@@ -4,7 +4,7 @@ import { translations } from '../types';
 // SAME authoritative engine the server uses, so the numbers an admin sees in
 // the console are the numbers the claim will actually be priced from.
 import { computeRecoveryFee } from '../services/feeEngine';
-import { ShieldCheck, BarChart2, Users, FileCheck, Coins, HelpCircle, Loader2, ArrowRight, AlertCircle, AlertTriangle, RefreshCw, CheckCircle, ShieldAlert, Package, ClipboardList, FileSearch } from 'lucide-react';
+import { ShieldCheck, BarChart2, Users, FileCheck, Coins, HelpCircle, Loader2, ArrowRight, AlertTriangle, RefreshCw, CheckCircle, ShieldAlert, Package, ClipboardList, FileSearch } from 'lucide-react';
 // BATCH 1 (shared admin visual language) — the console reuses the SAME design
 // system every other surface uses. These are presentation primitives only:
 // they hold no data, make no requests and change no behaviour.
@@ -12,10 +12,14 @@ import Button from './ui/Button';
 import Badge from './ui/Badge';
 import Banner from './ui/Banner';
 import EmptyState from './ui/EmptyState';
+import Spinner from './ui/Spinner';
 import Textarea from './ui/Textarea';
 import Select from './ui/Select';
 import Input from './ui/Input';
 import StatCard from './ui/StatCard';
+// UX-15A/B — the UX-01 icon ladder, exported from the shared foundation, so the
+// authenticated states and the console chrome size every icon from one place.
+import { ICON_SIZE } from './ui';
 // P1-01: the refund reconciliation confirmation uses the SHARED modal, which
 // already provides focus trapping, Escape-to-cancel, focus restoration and
 // aria-modal semantics. No second dialog component was introduced.
@@ -1910,35 +1914,54 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
         </div>
       )}
 
-      {/* 2. DISTINCT LOADING / ERROR / EMPTY STATES */}
+      {/* 2. DISTINCT LOADING / ERROR / EMPTY STATES
+          UX-15A — the three authenticated dashboard states now sit on the
+          shared primitives and the appearance tokens. Presentation only: the
+          same conditions, the same loader, the same copy and the same retry
+          handler (fetchDashboardData) as before — no new state, no new request
+          and no change to the dashboard data contract. */}
       {token && dashboardLoading && !dashboardData && (
         <div className="flex flex-col items-center justify-center py-20 space-y-4">
-          <Loader2 className="animate-spin text-primary-green w-10 h-10" />
-          <p className="text-stone-500 text-xs font-semibold uppercase tracking-wider animate-pulse">
+          <Spinner
+            size={ICON_SIZE.feature}
+            label="Fetching console dashboard statistics..."
+            className="text-[var(--appearance-primary)]"
+          />
+          <p className="text-caption font-semibold uppercase tracking-wider animate-pulse text-[var(--appearance-text-muted)]">
             Fetching console dashboard statistics...
           </p>
         </div>
       )}
 
       {token && !dashboardData && dataError && (
-        <div className="bg-red-50 border border-red-100 p-6 rounded-2xl max-w-md mx-auto text-center space-y-4 my-8">
-          <AlertCircle className="w-12 h-12 text-red-500 mx-auto" />
-          <h2 className="text-sm font-extrabold text-red-800">Failed to Load Dashboard</h2>
-          <p className="text-xs text-red-600">{dataError}</p>
-          <button onClick={fetchDashboardData} className="bg-red-600 hover:bg-red-700 text-white text-xs font-bold px-4 py-2 rounded-xl transition">
+        <div className="max-w-md mx-auto my-8 space-y-4">
+          <Banner kind="error">
+            <h2 className="text-heading">Failed to Load Dashboard</h2>
+            <p className="mt-1">{dataError}</p>
+          </Banner>
+          <Button
+            variant="primary"
+            size="md"
+            onClick={fetchDashboardData}
+            className="w-full"
+          >
             Retry Connection
-          </button>
+          </Button>
         </div>
       )}
 
       {token && !dashboardLoading && !dashboardData && !dataError && (
-        <div className="bg-white rounded-2xl border border-stone-100 p-8 text-center space-y-4 shadow-sm max-w-md mx-auto my-8">
-          <HelpCircle className="w-12 h-12 text-stone-300 mx-auto" />
-          <h2 className="text-lg font-bold text-stone-800">No Dashboard Data Available</h2>
-          <p className="text-xs text-stone-500">The console returned no statistical or audit record metrics at this time.</p>
-          <button onClick={fetchDashboardData} className="bg-stone-900 text-white text-xs font-bold px-4 py-2 rounded-xl transition">
-            Retry Fetching
-          </button>
+        <div className="max-w-md mx-auto my-8">
+          <EmptyState
+            icon={HelpCircle}
+            title="No Dashboard Data Available"
+            description="The console returned no statistical or audit record metrics at this time."
+            action={
+              <Button variant="primary" size="md" onClick={fetchDashboardData}>
+                Retry Fetching
+              </Button>
+            }
+          />
         </div>
       )}
 
@@ -1957,26 +1980,30 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               token itself is never rendered. Sign out clears the session
               exactly as the navbar logout does (setToken(null)); the server-side
               revocation path is unchanged. */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border border-brand-border bg-white px-4 py-3.5 shadow-sm">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)] px-4 py-3.5 shadow-sm">
             <div className="flex items-center gap-3 min-w-0">
-              <span className="w-10 h-10 rounded-xl bg-primary-green text-white flex items-center justify-center shrink-0">
-                <ShieldCheck size={18} aria-hidden="true" />
+              <span className="w-10 h-10 rounded-standard bg-primary-green text-white flex items-center justify-center shrink-0">
+                <ShieldCheck size={ICON_SIZE.emphasis} aria-hidden="true" />
               </span>
               <div className="min-w-0">
-                <p className="text-caption font-extrabold uppercase tracking-widest text-brand-muted-text">Administrator</p>
-                <p className="text-sm font-extrabold text-brand-dark-text truncate">{adminLabel}</p>
-                <p className="text-caption text-brand-muted-text">
+                <p className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">Administrator</p>
+                <p className="text-body font-extrabold text-[var(--appearance-text-primary)] truncate">{adminLabel}</p>
+                <p className="text-caption text-[var(--appearance-text-muted)]">
                   {adminIdentity.role ? `Signed in · role ${adminIdentity.role}` : 'Signed in · active console session'}
                 </p>
               </div>
             </div>
-            <button
-              type="button"
+            {/* UX-15B — the hand-built control is now the shared Button. Same
+                action (setToken(null)), same session semantics, and size="md"
+                (44px) so it meets the interaction floor. */}
+            <Button
+              variant="outline"
+              size="md"
               onClick={() => setToken(null)}
-              className="border border-brand-border hover:border-primary-green text-brand-dark-text hover:text-primary-green text-xs font-bold px-4 py-2.5 rounded-xl transition self-start sm:self-auto cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange/40"
+              className="self-start sm:self-auto shrink-0"
             >
               {lang === 'en' ? 'Sign out' : 'Toka'}
-            </button>
+            </Button>
           </div>
 
           {actionSuccess && <Banner kind="success">{actionSuccess}</Banner>}
@@ -2059,47 +2086,47 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               .r4m-admin-nav (src/index.css). */}
           <div className="lg:grid lg:grid-cols-[236px_minmax(0,1fr)] lg:gap-8 lg:items-start">
           <nav
-            className="r4m-admin-nav flex border-b border-stone-200 overflow-x-auto scrollbar-none"
+            className="r4m-admin-nav flex border-b border-[var(--appearance-border)] overflow-x-auto scrollbar-none"
             aria-label={lang === 'en' ? 'Admin sections' : 'Sehemu za msimamizi'}
           >
             <button
               onClick={() => setActiveTab('stats')}
               aria-current={activeTab === 'stats' ? 'page' : undefined}
-              className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
-                activeTab === 'stats' ? 'border-primary-green text-brand-dark-text font-extrabold' : 'border-transparent text-brand-muted-text hover:text-brand-dark-text'
+              className={`py-3 px-6 text-caption font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
+                activeTab === 'stats' ? 'border-[var(--appearance-primary)] text-[var(--appearance-text-primary)] font-extrabold' : 'border-transparent text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'
               }`}
             >
-              <BarChart2 size={14} />
+              <BarChart2 size={ICON_SIZE.metadata} aria-hidden="true" />
               <span>{t.statsTab}</span>
             </button>
             <button
               onClick={() => setActiveTab('agents')}
               aria-current={activeTab === 'agents' ? 'page' : undefined}
-              className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
-                activeTab === 'agents' ? 'border-primary-green text-brand-dark-text font-extrabold' : 'border-transparent text-brand-muted-text hover:text-brand-dark-text'
+              className={`py-3 px-6 text-caption font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
+                activeTab === 'agents' ? 'border-[var(--appearance-primary)] text-[var(--appearance-text-primary)] font-extrabold' : 'border-transparent text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'
               }`}
             >
-              <Users size={14} />
+              <Users size={ICON_SIZE.metadata} aria-hidden="true" />
               <span>{lang === 'en' ? 'Agents Hub' : 'Mawakala'}</span>
             </button>
             <button
               onClick={() => setActiveTab('found_items')}
               aria-current={activeTab === 'found_items' ? 'page' : undefined}
-              className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
-                activeTab === 'found_items' ? 'border-primary-green text-brand-dark-text font-extrabold' : 'border-transparent text-brand-muted-text hover:text-brand-dark-text'
+              className={`py-3 px-6 text-caption font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
+                activeTab === 'found_items' ? 'border-[var(--appearance-primary)] text-[var(--appearance-text-primary)] font-extrabold' : 'border-transparent text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'
               }`}
             >
-              <Package size={14} />
+              <Package size={ICON_SIZE.metadata} aria-hidden="true" />
               <span>{lang === 'en' ? 'Found Items' : 'Vitu Vilivyopatikana'}</span>
             </button>
             <button
               onClick={() => setActiveTab('disputes')}
               aria-current={activeTab === 'disputes' ? 'page' : undefined}
-              className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
-                activeTab === 'disputes' ? 'border-primary-green text-brand-dark-text font-extrabold' : 'border-transparent text-brand-muted-text hover:text-brand-dark-text'
+              className={`py-3 px-6 text-caption font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
+                activeTab === 'disputes' ? 'border-[var(--appearance-primary)] text-[var(--appearance-text-primary)] font-extrabold' : 'border-transparent text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'
               }`}
             >
-              <HelpCircle size={14} />
+              <HelpCircle size={ICON_SIZE.metadata} aria-hidden="true" />
               <span>{t.disputesTab}</span>
             </button>
             {/* Phase 6F — Claims Administration. Read-only; the surface itself
@@ -2107,61 +2134,61 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
             <button
               onClick={() => setActiveTab('claims')}
               aria-current={activeTab === 'claims' ? 'page' : undefined}
-              className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
-                activeTab === 'claims' ? 'border-primary-green text-brand-dark-text font-extrabold' : 'border-transparent text-brand-muted-text hover:text-brand-dark-text'
+              className={`py-3 px-6 text-caption font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
+                activeTab === 'claims' ? 'border-[var(--appearance-primary)] text-[var(--appearance-text-primary)] font-extrabold' : 'border-transparent text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'
               }`}
             >
-              <ClipboardList size={14} />
+              <ClipboardList size={ICON_SIZE.metadata} aria-hidden="true" />
               <span>{lang === 'en' ? 'Claims' : 'Claims'}</span>
             </button>
             <button
               onClick={() => setActiveTab('lost_reports')}
               aria-current={activeTab === 'lost_reports' ? 'page' : undefined}
-              className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
-                activeTab === 'lost_reports' ? 'border-primary-green text-brand-dark-text font-extrabold' : 'border-transparent text-brand-muted-text hover:text-brand-dark-text'
+              className={`py-3 px-6 text-caption font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
+                activeTab === 'lost_reports' ? 'border-[var(--appearance-primary)] text-[var(--appearance-text-primary)] font-extrabold' : 'border-transparent text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'
               }`}
             >
-              <FileSearch size={14} />
+              <FileSearch size={ICON_SIZE.metadata} aria-hidden="true" />
               <span>{lang === 'en' ? 'Lost Reports' : 'Ripoti za Vitu'}</span>
             </button>
             <button
               onClick={() => setActiveTab('ledger')}
               aria-current={activeTab === 'ledger' ? 'page' : undefined}
-              className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
-                activeTab === 'ledger' ? 'border-primary-green text-brand-dark-text font-extrabold' : 'border-transparent text-brand-muted-text hover:text-brand-dark-text'
+              className={`py-3 px-6 text-caption font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
+                activeTab === 'ledger' ? 'border-[var(--appearance-primary)] text-[var(--appearance-text-primary)] font-extrabold' : 'border-transparent text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'
               }`}
             >
-              <Coins size={14} />
+              <Coins size={ICON_SIZE.metadata} aria-hidden="true" />
               <span>{t.ledgerTab}</span>
             </button>
             <button
               onClick={() => setActiveTab('review')}
               aria-current={activeTab === 'review' ? 'page' : undefined}
-              className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
-                activeTab === 'review' ? 'border-primary-green text-brand-dark-text font-extrabold' : 'border-transparent text-brand-muted-text hover:text-brand-dark-text'
+              className={`py-3 px-6 text-caption font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
+                activeTab === 'review' ? 'border-[var(--appearance-primary)] text-[var(--appearance-text-primary)] font-extrabold' : 'border-transparent text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'
               }`}
             >
-              <FileCheck size={14} />
+              <FileCheck size={ICON_SIZE.metadata} aria-hidden="true" />
               <span>Manual Review</span>
             </button>
             <button
               onClick={() => setActiveTab('categories')}
               aria-current={activeTab === 'categories' ? 'page' : undefined}
-              className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
-                activeTab === 'categories' ? 'border-primary-green text-brand-dark-text font-extrabold' : 'border-transparent text-brand-muted-text hover:text-brand-dark-text'
+              className={`py-3 px-6 text-caption font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
+                activeTab === 'categories' ? 'border-[var(--appearance-primary)] text-[var(--appearance-text-primary)] font-extrabold' : 'border-transparent text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'
               }`}
             >
-              <Coins size={14} />
+              <Coins size={ICON_SIZE.metadata} aria-hidden="true" />
               <span>{t.categoriesTab}</span>
             </button>
             <button
               onClick={() => setActiveTab('strikes')}
               aria-current={activeTab === 'strikes' ? 'page' : undefined}
-              className={`py-3 px-6 text-xs font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
-                activeTab === 'strikes' ? 'border-primary-green text-brand-dark-text font-extrabold' : 'border-transparent text-brand-muted-text hover:text-brand-dark-text'
+              className={`py-3 px-6 text-caption font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
+                activeTab === 'strikes' ? 'border-[var(--appearance-primary)] text-[var(--appearance-text-primary)] font-extrabold' : 'border-transparent text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'
               }`}
             >
-              <ShieldAlert size={14} />
+              <ShieldAlert size={ICON_SIZE.metadata} aria-hidden="true" />
               <span>Payment Strikes</span>
             </button>
           </nav>
@@ -2173,22 +2200,27 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               CONSOLE_SECTIONS table and change with the active section. The
               dashboard refresh control lives here because it refreshes the
               whole console payload, not any one section. */}
-          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 pb-3 border-b border-brand-border">
+          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 pb-3 border-b border-[var(--appearance-border)]">
             <div className="space-y-1 min-w-0">
-              <h1 className="text-xl sm:text-2xl font-extrabold tracking-tight text-brand-dark-text">
+              {/* UX-15B — the heading's approved semantic contract: the type
+                  ladder's subsection step on small screens and its section step
+                  from sm up (20/28 → 24/32) — exactly the text-xl → text-2xl
+                  pair it replaces, now on the UX-01 ladder. This is still the
+                  console's ONE page-level <h1>. */}
+              <h1 className="text-subsection sm:text-section font-extrabold tracking-tight text-[var(--appearance-text-primary)]">
                 {sectionCopy.title}
               </h1>
-              <p className="text-sm text-brand-muted-text leading-relaxed max-w-2xl">{sectionCopy.description}</p>
+              <p className="text-body text-[var(--appearance-text-muted)] leading-relaxed max-w-2xl">{sectionCopy.description}</p>
             </div>
             <Button
               variant="outline"
-              size="sm"
+              size="md"
               onClick={fetchDashboardData}
               title="Refresh Audit Data"
               aria-label="Refresh Audit Data"
               className="shrink-0 self-start"
             >
-              <RefreshCw size={14} aria-hidden="true" />
+              <RefreshCw size={ICON_SIZE.metadata} aria-hidden="true" />
               <span>{lang === 'en' ? 'Refresh' : 'Huisha'}</span>
             </Button>
           </div>

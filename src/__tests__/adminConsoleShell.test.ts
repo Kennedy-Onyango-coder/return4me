@@ -56,7 +56,10 @@ describe('admin sidebar (Request 05 / §11)', () => {
     expect(indexCss).toMatch(/\.r4m-admin-nav \{[\s\S]{0,400}flex-direction: column;/);
     expect(indexCss).toMatch(/\.r4m-admin-nav \{[\s\S]{0,400}position: sticky;/);
     // The pre-existing horizontal behaviour stays the default (mobile) case.
-    expect(adminView).toMatch(/className="r4m-admin-nav flex border-b border-stone-200 overflow-x-auto scrollbar-none"/);
+    // UX-15B swapped the raw stone-200 border for the appearance border token;
+    // the layout contract this pins (flex strip, bottom border, horizontal
+    // overflow, hidden scrollbar) is unchanged.
+    expect(adminView).toMatch(/className="r4m-admin-nav flex border-b border-\[var\(--appearance-border\)\] overflow-x-auto scrollbar-none"/);
     // The layout wrapper is what puts the nav beside the content on desktop.
     expect(adminView).toContain('lg:grid lg:grid-cols-[236px_minmax(0,1fr)] lg:gap-8 lg:items-start');
   });

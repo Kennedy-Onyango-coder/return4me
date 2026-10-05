@@ -35,8 +35,12 @@ const code = adminView
 
 describe('Batch 2: the console has ONE page-level heading per section', () => {
   it('keeps the single authoritative title band', () => {
+    // UX-15B moved this band onto the UX-01 type ladder: the same 20/28 → 24/32
+    // responsive pair the old `text-xl sm:text-2xl` expressed, now as the
+    // sanctioned semantic heading steps (text-subsection → text-section) with
+    // the appearance text token. It is still the console's ONE page-level <h1>.
     expect(adminView).toContain(
-      '<h1 className="text-xl sm:text-2xl font-extrabold tracking-tight text-brand-dark-text">',
+      '<h1 className="text-subsection sm:text-section font-extrabold tracking-tight text-[var(--appearance-text-primary)]">',
     );
   });
 
