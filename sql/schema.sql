@@ -788,7 +788,7 @@ CREATE TABLE lost_reports (
     -- never withdrawn.
     withdrawn_at TIMESTAMP WITH TIME ZONE,
     withdrawn_by VARCHAR(100),
-    withdrawal_reason TEXT,
+    withdrawal_reason TEXT
 );
 CREATE INDEX idx_lost_reports_customer ON lost_reports(customer_id);
 CREATE INDEX idx_lost_reports_category ON lost_reports(category_id);
