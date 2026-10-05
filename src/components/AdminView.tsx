@@ -1249,10 +1249,27 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
   };
 
   // Issue Official Warning to Agent
-  const handleWarnAgent = (id: string) => {
-    const reason = prompt(lang === 'en' ? 'Enter reason for issuing warning to this agent:' : 'Weka sababu ya kumpa wakala huyu onyo:');
-    if (!reason || reason.trim() === '') return;
-
+  // UX-15F — THE REASON STEP IS THE SHARED ui/Modal, NOT window.prompt().
+  //
+  // WHY THIS EXISTS
+  //   The "Issue Warning" action collected its audit-logged reason with a native
+  //   `prompt()`. A browser prompt is unstyled, cannot be translated, cannot
+  //   render a validation message, is not focus-managed and blocks the main
+  //   thread — so it read as a different product bolted onto this console. It is
+  //   now the SAME shared ui/Modal the refund reconciliation adopted in P1-01 and
+  //   the item-review reason step adopted in UX-15E. No second dialog component
+  //   was introduced, and the bespoke confirm modal keeps its own later scope.
+  //
+  // WHAT DID NOT CHANGE
+  //   The warning TARGET, the endpoint, the Authorization bearer, the
+  //   `{ reason }` body, the EXACT blank-reason guard the prompt used
+  //   (`!reason || reason.trim() === ''` — a missing, empty or whitespace-only
+  //   reason issues no warning at all), the UNTRIMMED reason that is sent, the
+  //   success / error banners, the `adminActionProcessing` guard and the
+  //   dashboard refresh. Only HOW the reason is collected changed.
+  /** The UNCHANGED warning mutation: same endpoint, same authorization, same
+   *  `{ reason }` payload, same success / error handling, same refresh. */
+  const handleWarnAgent = (id: string, reason: string) => {
     setActionSuccess('');
     setActionWarning('');
     setDataError('');
@@ -1274,6 +1291,50 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
       })
       .catch(err => setDataError(err.message))
       .finally(() => setAdminActionProcessing(false));
+  };
+
+  // --- UX-15F dialog state: the target agent, the typed reason and its
+  // validation message — nothing else, and no change to the agent shape. ---
+  const [agentWarnPrompt, setAgentWarnPrompt] = useState<{ agentId: string } | null>(null);
+  const [agentWarnReason, setAgentWarnReason] = useState('');
+  const [agentWarnReasonError, setAgentWarnReasonError] = useState('');
+
+  /** Cancel / dismiss: closes the dialog with no request, no mutation and no
+   *  console state change — exactly what cancelling the old prompt did. */
+  const closeAgentWarnDialog = () => {
+    setAgentWarnPrompt(null);
+    setAgentWarnReason('');
+    setAgentWarnReasonError('');
+  };
+
+  /** Opens the shared dialog for ONE agent. Records the target only: no request
+   *  and no mutation yet, exactly like the prompt it replaces, which also did
+   *  nothing until the administrator submitted. */
+  const openAgentWarnDialog = (id: string) => {
+    setAgentWarnReason('');
+    setAgentWarnReasonError('');
+    setAgentWarnPrompt({ agentId: id });
+  };
+
+  /**
+   * Submits the collected reason. The blank-reason rule is the SAME guard the
+   * prompt enforced: a missing or whitespace-only reason issued no warning at
+   * all, so it is now rejected IN PLACE — where the administrator is looking,
+   * instead of failing silently — the mutation is never reached, and the dialog
+   * stays open so the reason can be filled in. On a valid reason the dialog
+   * closes exactly as the prompt did, and the reason reaches the mutation
+   * UNTRIMMED, exactly as before.
+   */
+  const confirmAgentWarn = () => {
+    if (!agentWarnPrompt) return;
+    const { agentId } = agentWarnPrompt;
+    const reason = agentWarnReason;
+    if (!reason || reason.trim() === '') {
+      setAgentWarnReasonError(lang === 'en' ? 'A reason is required.' : 'Sababu inahitajika.');
+      return;
+    }
+    closeAgentWarnDialog();
+    handleWarnAgent(agentId, reason);
   };
 
   // Refund reconciliation (A1): fetch claims awaiting manual refund reconciliation.
@@ -2768,7 +2829,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                                   variant="outline"
                                   size="sm"
                                   disabled={adminActionProcessing}
-                                  onClick={() => handleWarnAgent(agent.id)}
+                                  onClick={() => openAgentWarnDialog(agent.id)}
                                 >
                                   Issue Warning
                                 </Button>
@@ -4545,6 +4606,54 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               : (lang === 'en'
                 ? 'Required — recorded against your administrator session.'
                 : 'Inahitajika — inarekodiwa kwa kikao chako cha msimamizi.')}
+          />
+        </div>
+      </Modal>
+
+      {/* UX-15F — the agent-warning reason step (shared ui/Modal).
+          Opened by the SAME "Issue Warning" control as before, which now records
+          the target instead of calling a browser prompt. Cancel / Escape / scrim
+          click close it with no request, no mutation and no console state change.
+          A missing or whitespace-only reason is rejected IN PLACE with the shared
+          Banner (the old prompt issued no warning for one either) and never calls
+          handleWarnAgent; on a valid reason the dialog closes and the UNTRIMMED
+          reason reaches the unchanged mutation. */}
+      <Modal
+        open={agentWarnPrompt !== null}
+        onClose={closeAgentWarnDialog}
+        title={lang === 'en' ? 'Issue agent warning' : 'Toa onyo kwa wakala'}
+        closeLabel={lang === 'en' ? 'Close' : 'Funga'}
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" size="sm" onClick={closeAgentWarnDialog}>
+              {lang === 'en' ? 'Cancel' : 'Ghairi'}
+            </Button>
+            <Button variant="danger" size="sm" onClick={confirmAgentWarn}>
+              {lang === 'en' ? 'Issue Warning' : 'Toa Onyo'}
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3">
+          {agentWarnReasonError && <Banner kind="error">{agentWarnReasonError}</Banner>}
+          <p className="text-[var(--appearance-text-secondary)]">
+            {lang === 'en'
+              ? 'This issues an official warning against this agent. The reason you give is recorded in the platform audit log against your administrator session.'
+              : 'Hii inatoa onyo rasmi kwa wakala huyu. Sababu unayotoa inarekodiwa kwenye kumbukumbu ya ukaguzi wa jukwaa kwa kikao chako cha msimamizi.'}
+          </p>
+          <Textarea
+            label={lang === 'en' ? 'Reason (recorded in the audit log)' : 'Sababu (inarekodiwa kwenye kumbukumbu)'}
+            id="agent-warn-reason"
+            rows={3}
+            value={agentWarnReason}
+            onChange={(e) => {
+              setAgentWarnReason(e.target.value);
+              if (agentWarnReasonError) setAgentWarnReasonError('');
+            }}
+            required
+            hint={lang === 'en'
+              ? 'Required — a warning is never recorded without one.'
+              : 'Inahitajika — onyo halirekodiwi bila sababu.'}
           />
         </div>
       </Modal>

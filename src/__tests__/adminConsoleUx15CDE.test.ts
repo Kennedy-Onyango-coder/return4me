@@ -88,8 +88,14 @@ const REVIEW_FLOW = sliceBetween(
   'const [itemReviewPrompt, setItemReviewPrompt] = useState<null | {',
   'const handleReleaseSettlementNow = async (claimId: string)',
 );
-/** UX-15E — the dialog itself (the shared Modal's props and body). */
-const REVIEW_MODAL = sliceBetween(ADMIN_VIEW_TSX, 'open={itemReviewPrompt !== null}', BESPOKE_MODAL);
+/** UX-15E — the dialog itself (the shared Modal's props and body). It ends where
+ *  the UX-15F agent-warning dialog begins, so the two shared dialogs stay
+ *  separately assertable. */
+const REVIEW_MODAL = sliceBetween(
+  ADMIN_VIEW_TSX,
+  'open={itemReviewPrompt !== null}',
+  '{/* UX-15F — the agent-warning reason step',
+);
 
 /* ---------------------------------------------------------------------------
  * The guards. They are the same guards UX-15A/B mutation-checks, extended with
@@ -218,9 +224,10 @@ describe('UX-15E: the item-review reason step is the shared Modal, not window.pr
   });
 
   it('uses the ONE shared Modal — no second dialog component was introduced', () => {
-    // Exactly two shared Modal usages exist in the file: the P1-01 refund
-    // reconciliation and this reason step.
-    expect(count(ADMIN_VIEW_TSX, /<Modal\b/g)).toBe(2);
+    // Exactly three shared Modal usages exist in the file: the P1-01 refund
+    // reconciliation, this reason step, and the agent-warning reason step UX-15F
+    // added on the SAME primitive (it introduced no dialog component).
+    expect(count(ADMIN_VIEW_TSX, /<Modal\b/g)).toBe(3);
     expect(ADMIN_VIEW_TSX).toContain("import Modal from './ui/Modal';");
     expect(REVIEW_MODAL).toContain('open={itemReviewPrompt !== null}');
     expect(REVIEW_MODAL).toContain('onClose={closeItemReviewPrompt}');
@@ -416,23 +423,19 @@ describe('the batch is recorded in the design-system reference', () => {
   });
 });
 
-describe('the one recorded, out-of-scope native dialog', () => {
-  it('is NOT the item-review flow, and no new one was introduced', () => {
-    // RECORDED FINDING — AdminView also contains a PRE-EXISTING bare
-    // `prompt()` in `handleWarnAgent` (the "Issue Warning" control in the agents
-    // panel). It belongs to a DIFFERENT flow from the item-review reason step
-    // this batch was scoped to, so it is deliberately left in place and
-    // reported rather than migrated silently.
-    //
-    // This assertion is the tripwire: it must remain the ONLY native dialog in
-    // the file, it must stay out of the item-review flow, and it must stay out
-    // of the panels slice every UX-15C guard above is asserted against.
-    expect(browserDialog(CODE)).toEqual(['prompt(']);
-    expect(CODE).toContain("const reason = prompt(lang === 'en' ? 'Enter reason for issuing warning to this agent:'");
+describe('the previously recorded native dialog was migrated in UX-15F', () => {
+  it('leaves ZERO browser-native dialogs in the console', () => {
+    // RECORDED FINDING, NOW CLOSED — this block used to pin the ONE remaining
+    // native dialog: the bare `prompt()` in the agent-warning flow
+    // (`handleWarnAgent`, the "Issue Warning" control in the agents panel), which
+    // UX-15C/D/E deliberately left in place and REPORTED rather than migrating
+    // silently. UX-15F is that follow-up batch, so the tripwire is now the
+    // STRICTER zero-dialog assertion across the whole file — gate, chrome and
+    // panels — instead of "exactly one, and here it is".
+    expect(browserDialog(CODE)).toEqual([]);
     expect(REVIEW_FLOW).not.toContain('prompt(');
     expect(PANELS).not.toContain('prompt(');
-    // The panels still reach that (unchanged) action — the batch migrated
-    // presentation, not the agent-warning workflow.
-    expect(PANELS).toContain('onClick={() => handleWarnAgent(agent.id)}');
+    // The panels still reach that (unchanged) action — through the shared dialog.
+    expect(PANELS).toContain('onClick={() => openAgentWarnDialog(agent.id)}');
   });
 });
