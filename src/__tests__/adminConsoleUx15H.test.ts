@@ -14,7 +14,9 @@ import path from 'path';
 //     call sites — the two item thumbnails, the agent shop-photo and
 //     ID-document disclosures (each with a pointer and a keyboard path), and the
 //     dispute claimant card through its `onViewPhoto` prop — and dismissed by a
-//     click anywhere on the veil or Escape.
+//     click anywhere on the veil or Escape. (The claimant card's image was the
+//     one trigger with NO keyboard route of its own; the UX-15 closure audit
+//     gave it one — see adminConsoleUx15Closure.test.ts.)
 //   * The marker called it a "Portal" and nothing was portalled. The veil is
 //     `fixed inset-0` inside the `.fade-in` console root, and `.fade-in`'s
 //     `forwards` entrance animation leaves `transform: translateY(0)` applied. A
@@ -309,7 +311,11 @@ describe('the photograph and every one of its openers survive the batch', () => 
     expect(count(CODE, /cursor-zoom-in/g)).toBe(2);
     expect(CODE).toContain('aria-label="View item photo full-size"');
     expect(CODE).toContain("if (e.key === 'Enter' || e.key === ' ')");
-    expect(count(CODE, /role="button"/g)).toBe(4);
+    // Four of these pre-dated this audit (the details disclosure and the three
+    // opener containers); the fifth is the dispute claimant card's evidence
+    // photograph, which the UX-15 closure audit gave the keyboard route it was
+    // missing — see adminConsoleUx15Closure.test.ts.
+    expect(count(CODE, /role="button"/g)).toBe(5);
     // The evidence-photo opener still passes its own URL through the card's prop.
     expect(CODE).toContain('onViewPhoto(ev.evidence_photo_url)');
   });

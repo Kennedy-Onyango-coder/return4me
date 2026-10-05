@@ -266,6 +266,21 @@ presentation rather than theme surfaces: `--appearance-scrim` is 0.6 opaque in
 the light theme, which would let the console show through behind the photograph
 being investigated.
 
+Every one of the viewer's openers now offers both a pointer and a keyboard route:
+the two item thumbnails, the agent shop-photo and ID-document disclosures and the
+dispute claimant card's evidence photograph. The first three always had both; the
+claimant card's image was the last pointer-only trigger, and the UX-15 closure
+audit gave it the same `role="button"` / `tabIndex={0}` / Enter-and-Space contract
+in the console's existing idiom, leaving the image, its URL and its sizing
+untouched. The viewer itself was not changed by that audit. The viewer's alt text
+and its "click anywhere / press Escape" sentence are still English-only: UX-15's
+scope is presentation and accessibility rather than language coverage, every
+pre-existing English string in the console was left verbatim by UX-15C/D/E/H, and
+only new chrome follows the bilingual convention — so the remaining English-only
+copy (the viewer's copy, the three openers' own `aria-label`s and panel labels
+such as "Agent Verification Photographs") belongs to a console-wide i18n pass
+rather than to a spot-translation of one overlay.
+
 ## 13. Dashboards
 
 `src/components/dashboard/DashboardShell.tsx` owns the authenticated workspace

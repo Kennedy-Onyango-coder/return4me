@@ -165,13 +165,33 @@ function DisputeClaimantPanel({
                   <p className="text-caption text-[var(--appearance-text-primary)] whitespace-pre-wrap break-words">{ev.evidence_text}</p>
                 )}
                 {ev.evidence_photo_url && (
-                  <img
-                    src={ev.evidence_photo_url}
-                    alt={en ? 'Evidence photograph submitted with this claim' : 'Picha ya ushahidi iliyowasilishwa'}
-                    referrerPolicy="no-referrer"
+                  // The opener is a real button, exactly like the console's other
+                  // three photo openers (the shop-photo and ID-document
+                  // disclosures and the item thumbnail): a pointer target that an
+                  // admin can also reach with Tab and fire with Enter or Space.
+                  // Until the UX-15 closure audit this was the one lightbox
+                  // trigger with no keyboard route at all — the image was the
+                  // click target and nothing else.
+                  <div
                     onClick={() => onViewPhoto(ev.evidence_photo_url)}
-                    className="w-full max-h-40 object-contain rounded-lg border border-[var(--appearance-border)] cursor-zoom-in"
-                  />
+                    className="cursor-zoom-in"
+                    role="button"
+                    tabIndex={0}
+                    aria-label={en ? 'View evidence photograph full-size' : 'Tazama picha ya ushahidi kwa ukubwa kamili'}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onViewPhoto(ev.evidence_photo_url);
+                      }
+                    }}
+                  >
+                    <img
+                      src={ev.evidence_photo_url}
+                      alt={en ? 'Evidence photograph submitted with this claim' : 'Picha ya ushahidi iliyowasilishwa'}
+                      referrerPolicy="no-referrer"
+                      className="w-full max-h-40 object-contain rounded-lg border border-[var(--appearance-border)]"
+                    />
+                  </div>
                 )}
               </li>
             ))}
