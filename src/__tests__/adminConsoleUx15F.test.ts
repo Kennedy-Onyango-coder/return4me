@@ -22,8 +22,9 @@ import path from 'path';
 //     (`!reason || reason.trim() === ''` — a missing, empty or whitespace-only
 //     reason issued no warning at all, and still does not);
 //   * the UNTRIMMED reason that is sent, or the success / error / refresh flow;
-//   * the UX-14 authentication gate, the UX-15E item-review dialog, the bespoke
-//     confirm modal, the lightbox, or anything UX-16 still owns.
+//   * the UX-14 authentication gate, the UX-15E item-review dialog, the
+//     confirmation dialog (which UX-15G later moved onto this same shared
+//     Modal), the lightbox, or anything UX-16 still owns.
 //
 // There is no jsdom/React harness in this repository, so — exactly as the
 // UX-06 … UX-15C/D/E suites do — the contract is asserted against the shipped
@@ -64,12 +65,12 @@ const CONSOLE_TSX = ADMIN_VIEW_TSX.slice(ADMIN_VIEW_TSX.indexOf(CONSOLE_MARKER))
 const GATE = stripComments(GATE_TSX);
 /** The UX-14 gate's OWN JSX: from its marker to the console marker. */
 const GATE_JSX = GATE_TSX.slice(GATE_TSX.indexOf('{/* 1. SECURE ADMIN AUTHENTICATION GATE'));
-const BESPOKE_MODAL = '{/* Custom Confirmation Modal */}';
+const CONFIRM_MODAL = '{/* Custom Confirmation Modal */}';
 const LIGHTBOX = '{/* Lightbox Image Zoom Portal */}';
-/** The authenticated panels, with the two un-migrated surfaces this batch is
- *  explicitly not allowed to touch carved out. */
+/** The authenticated panels, with the confirmation dialog (the shared `Modal`
+ *  since UX-15G) and the lightbox (still its own scope) carved out. */
 const PANELS = stripComments(
-  CONSOLE_TSX.replace(sliceBetween(CONSOLE_TSX, BESPOKE_MODAL, LIGHTBOX), ' '),
+  CONSOLE_TSX.replace(sliceBetween(CONSOLE_TSX, CONFIRM_MODAL, LIGHTBOX), ' '),
 );
 
 /** UX-15F — the warning flow: the unchanged mutation, the dialog state and the
@@ -91,7 +92,7 @@ const WARN_OPEN = sliceBetween(WARN_FLOW, 'const openAgentWarnDialog = (id: stri
 const WARN_CLOSE = sliceBetween(WARN_FLOW, 'const closeAgentWarnDialog = () => {', '};');
 const WARN_CONFIRM = sliceBetween(WARN_FLOW, 'const confirmAgentWarn = () => {', '};');
 /** UX-15F — the dialog itself (the shared Modal's props and body). */
-const WARN_MODAL = sliceBetween(ADMIN_VIEW_TSX, 'open={agentWarnPrompt !== null}', BESPOKE_MODAL);
+const WARN_MODAL = sliceBetween(ADMIN_VIEW_TSX, 'open={agentWarnPrompt !== null}', CONFIRM_MODAL);
 
 /* ---------------------------------------------------------------------------
  * The guards — the same ones the UX-15C/D/E suite uses, so a reintroduced
@@ -181,9 +182,10 @@ describe('the "Issue Warning" control opens the shared dialog', () => {
   });
 
   it('uses the ONE shared Modal — no new dialog component was introduced', () => {
-    // Exactly three shared Modal usages exist in the file: the P1-01 refund
-    // reconciliation, the UX-15E item-review reason step and this one.
-    expect(count(ADMIN_VIEW_TSX, /<Modal\b/g)).toBe(3);
+    // Exactly four shared Modal usages exist in the file: the P1-01 refund
+    // reconciliation, the UX-15E item-review reason step, this one, and the
+    // confirmation dialog UX-15G later migrated onto the same primitive.
+    expect(count(ADMIN_VIEW_TSX, /<Modal\b/g)).toBe(4);
     expect(ADMIN_VIEW_TSX).toContain("import Modal from './ui/Modal';");
     expect(WARN_MODAL).toContain('open={agentWarnPrompt !== null}');
     expect(WARN_MODAL).toContain('onClose={closeAgentWarnDialog}');
@@ -325,7 +327,7 @@ describe('the warning mutation is unchanged', () => {
 });
 
 // -----------------------------------------------------------------------------
-// F. Scope: UX-14, UX-15E, the bespoke confirm modal, the lightbox and UX-16.
+// F. Scope: UX-14, UX-15E, the confirmation dialog, the lightbox and UX-16.
 // -----------------------------------------------------------------------------
 
 describe('the batch stays in its lane', () => {
@@ -359,13 +361,17 @@ describe('the batch stays in its lane', () => {
     expect(WARN_FLOW).not.toContain('itemReviewPrompt');
   });
 
-  it('does not touch the bespoke confirm modal or the lightbox', () => {
-    const bespoke = sliceBetween(ADMIN_VIEW_TSX, BESPOKE_MODAL, LIGHTBOX);
-    expect(bespoke).toContain('{confirmModal && (');
-    expect(bespoke).toContain('confirmModal.onConfirm();');
-    // Still the un-migrated markup, deliberately: it has its own later scope.
-    expect(bespoke).toContain('bg-stone-900/60');
-    expect(bespoke).toContain('bg-primary-green hover:bg-primary-hover');
+  it('leaves the shared confirmation dialog and the lightbox in their own lanes', () => {
+    const confirmDialog = sliceBetween(ADMIN_VIEW_TSX, CONFIRM_MODAL, LIGHTBOX);
+    // UX-15G moved this overlay onto the shared primitive: the dialog is now the
+    // same Modal, and the hand-built presentation is gone.
+    expect(confirmDialog).toContain('<Modal');
+    expect(confirmDialog).toContain('open={confirmModal !== null}');
+    expect(confirmDialog).toContain('onClick={confirmPendingAction}');
+    expect(confirmDialog).toContain('onClick={closeConfirmModal}');
+    expect(confirmDialog).not.toContain('bg-stone-900/60');
+    expect(confirmDialog).not.toContain('bg-primary-green hover:bg-primary-hover');
+    // The two shared dialogs stay independent of one another.
     expect(WARN_MODAL).not.toContain('confirmModal');
     expect(WARN_FLOW).not.toContain('confirmModal');
     expect(ADMIN_VIEW_TSX).toContain(LIGHTBOX);

@@ -70,14 +70,14 @@ const GATE_TSX = ADMIN_VIEW_TSX.slice(0, ADMIN_VIEW_TSX.indexOf(CONSOLE_MARKER))
 const CONSOLE_TSX = ADMIN_VIEW_TSX.slice(ADMIN_VIEW_TSX.indexOf(CONSOLE_MARKER));
 
 /**
- * The BESPOKE confirm modal (`confirmModal`) is explicitly NOT part of this
- * batch — it keeps its own later scope. It is stripped here with exactly the
- * same two markers the batch itself uses, so the guard below covers every
- * migrated surface and none of the un-migrated one.
+ * The confirmation dialog (`confirmModal`) was NOT part of this batch — UX-15G
+ * migrated it later, onto the same shared `Modal`. It is stripped here with
+ * exactly the same two markers the batch itself uses, so the guards below cover
+ * every UX-15C/D/E surface and neither dialog.
  */
-const BESPOKE_MODAL = '{/* Custom Confirmation Modal */}';
+const CONFIRM_MODAL = '{/* Custom Confirmation Modal */}';
 const LIGHTBOX = '{/* Lightbox Image Zoom Portal */}';
-const PANELS_TSX = CONSOLE_TSX.replace(sliceBetween(CONSOLE_TSX, BESPOKE_MODAL, LIGHTBOX), ' ');
+const PANELS_TSX = CONSOLE_TSX.replace(sliceBetween(CONSOLE_TSX, CONFIRM_MODAL, LIGHTBOX), ' ');
 const PANELS = stripComments(PANELS_TSX);
 const GATE = stripComments(GATE_TSX);
 const CODE = stripComments(ADMIN_VIEW_TSX);
@@ -224,10 +224,11 @@ describe('UX-15E: the item-review reason step is the shared Modal, not window.pr
   });
 
   it('uses the ONE shared Modal — no second dialog component was introduced', () => {
-    // Exactly three shared Modal usages exist in the file: the P1-01 refund
-    // reconciliation, this reason step, and the agent-warning reason step UX-15F
-    // added on the SAME primitive (it introduced no dialog component).
-    expect(count(ADMIN_VIEW_TSX, /<Modal\b/g)).toBe(3);
+    // Exactly four shared Modal usages exist in the file: the P1-01 refund
+    // reconciliation, this reason step, the agent-warning reason step UX-15F
+    // added on the SAME primitive, and the confirmation dialog UX-15G later
+    // migrated onto it (none of them introduced a dialog component).
+    expect(count(ADMIN_VIEW_TSX, /<Modal\b/g)).toBe(4);
     expect(ADMIN_VIEW_TSX).toContain("import Modal from './ui/Modal';");
     expect(REVIEW_MODAL).toContain('open={itemReviewPrompt !== null}');
     expect(REVIEW_MODAL).toContain('onClose={closeItemReviewPrompt}');
@@ -321,7 +322,8 @@ describe('UX-15E: the item-review reason step is the shared Modal, not window.pr
 });
 
 // -----------------------------------------------------------------------------
-// D. The scope: UX-14 untouched above, UX-16 untouched beside, bespoke modal kept.
+// D. The scope: UX-14 untouched above, UX-16 untouched beside, and neither
+//    dialog disturbed.
 // -----------------------------------------------------------------------------
 
 describe('the batch stays inside its scope', () => {
@@ -345,13 +347,14 @@ describe('the batch stays inside its scope', () => {
     expect(magicIconSize(GATE)).toEqual([]);
   });
 
-  it('does not touch the bespoke confirm modal (its own later scope)', () => {
-    const bespoke = sliceBetween(ADMIN_VIEW_TSX, BESPOKE_MODAL, LIGHTBOX);
-    expect(bespoke).toContain('{confirmModal && (');
-    expect(bespoke).toContain('confirmModal.onConfirm();');
-    expect(bespoke).toContain("onClick={() => setConfirmModal(null)}");
+  it('does not touch the confirmation dialog UX-15G later moved onto the shared Modal', () => {
+    const confirmDialog = sliceBetween(ADMIN_VIEW_TSX, CONFIRM_MODAL, LIGHTBOX);
+    expect(confirmDialog).toContain('<Modal');
+    expect(confirmDialog).toContain('open={confirmModal !== null}');
+    expect(confirmDialog).toContain('onClick={confirmPendingAction}');
+    expect(confirmDialog).toContain('onClick={closeConfirmModal}');
     // …and it is outside the slice every UX-15C guard above is asserted against.
-    expect(PANELS).not.toContain('confirmModal.onConfirm();');
+    expect(PANELS).not.toContain('open={confirmModal !== null}');
   });
 
   it('does not start UX-16', () => {

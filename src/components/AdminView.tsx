@@ -427,6 +427,39 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
   } | null>(null);
 
   // ---------------------------------------------------------------------------
+  // UX-15G — THE CONFIRMATION DIALOG IS THE SHARED ui/Modal.
+  //
+  // WHY THIS EXISTS
+  //   The overlay every confirmation flow shared was hand-built JSX: no dialog
+  //   semantics, no focus management, no Escape handling, and a scrim that could
+  //   not be dismissed at all. It is now the SAME shared ui/Modal the refund
+  //   reconciliation (P1-01), the item-review reason step (UX-15E) and the
+  //   agent-warning reason step (UX-15F) use, so the dialog structure, the focus
+  //   trap, focus restoration, Escape and the scrim all come from one primitive.
+  //
+  // WHAT DID NOT CHANGE
+  //   Everything the flows DO. `confirmModal` still stores exactly the title, the
+  //   message and the callback each flow already built; no endpoint, method,
+  //   payload, authorization, success/error handling, refresh or processing flag
+  //   was touched; the confirm control still runs the callback and then dismisses
+  //   in that same order; and dismissal still only clears the pending request, so
+  //   a cancelled confirmation can never run the callback.
+  // ---------------------------------------------------------------------------
+  /** The ONE dismissal path. Cancel, the header close control, Escape and the
+   *  scrim all route here, and it can only clear the pending request — it never
+   *  reaches the stored callback, so no dismissal can confirm anything. */
+  const closeConfirmModal = () => setConfirmModal(null);
+
+  /** The ONE confirmation path. It runs the stored callback and then dismisses —
+   *  the same two statements in the same order the hand-built overlay used, so
+   *  every flow keeps its own loading, refresh and banner handling. */
+  const confirmPendingAction = () => {
+    if (!confirmModal) return;
+    confirmModal.onConfirm();
+    setConfirmModal(null);
+  };
+
+  // ---------------------------------------------------------------------------
   // PROD BATCH 3 / P1-01 — refund reconciliation confirmation.
   //
   // WHY THIS EXISTS
@@ -4659,40 +4692,43 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
       </Modal>
 
       {/* Custom Confirmation Modal */}
-      {confirmModal && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-stone-900/60 fade-in">
-          <div className="bg-white border border-stone-200 rounded-xl p-6 shadow-sm max-w-sm w-full space-y-4 fade-in">
-            <div className="flex items-start space-x-3 text-amber-600">
-              <ShieldAlert className="w-6 h-6 shrink-0 mt-0.5" />
-              <div className="space-y-1">
-                <h3 className="font-extrabold text-sm text-stone-900 uppercase tracking-wider">
-                  {confirmModal.title}
-                </h3>
-                <p className="text-stone-500 text-xs leading-relaxed font-semibold">
-                  {confirmModal.message}
-                </p>
-              </div>
-            </div>
-            <div className="flex justify-end space-x-2 pt-2">
-              <button
-                onClick={() => setConfirmModal(null)}
-                className="bg-stone-100 hover:bg-stone-200 text-stone-600 text-xs font-bold px-4 py-2 rounded-xl transition"
-              >
-                {lang === 'en' ? 'Cancel' : 'Ghairi'}
-              </button>
-              <button
-                onClick={() => {
-                  confirmModal.onConfirm();
-                  setConfirmModal(null);
-                }}
-                className="bg-primary-green hover:bg-primary-hover text-white text-xs font-bold px-4 py-2 rounded-xl transition"
-              >
-                {lang === 'en' ? 'Confirm' : 'Thibitisha'}
-              </button>
-            </div>
+      {/* UX-15G — this confirmation overlay is the SHARED ui/Modal, not bespoke
+          markup: the primitive owns the dialog semantics, the focus trap, focus
+          restoration, Escape and the scrim. The six flows that still store their
+          title / message / callback in `confirmModal` (delete category, clear
+          payment strikes, approve agent, suspend agent, resolve dispute, clear
+          reputation flag) render here unchanged. Cancel, the header close
+          control, Escape and the scrim all route through closeConfirmModal and
+          can only clear the pending request; only Confirm runs the stored
+          callback — and it then dismisses at once, so each flow keeps its
+          existing close-then-run behaviour. */}
+      <Modal
+        open={confirmModal !== null}
+        onClose={closeConfirmModal}
+        title={confirmModal?.title ?? ''}
+        closeLabel={lang === 'en' ? 'Close' : 'Funga'}
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" size="sm" onClick={closeConfirmModal}>
+              {lang === 'en' ? 'Cancel' : 'Ghairi'}
+            </Button>
+            <Button variant="primary" size="sm" onClick={confirmPendingAction}>
+              {lang === 'en' ? 'Confirm' : 'Thibitisha'}
+            </Button>
           </div>
-        </div>
-      )}
+        }
+      >
+        {confirmModal && (
+          <div className="flex items-start gap-3">
+            <ShieldAlert
+              size={ICON_SIZE.emphasis}
+              aria-hidden="true"
+              className="shrink-0 mt-0.5 text-[var(--appearance-warning)]"
+            />
+            <p className="text-[var(--appearance-text-secondary)]">{confirmModal.message}</p>
+          </div>
+        )}
+      </Modal>
 
       {/* Lightbox Image Zoom Portal */}
       {lightboxImage && (
