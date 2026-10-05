@@ -62,7 +62,7 @@ fails closed or degrades rather than silently succeeding. See
 | Provider | Purpose | Without it |
 |---|---|---|
 | Resend | Email | Fails closed in production; handover and activation notifications fail |
-| Africa's Talking | SMS | Fails closed; one-time codes cannot be delivered |
+| Africa's Talking | SMS | Optional channel: off unless `SMS_ENABLED="true"`. When off, one-time codes are not delivered by SMS and the send fails closed |
 | IntaSend | Payments | Payment routes refuse |
 | S3-compatible storage | Images and documents | Uploads fail visibly |
 | Google GenAI | Document OCR | Items are recorded without extracted text |
@@ -130,7 +130,13 @@ send an activation email.
 | `JWT_SECRET` | Code-level fallback means a missing value starts the server with a publicly known signing key. |
 | `DOC_HASH_SALT` | Falls back to `JWT_SECRET`; rotating the JWT secret then changes every document hash and empties in-flight rate-limit buckets. |
 | `INTASEND_WEBHOOK_SECRET` | Unset means a webhook cannot be verified, and a crafted request could mark a claim as paid. |
-| `SMS_ENABLED` | Off means SMS fails closed. A user waiting on a one-time code is told the send failed, which is the intended behaviour. |
+| `SMS_ENABLED` | Off is the recommended launch setting: SMS is skipped and fails closed, and the Africa's Talking credentials are not required to boot. Set to `true` only with real credentials and an approved Sender ID — from then on a missing or placeholder value refuses to boot. |
+
+SMS is optional at launch. `SMS_ENABLED="false"` is the recommended initial
+production setting: with it, the Africa's Talking credentials and Sender ID do
+not have to exist for the server to boot, no SMS is attempted, and email/Resend
+carries the notifications. Turning it on (`"true"`) restores the strict
+production boot guard for those three values.
 
 `ENABLE_DEV_PAYMENT_SIMULATION` and `ALLOW_MOCK_OTP_BYPASS` must not be set. The
 `/api/dev/*` routes additionally check `NODE_ENV`, but the environment

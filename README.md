@@ -89,10 +89,17 @@ cp .env.example .env
 minimum needed to start is `DATABASE_URL` and `JWT_SECRET`. SMS, storage, OCR and
 geocoding each fail closed or degrade when their own configuration is absent, so
 an incomplete `.env` produces a running server with reduced capability rather
-than a startup error. Payments, SMS credentials, the email transport and the
-admin secrets are stricter: in production the server refuses to boot without
-them, because each of those paths fails closed at runtime and a missing value
-would otherwise look healthy.
+than a startup error. Payments, the email transport and the admin secrets are
+stricter: in production the server refuses to boot without them, because each of
+those paths fails closed at runtime and a missing value would otherwise look
+healthy.
+
+SMS is deliberately optional. `SMS_ENABLED="false"` is the recommended initial
+production-launch configuration: Africa's Talking credentials and a Sender ID are
+not required to boot, no SMS is attempted, and transactional notifications are
+carried by email (Resend). Set `SMS_ENABLED="true"` later — once valid Africa's
+Talking credentials and an approved Sender ID exist — to activate SMS, at which
+point a missing or placeholder SMS value fails the production boot guard again.
 [docs/configuration.md](docs/configuration.md) lists every variable and which
 ones are required to boot; `PUBLIC_APP_URL` in particular must be set to the real
 public origin in production, or activation links point at localhost.

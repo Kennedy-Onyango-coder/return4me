@@ -154,7 +154,7 @@ See [claims-and-payments.md](claims-and-payments.md).
 |---|---|---|
 | PostgreSQL | Persistence | Required; the application cannot start |
 | Resend | Email | Fails closed in production; sandbox console in development |
-| Africa's Talking | SMS | Fails closed in production when `SMS_ENABLED` is off |
+| Africa's Talking | SMS | Optional channel, off unless `SMS_ENABLED="true"`; when off it is not required to boot and no SMS is attempted |
 | IntaSend | Payment | Payment routes refuse; the webhook still verifies |
 | S3-compatible storage | Images and documents | Uploads fail; the request does not silently succeed |
 | Google GenAI | OCR | Analysis is skipped; the item is still recorded |

@@ -130,9 +130,15 @@ sends and deliver nothing. See [configuration.md](configuration.md).
 
 ### No SMS is arriving
 
-Check `SMS_ENABLED`, then the Africa's Talking credentials and sender ID. In
-production a disabled or unconfigured SMS path fails closed, so the affected
-request reports failure rather than appearing to succeed.
+Check `SMS_ENABLED` first. `"false"` — the recommended launch setting — is the
+most common cause: SMS is skipped by design, the server prints a `[BOOT]` notice
+saying Africa's Talking is optional, and email/Resend carries the notification
+instead. If SMS is meant to be live, `SMS_ENABLED` must be exactly `"true"` and
+the Africa's Talking credentials and sender ID must be real; with `"true"` the
+production boot guard refuses to start without them, so a running server that has
+`"true"` already holds them. In production a disabled or unconfigured SMS path
+fails closed, so the affected request reports failure rather than appearing to
+succeed.
 
 Note the durable limit: 3 SMS per 10 minutes per identity. A user testing several
 flows in quick succession will hit it, and that is expected.

@@ -65,6 +65,21 @@ password in the application, not in the environment.
 | `AFRICASTALKING_USERNAME` | Provider account username | Yes |
 | `AFRICASTALKING_SENDER_ID` | Sender identifier shown to recipients | No |
 
+### Boot behaviour
+
+SMS is an optional channel, not a boot dependency. `SMS_ENABLED="false"` is the
+recommended initial production-launch configuration: the server boots without
+`AFRICASTALKING_API_KEY`, `AFRICASTALKING_USERNAME` and
+`AFRICASTALKING_SENDER_ID`, and email (Resend) remains the transactional
+notification channel. No SMS is attempted in that state.
+
+Set `SMS_ENABLED="true"` once valid Africa's Talking credentials and an approved
+Sender ID are available. From that point the production boot guard is strict
+again: a missing or placeholder `AFRICASTALKING_API_KEY`,
+`AFRICASTALKING_USERNAME` or `AFRICASTALKING_SENDER_ID` refuses to boot, exactly
+as it did before SMS was made optional. Enabling SMS changes nothing else — the
+JWT, admin, IntaSend, storage and Resend requirements are unaffected.
+
 With `SMS_ENABLED` off, the application fails closed in production rather than
 silently skipping a message. A user waiting on a one-time code is told the send
 did not happen, which is the correct outcome: silence would leave them waiting.

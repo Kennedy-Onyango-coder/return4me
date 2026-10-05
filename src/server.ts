@@ -433,6 +433,30 @@ if (isRealGoogleKey && isFreshlyCloned) {
 // The only behavioural difference is that merely importing the module no longer
 // aborts the process.
 function assertBootSecrets() {
+  // AFRICA'S TALKING SMS IS AN OPTIONAL CHANNEL, NOT A BOOT DEPENDENCY.
+  //
+  // The predicate below is deliberately the EXACT expression the runtime send
+  // path uses (services/auth.ts:74), so the boot guard and the sender can never
+  // disagree about whether SMS is live:
+  //
+  //   SMS_ENABLED === 'true'  ->  SMS is ON, and the strict Africa's Talking
+  //                              credentials check further down is UNCHANGED.
+  //   anything else           ->  SMS is OFF, so Africa's Talking credentials
+  //                              and a Sender ID are NOT required to boot. This
+  //                              is the recommended initial production-launch
+  //                              posture: the platform runs on email/Resend and
+  //                              the send path already fails closed rather than
+  //                              ever claiming a delivery it cannot prove.
+  //
+  // This gates ONLY the two Africa's Talking checks below. Every other
+  // production requirement in this function (JWT_SECRET, DOC_HASH_SALT,
+  // ADMIN_PASSCODE, the dev-flag refusals, the IntaSend keys and the
+  // Resend/email rule) is unconditional and untouched.
+  const smsEnabled = process.env.SMS_ENABLED === 'true';
+  if (!smsEnabled) {
+    console.log('[BOOT] SMS_ENABLED is not "true": Africa\'s Talking SMS is an OPTIONAL notification channel. Africa\'s Talking credentials and Sender ID are NOT required for startup, and no SMS is attempted. Email (Resend) remains the transactional notification channel. Set SMS_ENABLED="true" once valid Africa\'s Talking credentials and an approved Sender ID are available, to enable SMS later.');
+  }
+
   // P2-A4: the production-only strict block used to run at MODULE IMPORT. It is
   // a STARTUP guard, so it now runs from the boot path like the rest of this
   // function. Under test NODE_ENV is 'test', so it never fired there anyway â€”
@@ -458,18 +482,24 @@ function assertBootSecrets() {
     // IntaSend keys would boot successfully and then silently simulate every
     // M-Pesa payment as "successful" â€” real users would see a success message,
     // items would be released to them, and agents would be told they'd been
-    // paid, while zero real money ever moved. Same principle for Africa's
-    // Talking: a placeholder key there means pickup codes are only ever
-    // logged to the server console, never actually sent to the owner's phone.
-    // Both failure modes are invisible unless caught here at boot.
+    // paid, while zero real money ever moved. The same principle applies to
+    // Africa's Talking WHEN SMS IS ENABLED: a placeholder key there means
+    // pickup codes are only ever logged to the server console, never actually
+    // sent to the owner's phone. Both failure modes are invisible unless
+    // caught here at boot.
+    //
+    // The SMS check is conditional on `smsEnabled` (declared at the top of this
+    // function) because SMS is an optional channel a launch may deliberately
+    // leave off; the IntaSend checks above are unconditional because payments
+    // are never optional.
     if (isPlaceholderKey(process.env.INTASEND_PUBLISHABLE_KEY) || isPlaceholderKey(process.env.INTASEND_SECRET_KEY)) {
       throw new Error('FATAL: INTASEND_PUBLISHABLE_KEY / INTASEND_SECRET_KEY are missing or still placeholder values in production mode. Without real keys, all M-Pesa payments would be silently simulated as successful with no real money moving. The app refuses to boot.');
     }
     if (isPlaceholderKey(process.env.INTASEND_WEBHOOK_SECRET)) {
       throw new Error('FATAL: INTASEND_WEBHOOK_SECRET is missing or still a placeholder value in production mode. Without it, payment webhook signatures cannot be verified, and the app refuses to boot rather than accept unverified payment confirmations.');
     }
-    if (isPlaceholderKey(process.env.AFRICASTALKING_API_KEY) || isPlaceholderKey(process.env.AFRICASTALKING_USERNAME) || isPlaceholderKey(process.env.AFRICASTALKING_SENDER_ID)) {
-      throw new Error('FATAL: Africa\'s Talking configuration is missing or still placeholder values in production mode. Without it, secret pickup codes would only ever be logged to the server console, never actually delivered to owners by SMS. The app refuses to boot.');
+    if (smsEnabled && (isPlaceholderKey(process.env.AFRICASTALKING_API_KEY) || isPlaceholderKey(process.env.AFRICASTALKING_USERNAME) || isPlaceholderKey(process.env.AFRICASTALKING_SENDER_ID))) {
+      throw new Error('FATAL: Africa\'s Talking configuration is missing or still placeholder values in production mode while SMS_ENABLED is "true". Without it, secret pickup codes would only ever be logged to the server console, never actually delivered to owners by SMS. Enable valid Africa\'s Talking credentials and an approved Sender ID, or set SMS_ENABLED="false" to launch on email/Resend alone. The app refuses to boot.');
     }
   }
 
@@ -497,9 +527,14 @@ function assertBootSecrets() {
     throw new Error('FATAL: INTASEND_SECRET_KEY environment variable is missing. The app refuses to boot.');
   }
 
-  if (realEnvExists) {
+  // Africa's Talking presence check. Meaningful ONLY when SMS is actually
+  // enabled: when SMS_ENABLED is not 'true' the credentials are not a launch
+  // requirement, so their absence must never refuse boot. When SMS IS enabled
+  // this preserves the original guarantee — a real .env without the three SMS
+  // variables still refuses to boot.
+  if (realEnvExists && smsEnabled) {
     if (process.env.AFRICASTALKING_API_KEY === undefined || process.env.AFRICASTALKING_USERNAME === undefined || process.env.AFRICASTALKING_SENDER_ID === undefined) {
-      throw new Error('FATAL: Africa\'s Talking configuration variables (AFRICASTALKING_API_KEY, AFRICASTALKING_USERNAME, AFRICASTALKING_SENDER_ID) are missing from .env. The app refuses to boot.');
+      throw new Error('FATAL: Africa\'s Talking configuration variables (AFRICASTALKING_API_KEY, AFRICASTALKING_USERNAME, AFRICASTALKING_SENDER_ID) are missing from .env while SMS_ENABLED is "true". The app refuses to boot.');
     }
   }
 
