@@ -1446,8 +1446,30 @@ updated_at TIMESTAMP WITH TIME ZONE NOT NULL
     // One row per customer+category+channel, so a concurrent double-submit
     // cannot leave contradictory preferences behind.
     `CREATE UNIQUE INDEX IF NOT EXISTS uq_customer_notification_pref ON customer_notification_prefs(customer_id, category, channel)`,
-    // Only channels the system can actually deliver on.
+    // Only channels the system can actually deliver on. No fake channel.
+    //
+    // Re-asserted DROP-then-ADD, exactly like items_status_check above, and for
+    // the same reason: sql/schema.sql declares these two constraints as UNNAMED
+    // inline column CHECKs, and Postgres auto-names such a constraint
+    // "<table>_<column>_check" — which is precisely the two names used below.
+    // Any database bootstrapped from sql/schema.sql therefore ALREADY carries
+    // both constraints, so a bare ADD CONSTRAINT aborts with
+    // 'constraint "..." for relation "customer_notification_prefs" already
+    // exists'. Because the bootstrap in this same function runs sql/schema.sql
+    // on a genuinely fresh database, that abort happened on FIRST boot too, not
+    // only on a re-run — it surfaced as "2 of 171 migration statement(s)
+    // failed" and the production startup refusal.
+    //
+    // Dropping IF EXISTS first makes the pair idempotent on a fresh database
+    // AND on a database that already carries the constraint, while still
+    // re-asserting the exact predicate: a missing or drifted constraint is
+    // corrected, never tolerated. The fail-closed guarantee at the end of this
+    // function is untouched — a genuine failure is still fatal in production.
+    // This is the SAME pattern the other seven constraint re-assertions in this
+    // list use; these two were the only ADD CONSTRAINTs missing their DROP.
+    `ALTER TABLE customer_notification_prefs DROP CONSTRAINT IF EXISTS customer_notification_prefs_channel_check`,
     `ALTER TABLE customer_notification_prefs ADD CONSTRAINT customer_notification_prefs_channel_check CHECK (channel IN ('sms', 'email', 'in_app'))`,
+    `ALTER TABLE customer_notification_prefs DROP CONSTRAINT IF EXISTS customer_notification_prefs_category_check`,
     `ALTER TABLE customer_notification_prefs ADD CONSTRAINT customer_notification_prefs_category_check CHECK (category IN ('claim_status', 'payment_status', 'document_verification', 'lost_report', 'found_item_report', 'account_security', 'terms_service'))`,
 
     // Append-only audit of preference changes. Separate from the pref table
