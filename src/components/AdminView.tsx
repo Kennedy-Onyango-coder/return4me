@@ -104,9 +104,9 @@ function DisputeClaimantPanel({
     : [];
 
   return (
-    <div className={`border rounded-2xl p-4 space-y-2 ${isWinner ? 'border-status-success-border bg-status-success-surface/40' : 'border-brand-border bg-canvas-sunken'}`}>
+    <div className={`border rounded-2xl p-4 space-y-2 ${isWinner ? 'border-status-success-border bg-status-success-surface/40' : 'border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)]'}`}>
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-widest">{roleLabel}</span>
+        <span className="text-caption font-extrabold text-[var(--appearance-text-muted)] uppercase tracking-widest">{roleLabel}</span>
         {isWinner && (
           <Badge variant="success">
             {en ? 'Awarded' : 'Ilipewa ushindi'}
@@ -114,48 +114,48 @@ function DisputeClaimantPanel({
         )}
       </div>
 
-      <div className="text-[11px] text-brand-muted-text space-y-0.5">
+      <div className="text-caption text-[var(--appearance-text-muted)] space-y-0.5">
         <p>
-          <span className="text-brand-muted-text">{en ? 'Phone' : 'Simu'}:</span>{' '}
-          <b className="text-brand-dark-text">{claimant.owner_phone || (en ? 'not recorded' : 'haijarekodiwa')}</b>
+          <span className="text-[var(--appearance-text-muted)]">{en ? 'Phone' : 'Simu'}:</span>{' '}
+          <b className="text-[var(--appearance-text-primary)]">{claimant.owner_phone || (en ? 'not recorded' : 'haijarekodiwa')}</b>
         </p>
         <p>
-          <span className="text-brand-muted-text">Claim:</span>{' '}
-          <span className="font-mono font-bold text-brand-dark-text">{claimant.claim_id || (en ? 'not recorded' : 'haijarekodiwa')}</span>
+          <span className="text-[var(--appearance-text-muted)]">Claim:</span>{' '}
+          <span className="font-mono font-bold text-[var(--appearance-text-primary)]">{claimant.claim_id || (en ? 'not recorded' : 'haijarekodiwa')}</span>
         </p>
         <p>
-          <span className="text-brand-muted-text">{en ? 'Claim status' : 'Hali ya claim'}:</span>{' '}
-          <b className="text-brand-dark-text">{claimant.claim_status || (en ? 'unknown' : 'haijulikani')}</b>
+          <span className="text-[var(--appearance-text-muted)]">{en ? 'Claim status' : 'Hali ya claim'}:</span>{' '}
+          <b className="text-[var(--appearance-text-primary)]">{claimant.claim_status || (en ? 'unknown' : 'haijulikani')}</b>
         </p>
         <p>
-          <span className="text-brand-muted-text">{en ? 'Escrow paid' : 'Amana imelipwa'}:</span>{' '}
-          <b className="text-brand-dark-text">{claimant.has_paid_escrow ? (en ? 'Yes' : 'Ndiyo') : (en ? 'No' : 'Hapana')}</b>
+          <span className="text-[var(--appearance-text-muted)]">{en ? 'Escrow paid' : 'Amana imelipwa'}:</span>{' '}
+          <b className="text-[var(--appearance-text-primary)]">{claimant.has_paid_escrow ? (en ? 'Yes' : 'Ndiyo') : (en ? 'No' : 'Hapana')}</b>
         </p>
       </div>
 
-      <div className="border-t border-brand-border pt-2 space-y-1">
-        <span className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-widest block">
+      <div className="border-t border-[var(--appearance-border)] pt-2 space-y-1">
+        <span className="text-caption font-extrabold text-[var(--appearance-text-muted)] uppercase tracking-widest block">
           {en ? 'Submitted evidence' : 'Ushahidi uliowasilishwa'}
         </span>
         {!evidenceState ? (
-          <p className="text-[11px] text-brand-muted-text">{en ? 'Not loaded yet.' : 'Haijapakiwa bado.'}</p>
+          <p className="text-caption text-[var(--appearance-text-muted)]">{en ? 'Not loaded yet.' : 'Haijapakiwa bado.'}</p>
         ) : evidenceState.loading ? (
-          <p className="text-[11px] text-brand-muted-text" aria-busy="true">{en ? 'Loading evidence…' : 'Inapakia ushahidi…'}</p>
+          <p className="text-caption text-[var(--appearance-text-muted)]" aria-busy="true">{en ? 'Loading evidence…' : 'Inapakia ushahidi…'}</p>
         ) : evidenceState.error ? (
-          <p className="text-[11px] text-status-danger">
+          <p className="text-caption text-status-danger">
             {en ? 'Evidence could not be loaded: ' : 'Ushahidi haukupakiwa: '}{evidenceState.error}
           </p>
         ) : ownEvidence.length === 0 ? (
-          <p className="text-[11px] text-brand-muted-text">{en ? 'No evidence available.' : 'Hakuna ushahidi unaopatikana.'}</p>
+          <p className="text-caption text-[var(--appearance-text-muted)]">{en ? 'No evidence available.' : 'Hakuna ushahidi unaopatikana.'}</p>
         ) : (
           <ul className="space-y-2">
             {ownEvidence.map((ev: any) => (
-              <li key={ev.id} className="bg-white border border-brand-border rounded-xl p-2 space-y-1">
-                <p className="text-[11px] text-brand-muted-text">
+              <li key={ev.id} className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-xl p-2 space-y-1">
+                <p className="text-caption text-[var(--appearance-text-muted)]">
                   {ev.created_at ? new Date(ev.created_at).toLocaleString() : ''}
                 </p>
                 {ev.evidence_text && (
-                  <p className="text-[11px] text-brand-dark-text whitespace-pre-wrap break-words">{ev.evidence_text}</p>
+                  <p className="text-caption text-[var(--appearance-text-primary)] whitespace-pre-wrap break-words">{ev.evidence_text}</p>
                 )}
                 {ev.evidence_photo_url && (
                   <img
@@ -163,7 +163,7 @@ function DisputeClaimantPanel({
                     alt={en ? 'Evidence photograph submitted with this claim' : 'Picha ya ushahidi iliyowasilishwa'}
                     referrerPolicy="no-referrer"
                     onClick={() => onViewPhoto(ev.evidence_photo_url)}
-                    className="w-full max-h-40 object-contain rounded-lg border border-brand-border cursor-zoom-in"
+                    className="w-full max-h-40 object-contain rounded-lg border border-[var(--appearance-border)] cursor-zoom-in"
                   />
                 )}
               </li>
@@ -1578,13 +1578,72 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // UX-15E — THE ITEM-REVIEW REASON STEP IS THE SHARED ui/Modal, NOT window.prompt().
+  //
+  // WHY THIS EXISTS
+  //   The three stolen-property / legal-hold transitions each require an
+  //   operator-entered reason, and that reason was collected with a native
+  //   `window.prompt()`. A browser prompt is unstyled, cannot be translated,
+  //   cannot render a validation message, is not focus-managed, and blocks the
+  //   main thread — so it read as a different product bolted onto this console.
+  //
+  //   It is now the SAME shared ui/Modal the refund reconciliation adopted in
+  //   P1-01 (focus trap, Escape-to-cancel, focus restoration, role="dialog" +
+  //   aria-modal, scrollable body, footer action row). No second dialog
+  //   component was introduced, and the bespoke confirm modal below is left
+  //   untouched — it keeps its own dedicated scope.
+  //
+  // WHAT DID NOT CHANGE
+  //   The endpoint, the Authorization bearer, the `{ reason }` body, the
+  //   required/optional rule per action, the exact 'A reason is required.'
+  //   message, the `.trim()` applied to whatever the operator types, the
+  //   `itemActionProcessing` guard that disables the originating row, and every
+  //   server-side rule. Only HOW the reason is collected changed.
+  // ---------------------------------------------------------------------------
+  const [itemReviewPrompt, setItemReviewPrompt] = useState<null | {
+    itemId: string;
+    action: 'flag-stolen' | 'legal-hold' | 'clear-hold';
+    promptLabel: string;
+  }>(null);
+  const [itemReviewReason, setItemReviewReason] = useState('');
+  const [itemReviewReasonError, setItemReviewReasonError] = useState('');
+
+  /** Cancel / dismiss: closes the dialog with no mutation, no request and no
+   *  state transition — exactly what cancelling the old prompt did. */
+  const closeItemReviewPrompt = () => {
+    setItemReviewPrompt(null);
+    setItemReviewReason('');
+    setItemReviewReasonError('');
+  };
+
+  /** Opens the shared dialog. No request and no mutation yet, exactly like the
+   *  prompt it replaces, which also did nothing until the operator submitted. */
   const promptItemReviewStatusChange = (itemId: string, action: 'flag-stolen' | 'legal-hold' | 'clear-hold', promptLabel: string) => {
-    const reason = window.prompt(promptLabel);
-    if (reason === null) return; // cancelled
+    setItemReviewReason('');
+    setItemReviewReasonError('');
+    setItemReviewPrompt({ itemId, action, promptLabel });
+  };
+
+  /**
+   * Submits the collected reason. The required-reason rule is IDENTICAL to the
+   * one the prompt enforced — a blank or whitespace-only reason for
+   * `flag-stolen` / `legal-hold` is rejected with the same
+   * 'A reason is required.' message and the mutation is never called; only the
+   * PLACE that message appears changed (inside the dialog, where the operator is
+   * looking, instead of the console-level error banner). `clear-hold` stays
+   * optional. The dialog closes on submit exactly as the prompt did, and the
+   * mutation receives `reason.trim()`.
+   */
+  const confirmItemReviewStatusChange = () => {
+    if (!itemReviewPrompt) return;
+    const { itemId, action } = itemReviewPrompt;
+    const reason = itemReviewReason;
     if ((action === 'flag-stolen' || action === 'legal-hold') && !reason.trim()) {
-      setDataError('A reason is required.');
+      setItemReviewReasonError('A reason is required.');
       return;
     }
+    closeItemReviewPrompt();
     handleItemReviewStatusChange(itemId, action, reason.trim());
   };
 
@@ -1982,12 +2041,12 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               revocation path is unchanged. */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)] px-4 py-3.5 shadow-sm">
             <div className="flex items-center gap-3 min-w-0">
-              <span className="w-10 h-10 rounded-standard bg-primary-green text-white flex items-center justify-center shrink-0">
+              <span className="w-10 h-10 rounded-standard bg-[var(--appearance-primary)] text-[var(--appearance-primary-foreground)] flex items-center justify-center shrink-0">
                 <ShieldCheck size={ICON_SIZE.emphasis} aria-hidden="true" />
               </span>
               <div className="min-w-0">
                 <p className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">Administrator</p>
-                <p className="text-body font-extrabold text-[var(--appearance-text-primary)] truncate">{adminLabel}</p>
+                <p className="text-heading font-extrabold text-[var(--appearance-text-primary)] truncate">{adminLabel}</p>
                 <p className="text-caption text-[var(--appearance-text-muted)]">
                   {adminIdentity.role ? `Signed in · role ${adminIdentity.role}` : 'Signed in · active console session'}
                 </p>
@@ -2013,10 +2072,10 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               settings. See isSocialPublishingPaused() in server.ts: every
               broadcast call site checks this before posting, and a failed
               check fails safe (treated as paused). */}
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-brand-border bg-white px-4 py-3 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--appearance-border)] bg-[var(--appearance-surface)] px-4 py-3 shadow-sm">
             <span className="flex items-center gap-2.5 min-w-0">
-              <ShieldAlert size={16} aria-hidden="true" className="shrink-0 text-brand-muted-text" />
-              <span className="text-sm font-bold text-brand-dark-text">Social Media Publishing</span>
+              <ShieldAlert size={ICON_SIZE.ui} aria-hidden="true" className="shrink-0 text-[var(--appearance-text-muted)]" />
+              <span className="text-body font-bold text-[var(--appearance-text-primary)]">Social Media Publishing</span>
               <Badge variant={dashboardData.socialPublishingPaused ? 'danger' : 'success'}>
                 {dashboardData.socialPublishingPaused ? 'Paused — no new posts' : 'Active'}
               </Badge>
@@ -2050,11 +2109,11 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                 return (
                   <div
                     key={scope}
-                    className="flex items-center justify-between gap-2 rounded-xl border border-brand-border bg-white px-3.5 py-2.5 shadow-sm"
+                    className="flex items-center justify-between gap-2 rounded-xl border border-[var(--appearance-border)] bg-[var(--appearance-surface)] px-3.5 py-2.5 shadow-sm"
                   >
                     <span className="flex items-center gap-2 min-w-0">
-                      <ShieldAlert size={14} aria-hidden="true" className="shrink-0 text-brand-muted-text" />
-                      <span className="text-xs font-bold text-brand-dark-text">{label}</span>
+                      <ShieldAlert size={ICON_SIZE.metadata} aria-hidden="true" className="shrink-0 text-[var(--appearance-text-muted)]" />
+                      <span className="text-caption font-bold text-[var(--appearance-text-primary)]">{label}</span>
                       <Badge variant={isPaused ? 'danger' : 'success'}>{isPaused ? 'Paused' : 'Active'}</Badge>
                     </span>
                     <Button
@@ -2225,6 +2284,36 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
             </Button>
           </div>
 
+          {/* ==================================================================
+              UX-15C / UX-15D — THE SECTION PANELS NOW SPEAK THE DESIGN SYSTEM.
+
+              The nine authenticated panels below (stats, agents, found items,
+              disputes, claims, lost reports, ledger, review, categories,
+              strikes) were the last surface in the product still mixing the
+              pre-UX-01 vocabulary: `stone-*` / `red-*` palettes, literal
+              `bg-white` cards, `brand-*` / `canvas-*` surfaces that never flipped
+              in the dark theme, off-ladder `text-[9px]` / `[10px]` / `[11px]`
+              captions, and icons sized by magic numbers.
+
+              EVERYTHING BELOW IS PRESENTATION ONLY. Not one section, key,
+              filter, condition, loop, table column, handler, API call, payload
+              or permission changed. What moved:
+                * type       -> the UX-01 ladder (text-caption / text-body /
+                                text-body-large / text-heading / text-section,
+                                every step size-preserving versus the class it
+                                replaced);
+                * surface    -> --appearance-surface / -surface-muted;
+                * text       -> --appearance-text-primary / -secondary / -muted;
+                * rule       -> --appearance-border;
+                * status     -> --appearance-danger / -warning / -success;
+                * actions    -> the shared Button where the element is a true
+                                action (navigation tabs, disclosure controls and
+                                filter chips deliberately stay native buttons);
+                * icons      -> ICON_SIZE, so no icon is sized by a literal;
+                * dark mode  -> every migrated surface now flips with
+                                html[data-theme='dark'].
+              ================================================================== */}
+
           {/* TAB CONTENT 1: STATS WORKSPACE */}
           {activeTab === 'stats' && (
             <div className="space-y-6">
@@ -2253,13 +2342,13 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                     (the financial-truthfulness guard that stops a claim COUNT
                     being shown as money). They are styled to the same visual
                     language as StatCard so the grid still reads as one set. */}
-                <div className="bg-white border border-brand-border rounded-2xl p-4 sm:p-5 shadow-sm">
-                  <span className="block text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">Escrow Funds Held</span>
-                  <span className="block mt-1 text-2xl font-extrabold text-primary-green tabular-nums tracking-tight leading-tight">KES {dashboardData.stats.escrowHeldAmount}</span>
+                <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-4 sm:p-5 shadow-sm">
+                  <span className="block text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">Escrow Funds Held</span>
+                  <span className="block mt-1 text-section font-extrabold text-[var(--appearance-primary)] tabular-nums tracking-tight leading-tight">KES {dashboardData.stats.escrowHeldAmount}</span>
                 </div>
-                <div className="bg-white border border-brand-border rounded-2xl p-4 sm:p-5 shadow-sm">
-                  <span className="block text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">Claims in Escrow</span>
-                  <span className="block mt-1 text-2xl font-extrabold text-primary-green tabular-nums tracking-tight leading-tight">{dashboardData.stats.escrowHeldCount}</span>
+                <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-4 sm:p-5 shadow-sm">
+                  <span className="block text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">Claims in Escrow</span>
+                  <span className="block mt-1 text-section font-extrabold text-[var(--appearance-primary)] tabular-nums tracking-tight leading-tight">{dashboardData.stats.escrowHeldCount}</span>
                 </div>
                 <StatCard
                   icon={Coins}
@@ -2269,10 +2358,10 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               </div>
 
               {/* Admin 2FA / Security */}
-              <div className="bg-white border border-brand-border rounded-2xl p-6 shadow-sm space-y-4">
+              <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-6 shadow-sm space-y-4">
                 <div className="flex items-center justify-between gap-3">
-                  <h3 className="font-extrabold text-sm text-brand-muted-text uppercase tracking-widest flex items-center gap-2">
-                    <ShieldCheck size={16} aria-hidden="true" />
+                  <h3 className="font-extrabold text-caption text-[var(--appearance-text-muted)] uppercase tracking-widest flex items-center gap-2">
+                    <ShieldCheck size={ICON_SIZE.ui} aria-hidden="true" />
                     Two-Factor Authentication (2FA)
                   </h3>
                   <Badge variant={adminTotpEnabled ? 'success' : 'neutral'}>
@@ -2285,7 +2374,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
 
                 {!adminTotpEnabled && !twoFaSetupData && (
                   <div className="space-y-2">
-                    <p className="text-sm text-brand-muted-text">
+                    <p className="text-body text-[var(--appearance-text-muted)]">
                       This admin account does not have 2FA enabled. Given this account controls dispute resolution, agent approval, and the full financial ledger, we strongly recommend enabling it.
                     </p>
                     <Button variant="primary" loading={twoFaProcessing} onClick={handleTwoFaStartSetup} className="self-start">
@@ -2295,18 +2384,18 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                 )}
 
                 {twoFaSetupData && (
-                  <div className="space-y-3 bg-canvas-muted border border-brand-border rounded-2xl p-4">
-                    <p className="text-sm text-brand-muted-text">
+                  <div className="space-y-3 bg-[var(--appearance-surface-muted)] border border-[var(--appearance-border)] rounded-2xl p-4">
+                    <p className="text-body text-[var(--appearance-text-muted)]">
                       Add this account to Google Authenticator, Authy, or any TOTP app — either by scanning a QR code generated from the URL below, or by entering the secret manually.
                     </p>
-                    <div className="text-[11px] font-mono bg-white border border-brand-border rounded-lg p-2 break-all">{twoFaSetupData.otpauthUrl}</div>
-                    <div className="text-xs text-brand-dark-text">
+                    <div className="text-caption font-mono bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-lg p-2 break-all">{twoFaSetupData.otpauthUrl}</div>
+                    <div className="text-caption text-[var(--appearance-text-primary)]">
                       <span className="font-bold">Manual entry secret:</span>{' '}
                       <span className="font-mono">{twoFaSetupData.secret}</span>
                     </div>
                     <form onSubmit={handleTwoFaConfirm} className="flex gap-2 items-end">
                       <div className="flex-1 space-y-1">
-                        <label htmlFor="twofa-confirm-code" className="block text-xs font-bold text-brand-dark-text">Enter code to confirm</label>
+                        <label htmlFor="twofa-confirm-code" className="block text-caption font-bold text-[var(--appearance-text-primary)]">Enter code to confirm</label>
                         <input
                           id="twofa-confirm-code"
                           type="text"
@@ -2315,7 +2404,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                           value={twoFaConfirmCode}
                           onChange={(e) => setTwoFaConfirmCode(e.target.value)}
                           placeholder="123456"
-                          className="w-full h-11 border border-brand-border rounded-xl px-3 text-sm font-mono text-center focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30"
+                          className="w-full h-11 border border-[var(--appearance-border)] rounded-xl px-3 text-body font-mono text-center focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30"
                           required
                         />
                       </div>
@@ -2330,7 +2419,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                   <button
                     type="button"
                     onClick={() => setTwoFaShowDisableForm(true)}
-                    className="self-start text-xs font-bold text-status-danger underline hover:no-underline cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange/40 rounded"
+                    className="self-start text-caption font-bold text-status-danger underline hover:no-underline cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange/40 rounded"
                   >
                     Disable 2FA
                   </button>
@@ -2339,13 +2428,13 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                 {adminTotpEnabled && twoFaShowDisableForm && (
                   <form onSubmit={handleTwoFaDisable} className="flex gap-2 items-end bg-status-danger-surface border border-status-danger-border rounded-2xl p-4">
                     <div className="flex-1 space-y-1">
-                      <label htmlFor="twofa-disable-password" className="block text-xs font-bold text-status-danger">Confirm password to disable 2FA</label>
+                      <label htmlFor="twofa-disable-password" className="block text-caption font-bold text-status-danger">Confirm password to disable 2FA</label>
                       <input
                         id="twofa-disable-password"
                         type="password"
                         value={twoFaDisablePassword}
                         onChange={(e) => setTwoFaDisablePassword(e.target.value)}
-                        className="w-full h-11 border border-brand-border rounded-xl px-3 text-sm focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30"
+                        className="w-full h-11 border border-[var(--appearance-border)] rounded-xl px-3 text-body focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30"
                         required
                       />
                     </div>
@@ -2357,8 +2446,8 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               </div>
 
               {/* Audit logs timeline */}
-              <div className="bg-white border border-brand-border rounded-2xl p-6 shadow-sm space-y-4">
-                <h3 className="font-extrabold text-sm text-brand-muted-text uppercase tracking-widest">Real-time Platform Audit Logs</h3>
+              <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-6 shadow-sm space-y-4">
+                <h3 className="font-extrabold text-caption text-[var(--appearance-text-muted)] uppercase tracking-widest">Real-time Platform Audit Logs</h3>
                 {dashboardData.auditLogs.length === 0 ? (
                   <EmptyState
                     icon={ClipboardList}
@@ -2368,14 +2457,14 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                       : 'Vitendo vya jukwaa vinaonekana hapa vinaporekodiwa.'}
                   />
                 ) : (
-                  <div className="h-60 overflow-y-auto border border-brand-border rounded-xl font-mono text-[11px] p-4 bg-brand-beige space-y-2 leading-relaxed">
+                  <div className="h-60 overflow-y-auto border border-[var(--appearance-border)] rounded-xl font-mono text-caption p-4 bg-[var(--appearance-surface-muted)] space-y-2 leading-relaxed">
                     {dashboardData.auditLogs.map((log: any) => (
-                      <div key={log.id} className="text-brand-muted-text border-b border-brand-border/60 pb-1.5 flex justify-between items-start gap-3">
+                      <div key={log.id} className="text-[var(--appearance-text-muted)] border-b border-[var(--appearance-border)]/60 pb-1.5 flex justify-between items-start gap-3">
                         <div className="min-w-0">
-                          <span className="text-primary-green font-bold mr-2">[{log.action.toUpperCase()}]</span>
+                          <span className="text-[var(--appearance-primary)] font-bold mr-2">[{log.action.toUpperCase()}]</span>
                           <span>{log.details}</span>
                         </div>
-                        <span className="text-brand-muted-text shrink-0 ml-3">{new Date(log.created_at).toLocaleString()}</span>
+                        <span className="text-[var(--appearance-text-muted)] shrink-0 ml-3">{new Date(log.created_at).toLocaleString()}</span>
                       </div>
                     ))}
                   </div>
@@ -2388,7 +2477,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
           {activeTab === 'agents' && (
             <div className="space-y-6">
               {/* Search & Filters */}
-              <div className="bg-white border border-brand-border rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row gap-3 sm:items-end">
+              <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row gap-3 sm:items-end">
                 <Input
                   label={lang === 'en' ? 'Search agents' : 'Tafuta mawakala'}
                   hideLabel
@@ -2447,12 +2536,12 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                       return (
                         <div 
                           key={agent.id} 
-                          className="bg-white border border-brand-border rounded-2xl shadow-sm hover:shadow-md transition overflow-hidden"
+                          className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl shadow-sm hover:shadow-md transition overflow-hidden"
                         >
                           {/* Core Row Header */}
                           <div 
                             onClick={() => setExpandedAgentId(isExpanded ? null : agent.id)}
-                            className="p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 cursor-pointer hover:bg-canvas-muted transition"
+                            className="p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 cursor-pointer hover:bg-[var(--appearance-surface-muted)] transition"
                             role="button"
                             tabIndex={0}
                             aria-expanded={isExpanded}
@@ -2474,14 +2563,14 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                                 )}
                                 <Badge variant="code">ID: {agent.id}</Badge>
                               </div>
-                              <h3 className="font-extrabold text-brand-dark-text text-sm md:text-base">{agent.business_name}</h3>
-                              <p className="text-brand-muted-text text-xs line-clamp-1">{agent.location_address}</p>
+                              <h3 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">{agent.business_name}</h3>
+                              <p className="text-[var(--appearance-text-muted)] text-caption line-clamp-1">{agent.location_address}</p>
                             </div>
 
                             <div className="flex items-center gap-3 self-stretch md:self-auto justify-between md:justify-end">
                               <div className="text-right hidden md:block">
-                                <div className="text-xs font-bold text-status-success">KES {(agent.total_earned || 0).toLocaleString()} {lang === 'en' ? 'earned' : 'iliyopatikana'}</div>
-                                <div className="text-[11px] text-brand-muted-text font-mono">{agent.contact_phone} · Till: {agent.mpesa_till_or_paybill}</div>
+                                <div className="text-caption font-bold text-status-success">KES {(agent.total_earned || 0).toLocaleString()} {lang === 'en' ? 'earned' : 'iliyopatikana'}</div>
+                                <div className="text-caption text-[var(--appearance-text-muted)] font-mono">{agent.contact_phone} · Till: {agent.mpesa_till_or_paybill}</div>
                               </div>
                               <div className="flex items-center gap-2">
                                 <Button
@@ -2500,24 +2589,24 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
 
                           {/* Expanded Details Body */}
                           {isExpanded && (
-                            <div className="border-t border-brand-border bg-canvas-sunken/60 p-5 space-y-4 fade-in text-xs text-brand-muted-text">
+                            <div className="border-t border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)]/60 p-5 space-y-4 fade-in text-caption text-[var(--appearance-text-muted)]">
                               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                                 {/* Column 1: Verification / Details */}
                                 <div className="space-y-2">
-                                  <span className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-wider block">Agent Contact Details</span>
+                                  <span className="text-caption font-extrabold text-[var(--appearance-text-muted)] uppercase tracking-wider block">Agent Contact Details</span>
                                   <p><b>Business Name:</b> {agent.business_name}</p>
                                   <p><b>Contact Phone:</b> {agent.contact_phone}</p>
                                   <p><b>Contact Email:</b> {agent.contact_email || 'Not Provided'}</p>
                                   <p className="pt-1">
                                     <b>Total Earned:</b>{' '}
-                                    <span className="text-emerald-700 font-extrabold">KES {(agent.total_earned || 0).toLocaleString()}</span>
-                                    {' '}<span className="text-stone-400">({agent.completed_payouts_count || 0} completed handovers)</span>
+                                    <span className="text-[var(--appearance-success)] font-extrabold">KES {(agent.total_earned || 0).toLocaleString()}</span>
+                                    {' '}<span className="text-[var(--appearance-text-muted)]">({agent.completed_payouts_count || 0} completed handovers)</span>
                                   </p>
                                 </div>
 
                                 {/* Column 2: Location and Map */}
                                 <div className="space-y-2">
-                                  <span className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-wider block">Physical Coordinates</span>
+                                  <span className="text-caption font-extrabold text-[var(--appearance-text-muted)] uppercase tracking-wider block">Physical Coordinates</span>
                                   <p><b>Full Address:</b> {agent.location_address}</p>
                                   {agent.latitude && agent.longitude ? (
                                     <>
@@ -2527,70 +2616,51 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                                         href={`https://www.google.com/maps/search/?api=1&query=${agent.latitude},${agent.longitude}`}
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        className="text-primary-green hover:underline font-bold inline-flex items-center space-x-1"
+                                        className="text-[var(--appearance-primary)] hover:underline font-bold inline-flex items-center space-x-1"
                                       >
                                         <span>View on Google Maps</span>
                                       </a>
                                     </>
                                   ) : (
                                     <div className="space-y-2">
-                                      <p className="text-red-500 font-bold">GPS coordinates unavailable — this agent cannot receive GPS-matched items until fixed</p>
+                                      <p className="text-[var(--appearance-danger)] font-bold">GPS coordinates unavailable — this agent cannot receive GPS-matched items until fixed</p>
                                       {locationFormAgentId === agent.id ? (
-                                        <div className="flex flex-wrap items-end gap-2 p-2 bg-white border border-stone-200 rounded-xl">
+                                        <div className="flex flex-wrap items-end gap-2 p-2 bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-xl">
                                           <div>
-                                            <label htmlFor={`agent-lat-${agent.id}`} className="text-[9px] font-bold text-stone-500 block">Latitude</label>
+                                            <label htmlFor={`agent-lat-${agent.id}`} className="text-caption font-bold text-[var(--appearance-text-muted)] block">Latitude</label>
                                             <input
                                               id={`agent-lat-${agent.id}`}
                                               type="text"
                                               value={locationFormLat}
                                               onChange={(e) => setLocationFormLat(e.target.value)}
                                               placeholder="-1.286389"
-                                              className="w-28 border border-stone-200 rounded-lg px-2 py-1 text-xs font-mono"
+                                              className="w-28 border border-[var(--appearance-border)] rounded-lg px-2 py-1 text-caption font-mono"
                                             />
                                           </div>
                                           <div>
-                                            <label htmlFor={`agent-lon-${agent.id}`} className="text-[9px] font-bold text-stone-500 block">Longitude</label>
+                                            <label htmlFor={`agent-lon-${agent.id}`} className="text-caption font-bold text-[var(--appearance-text-muted)] block">Longitude</label>
                                             <input
                                               id={`agent-lon-${agent.id}`}
                                               type="text"
                                               value={locationFormLon}
                                               onChange={(e) => setLocationFormLon(e.target.value)}
                                               placeholder="36.817223"
-                                              className="w-28 border border-stone-200 rounded-lg px-2 py-1 text-xs font-mono"
+                                              className="w-28 border border-[var(--appearance-border)] rounded-lg px-2 py-1 text-caption font-mono"
                                             />
                                           </div>
-                                          <button
-                                            type="button"
-                                            disabled={adminActionProcessing}
-                                            onClick={() => handleSetAgentLocation(agent.id)}
-                                            className="bg-primary-green hover:bg-primary-hover text-white text-[10px] font-bold px-3 py-1.5 rounded-lg transition disabled:opacity-50"
-                                          >
-                                            Save
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => setLocationFormAgentId(null)}
-                                            className="bg-stone-100 hover:bg-stone-200 text-stone-600 text-[10px] font-bold px-3 py-1.5 rounded-lg transition"
-                                          >
-                                            Cancel
-                                          </button>
+                                          <Button variant="primary" size="sm" disabled={adminActionProcessing} onClick={() => handleSetAgentLocation(agent.id)}>Save</Button>
+                                          <Button variant="secondary" size="sm" onClick={() => setLocationFormAgentId(null)}>Cancel</Button>
                                           <a
                                             href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(agent.location_address)}`}
                                             target="_blank"
                                             rel="noopener noreferrer"
-                                            className="text-primary-green hover:underline text-[10px] font-bold"
+                                            className="text-[var(--appearance-primary)] hover:underline text-caption font-bold"
                                           >
                                             Look up on Google Maps
                                           </a>
                                         </div>
                                       ) : (
-                                        <button
-                                          type="button"
-                                          onClick={() => { setLocationFormAgentId(agent.id); setLocationFormLat(''); setLocationFormLon(''); }}
-                                          className="bg-red-50 hover:bg-red-100 text-red-600 border border-red-100 text-[10px] font-extrabold px-3 py-1.5 rounded-lg transition"
-                                        >
-                                          Set Coordinates Manually
-                                        </button>
+                                        <Button variant="outline" size="sm" onClick={() => { setLocationFormAgentId(agent.id); setLocationFormLat(''); setLocationFormLon(''); }}>Set Coordinates Manually</Button>
                                       )}
                                     </div>
                                   )}
@@ -2599,21 +2669,21 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
 
                                 {/* Column 3: Performance, Finance & Warnings */}
                                 <div className="space-y-2">
-                                  <span className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-wider block">Financials, Rating & Warnings</span>
+                                  <span className="text-caption font-extrabold text-[var(--appearance-text-muted)] uppercase tracking-wider block">Financials, Rating & Warnings</span>
                                   <p><b>Payout Method:</b> {agent.payout_method_type || 'Till Number'}</p>
                                   <p><b>M-Pesa Target:</b> {agent.mpesa_till_or_paybill}</p>
                                   <p><b>Refundable Security Deposit:</b> KES {parseFloat(agent.refundable_deposit || '0').toLocaleString()}</p>
                                   <p className="flex items-center gap-1.5">
                                     <b>Rating Score:</b> 
-                                    <span className="bg-amber-50 text-amber-800 font-extrabold px-2 py-0.5 rounded border border-amber-100 flex items-center gap-0.5">
+                                    <span className="bg-[var(--appearance-surface-muted)] text-[var(--appearance-warning)] font-extrabold px-2 py-0.5 rounded border border-[var(--appearance-warning)] flex items-center gap-0.5">
                                       {parseFloat(agent.rating || '5.0').toFixed(1)}
                                     </span>
                                     <span>({agent.rating_count || 0} reviews)</span>
                                   </p>
-                                  <div className="bg-red-50 border border-red-100 p-2 rounded-xl space-y-1 mt-1">
-                                    <p className="font-bold text-red-800 text-[11px]">Warnings: {agent.warning_count || 0}</p>
+                                  <div className="bg-[var(--appearance-surface-muted)] border border-[var(--appearance-danger)] p-2 rounded-xl space-y-1 mt-1">
+                                    <p className="font-bold text-[var(--appearance-danger)] text-caption">Warnings: {agent.warning_count || 0}</p>
                                     {agent.last_warning_reason && (
-                                      <p className="text-[10px] text-red-600 italic">"Last: {agent.last_warning_reason}"</p>
+                                      <p className="text-caption text-[var(--appearance-danger)] italic">"Last: {agent.last_warning_reason}"</p>
                                     )}
                                   </div>
                                 </div>
@@ -2626,16 +2696,16 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                                   for this agent only, when the row is expanded
                                   (GET /api/admin/agents/:id/documents). */}
                               {agentDocsLoading === agent.id ? (
-                                <div className="border-t border-brand-border pt-3 space-y-2">
-                                  <span className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-wider block">Agent Verification Photographs</span>
-                                  <p className="text-[11px] text-brand-muted-text flex items-center gap-1.5" aria-busy="true">
-                                    <Loader2 className="animate-spin" size={12} aria-hidden="true" /> Loading verification photographs…
+                                <div className="border-t border-[var(--appearance-border)] pt-3 space-y-2">
+                                  <span className="text-caption font-extrabold text-[var(--appearance-text-muted)] uppercase tracking-wider block">Agent Verification Photographs</span>
+                                  <p className="text-caption text-[var(--appearance-text-muted)] flex items-center gap-1.5" aria-busy="true">
+                                    <Loader2 className="animate-spin" size={ICON_SIZE.metadata} aria-hidden="true" /> Loading verification photographs…
                                   </p>
                                 </div>
                               ) : agentDocs && agentDocs.id === agent.id ? (
                                 (agentDocs.shop_photo_url || agentDocs.id_document_photo_url) ? (
-                                  <div className="border-t border-brand-border pt-3 space-y-2">
-                                    <span className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-wider block">Agent Verification Photographs</span>
+                                  <div className="border-t border-[var(--appearance-border)] pt-3 space-y-2">
+                                    <span className="text-caption font-extrabold text-[var(--appearance-text-muted)] uppercase tracking-wider block">Agent Verification Photographs</span>
                                     <div className="flex flex-wrap gap-4">
                                       {agentDocs.shop_photo_url && (
                                         <div
@@ -2651,8 +2721,8 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                                             }
                                           }}
                                         >
-                                          <p className="text-[11px] font-bold text-brand-dark-text">Shop / Business Location Front</p>
-                                          <div className="w-32 h-24 rounded-xl border border-brand-border overflow-hidden bg-canvas-muted relative">
+                                          <p className="text-caption font-bold text-[var(--appearance-text-primary)]">Shop / Business Location Front</p>
+                                          <div className="w-32 h-24 rounded-xl border border-[var(--appearance-border)] overflow-hidden bg-[var(--appearance-surface-muted)] relative">
                                             <img src={agentDocs.shop_photo_url} alt="Shop Front" className="w-full h-full object-cover group-hover:scale-105 transition" />
                                           </div>
                                         </div>
@@ -2671,8 +2741,8 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                                             }
                                           }}
                                         >
-                                          <p className="text-[11px] font-bold text-brand-dark-text">National ID Document Photo</p>
-                                          <div className="w-32 h-24 rounded-xl border border-brand-border overflow-hidden bg-canvas-muted relative">
+                                          <p className="text-caption font-bold text-[var(--appearance-text-primary)]">National ID Document Photo</p>
+                                          <div className="w-32 h-24 rounded-xl border border-[var(--appearance-border)] overflow-hidden bg-[var(--appearance-surface-muted)] relative">
                                             <img src={agentDocs.id_document_photo_url} alt="ID Document" className="w-full h-full object-cover group-hover:scale-105 transition" />
                                           </div>
                                         </div>
@@ -2680,20 +2750,20 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                                     </div>
                                   </div>
                                 ) : (
-                                  <div className="border-t border-brand-border pt-3">
-                                    <span className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-wider block">Agent Verification Photographs</span>
-                                    <p className="text-[11px] text-brand-muted-text pt-1">No verification photographs on file for this agent.</p>
+                                  <div className="border-t border-[var(--appearance-border)] pt-3">
+                                    <span className="text-caption font-extrabold text-[var(--appearance-text-muted)] uppercase tracking-wider block">Agent Verification Photographs</span>
+                                    <p className="text-caption text-[var(--appearance-text-muted)] pt-1">No verification photographs on file for this agent.</p>
                                   </div>
                                 )
                               ) : agentDocsError && expandedAgentId === agent.id ? (
-                                <div className="border-t border-brand-border pt-3">
-                                  <span className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-wider block">Agent Verification Photographs</span>
-                                  <p className="text-[11px] text-status-danger pt-1">{agentDocsError}</p>
+                                <div className="border-t border-[var(--appearance-border)] pt-3">
+                                  <span className="text-caption font-extrabold text-[var(--appearance-text-muted)] uppercase tracking-wider block">Agent Verification Photographs</span>
+                                  <p className="text-caption text-status-danger pt-1">{agentDocsError}</p>
                                 </div>
                               ) : null}
 
                               {/* Actions on this Agent */}
-                              <div className="border-t border-stone-200/60 pt-4 flex flex-wrap justify-end gap-2">
+                              <div className="border-t border-[var(--appearance-border)] pt-4 flex flex-wrap justify-end gap-2">
                                 <Button
                                   variant="outline"
                                   size="sm"
@@ -2750,7 +2820,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
           {activeTab === 'found_items' && (
             <div className="space-y-6">
               {/* Filters Panel */}
-              <div className="bg-white border border-brand-border rounded-2xl p-5 shadow-sm space-y-4">
+              <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-5 shadow-sm space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                   {/* Search bar */}
                   <Input
@@ -2792,14 +2862,15 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                   </Select>
                 </div>
 
-                <div className="flex flex-wrap gap-2 pt-2 border-t border-brand-border">
-                  <span className="text-[11px] font-bold text-brand-muted-text self-center uppercase tracking-wider mr-1">Quick Categories:</span>
+                <div className="flex flex-wrap gap-2 pt-2 border-t border-[var(--appearance-border)]">
+                  <span className="text-caption font-bold text-[var(--appearance-text-muted)] self-center uppercase tracking-wider mr-1">Quick Categories:</span>
                   <button
                     onClick={() => setItemCategoryFilter('all')}
-                    className={`px-3 py-1.5 text-[11px] font-bold rounded-full border transition cursor-pointer ${
+                    aria-pressed={itemCategoryFilter === 'all'}
+                    className={`min-h-11 px-3 py-1.5 text-caption font-bold rounded-full border transition cursor-pointer ${
                       itemCategoryFilter === 'all'
-                        ? 'bg-primary-green text-white border-primary-green'
-                        : 'bg-white text-brand-dark-text border-brand-border hover:border-primary-green'
+                        ? 'bg-[var(--appearance-primary)] text-[var(--appearance-primary-foreground)] border-[var(--appearance-primary)]'
+                        : 'bg-[var(--appearance-surface)] text-[var(--appearance-text-primary)] border-[var(--appearance-border)] hover:border-[var(--appearance-primary)]'
                     }`}
                   >
                     All Categories
@@ -2808,10 +2879,11 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                     <button
                       key={cat.id}
                       onClick={() => setItemCategoryFilter(cat.id)}
-                      className={`px-3 py-1.5 text-[11px] font-bold rounded-full border transition cursor-pointer ${
+                      aria-pressed={itemCategoryFilter === cat.id}
+                      className={`min-h-11 px-3 py-1.5 text-caption font-bold rounded-full border transition cursor-pointer ${
                         itemCategoryFilter === cat.id
-                          ? 'bg-primary-green text-white border-primary-green'
-                          : 'bg-white text-brand-dark-text border-brand-border hover:border-primary-green'
+                          ? 'bg-[var(--appearance-primary)] text-[var(--appearance-primary-foreground)] border-[var(--appearance-primary)]'
+                          : 'bg-[var(--appearance-surface)] text-[var(--appearance-text-primary)] border-[var(--appearance-border)] hover:border-[var(--appearance-primary)]'
                       }`}
                     >
                       {lang === 'en' ? cat.name_en : cat.name_sw}
@@ -2861,11 +2933,11 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                       // Lookup agent
                       const agentObj = dashboardData.agents.find((a: any) => a.id === item.assigned_agent_id);
                       return (
-                        <div key={item.id} className="bg-white border border-brand-border rounded-2xl p-5 shadow-sm hover:shadow-md transition flex flex-col md:flex-row gap-5">
+                        <div key={item.id} className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-5 shadow-sm hover:shadow-md transition flex flex-col md:flex-row gap-5">
                           {/* Image Thumbnail with zoom trigger */}
                           <div 
                             onClick={() => setLightboxImage(item.photo_url)}
-                            className="w-full md:w-36 h-36 rounded-2xl bg-canvas-muted border border-brand-border overflow-hidden shrink-0 flex items-center justify-center cursor-zoom-in relative group"
+                            className="w-full md:w-36 h-36 rounded-2xl bg-[var(--appearance-surface-muted)] border border-[var(--appearance-border)] overflow-hidden shrink-0 flex items-center justify-center cursor-zoom-in relative group"
                             role="button"
                             tabIndex={0}
                             aria-label="View item photo full-size"
@@ -2883,14 +2955,14 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                               referrerPolicy="no-referrer"
                             />
                             <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
-                              <span className="text-white text-[10px] font-black bg-stone-900/80 px-2 py-1 rounded-md uppercase tracking-wider">Zoom View</span>
+                              <span className="text-white text-caption font-black bg-black/70 px-2 py-1 rounded-md uppercase tracking-wider">Zoom View</span>
                             </div>
                           </div>
 
                           {/* Item Details Column */}
                           <div className="flex-1 flex flex-col justify-between space-y-3 min-w-0">
                             <div className="space-y-1.5">
-                              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-100 pb-2">
+                              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--appearance-border)] pb-2">
                                 <div className="flex items-center gap-1.5">
                                   <Badge variant="code">CODE: {item.id}</Badge>
                                   {item.flaggedForReview && (
@@ -2910,26 +2982,26 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                                 </Badge>
                               </div>
 
-                              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+                              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-caption">
                                 <div>
-                                  <span className="text-[10px] text-stone-400 block">Category</span>
-                                  <span className="font-bold text-stone-800">
+                                  <span className="text-caption text-[var(--appearance-text-muted)] block">Category</span>
+                                  <span className="font-bold text-[var(--appearance-text-primary)]">
                                     {categories.find((c: any) => c.id === item.category_id)?.name_en || item.category_id}
                                   </span>
                                 </div>
                                 <div>
-                                  <span className="text-[10px] text-stone-400 block">Date Reported</span>
-                                  <span className="font-medium text-stone-800">
+                                  <span className="text-caption text-[var(--appearance-text-muted)] block">Date Reported</span>
+                                  <span className="font-medium text-[var(--appearance-text-primary)]">
                                     {new Date(item.created_at).toLocaleDateString()}
                                   </span>
                                 </div>
                                 
                                 {/* OCR / Description Details */}
-                                <div className="col-span-2 pt-1 border-t border-stone-50">
+                                <div className="col-span-2 pt-1 border-t border-[var(--appearance-border)]">
                                   {item.is_description_only || item.isDescriptionOnly ? (
                                     <div>
-                                      <span className="text-[10px] text-stone-400 block">Description</span>
-                                      <p className="text-stone-700 text-[11px] leading-normal italic font-medium">"{item.description}"</p>
+                                      <span className="text-caption text-[var(--appearance-text-muted)] block">Description</span>
+                                      <p className="text-[var(--appearance-text-secondary)] text-caption leading-normal italic font-medium">"{item.description}"</p>
                                     </div>
                                   ) : (
                                     <>
@@ -2940,27 +3012,27 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                                         auditable, never silently overwritten. */}
                                     <div className="grid grid-cols-2 gap-2">
                                       <div>
-                                        <span className="text-[10px] text-stone-400 block">
+                                        <span className="text-caption text-[var(--appearance-text-muted)] block">
                                           {item.verified_document_number ? 'Verified Number' : 'Extracted Number'}
                                         </span>
-                                        <span className="font-mono font-bold text-stone-800 break-all">
+                                        <span className="font-mono font-bold text-[var(--appearance-text-primary)] break-all">
                                           {item.verified_document_number || item.ocr_extracted_number || 'None'}
                                         </span>
                                         {item.verified_document_number && item.ocr_extracted_number && item.verified_document_number !== item.ocr_extracted_number && (
-                                          <span className="text-[10px] text-stone-400 block truncate">
+                                          <span className="text-caption text-[var(--appearance-text-muted)] block truncate">
                                             Original OCR: {item.ocr_extracted_number}
                                           </span>
                                         )}
                                       </div>
                                       <div>
-                                        <span className="text-[10px] text-stone-400 block">
+                                        <span className="text-caption text-[var(--appearance-text-muted)] block">
                                           {item.verified_name ? 'Verified Name' : 'Extracted Name'}
                                         </span>
-                                        <span className="font-sans font-extrabold text-stone-800 uppercase line-clamp-1">
+                                        <span className="font-sans font-extrabold text-[var(--appearance-text-primary)] uppercase line-clamp-1">
                                           {item.verified_name || item.ocr_extracted_name || 'None'}
                                         </span>
                                         {item.verified_name && item.ocr_extracted_name && item.verified_name !== item.ocr_extracted_name && (
-                                          <span className="text-[10px] text-stone-400 block truncate">
+                                          <span className="text-caption text-[var(--appearance-text-muted)] block truncate">
                                             Original OCR: {item.ocr_extracted_name}
                                           </span>
                                         )}
@@ -2971,21 +3043,21 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                                 </div>
 
                                 {/* Matching Stats & Location details */}
-                                <div className="col-span-2 pt-1 border-t border-stone-50 text-[11px]">
-                                  <p className="text-stone-500">
+                                <div className="col-span-2 pt-1 border-t border-[var(--appearance-border)] text-caption">
+                                  <p className="text-[var(--appearance-text-muted)]">
                                     <b>Location:</b> {item.location_description}
                                   </p>
                                   {item.latitude && item.longitude && (
-                                    <p className="text-stone-400 font-mono text-[10px] mt-0.5">
+                                    <p className="text-[var(--appearance-text-muted)] font-mono text-caption mt-0.5">
                                       GPS: {parseFloat(item.latitude).toFixed(4)}, {parseFloat(item.longitude).toFixed(4)}
                                     </p>
                                   )}
                                 </div>
 
                                 {/* Finder phone and reputation */}
-                                <div className="col-span-2 pt-1.5 border-t border-stone-100 bg-stone-50 p-2 rounded-xl text-[11px]">
-                                  <p className="font-bold text-stone-700">Finder Information:</p>
-                                  <div className="flex justify-between mt-1 text-stone-600">
+                                <div className="col-span-2 pt-1.5 border-t border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] p-2 rounded-xl text-caption">
+                                  <p className="font-bold text-[var(--appearance-text-secondary)]">Finder Information:</p>
+                                  <div className="flex justify-between mt-1 text-[var(--appearance-text-secondary)]">
                                     <span>Phone: <b>{item.finder_phone}</b></span>
                                     {item.reputation && (
                                       <span>Reputation: <b>{item.reputation.rejected_reports}/{item.reputation.total_reports} rejected</b></span>
@@ -2994,22 +3066,22 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                                 </div>
 
                                 {/* Assigned Agent Hub details */}
-                                <div className="col-span-2 pt-1.5 border-t border-stone-50 text-[11px]">
-                                  <span className="text-[10px] text-stone-400 block">Assigned Physical Agent Station</span>
+                                <div className="col-span-2 pt-1.5 border-t border-[var(--appearance-border)] text-caption">
+                                  <span className="text-caption text-[var(--appearance-text-muted)] block">Assigned Physical Agent Station</span>
                                   {agentObj ? (
-                                    <div className="mt-0.5 flex justify-between items-center bg-brand-beige p-2 rounded-xl border border-stone-200/50">
+                                    <div className="mt-0.5 flex justify-between items-center bg-[var(--appearance-surface-muted)] p-2 rounded-xl border border-[var(--appearance-border)]">
                                       <div>
-                                        <p className="font-extrabold text-stone-800">{agentObj.business_name}</p>
-                                        <p className="text-[10px] text-stone-500 line-clamp-1">{agentObj.location_address}</p>
+                                        <p className="font-extrabold text-[var(--appearance-text-primary)]">{agentObj.business_name}</p>
+                                        <p className="text-caption text-[var(--appearance-text-muted)] line-clamp-1">{agentObj.location_address}</p>
                                       </div>
                                       {item.agent_assignment_distance_km !== null && (
-                                        <span className="bg-stone-100 text-stone-700 font-mono text-[9px] px-2 py-0.5 rounded-md font-bold shrink-0">
+                                        <span className="bg-[var(--appearance-surface-muted)] text-[var(--appearance-text-secondary)] font-mono text-caption px-2 py-0.5 rounded-md font-bold shrink-0">
                                           {parseFloat(item.agent_assignment_distance_km).toFixed(1)} km
                                         </span>
                                       )}
                                     </div>
                                   ) : (
-                                    <span className="text-red-500 font-bold block">No Assigned Agent (Error)</span>
+                                    <span className="text-[var(--appearance-danger)] font-bold block">No Assigned Agent (Error)</span>
                                   )}
                                 </div>
                               </div>
@@ -3017,7 +3089,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
 
                             {/* Action to correct / review */}
                             {item.flaggedForReview && (
-                              <div className="pt-2 border-t border-brand-border flex justify-end">
+                              <div className="pt-2 border-t border-[var(--appearance-border)] flex justify-end">
                                 <Button
                                   variant="primary"
                                   size="sm"
@@ -3035,7 +3107,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                                 never publishes an accusation; this only ever changes
                                 claimability, and a reason is required and audit-logged
                                 for every transition. */}
-                            <div className="pt-2 border-t border-brand-border flex flex-wrap justify-end gap-2">
+                            <div className="pt-2 border-t border-[var(--appearance-border)] flex flex-wrap justify-end gap-2">
                               {(item.status === 'suspected_stolen' || item.status === 'legal_hold') ? (
                                 <Button
                                   variant="secondary"
@@ -3098,11 +3170,11 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
           {activeTab === 'disputes' && (
             <div className="space-y-4">
               {/* REFUNDS REQUIRING RECONCILIATION (A1 unknown-outcome workflow) */}
-              <div className="bg-white border border-status-warning-border rounded-2xl p-5 shadow-sm">
+              <div className="bg-[var(--appearance-surface)] border border-status-warning-border rounded-2xl p-5 shadow-sm">
                 <div className="flex items-start justify-between gap-3 mb-3">
                   <div>
-                    <h3 className="font-extrabold text-sm text-status-warning uppercase tracking-widest">Refunds Requiring Reconciliation</h3>
-                    <p className="text-xs text-brand-muted-text mt-1">
+                    <h3 className="font-extrabold text-caption text-status-warning uppercase tracking-widest">Refunds Requiring Reconciliation</h3>
+                    <p className="text-caption text-[var(--appearance-text-muted)] mt-1">
                       Claims locked in <span className="font-mono">refunding</span> — a real refund was attempted but the provider outcome is UNKNOWN (network/timeout). No automatic retry is ever issued. Verify the outcome with the payment provider (IntaSend) before choosing an action. Neither action sends money.
                     </p>
                   </div>
@@ -3118,19 +3190,19 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                 </div>
 
                 {refundReconcileLoading ? (
-                  <p className="text-xs text-brand-muted-text py-3" aria-busy="true">Loading&hellip;</p>
+                  <p className="text-caption text-[var(--appearance-text-muted)] py-3" aria-busy="true">Loading&hellip;</p>
                 ) : !refundReconcileItems || refundReconcileItems.length === 0 ? (
-                  <p className="text-xs text-brand-muted-text py-2">No refunds currently require reconciliation.</p>
+                  <p className="text-caption text-[var(--appearance-text-muted)] py-2">No refunds currently require reconciliation.</p>
                 ) : (
                   <div className="space-y-2">
                     {refundReconcileItems.map((item: any) => (
-                      <div key={item.claimId} className="border border-brand-border rounded-xl p-3 space-y-2">
-                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                      <div key={item.claimId} className="border border-[var(--appearance-border)] rounded-xl p-3 space-y-2">
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-caption">
                           <Badge variant="code">Claim: {item.claimId}</Badge>
-                          <span className="text-brand-muted-text">Item: {item.itemId || '\u2014'}</span>
-                          <span className="text-brand-muted-text">Recipient: {item.ownerPhone}</span>
-                          <span className="text-brand-muted-text">Amount: KES {item.refundAmount}</span>
-                          <span className="text-brand-muted-text">Waiting since: {item.waitingSince ? new Date(item.waitingSince).toLocaleString() : '\u2014'}</span>
+                          <span className="text-[var(--appearance-text-muted)]">Item: {item.itemId || '\u2014'}</span>
+                          <span className="text-[var(--appearance-text-muted)]">Recipient: {item.ownerPhone}</span>
+                          <span className="text-[var(--appearance-text-muted)]">Amount: KES {item.refundAmount}</span>
+                          <span className="text-[var(--appearance-text-muted)]">Waiting since: {item.waitingSince ? new Date(item.waitingSince).toLocaleString() : '\u2014'}</span>
                           <Badge variant="warning">Outcome UNKNOWN</Badge>
                         </div>
                         <div className="flex flex-wrap gap-2 pt-1">
@@ -3178,17 +3250,17 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                       ? (lang === 'en' ? 'Claimant A' : 'Mdai A')
                       : (lang === 'en' ? 'Claimant B' : 'Mdai B');
                     return (
-                    <div key={dispute.id} className="bg-white border border-brand-border rounded-2xl p-5 shadow-sm space-y-4">
-                      <div className="flex flex-wrap justify-between items-center gap-2 pb-3 border-b border-brand-border">
+                    <div key={dispute.id} className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-5 shadow-sm space-y-4">
+                      <div className="flex flex-wrap justify-between items-center gap-2 pb-3 border-b border-[var(--appearance-border)]">
                         <div>
-                          <span className="text-xs font-mono font-bold text-status-danger">DISPUTE: {dispute.id}</span>
-                          <p className="text-[11px] text-brand-muted-text">
+                          <span className="text-caption font-mono font-bold text-status-danger">DISPUTE: {dispute.id}</span>
+                          <p className="text-caption text-[var(--appearance-text-muted)]">
                             {lang === 'en' ? 'Raised on' : 'Ilianzishwa'}{' '}
                             {dispute.created_at ? new Date(dispute.created_at).toLocaleString() : '—'}
                           </p>
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className="text-[11px] font-bold text-brand-muted-text">
+                          <span className="text-caption font-bold text-[var(--appearance-text-muted)]">
                             {lang === 'en' ? 'Item' : 'Bidhaa'}: {dispute.item_id || '—'}
                           </span>
                           <Badge variant={isResolved ? 'neutral' : 'warning'}>
@@ -3198,7 +3270,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                       </div>
 
                       {claimants.length === 0 ? (
-                        <p className="text-xs text-status-danger">
+                        <p className="text-caption text-status-danger">
                           {lang === 'en'
                             ? 'No claimant details were returned for this dispute, so it cannot be adjudicated from here.'
                             : 'Hakuna taarifa za wadai zilizorejeshwa kwa mzozo huu, hivyo hauwezi kusuluhishwa hapa.'}
@@ -3237,7 +3309,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                           resolved dispute is reported as resolved rather than
                           offering buttons that can only fail. */}
                       {isResolved ? (
-                        <p className="text-xs text-brand-muted-text border-t border-brand-border pt-3">
+                        <p className="text-caption text-[var(--appearance-text-muted)] border-t border-[var(--appearance-border)] pt-3">
                           {lang === 'en' ? 'Resolved' : 'Imemetatuliwa'}
                           {dispute.resolved_at ? ` ${new Date(dispute.resolved_at).toLocaleString()}` : ''}
                           {dispute.resolved_claim_id
@@ -3246,13 +3318,13 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                           {dispute.resolved_by ? ` (${dispute.resolved_by})` : ''}
                         </p>
                       ) : claimants.length === 0 ? (
-                        <p className="text-xs text-status-danger border-t border-brand-border pt-3">
+                        <p className="text-caption text-status-danger border-t border-[var(--appearance-border)] pt-3">
                           {lang === 'en'
                             ? 'Resolution is unavailable: the two claimant claim IDs were not returned for this dispute.'
                             : 'Kusuluhisha hakuwezekani: vitambulisho vya claim havijarejeshwa.'}
                         </p>
                       ) : (
-                        <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-brand-border">
+                        <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-[var(--appearance-border)]">
                           {claimants.map((claimant: any) => (
                             <Button
                               key={'award:' + claimant.role}
@@ -3288,32 +3360,32 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                   the item but whose real M-Pesa payout is still inside the
                   dispute window. Released automatically once settleAt passes,
                   or immediately here via admin override (audit-logged). */}
-              <div className="bg-white border border-brand-border rounded-2xl shadow-sm p-5 space-y-3">
+              <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl shadow-sm p-5 space-y-3">
                 <div>
-                  <h3 className="text-sm font-extrabold text-brand-dark-text">Pending Settlements</h3>
-                  <p className="text-xs text-brand-muted-text">
+                  <h3 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">Pending Settlements</h3>
+                  <p className="text-caption text-[var(--appearance-text-muted)]">
                     Handover confirmed, payout booked, dispute window still open. Settles automatically, or release now to override.
                   </p>
                 </div>
                 {(!dashboardData.pendingSettlements || dashboardData.pendingSettlements.length === 0) ? (
-                  <p className="text-center text-brand-muted-text text-xs py-4">No claims currently in the dispute window.</p>
+                  <p className="text-center text-[var(--appearance-text-muted)] text-caption py-4">No claims currently in the dispute window.</p>
                 ) : (
                   <div className="space-y-2">
                     {dashboardData.pendingSettlements.map((ps: any) => {
                       const settleAtDate = ps.settleAt ? new Date(ps.settleAt) : null;
                       const isDue = settleAtDate ? settleAtDate.getTime() <= Date.now() : false;
                       return (
-                        <div key={ps.claimId} className="flex flex-wrap items-center justify-between gap-2 border border-brand-border rounded-xl p-3 bg-brand-beige/40">
-                          <div className="text-xs">
-                            <span className="font-mono font-bold text-brand-dark-text">{ps.claimId}</span>
-                            <span className="text-brand-muted-text/60 mx-1.5">·</span>
-                            <span className="text-brand-muted-text">Item {ps.itemId}</span>
-                            <span className="text-brand-muted-text/60 mx-1.5">·</span>
+                        <div key={ps.claimId} className="flex flex-wrap items-center justify-between gap-2 border border-[var(--appearance-border)] rounded-xl p-3 bg-[var(--appearance-surface-muted)]/40">
+                          <div className="text-caption">
+                            <span className="font-mono font-bold text-[var(--appearance-text-primary)]">{ps.claimId}</span>
+                            <span className="text-[var(--appearance-text-muted)]/60 mx-1.5">·</span>
+                            <span className="text-[var(--appearance-text-muted)]">Item {ps.itemId}</span>
+                            <span className="text-[var(--appearance-text-muted)]/60 mx-1.5">·</span>
                             <span className={`font-bold ${isDue ? 'text-status-success' : 'text-status-warning'}`}>
                               {settleAtDate ? (isDue ? 'Due now' : `Settles ${settleAtDate.toLocaleString()}`) : 'No settle time set'}
                             </span>
                             {ps.lockedTotalFee !== null && (
-                              <span className="text-brand-muted-text"> · KES {ps.lockedTotalFee}</span>
+                              <span className="text-[var(--appearance-text-muted)]"> · KES {ps.lockedTotalFee}</span>
                             )}
                           </div>
                           <Button
@@ -3331,11 +3403,11 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                 )}
               </div>
 
-              <div className="bg-white border border-brand-border rounded-2xl shadow-sm overflow-hidden">
+              <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl shadow-sm overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse">
                     <thead>
-                      <tr className="bg-brand-light-gray text-xs font-extrabold text-brand-muted-text uppercase tracking-widest border-b border-brand-border">
+                      <tr className="bg-[var(--appearance-surface-muted)] text-caption font-extrabold text-[var(--appearance-text-muted)] uppercase tracking-widest border-b border-[var(--appearance-border)]">
                         <th className="px-5 py-3 font-bold">Transaction Reference</th>
                         <th className="px-5 py-3 font-bold">Type</th>
                         <th className="px-5 py-3 font-bold">Amount</th>
@@ -3344,10 +3416,10 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                         <th className="px-5 py-3 font-bold">Date</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-brand-border text-xs text-brand-muted-text font-mono">
+                    <tbody className="divide-y divide-[var(--appearance-border)] text-caption text-[var(--appearance-text-muted)] font-mono">
                       {dashboardData.ledger.map((entry: any) => (
-                        <tr key={entry.id} className="hover:bg-brand-beige/50 transition">
-                          <td className="px-5 py-3.5 font-bold text-brand-dark-text">{entry.id}</td>
+                        <tr key={entry.id} className="hover:bg-[var(--appearance-surface-muted)]/50 transition">
+                          <td className="px-5 py-3.5 font-bold text-[var(--appearance-text-primary)]">{entry.id}</td>
                           <td className="px-5 py-3.5">
                             {/* Transaction TYPE label — a classification, not a
                                 lifecycle status — so each type keeps its own
@@ -3363,7 +3435,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                               {entry.type.replace('_', ' ')}
                             </Badge>
                           </td>
-                          <td className="px-5 py-3.5 font-bold text-brand-dark-text">KES {entry.amount}</td>
+                          <td className="px-5 py-3.5 font-bold text-[var(--appearance-text-primary)]">KES {entry.amount}</td>
                           <td className="px-5 py-3.5">{entry.claim_id || '—'}</td>
                           <td className="px-5 py-3.5">
                             <Badge
@@ -3375,7 +3447,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                               {entry.status.toUpperCase()}
                             </Badge>
                           </td>
-                          <td className="px-5 py-3.5 text-brand-muted-text text-xs whitespace-nowrap">
+                          <td className="px-5 py-3.5 text-[var(--appearance-text-muted)] text-caption whitespace-nowrap">
                             {entry.created_at ? new Date(entry.created_at).toLocaleString() : '—'}
                           </td>
                         </tr>
@@ -3393,14 +3465,14 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               {/* Supporting context for the review queue. The page-level h1 and
                   section description come from the console title band
                   (CONSOLE_SECTIONS), so this is deliberately NOT a heading. */}
-              <p className="text-xs text-brand-muted-text max-w-2xl">
+              <p className="text-caption text-[var(--appearance-text-muted)] max-w-2xl">
                 These items have low OCR confidence, missing details, or require administrator correction.
               </p>
 
               {selectedReviewItem ? (
-                <div className="bg-white border border-brand-border rounded-2xl p-6 md:p-8 shadow-sm space-y-6 max-w-2xl mx-auto">
-                  <div className="flex justify-between items-center border-b border-brand-border pb-3">
-                    <h3 className="font-extrabold text-brand-dark-text">Reviewing Item: {selectedReviewItem.id}</h3>
+                <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-6 md:p-8 shadow-sm space-y-6 max-w-2xl mx-auto">
+                  <div className="flex justify-between items-center border-b border-[var(--appearance-border)] pb-3">
+                    <h3 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">Reviewing Item: {selectedReviewItem.id}</h3>
                     <Button variant="ghost" size="sm" onClick={() => setSelectedReviewItem(null)}>
                       Back to list
                     </Button>
@@ -3409,8 +3481,8 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {/* Left: Finder Photo */}
                     <div className="space-y-2">
-                      <span className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-widest block">Uploaded Photo</span>
-                      <div className="border border-brand-border rounded-2xl overflow-hidden bg-brand-light-gray aspect-[4/3] flex items-center justify-center">
+                      <span className="text-caption font-extrabold text-[var(--appearance-text-muted)] uppercase tracking-widest block">Uploaded Photo</span>
+                      <div className="border border-[var(--appearance-border)] rounded-2xl overflow-hidden bg-[var(--appearance-surface-muted)] aspect-[4/3] flex items-center justify-center">
                         <img
                           src={selectedReviewItem.photo_url}
                           alt="Document to review"
@@ -3490,11 +3562,11 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
 
                       {/* Assignment Metadata Info */}
                       {selectedReviewItem.agent_assignment_method && (
-                        <div className="p-2.5 bg-brand-light-gray border border-brand-border rounded-xl text-[11px] font-mono text-brand-muted-text space-y-1">
-                          <p className="font-sans font-bold text-brand-dark-text">Assignment Metadata:</p>
-                          <p>Method: <span className="font-bold text-brand-dark-text">{selectedReviewItem.agent_assignment_method}</span></p>
+                        <div className="p-2.5 bg-[var(--appearance-surface-muted)] border border-[var(--appearance-border)] rounded-xl text-caption font-mono text-[var(--appearance-text-muted)] space-y-1">
+                          <p className="font-sans font-bold text-[var(--appearance-text-primary)]">Assignment Metadata:</p>
+                          <p>Method: <span className="font-bold text-[var(--appearance-text-primary)]">{selectedReviewItem.agent_assignment_method}</span></p>
                           {selectedReviewItem.agent_assignment_distance_km !== null && (
-                            <p>Calculated Distance: <span className="font-bold text-brand-dark-text">{parseFloat(selectedReviewItem.agent_assignment_distance_km).toFixed(2)} km</span></p>
+                            <p>Calculated Distance: <span className="font-bold text-[var(--appearance-text-primary)]">{parseFloat(selectedReviewItem.agent_assignment_distance_km).toFixed(2)} km</span></p>
                           )}
                           {selectedReviewItem.needs_manual_agent_reassignment ? (
                             <p className="text-status-danger font-sans font-extrabold uppercase animate-pulse">Reassigned to Default Backup Agent (Needs Manual Correction)</p>
@@ -3510,9 +3582,9 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                           id="reviewIsDescriptionOnly"
                           checked={reviewIsDescriptionOnly}
                           onChange={(e) => setReviewIsDescriptionOnly(e.target.checked)}
-                          className="rounded text-primary-green focus:ring-primary-green h-4 w-4"
+                          className="rounded text-[var(--appearance-primary)] focus:ring-[var(--appearance-primary)] h-4 w-4"
                         />
-                        <label htmlFor="reviewIsDescriptionOnly" className="text-xs font-bold text-brand-dark-text">
+                        <label htmlFor="reviewIsDescriptionOnly" className="text-caption font-bold text-[var(--appearance-text-primary)]">
                           Mark as Description-Only Item (e.g. keys, bags)
                         </label>
                       </div>
@@ -3537,7 +3609,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                             placeholder="e.g. 3841920"
                             required
                           />
-                          <p className="text-xs text-brand-muted-text">Original OCR: {selectedReviewItem.ocr_extracted_number || 'None'}</p>
+                          <p className="text-caption text-[var(--appearance-text-muted)]">Original OCR: {selectedReviewItem.ocr_extracted_number || 'None'}</p>
 
                           <Input
                             label="Full Name on Document"
@@ -3548,14 +3620,14 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                             placeholder="e.g. JOHN DOE"
                             required
                           />
-                          <p className="text-xs text-brand-muted-text">Original OCR: {selectedReviewItem.ocr_extracted_name || 'None'}</p>
+                          <p className="text-caption text-[var(--appearance-text-muted)]">Original OCR: {selectedReviewItem.ocr_extracted_name || 'None'}</p>
                         </>
                       )}
 
                       <div className="flex gap-2">
                         <Button type="submit" variant="primary" loading={reviewSaving} className="flex-1">
                           <span>Save Correction</span>
-                          <ArrowRight size={16} aria-hidden="true" />
+                          <ArrowRight size={ICON_SIZE.ui} aria-hidden="true" />
                         </Button>
                         <Button
                           type="button"
@@ -3583,9 +3655,9 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                         .filter((item: any) => item.flaggedForReview)
                         .sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
                         .map((item: any) => (
-                          <div key={item.id} className="bg-white border border-brand-border rounded-2xl p-5 shadow-sm flex flex-col justify-between gap-4">
+                          <div key={item.id} className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-5 shadow-sm flex flex-col justify-between gap-4">
                             <div className="flex gap-4">
-                              <div className="w-16 h-16 rounded-xl bg-brand-light-gray border border-brand-border overflow-hidden shrink-0 flex items-center justify-center">
+                              <div className="w-16 h-16 rounded-xl bg-[var(--appearance-surface-muted)] border border-[var(--appearance-border)] overflow-hidden shrink-0 flex items-center justify-center">
                                 <img
                                   src={item.photo_url}
                                   alt="Thumbnail"
@@ -3595,11 +3667,11 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                               </div>
                               <div className="space-y-1">
                                 <Badge variant="danger">Flagged</Badge>
-                                <h3 className="font-extrabold text-brand-dark-text text-xs">Code: {item.id}</h3>
-                                <p className="text-brand-muted-text text-xs leading-snug">{item.location_description}</p>
-                                <p className="text-brand-muted-text text-[11px] font-mono">Date: {new Date(item.created_at).toLocaleDateString()}</p>
+                                <h3 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">Code: {item.id}</h3>
+                                <p className="text-[var(--appearance-text-muted)] text-caption leading-snug">{item.location_description}</p>
+                                <p className="text-[var(--appearance-text-muted)] text-caption font-mono">Date: {new Date(item.created_at).toLocaleDateString()}</p>
                                 {item.agent_assignment_method && (
-                                  <div className="mt-1.5 p-1.5 bg-brand-light-gray rounded-lg text-[11px] font-mono text-brand-muted-text">
+                                  <div className="mt-1.5 p-1.5 bg-[var(--appearance-surface-muted)] rounded-lg text-caption font-mono text-[var(--appearance-text-muted)]">
                                     <p>Assignment: <span className="font-bold">{item.agent_assignment_method}</span></p>
                                     {item.agent_assignment_distance_km !== null && (
                                       <p>Distance: <span className="font-bold">{parseFloat(item.agent_assignment_distance_km).toFixed(2)} km</span></p>
@@ -3611,10 +3683,10 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                                 )}
                                 {item.reputation && (
                                   <div className="mt-1.5 space-y-1">
-                                    <p className="text-xs text-brand-dark-text font-bold">
+                                    <p className="text-caption text-[var(--appearance-text-primary)] font-bold">
                                       Finder: {item.finder_phone}
                                     </p>
-                                    <p className="text-[11px] text-brand-muted-text">
+                                    <p className="text-caption text-[var(--appearance-text-muted)]">
                                       Reputation: {item.reputation.rejected_reports} rejected / {item.reputation.total_reports} total
                                     </p>
                                     {item.reputation.autoFlag && (
@@ -3654,8 +3726,8 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
           {/* TAB CONTENT 6: CATEGORIES & PRICING MANAGEMENT */}
           {activeTab === 'categories' && (
             <div className="space-y-6">
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-brand-border pb-4">
-                <p className="text-xs text-brand-muted-text max-w-2xl">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-[var(--appearance-border)] pb-4">
+                <p className="text-caption text-[var(--appearance-text-muted)] max-w-2xl">
                   Dhibiti kategoria za bidhaa, bei, na migao ya malipo. / Manage document categories, fees, and disbursement splits.
                 </p>
                 {!showCategoryForm && (
@@ -3666,9 +3738,9 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               </div>
 
               {showCategoryForm ? (
-                <div className="bg-white border border-brand-border rounded-2xl p-5 sm:p-6 md:p-8 shadow-sm space-y-6 max-w-3xl mx-auto">
-                  <div className="flex justify-between items-center gap-3 border-b border-brand-border pb-3">
-                    <h3 className="font-extrabold text-brand-dark-text">
+                <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-5 sm:p-6 md:p-8 shadow-sm space-y-6 max-w-3xl mx-auto">
+                  <div className="flex justify-between items-center gap-3 border-b border-[var(--appearance-border)] pb-3">
+                    <h3 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
                       {showCategoryForm === 'create' ? 'Create New Category' : `Editing Category: ${catFormId}`}
                     </h3>
                     <Button variant="ghost" size="sm" onClick={() => setShowCategoryForm(null)}>
@@ -3693,11 +3765,11 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                   <form onSubmit={handleSaveCategory} className="space-y-8">
                     {/* SECTION 1 — BASIC CATEGORY INFORMATION */}
                     <section className="space-y-4" aria-labelledby="cat-section-basic">
-                      <div className="border-b border-brand-border pb-2">
-                        <h4 id="cat-section-basic" className="text-sm font-extrabold text-brand-dark-text">
+                      <div className="border-b border-[var(--appearance-border)] pb-2">
+                        <h4 id="cat-section-basic" className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
                           Basic category information / Taarifa za msingi
                         </h4>
-                        <p className="mt-1 text-caption text-brand-muted-text">
+                        <p className="mt-1 text-caption text-[var(--appearance-text-muted)]">
                           How this category is identified internally and shown to customers in both languages.
                         </p>
                       </div>
@@ -3746,11 +3818,11 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                         in public/social recognition posts, and whether the owner's
                         identity document is required before release. */}
                     <section className="space-y-4" aria-labelledby="cat-section-privacy">
-                      <div className="border-b border-brand-border pb-2">
-                        <h4 id="cat-section-privacy" className="text-sm font-extrabold text-brand-dark-text">
+                      <div className="border-b border-[var(--appearance-border)] pb-2">
+                        <h4 id="cat-section-privacy" className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
                           Recognition &amp; privacy / Utambuzi na faragha
                         </h4>
-                        <p className="mt-1 text-caption text-brand-muted-text">
+                        <p className="mt-1 text-caption text-[var(--appearance-text-muted)]">
                           What a public post may reveal about items in this category.
                         </p>
                       </div>
@@ -3779,18 +3851,18 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                             consequence is stated in words rather than implied. */}
                         <label
                           htmlFor="catFormIsSensitive"
-                          className="flex items-start gap-3 min-h-11 rounded-xl border border-brand-border bg-white px-3 py-2.5 cursor-pointer"
+                          className="flex items-start gap-3 min-h-11 rounded-xl border border-[var(--appearance-border)] bg-[var(--appearance-surface)] px-3 py-2.5 cursor-pointer"
                         >
                           <input
                             type="checkbox"
                             id="catFormIsSensitive"
                             checked={catFormIsSensitive}
                             onChange={(e) => setCatFormIsSensitive(e.target.checked)}
-                            className="mt-0.5 h-5 w-5 shrink-0 rounded border-brand-border text-primary-green focus:ring-2 focus:ring-accent-orange/30 cursor-pointer"
+                            className="mt-0.5 h-5 w-5 shrink-0 rounded border-[var(--appearance-border)] text-[var(--appearance-primary)] focus:ring-2 focus:ring-accent-orange/30 cursor-pointer"
                           />
-                          <span className="text-sm text-brand-dark-text">
+                          <span className="text-body text-[var(--appearance-text-primary)]">
                             <span className="font-bold">Sensitive document / Hati nyeti</span>
-                            <span className="mt-0.5 block text-caption text-brand-muted-text">
+                            <span className="mt-0.5 block text-caption text-[var(--appearance-text-muted)]">
                               Requires the owner's identity proof (OCR / ID) before release.
                             </span>
                           </span>
@@ -3802,11 +3874,11 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                         Categories that must never go public without an
                         administrator looking at the item first. */}
                     <section className="space-y-4" aria-labelledby="cat-section-review">
-                      <div className="border-b border-brand-border pb-2">
-                        <h4 id="cat-section-review" className="text-sm font-extrabold text-brand-dark-text">
+                      <div className="border-b border-[var(--appearance-border)] pb-2">
+                        <h4 id="cat-section-review" className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
                           Review controls / Udhibiti wa ukaguzi
                         </h4>
-                        <p className="mt-1 text-caption text-brand-muted-text">
+                        <p className="mt-1 text-caption text-[var(--appearance-text-muted)]">
                           Whether items in this category need an administrator's approval before they go public.
                         </p>
                       </div>
@@ -3821,11 +3893,11 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                             id="catFormElevatedReview"
                             checked={catFormElevatedReview}
                             onChange={(e) => setCatFormElevatedReview(e.target.checked)}
-                            className="mt-0.5 h-5 w-5 shrink-0 rounded border-brand-border text-status-danger focus:ring-2 focus:ring-status-danger/30 cursor-pointer"
+                            className="mt-0.5 h-5 w-5 shrink-0 rounded border-[var(--appearance-border)] text-status-danger focus:ring-2 focus:ring-status-danger/30 cursor-pointer"
                           />
-                          <span className="text-sm text-brand-dark-text">
+                          <span className="text-body text-[var(--appearance-text-primary)]">
                             <span className="font-bold">Elevated review / Ukaguzi wa hali ya juu</span>
-                            <span className="mt-0.5 block text-caption text-brand-muted-text">
+                            <span className="mt-0.5 block text-caption text-[var(--appearance-text-muted)]">
                               Forces admin approval before this category's items go public.
                             </span>
                           </span>
@@ -3838,11 +3910,11 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                         flat admin-set override, or the Recovery Fee Engine. Nothing
                         about either calculation changed in this phase. */}
                     <section className="space-y-4" aria-labelledby="cat-section-fee">
-                      <div className="border-b border-brand-border pb-2">
-                        <h4 id="cat-section-fee" className="text-sm font-extrabold text-brand-dark-text">
+                      <div className="border-b border-[var(--appearance-border)] pb-2">
+                        <h4 id="cat-section-fee" className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
                           Fee configuration / Mipangilio ya ada
                         </h4>
-                        <p className="mt-1 text-caption text-brand-muted-text">
+                        <p className="mt-1 text-caption text-[var(--appearance-text-muted)]">
                           Choose one model: a flat override, or the Recovery Fee Engine that prices every item at report time.
                         </p>
                       </div>
@@ -3863,11 +3935,11 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                           id="catFormIsAdminModified"
                           checked={catFormIsAdminModified}
                           onChange={(e) => setCatFormIsAdminModified(e.target.checked)}
-                          className="mt-0.5 h-5 w-5 shrink-0 rounded border-brand-border text-status-warning focus:ring-2 focus:ring-status-warning/30 cursor-pointer"
+                          className="mt-0.5 h-5 w-5 shrink-0 rounded border-[var(--appearance-border)] text-status-warning focus:ring-2 focus:ring-status-warning/30 cursor-pointer"
                         />
-                        <span className="text-sm text-brand-dark-text">
+                        <span className="text-body text-[var(--appearance-text-primary)]">
                           <span className="font-bold">Use flat fee override / Tumia ada isiyobadilika</span>
-                          <span className="mt-0.5 block text-caption text-brand-muted-text">
+                          <span className="mt-0.5 block text-caption text-[var(--appearance-text-muted)]">
                             Pins Total / Finder / Agent / Platform fee below exactly and ignores the Recovery Fee Engine config entirely.
                           </span>
                         </span>
@@ -3934,7 +4006,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                             <span>Splits Sum / Jumla ya Mgao: KES {totalSum}</span>
                             <span>Target / Lengo: KES {catFormTotalFee}</span>
                           </div>
-                          <div className="text-xs mt-1 font-semibold">
+                          <div className="text-caption mt-1 font-semibold">
                             {isMatch ? (
                               <span className="flex items-center space-x-1">
                                 <span>Perfect match! Payout split equations balance successfully.</span>
@@ -3956,8 +4028,8 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                         platform shares above are just a preview of what the engine
                         would compute with no declared value — the real fee for an
                         item is computed fresh at report time from these inputs. */}
-                    <div className={`border rounded-xl p-4 space-y-3 ${catFormIsAdminModified ? 'border-brand-border bg-canvas-muted opacity-60' : 'border-brand-border bg-canvas-sunken'}`}>
-                      <p className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-wider">
+                    <div className={`border rounded-xl p-4 space-y-3 ${catFormIsAdminModified ? 'border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] opacity-60' : 'border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)]'}`}>
+                      <p className="text-caption font-extrabold text-[var(--appearance-text-muted)] uppercase tracking-wider">
                         Recovery Fee Engine Config
                       </p>
                       {catFormIsAdminModified && (
@@ -3965,7 +4037,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                           Inactive — "Use flat fee override" is checked above, so this category ignores everything below and uses the flat Total/Finder/Agent/Platform fee instead.
                         </Banner>
                       )}
-                      <p className="text-xs text-brand-muted-text leading-tight">
+                      <p className="text-caption text-[var(--appearance-text-muted)] leading-tight">
                         rawFee = Base + Complexity + Delay. If a finder gives a declared value, the fee is capped at Ceiling % of that value (never raised above rawFee). Split % applies to the resulting fee, not the item's value.
                       </p>
                       <div className="grid grid-cols-3 gap-3">
@@ -4032,7 +4104,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                         />
                       </div>
                       {parseFloat((Number(catFormFinderPct) + Number(catFormAgentPct) + Number(catFormPlatformPct)).toFixed(2)) !== 100 && (
-                        <p className="text-xs font-bold text-status-danger">
+                        <p className="text-caption font-bold text-status-danger">
                           Finder % + Agent % + Platform % = {(Number(catFormFinderPct) + Number(catFormAgentPct) + Number(catFormPlatformPct)).toFixed(2)}%, not 100%. The platform share absorbs the difference at settlement time, but percentages should sum to 100 for clarity.
                         </p>
                       )}
@@ -4045,46 +4117,46 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                           authoritative calculation. The platform share is the
                           engine's RESIDUAL, so the three rows always reconcile
                           to the claim fee. */}
-                      <div className="rounded-xl border border-brand-border bg-white p-3 space-y-2">
+                      <div className="rounded-xl border border-[var(--appearance-border)] bg-[var(--appearance-surface)] p-3 space-y-2">
                         {catFormAmountEntered ? (
                         <>
                         <div className="flex items-center justify-between gap-2 flex-wrap">
-                          <span className="text-[11px] font-extrabold text-brand-muted-text uppercase tracking-wider">
+                          <span className="text-caption font-extrabold text-[var(--appearance-text-muted)] uppercase tracking-wider">
                             Calculated split
                           </span>
-                          <span className="text-xs text-brand-muted-text">
+                          <span className="text-caption text-[var(--appearance-text-muted)]">
                             Claim fee{' '}
-                            <span className="font-extrabold text-brand-dark-text">{kes(enginePreview.totalFee)}</span>
+                            <span className="font-extrabold text-[var(--appearance-text-primary)]">{kes(enginePreview.totalFee)}</span>
                           </span>
                         </div>
 
-                        <table className="w-full text-xs">
+                        <table className="w-full text-caption">
                           <thead>
-                            <tr className="text-brand-muted-text uppercase tracking-wider">
+                            <tr className="text-[var(--appearance-text-muted)] uppercase tracking-wider">
                               <th scope="col" className="text-left font-extrabold py-1">Share</th>
                               <th scope="col" className="text-right font-extrabold py-1">Rate</th>
                               <th scope="col" className="text-right font-extrabold py-1">Amount</th>
                             </tr>
                           </thead>
-                          <tbody className="text-brand-dark-text">
-                            <tr className="border-t border-brand-border">
+                          <tbody className="text-[var(--appearance-text-primary)]">
+                            <tr className="border-t border-[var(--appearance-border)]">
                               <th scope="row" className="text-left font-semibold py-1">Finder</th>
                               <td className="text-right py-1">{Number(catFormFinderPct) || 0}%</td>
                               <td className="text-right py-1 font-bold">{kes(enginePreview.finderAmount)}</td>
                             </tr>
-                            <tr className="border-t border-brand-border">
+                            <tr className="border-t border-[var(--appearance-border)]">
                               <th scope="row" className="text-left font-semibold py-1">Agent</th>
                               <td className="text-right py-1">{Number(catFormAgentPct) || 0}%</td>
                               <td className="text-right py-1 font-bold">{kes(enginePreview.agentAmount)}</td>
                             </tr>
-                            <tr className="border-t border-brand-border">
+                            <tr className="border-t border-[var(--appearance-border)]">
                               <th scope="row" className="text-left font-semibold py-1">Platform</th>
                               <td className="text-right py-1">{Number(catFormPlatformPct) || 0}%</td>
                               <td className="text-right py-1 font-bold">{kes(enginePreview.platformAmount)}</td>
                             </tr>
                           </tbody>
                           <tfoot>
-                            <tr className="border-t border-brand-border text-brand-dark-text">
+                            <tr className="border-t border-[var(--appearance-border)] text-[var(--appearance-text-primary)]">
                               <th scope="row" className="text-left font-extrabold py-1">Total</th>
                               <td />
                               <td className="text-right py-1 font-extrabold">{kes(enginePreviewSplitTotal)}</td>
@@ -4093,26 +4165,26 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                         </table>
 
                         {enginePreview.finderCapApplied && (
-                          <p className="text-xs font-bold text-status-warning bg-status-warning-surface border border-status-warning-border rounded-lg px-2 py-1">
+                          <p className="text-caption font-bold text-status-warning bg-status-warning-surface border border-status-warning-border rounded-lg px-2 py-1">
                             Finder reward cap applied — the finder share was trimmed to the cap and the platform share absorbed the difference.
                           </p>
                         )}
                         {enginePreviewSplitTotal !== enginePreview.totalFee && (
-                          <p className="text-xs font-bold text-status-danger">
+                          <p className="text-caption font-bold text-status-danger">
                             The three shares do not reconcile to the claim fee — check the configured percentages before saving.
                           </p>
                         )}
                         {catFormIsAdminModified && (
-                          <p className="text-xs font-bold text-status-warning bg-status-warning-surface border border-status-warning-border rounded-lg px-2 py-1 leading-tight">
+                          <p className="text-caption font-bold text-status-warning bg-status-warning-surface border border-status-warning-border rounded-lg px-2 py-1 leading-tight">
                             Informational only — the "Use flat fee override" option is checked above, so these engine values are NOT what will be saved. Saving this category persists the flat Total/Finder/Agent/Platform fee instead.
                           </p>
                         )}
-                        <p className="text-xs text-brand-muted-text leading-tight">
+                        <p className="text-caption text-[var(--appearance-text-muted)] leading-tight">
                           Preview only, with no declared value — so it prices at Base + Complexity + Delay. A finder's declared replacement value can only pull the fee DOWN at the Ceiling % above, never up. The server recomputes this for every real claim; the browser is never the financial authority.
                         </p>
                         </>
                         ) : (
-                          <p className="text-xs text-brand-muted-text leading-tight">
+                          <p className="text-caption text-[var(--appearance-text-muted)] leading-tight">
                             Enter an amount (Base, Complexity or Delay fee) to see the calculated split — not yet calculable at KES 0.
                           </p>
                         )}
@@ -4126,12 +4198,12 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                         adminConsoleSectionChrome.test.ts) and Cancel is a real
                         button rather than a link — nothing about the handler,
                         the payload or the disabled rule (`splitsMatch`) moved. */}
-                    <section className="space-y-3 border-t border-brand-border pt-4" aria-labelledby="cat-section-actions">
+                    <section className="space-y-3 border-t border-[var(--appearance-border)] pt-4" aria-labelledby="cat-section-actions">
                       <div>
-                        <h4 id="cat-section-actions" className="text-sm font-extrabold text-brand-dark-text">
+                        <h4 id="cat-section-actions" className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
                           Actions / Vitendo
                         </h4>
-                        <p className="mt-1 text-caption text-brand-muted-text">
+                        <p className="mt-1 text-caption text-[var(--appearance-text-muted)]">
                           Saving writes this category immediately and is recorded against your admin session.
                         </p>
                       </div>
@@ -4144,7 +4216,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                         className="sm:flex-1"
                       >
                         <span>Save Category / Hifadhi</span>
-                        <ArrowRight size={16} aria-hidden="true" />
+                        <ArrowRight size={ICON_SIZE.ui} aria-hidden="true" />
                       </Button>
                       <Button
                         type="button"
@@ -4158,11 +4230,15 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                   </form>
                 </div>
               ) : (
-                <div className="bg-white border border-brand-border rounded-2xl overflow-hidden shadow-sm">
+                <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl overflow-hidden shadow-sm">
                   {adminCategoriesLoading ? (
                     <div className="flex flex-col items-center justify-center py-12 space-y-2">
-                      <Loader2 className="animate-spin text-primary-green w-6 h-6" aria-hidden="true" />
-                      <p className="text-brand-muted-text text-xs font-bold uppercase tracking-wider">Loading categories...</p>
+                      <Loader2
+                        className="animate-spin text-[var(--appearance-primary)]"
+                        size={ICON_SIZE.feature}
+                        aria-hidden="true"
+                      />
+                      <p className="text-[var(--appearance-text-muted)] text-caption font-bold uppercase tracking-wider">Loading categories...</p>
                     </div>
                   ) : adminCategories.length === 0 ? (
                     <div className="p-4">
@@ -4170,9 +4246,9 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                     </div>
                   ) : (
                     <div className="overflow-x-auto font-sans">
-                      <table className="w-full text-left border-collapse text-xs">
+                      <table className="w-full text-left border-collapse text-caption">
                         <thead>
-                          <tr className="bg-brand-light-gray border-b border-brand-border text-brand-muted-text uppercase tracking-wider font-extrabold text-xs">
+                          <tr className="bg-[var(--appearance-surface-muted)] border-b border-[var(--appearance-border)] text-[var(--appearance-text-muted)] uppercase tracking-wider font-extrabold text-caption">
                             <th className="py-3.5 px-4 font-bold">ID</th>
                             <th className="py-3.5 px-4 font-bold">Name (English / Kiswahili)</th>
                             <th className="py-3.5 px-4 text-right font-bold">Total Fee</th>
@@ -4184,13 +4260,13 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                             <th className="py-3.5 px-4 text-center font-bold">Actions</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-brand-border font-sans">
+                        <tbody className="divide-y divide-[var(--appearance-border)] font-sans">
                           {adminCategories.map((cat) => (
-                            <tr key={cat.id} className="hover:bg-brand-beige/50 transition">
-                              <td className="py-3 px-4 font-mono font-bold text-brand-dark-text">{cat.id}</td>
+                            <tr key={cat.id} className="hover:bg-[var(--appearance-surface-muted)]/50 transition">
+                              <td className="py-3 px-4 font-mono font-bold text-[var(--appearance-text-primary)]">{cat.id}</td>
                               <td className="py-3 px-4">
                                 <div className="flex items-center flex-wrap gap-1.5">
-                                  <p className="font-extrabold text-brand-dark-text">{cat.name_en}</p>
+                                  <p className="font-extrabold text-[var(--appearance-text-primary)]">{cat.name_en}</p>
                                   {cat.is_admin_modified && (
                                     <Badge variant="warning">Customized</Badge>
                                   )}
@@ -4200,12 +4276,12 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                                     <Badge variant="neutral">{lang === 'en' ? 'Inactive' : 'Haitumiki'}</Badge>
                                   )}
                                 </div>
-                                <p className="text-brand-muted-text text-xs">{cat.name_sw}</p>
+                                <p className="text-[var(--appearance-text-muted)] text-caption">{cat.name_sw}</p>
                               </td>
-                              <td className="py-3 px-4 text-right font-bold text-brand-dark-text">KES {cat.total_fee}</td>
-                              <td className="py-3 px-4 text-right text-brand-muted-text">KES {cat.finder_share}</td>
-                              <td className="py-3 px-4 text-right text-brand-muted-text">KES {cat.agent_share}</td>
-                              <td className="py-3 px-4 text-right text-brand-muted-text">KES {cat.platform_share}</td>
+                              <td className="py-3 px-4 text-right font-bold text-[var(--appearance-text-primary)]">KES {cat.total_fee}</td>
+                              <td className="py-3 px-4 text-right text-[var(--appearance-text-muted)]">KES {cat.finder_share}</td>
+                              <td className="py-3 px-4 text-right text-[var(--appearance-text-muted)]">KES {cat.agent_share}</td>
+                              <td className="py-3 px-4 text-right text-[var(--appearance-text-muted)]">KES {cat.platform_share}</td>
                               <td className="py-3 px-4 text-center">
                                 <Badge variant={cat.is_sensitive_document ? 'danger' : 'neutral'}>
                                   {cat.is_sensitive_document ? 'Yes' : 'No'}
@@ -4271,7 +4347,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
           {activeTab === 'strikes' && (
             <div className="space-y-6">
               <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                <p className="text-xs text-brand-muted-text max-w-2xl">
+                <p className="text-caption text-[var(--appearance-text-muted)] max-w-2xl">
                   Manage users who failed to pay within the 15-minute viewing verification window.
                 </p>
                 <Button
@@ -4281,16 +4357,20 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                   onClick={fetchPaymentStrikes}
                   className="shrink-0"
                 >
-                  {!paymentStrikesLoading && <RefreshCw size={14} aria-hidden="true" />}
+                  {!paymentStrikesLoading && <RefreshCw size={ICON_SIZE.metadata} aria-hidden="true" />}
                   <span>Reload list</span>
                 </Button>
               </div>
 
-              <div className="bg-white border border-brand-border rounded-2xl overflow-hidden shadow-sm">
+              <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl overflow-hidden shadow-sm">
                 {paymentStrikesLoading ? (
                   <div className="flex flex-col items-center justify-center py-12 space-y-2">
-                    <Loader2 className="animate-spin text-primary-green w-6 h-6" aria-hidden="true" />
-                    <p className="text-brand-muted-text text-xs font-bold uppercase tracking-wider">Loading strikes...</p>
+                    <Loader2
+                      className="animate-spin text-[var(--appearance-primary)]"
+                      size={ICON_SIZE.feature}
+                      aria-hidden="true"
+                    />
+                    <p className="text-[var(--appearance-text-muted)] text-caption font-bold uppercase tracking-wider">Loading strikes...</p>
                   </div>
                 ) : paymentStrikes.length === 0 ? (
                   <div className="p-4">
@@ -4298,19 +4378,19 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                   </div>
                 ) : (
                   <div className="overflow-x-auto font-sans">
-                    <table className="w-full text-left border-collapse text-xs">
+                    <table className="w-full text-left border-collapse text-caption">
                       <thead>
-                        <tr className="bg-brand-light-gray border-b border-brand-border text-brand-muted-text uppercase tracking-wider font-extrabold text-xs">
+                        <tr className="bg-[var(--appearance-surface-muted)] border-b border-[var(--appearance-border)] text-[var(--appearance-text-muted)] uppercase tracking-wider font-extrabold text-caption">
                           <th className="py-3.5 px-4 font-bold">User Phone Number</th>
                           <th className="py-3.5 px-4 text-center font-bold">Active Strikes Count</th>
                           <th className="py-3.5 px-4 text-center font-bold">Status Limit</th>
                           <th className="py-3.5 px-4 text-center font-bold">Action</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-brand-border font-sans">
+                      <tbody className="divide-y divide-[var(--appearance-border)] font-sans">
                         {paymentStrikes.map((strike) => (
-                          <tr key={strike.phone} className="hover:bg-brand-beige/50 transition">
-                            <td className="py-3.5 px-4 font-mono font-bold text-brand-dark-text">{strike.phone}</td>
+                          <tr key={strike.phone} className="hover:bg-[var(--appearance-surface-muted)]/50 transition">
+                            <td className="py-3.5 px-4 font-mono font-bold text-[var(--appearance-text-primary)]">{strike.phone}</td>
                             <td className="py-3.5 px-4 text-center">
                               {/* The 3-strike escalation thresholds are unchanged
                                   (>=3 blocked, >=2 escalated); only the palette
@@ -4393,7 +4473,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
         }
       >
         <div className="space-y-3">
-          <p className="text-stone-700">
+          <p className="text-[var(--appearance-text-secondary)]">
             {refundConfirm?.kind === 'revert'
               ? lang === 'en'
                 ? 'Have you verified directly with the payment provider (IntaSend) that this refund was NOT sent? Confirming rejects the losing claim and flags the money it was holding for a manual refund. It will NOT send any money.'
@@ -4402,16 +4482,70 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                 ? 'Have you verified directly with the payment provider (IntaSend) that this refund actually reached the claimant? Confirming records the claim as refunded and closes it. It will NOT send any money.'
                 : 'Je, ume$thibitisha mwenyewe kwa mwenyeji wa malipo (IntaSend) kwamba urejeshaji huu kwa kweli umefika kwa mdai? Kubatilisha kunarekodi kuwa mdai amepata pesa na kumaliza. Hakutuma pesa yoyote.'}
           </p>
-          <p className="font-mono text-xs text-stone-500">
+          <p className="font-mono text-caption text-[var(--appearance-text-muted)]">
             {lang === 'en' ? 'Claim: ' : 'Claim: '}{refundConfirm?.claimId}
           </p>
           {/* Authoritative server failure stays inside the dialog, so a rejected
               action is never mistaken for a completed one. */}
           {dataError && (
-            <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
+            <p role="alert" className="rounded-lg border border-[var(--appearance-danger)] bg-[var(--appearance-surface-muted)] px-3 py-2 text-caption font-semibold text-[var(--appearance-danger)]">
               {dataError}
             </p>
           )}
+        </div>
+      </Modal>
+
+      {/* UX-15E — the item-review reason step (shared ui/Modal).
+          Opened by the same three controls as before. Cancel / Escape / scrim
+          click close it with no request, no mutation and no state transition; a
+          blank or whitespace-only reason for flag-stolen / legal-hold is rejected
+          IN PLACE with the original 'A reason is required.' message and never
+          calls handleItemReviewStatusChange; clear-hold stays optional; and the
+          submitted reason is trimmed before it reaches the mutation. */}
+      <Modal
+        open={itemReviewPrompt !== null}
+        onClose={closeItemReviewPrompt}
+        title={itemReviewPrompt?.promptLabel ?? ''}
+        closeLabel={lang === 'en' ? 'Close' : 'Funga'}
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" size="sm" onClick={closeItemReviewPrompt}>
+              {lang === 'en' ? 'Cancel' : 'Ghairi'}
+            </Button>
+            <Button
+              variant={itemReviewPrompt?.action === 'legal-hold' ? 'danger' : 'primary'}
+              size="sm"
+              onClick={confirmItemReviewStatusChange}
+            >
+              {itemReviewPrompt?.action === 'clear-hold'
+                ? (lang === 'en' ? 'Clear hold' : 'Ondoa kizuizi')
+                : itemReviewPrompt?.action === 'legal-hold'
+                  ? (lang === 'en' ? 'Place Legal Hold' : 'Weka Kizuizi cha Kisheria')
+                  : (lang === 'en' ? 'Flag Suspected Stolen' : 'Weka Alama ya Wizi')}
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3">
+          {itemReviewReasonError && <Banner kind="error">{itemReviewReasonError}</Banner>}
+          <Textarea
+            label={lang === 'en' ? 'Reason (recorded in the audit log)' : 'Sababu (inarekodiwa kwenye kumbukumbu)'}
+            id="item-review-reason"
+            rows={3}
+            value={itemReviewReason}
+            onChange={(e) => {
+              setItemReviewReason(e.target.value);
+              if (itemReviewReasonError) setItemReviewReasonError('');
+            }}
+            required={itemReviewPrompt?.action !== 'clear-hold'}
+            hint={itemReviewPrompt?.action === 'clear-hold'
+              ? (lang === 'en'
+                ? 'Optional — clearing a hold only restores claimability.'
+                : 'Si lazima — kuondoa kizuizi kunarejesha uwezekano wa madai.')
+              : (lang === 'en'
+                ? 'Required — recorded against your administrator session.'
+                : 'Inahitajika — inarekodiwa kwa kikao chako cha msimamizi.')}
+          />
         </div>
       </Modal>
 
@@ -4475,7 +4609,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               className="max-w-full max-h-[80vh] object-contain rounded-2xl"
               referrerPolicy="no-referrer"
             />
-            <p className="text-stone-400 text-xs mt-4 font-bold bg-stone-900 px-4 py-2 rounded-full uppercase tracking-wider">
+            <p className="text-[var(--appearance-text-muted)] text-caption mt-4 font-bold bg-black/70 px-4 py-2 rounded-full uppercase tracking-wider">
               Click anywhere, or press Escape, to close full screen view
             </p>
           </div>
