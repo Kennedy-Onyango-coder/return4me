@@ -1738,100 +1738,174 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
   // The single page-level heading + description for whichever section is open.
   const sectionCopy = CONSOLE_SECTIONS[activeTab][lang];
 
+  // UX-14 — the admin authentication gate's single "a request is in flight"
+  // flag. The credential step and the 2FA step are mutually exclusive, so the
+  // submit control, the form's aria-busy state and the disabled state all read
+  // this one derived value instead of repeating the same ternary three times.
+  // Presentation only: both underlying flags (`authLoading`, `twoFactorLoading`)
+  // already existed and remain the only thing that gates the two network calls.
+  const isAuthBusy = pendingTwoFactorToken ? twoFactorLoading : authLoading;
+
   return (
     <div className="w-full fade-in">
       
-      {/* 1. SECURE ADMIN PASSCODE LOGIN (No public signups allowed to prevent privilege-escalation) */}
+      {/* 1. SECURE ADMIN AUTHENTICATION GATE — restyled in UX-14.
+          This is the ONLY unauthenticated surface in this file. Everything below
+          it is gated on `token` (the Admin Console) and belongs to UX-15: it is
+          deliberately untouched by this batch.
+
+          UX-14 IS PRESENTATION ONLY. It changes none of:
+            * the authentication protocol — the same two endpoints are called in
+              the same order with byte-identical bodies (`/api/auth/admin-login`
+              with { username, passcode }; `/api/auth/admin-login/verify-2fa`
+              with { pendingToken, code });
+            * the security model — the same bearer token the server returns is
+              handed to the same `setToken` (localStorage `admin_token` in
+              App.tsx). No second storage mechanism, no second credential field,
+              no client-side authorisation, and no change to the 2FA branch, the
+              rate limiting, the session expiry or the server-side role checks;
+            * the route architecture — this remains the `/console` gate, shown
+              only while there is no admin token (see src/App.tsx).
+
+          What it changes is hierarchy, control semantics, the type/colour/
+          radius/elevation vocabulary and the copy in both languages — entirely
+          by adopting primitives and tokens that already exist (`Button`,
+          `Input`, `Banner`, the `--appearance-*` tokens, the type/radius/
+          elevation ladders), exactly as UX-07 did for customer authentication
+          and UX-11 did for agent sign-in.
+
+          The OFFICIAL Return4me wordmark stays the brand mark (never replaced by
+          text pretending to be a logo, and never by the generic shield), and
+          this heading stays the ONE <h1> on the page while no token exists. */}
       {!token && (
-        <div className="bg-white rounded-2xl border border-stone-100 p-6 md:p-8 shadow-sm max-w-md mx-auto space-y-6">
-          <div className="text-center space-y-2">
+        <div className="mx-auto w-full max-w-md space-y-6 rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)] p-6 shadow-raised sm:p-8">
+          {/* UX-14 · A — identity, then what this page is, then who may use it.
+              No slogan, no reassurance, no security claim the system cannot back
+              up: the sentence in the middle is the existing one, verbatim. */}
+          <div className="space-y-3 text-center">
             <img
               src="/assets/logo_wordmark_transparent.png"
               alt="Return4me"
               className="mx-auto h-12 w-auto max-w-full object-contain sm:h-14"
               referrerPolicy="no-referrer"
             />
-            <h1 className="text-2xl font-extrabold text-stone-950">Admin Authentication</h1>
-            <p className="text-stone-500 text-xs max-w-sm mx-auto">Access restricted strictly to platform executives and vetted managers.</p>
+            <p className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">
+              {lang === 'en' ? 'Return4me administration' : 'Utawala wa Return4me'}
+            </p>
+            <h1 className="text-section font-extrabold tracking-tight text-[var(--appearance-text-primary)]">
+              {lang === 'en' ? 'Admin Authentication' : 'Uthibitishaji wa Msimamizi'}
+            </h1>
+            <p className="mx-auto max-w-sm text-body leading-relaxed text-[var(--appearance-text-muted)]">
+              {lang === 'en'
+                ? 'Access restricted strictly to platform executives and vetted managers.'
+                : 'Ufikiaji umezuiwa kwa watendaji wakuu wa jukwaa na mameneja waliothibitishwa pekee.'}
+            </p>
           </div>
 
+          {/* UX-14 · C — authentication feedback in ONE live region. `Banner
+              kind="error"` supplies role="alert" + aria-live="assertive" and the
+              appearance tokens, exactly as UX-11 uses it on the agent sign-in.
+              It stays a FORM-level banner and never a per-field error: the
+              existing semantics never say WHICH credential was wrong, and UX-14
+              adds no such disclosure. No native alert()/prompt()/confirm() is
+              used anywhere in this gate. */}
           {authError && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-2.5 rounded-2xl flex items-center space-x-2 text-xs">
-              <AlertCircle size={16} />
+            <Banner kind="error">
               <span>{authError}</span>
-            </div>
+            </Banner>
           )}
 
-          <form onSubmit={pendingTwoFactorToken ? handleTwoFactorVerify : handleAdminAuth} className="space-y-4">
+          {/* UX-14 · B — the credential step, then the existing 2FA code step.
+              Same two branches, same handlers, same endpoints, byte-identical
+              bodies and the same required/maxLength/autoFocus semantics as
+              before — only the controls move onto the shared `Input` primitive
+              (44px control, real label→control association, autofill semantics,
+              tokenised focus and error surfaces). */}
+          <form
+            onSubmit={pendingTwoFactorToken ? handleTwoFactorVerify : handleAdminAuth}
+            className="space-y-4"
+            aria-busy={isAuthBusy || undefined}
+          >
             {!pendingTwoFactorToken ? (
               <>
-                <div className="space-y-1">
-                  <label htmlFor="admin-username" className="block text-xs font-bold text-stone-700 uppercase tracking-wider">Admin Username</label>
-                  <input
-                    id="admin-username"
-                    type="text"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    placeholder="admin"
-                    className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm"
-                    required
-                  />
-                </div>
+                <Input
+                  id="admin-username"
+                  label={lang === 'en' ? 'Admin Username' : 'Jina la Mtumiaji wa Msimamizi'}
+                  type="text"
+                  autoComplete="username"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="admin"
+                  required
+                  disabled={authLoading}
+                  autoFocus
+                />
 
-                <div className="space-y-1">
-                  <label htmlFor="admin-passcode" className="block text-xs font-bold text-stone-700 uppercase tracking-wider">Access Password</label>
-                  <input
-                    id="admin-passcode"
-                    type="password"
-                    value={passcode}
-                    onChange={(e) => setPasscode(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm font-mono"
-                    required
-                  />
-                </div>
+                <Input
+                  id="admin-passcode"
+                  label={lang === 'en' ? 'Access Password' : 'Nenosiri la Ufikiaji'}
+                  type="password"
+                  autoComplete="current-password"
+                  value={passcode}
+                  onChange={(e) => setPasscode(e.target.value)}
+                  placeholder="••••••••"
+                  required
+                  disabled={authLoading}
+                />
               </>
             ) : (
-              <div className="space-y-1">
-                <label htmlFor="admin-2fa-code" className="block text-xs font-bold text-stone-700 uppercase tracking-wider">
-                  6-Digit Authenticator Code
-                </label>
-                <input
+              <div className="space-y-2">
+                <Input
                   id="admin-2fa-code"
+                  label={
+                    lang === 'en' ? '6-Digit Authenticator Code' : 'Msimbo wa Kithibitishaji wa Tarakimu 6'
+                  }
                   type="text"
                   inputMode="numeric"
+                  autoComplete="one-time-code"
                   autoFocus
                   maxLength={6}
                   value={twoFactorCode}
                   onChange={(e) => setTwoFactorCode(e.target.value)}
                   placeholder="123456"
-                  className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-lg font-mono text-center tracking-widest"
                   required
+                  disabled={twoFactorLoading}
                 />
-                <button
+                {/* The same escape hatch the gate already had, now on the shared
+                    Button so it keeps a 44px target and a tokenised hover/focus
+                    state. It is a tertiary action (ghost), not a second CTA. */}
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="md"
+                  className="w-full"
                   onClick={() => { setPendingTwoFactorToken(null); setTwoFactorCode(''); setAuthError(''); }}
-                  className="text-[11px] text-stone-400 hover:text-stone-600 underline"
                 >
-                  Back to password
-                </button>
+                  {lang === 'en' ? 'Back to password' : 'Rudi kwenye nenosiri'}
+                </Button>
               </div>
             )}
 
-            <button
+            {/* UX-14 · D — ONE dominant action. It is the same single submit the
+                gate already had: same handler, same endpoints, same payloads.
+                `loading` disables the control, so an accidental double submission
+                is impossible, and the spinner + label keep the button's height
+                and width fixed (size="lg" = 52px), so nothing jumps. */}
+            <Button
               type="submit"
-              disabled={pendingTwoFactorToken ? twoFactorLoading : authLoading}
-              className="w-full bg-stone-900 hover:bg-stone-800 text-white py-3.5 rounded-2xl font-bold transition flex items-center justify-center space-x-2 cursor-pointer"
+              variant="primary"
+              size="lg"
+              loading={isAuthBusy}
+              className="w-full"
             >
-              {(pendingTwoFactorToken ? twoFactorLoading : authLoading) ? (
-                <Loader2 className="animate-spin" size={18} />
-              ) : (
-                <>
-                  <span>{pendingTwoFactorToken ? 'Verify Code' : 'Unlock System Console'}</span>
-                  <ArrowRight size={18} />
-                </>
-              )}
-            </button>
+              {pendingTwoFactorToken
+                ? (twoFactorLoading
+                    ? (lang === 'en' ? 'Verifying…' : 'Inathibitisha…')
+                    : (lang === 'en' ? 'Verify Code' : 'Thibitisha Msimbo'))
+                : (authLoading
+                    ? (lang === 'en' ? 'Signing in…' : 'Inaingia…')
+                    : (lang === 'en' ? 'Unlock System Console' : 'Fungua Konsoli ya Mfumo'))}
+            </Button>
           </form>
         </div>
       )}
