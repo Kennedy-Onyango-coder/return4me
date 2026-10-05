@@ -3,7 +3,12 @@ import ClaimVerificationEvidence from '../ClaimVerificationEvidence';
 import { agentClaimBadge, getClaimStatusDisplay } from '../claimStatus';
 import Badge from '../ui/Badge';
 import Button from '../ui/Button';
-import { ShieldCheck, CheckCircle, AlertCircle, Loader2, Eye, RefreshCw } from 'lucide-react';
+// UX-13 - the workspace chrome adopts the SAME shared primitives the rest of the
+// design system uses, rather than a local one-off surface per section.
+import EmptyState from '../ui/EmptyState';
+import StatCard from '../ui/StatCard';
+import { ICON_SIZE } from '../ui/iconSize';
+import { ShieldCheck, CheckCircle, AlertCircle, Loader2, Eye, RefreshCw, ClipboardList, PackageOpen, Clock, Inbox } from 'lucide-react';
 import AgentVerificationPanel from './AgentVerificationPanel';
 import AgentRejectionPanel from './AgentRejectionPanel';
 // BATCH 1 (UX-02): focus-return target ids for the inline panels. Pure DOM
@@ -164,21 +169,82 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
     return getClaimStatusDisplay(item.associatedClaim.status, props.lang).variant;
   };
 
+  /**
+   * UX-13 - OPERATIONAL SUMMARY COUNTS.
+   *
+   * These read ONLY the two queues this Hub already renders and the claim status
+   * the queue endpoint already attaches, so the summary can never state anything
+   * the agent could not verify by reading the lists below it. They are plain
+   * render-time derivations - no state, no memo, no second fetch - and they do
+   * not replace the per-queue counts at the queue headings.
+   */
+  const countClaimsInStatus = (status: string) =>
+    props.holdingPickups.filter((item: any) => item.associatedClaim?.status === status).length;
+
+  const actionQueueCount =
+    props.expectedDropoffs.length +
+    countClaimsInStatus('awaiting_agent_confirmation') +
+    countClaimsInStatus('escrow_held');
+
+  const waitingOnOwnerCount = countClaimsInStatus('pending_payment');
+
   const ItemMetadata = ({ item }: { item: any }) => (
-    <div className="grid gap-2 text-xs text-stone-600 sm:grid-cols-2" aria-label={t.agentItemContextItem}>
+    <div className="grid gap-2 text-small text-[var(--appearance-text-secondary)] sm:grid-cols-2" aria-label={t.agentItemContextItem}>
       {item.category_name || item.category_id ? (
-        <p className="min-w-0 break-words"><span className="font-semibold text-stone-500">{t.agentItemContextCategory}:</span>{' '}{item.category_name || item.category_id}</p>
+        <p className="min-w-0 break-words"><span className="font-semibold text-[var(--appearance-text-muted)]">{t.agentItemContextCategory}:</span>{' '}{item.category_name || item.category_id}</p>
       ) : null}
-      <p className="min-w-0 break-words"><span className="font-semibold text-stone-500">{t.agentItemContextLocation}:</span>{' '}{itemLocationLabel(item)}</p>
-      {item.created_at ? <p><span className="font-semibold text-stone-500">{t.agentItemContextReported}:</span>{' '}{new Date(item.created_at).toLocaleDateString()}</p> : null}
+      <p className="min-w-0 break-words"><span className="font-semibold text-[var(--appearance-text-muted)]">{t.agentItemContextLocation}:</span>{' '}{itemLocationLabel(item)}</p>
+      {item.created_at ? <p><span className="font-semibold text-[var(--appearance-text-muted)]">{t.agentItemContextReported}:</span>{' '}{new Date(item.created_at).toLocaleDateString()}</p> : null}
     </div>
   );
 
   return (        <div className="space-y-8 fade-in">
+
+          {/* UX-13 - AGENT WORKSPACE HEADER.
+              Establishes WHERE the agent is and WHAT this page is for, in one
+              calm band, before any operational content. It repeats no identity
+              the DashboardShell header already shows, and it reads no data of
+              its own: every figure below comes from the existing queue props. */}
+          <section className="space-y-1 border-b border-[var(--appearance-border)] pb-5">
+            <p className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">
+              {t.agentWorkspaceEyebrow}
+            </p>
+            <h1 className="text-section font-extrabold tracking-tight text-[var(--appearance-text-primary)]">
+              {t.agentWorkspaceTitle}
+            </h1>
+            <p className="max-w-2xl text-body text-[var(--appearance-text-muted)]">
+              {t.agentWorkspaceIntro}
+            </p>
+          </section>
+
+          {/* UX-13 - OPERATIONAL SUMMARY.
+              Answers "what needs me?" before anything else. Every tile is a REAL
+              count of a real state in the two queues rendered below - nothing is
+              manufactured for visual balance, and no new data source is read. */}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <StatCard
+                icon={ClipboardList}
+                label={t.agentNeedsAttention}
+                value={actionQueueCount}
+                description={t.agentNeedsAttentionHint}
+              />
+              <StatCard
+                icon={PackageOpen}
+                label={t.agentInCustody}
+                value={props.holdingPickups.length}
+                description={t.agentInCustodyHint}
+              />
+              <StatCard
+                icon={Clock}
+                label={t.agentWaitingOnOwner}
+                value={waitingOnOwnerCount}
+                description={t.agentWaitingOnOwnerHint}
+              />
+          </div>
           
           {props.actionSuccessMsg && (
             <div
-              className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 rounded-2xl flex items-center space-x-2 text-sm font-semibold"
+              className="bg-[var(--appearance-surface-muted)] border border-[var(--appearance-success)] text-[var(--appearance-success)] px-4 py-3 rounded-standard flex items-center space-x-2 text-body font-semibold"
               role="status"
               aria-live="polite"
             >
@@ -203,7 +269,7 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
               also cleared automatically at the start of every operation. */}
           {props.operationError && (
             <div
-              className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-2xl flex items-start space-x-2 text-sm font-semibold"
+              className="bg-[var(--appearance-surface-muted)] border border-[var(--appearance-danger)] text-[var(--appearance-danger)] px-4 py-3 rounded-standard flex items-start space-x-2 text-body font-semibold"
               role="alert"
               aria-live="assertive"
             >
@@ -213,7 +279,7 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
                 type="button"
                 onClick={() => props.setOperationError('')}
                 aria-label={props.lang === 'en' ? 'Dismiss error' : 'Ondoa kosa'}
-                className="shrink-0 text-red-700/70 hover:text-red-900 font-bold leading-none px-1"
+                className="shrink-0 text-[var(--appearance-danger)] hover:opacity-80 font-bold leading-none px-1"
               >
                 ×
               </button>
@@ -226,7 +292,7 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
               claim a status change. It is reported here, in context. */}
           {props.queueError && (
             <div
-              className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-2xl flex items-start space-x-2 text-sm font-semibold"
+              className="bg-[var(--appearance-surface-muted)] border border-[var(--appearance-warning)] text-[var(--appearance-warning)] px-4 py-3 rounded-standard flex items-start space-x-2 text-body font-semibold"
               role="alert"
               aria-live="assertive"
             >
@@ -259,10 +325,10 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             
             {/* Confirm finder dropoff */}
-            <div className="bg-white rounded-2xl border border-stone-100 p-5 shadow-lg space-y-4">
-              <div className="flex items-center space-x-2 text-primary-green">
-                <ShieldCheck size={20} className="text-accent-orange" />
-                <h3 className="font-extrabold text-sm uppercase tracking-wide">{t.confirmDropBtn}</h3>
+            <div className="space-y-4 rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)] p-5 shadow-raised">
+              <div className="flex items-center gap-2 text-[var(--appearance-text-primary)]">
+                <ShieldCheck size={ICON_SIZE.heading} className="text-accent-orange" aria-hidden={true} />
+                <h3 className="text-caption font-extrabold uppercase tracking-widest">{t.confirmDropBtn}</h3>
               </div>
               <form onSubmit={props.handleLookupDropoff} className="flex gap-2">
                 <input
@@ -271,26 +337,28 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
                   onChange={(e) => props.setDropoffCodeInput(e.target.value)}
                   placeholder={t.enterDropCode}
                   aria-label={t.enterDropCode}
-                  className="flex-1 border border-stone-200 rounded-xl px-3 py-2 text-xs font-mono focus:outline-none focus:border-accent-orange"
+                  className="h-11 flex-1 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface)] px-3 text-body font-mono text-[var(--appearance-text-primary)] placeholder:text-[var(--appearance-text-muted)] focus:border-[var(--appearance-focus)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)] focus-visible:ring-offset-2"
                   required
                 />
-                <button
+                <Button
                   type="submit"
+                  variant="accent"
+                  size="md"
+                  className="shrink-0"
                   disabled={props.actionProcessing}
                   aria-busy={props.actionProcessing}
-                  className="bg-accent-strong hover:bg-accent-strong-hover text-white text-xs font-bold px-4 py-2 rounded-xl transition flex items-center justify-center space-x-1.5 disabled:opacity-50"
                 >
                   {props.actionProcessing ? (
-                    <Loader2 className="animate-spin" size={14} aria-hidden={true} />
+                    <Loader2 className="animate-spin" size={ICON_SIZE.ui} aria-hidden={true} />
                   ) : (
                     <span>{props.lang === 'en' ? 'Verify' : 'Thibitisha'}</span>
                   )}
-                </button>
+                </Button>
               </form>
             </div>
 
             {/* Hub rules note */}
-            <div className="bg-emerald-50 border border-emerald-100 text-primary-green p-5 rounded-2xl text-xs space-y-1">
+            <div className="space-y-1 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] p-5 text-small text-[var(--appearance-text-secondary)]">
               <span className="font-bold block">Hub Handover Golden Rule:</span>
               <span>Always visually match the name on the owner national ID against the document name on the system before typing collection codes! Incorrect handovers result in permanent agent suspension.</span>
             </div>
@@ -311,28 +379,28 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
               loads. */}
           <div className="space-y-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-xl font-extrabold text-primary-green">{t.agentQueue}</h2>
+              <h2 className="text-subsection font-extrabold text-[var(--appearance-text-primary)]">{t.agentQueue}</h2>
               <div className="flex items-center gap-3">
                 {props.queueLoading && (
                   <span
                     role="status"
                     aria-live="polite"
-                    className="flex items-center gap-1.5 text-xs font-semibold text-stone-500"
+                    className="flex items-center gap-1.5 text-small font-semibold text-[var(--appearance-text-muted)]"
                   >
-                    <Loader2 className="animate-spin" size={12} aria-hidden={true} />
+                    <Loader2 className="animate-spin" size={ICON_SIZE.metadata} aria-hidden={true} />
                     <span>{t.agentQueueRefreshing}</span>
                   </span>
                 )}
-                <button
-                  type="button"
+                <Button
+                  variant="outline"
+                  size="md"
                   onClick={props.retryQueue}
                   disabled={props.queueLoading}
                   aria-busy={props.queueLoading}
-                  className="flex items-center gap-1.5 bg-white border border-stone-200 text-stone-600 hover:text-primary-green hover:border-primary-green text-xs font-bold px-3 py-1.5 rounded-xl transition disabled:opacity-50"
                 >
-                  <RefreshCw size={12} aria-hidden={true} />
+                  <RefreshCw size={ICON_SIZE.ui} aria-hidden={true} />
                   <span>{t.agentQueueRefresh}</span>
-                </button>
+                </Button>
               </div>
             </div>
 
@@ -340,25 +408,27 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
               
               {/* Drop-offs Queue */}
               <div className="space-y-3">
-                <h3 className="font-bold text-sm text-stone-500 uppercase tracking-widest">{t.expectedDropoffs} ({props.expectedDropoffs.length})</h3>
+                <h3 className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">{t.expectedDropoffs} ({props.expectedDropoffs.length})</h3>
                 {props.expectedDropoffs.length === 0 ? (
-                  <div className="rounded-2xl border border-stone-200 bg-stone-50 p-6 text-center text-sm text-stone-500">
-                    {t.agentDropoffsEmpty}
-                  </div>
+                  <EmptyState
+                    icon={Inbox}
+                    title={t.agentDropoffsEmpty}
+                    description={t.agentDropoffQueueEmptyExplain}
+                  />
                 ) : (
                   <div className="space-y-2">
                     {props.expectedDropoffs.map((item) => (
-                      <article key={item.id} className="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
+                      <article key={item.id} className="overflow-hidden rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)] shadow-raised">
                         <div className="space-y-4 p-4 sm:p-5">
                           <div className="min-w-0">
-                            <p className="font-mono text-sm font-extrabold text-primary-green break-all">{itemReference(item)}</p>
-                            <h4 className="mt-1 break-words text-base font-extrabold text-stone-900">{itemHeading(item)}</h4>
-                            <p className="mt-1 text-xs font-bold uppercase tracking-wide text-accent-orange">{t.agentDropoffQueueRole}</p>
+                            <p className="font-mono text-body font-extrabold text-[var(--appearance-primary)] break-all">{itemReference(item)}</p>
+                            <h4 className="mt-1 break-words text-heading font-extrabold text-[var(--appearance-text-primary)]">{itemHeading(item)}</h4>
+                            <p className="mt-1 text-caption font-bold uppercase tracking-wide text-accent-orange">{t.agentDropoffQueueRole}</p>
                           </div>
                           <ItemMetadata item={item} />
-                          <div className="border-t border-stone-100 pt-3">
-                            <p className="mb-2 text-xs font-semibold text-stone-500">{t.agentWorkflowLabel}</p>
-                            <p className="text-sm font-semibold text-stone-800">{t.agentDropoffWorkflow}</p>
+                          <div className="border-t border-[var(--appearance-border)] pt-3">
+                            <p className="mb-2 text-caption font-semibold text-[var(--appearance-text-muted)]">{t.agentWorkflowLabel}</p>
+                            <p className="text-body font-semibold text-[var(--appearance-text-primary)]">{t.agentDropoffWorkflow}</p>
                           </div>
                           {props.rejectingItemId !== item.id && props.verifyingItemId !== item.id && (
                             <div className="flex flex-wrap gap-2">
@@ -451,21 +521,23 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
 
               {/* Handover / Pickups Queue */}
               <div className="space-y-3">
-                <h3 className="font-bold text-sm text-stone-500 uppercase tracking-widest">{t.holdingPickups} ({props.holdingPickups.length})</h3>
+                <h3 className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">{t.holdingPickups} ({props.holdingPickups.length})</h3>
                 {props.holdingPickups.length === 0 ? (
-                  <div className="rounded-2xl border border-stone-200 bg-stone-50 p-6 text-center text-sm text-stone-500">
-                    {t.agentHandoversEmpty}
-                  </div>
+                  <EmptyState
+                    icon={PackageOpen}
+                    title={t.agentHandoversEmpty}
+                    description={t.agentHandoverQueueEmptyExplain}
+                  />
                 ) : (
                   <div className="space-y-3">
                     {props.holdingPickups.map((item) => (
-                      <article key={item.id} className="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
+                      <article key={item.id} className="overflow-hidden rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)] shadow-raised">
                         <div className="space-y-4 p-4 sm:p-5">
                           <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                             <div className="min-w-0">
-                              <p className="break-all font-mono text-sm font-extrabold text-primary-green">{itemReference(item)}</p>
-                              <h4 className="mt-1 break-words text-base font-extrabold text-stone-900">{itemHeading(item)}</h4>
-                              <p className="mt-1 text-xs font-bold uppercase tracking-wide text-accent-orange">{t.agentHandoverQueueRole}</p>
+                              <p className="break-all font-mono text-body font-extrabold text-[var(--appearance-primary)]">{itemReference(item)}</p>
+                              <h4 className="mt-1 break-words text-heading font-extrabold text-[var(--appearance-text-primary)]">{itemHeading(item)}</h4>
+                              <p className="mt-1 text-caption font-bold uppercase tracking-wide text-accent-orange">{t.agentHandoverQueueRole}</p>
                             </div>
                             <Badge variant={claimBadgeVariant(item)} className="self-start whitespace-normal text-left">
                               {agentClaimBadge(item.associatedClaim?.status, props.lang).label}
@@ -488,7 +560,7 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
                             transition, no endpoint and no payment detail (no
                             amount, no reference, no phone) is exposed. */}
                         {item.associatedClaim?.status === 'pending_payment' && (
-                          <p className="text-xs text-stone-500 font-medium text-left border-t border-stone-100 pt-3">
+                          <p className="text-small text-[var(--appearance-text-muted)] font-medium text-left border-t border-[var(--appearance-border)] pt-3">
                             {t.agentPendingPaymentNote}
                           </p>
                         )}
@@ -506,7 +578,7 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
                             whatever the reason for the absence. It exposes no
                             withheld status and no claim detail. */}
                         {!item.associatedClaim && (
-                          <p className="text-xs text-stone-500 font-medium text-left border-t border-stone-100 pt-3">
+                          <p className="text-small text-[var(--appearance-text-muted)] font-medium text-left border-t border-[var(--appearance-border)] pt-3">
                             {t.agentNoClaimInfoNote}
                           </p>
                         )}
@@ -519,7 +591,7 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
                             action — only an explanation, so the agent knows the
                             item must not leave the hub. */}
                         {(item.associatedClaim?.status === 'disputed' || item.associatedClaim?.status === 'released') && (
-                          <p className="text-xs text-stone-500 font-medium text-left border-t border-stone-100 pt-3">
+                          <p className="text-small text-[var(--appearance-text-muted)] font-medium text-left border-t border-[var(--appearance-border)] pt-3">
                             {item.associatedClaim.status === 'disputed'
                               ? (props.lang === 'en'
                                 ? 'This claim is under dispute review. Do NOT release the item — Return4me will contact you.'
@@ -532,8 +604,8 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
 
                         {/* If claim is awaiting physical agent confirmation, show verification action button */}
                         {item.associatedClaim?.status === 'awaiting_agent_confirmation' && (
-                          <div className="border-t border-stone-100 pt-3 space-y-2">
-                            <p className="text-xs text-stone-500 font-medium text-left">
+                          <div className="border-t border-[var(--appearance-border)] pt-3 space-y-2">
+                            <p className="text-small text-[var(--appearance-text-muted)] font-medium text-left">
                               {props.lang === 'en' 
                                 ? 'The owner must travel to your station and visually verify this item is theirs.' 
                                 : 'Mwenye mali lazima afike kituoni kwako na athibitishe kwa macho kuwa bidhaa hii ni yake.'}
@@ -549,22 +621,24 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
                               identifyingDetails={item.associatedClaim.owner_identifying_details}
                             />
 
-                            <button
+                            <Button
                               type="button"
+                              variant="secondary"
+                              size="md"
+                              className="w-full"
                               onClick={() => props.handleConfirmViewing(item.associatedClaim.id)}
                               disabled={isItemBusy(item.associatedClaim.id)}
                               aria-busy={isItemBusy(item.associatedClaim.id)}
-                              className="w-full bg-amber-500 text-white text-xs font-extrabold px-3 py-2 rounded-lg hover:bg-amber-600 flex items-center justify-center space-x-1.5 disabled:opacity-50 transition cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2"
                             >
                               {isItemBusy(item.associatedClaim.id) ? (
-                                <Loader2 className="animate-spin" size={12} aria-hidden={true} />
+                                <Loader2 className="animate-spin" size={ICON_SIZE.ui} aria-hidden={true} />
                               ) : (
                                 <>
-                                  <Eye size={14} />
+                                  <Eye size={ICON_SIZE.ui} aria-hidden={true} />
                                   <span>{props.lang === 'en' ? 'Confirm Owner Viewed & Verified Item' : 'Thibitisha Mwenye Mali Ameiona & Kukagua'}</span>
                                 </>
                               )}
-                            </button>
+                            </Button>
                           </div>
                         )}
 
@@ -577,25 +651,27 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
                             opens. Keeping the field implied a second, different
                             handover code existed. */}
                         {item.associatedClaim?.status === 'escrow_held' && (
-                          <div className="border-t border-stone-100 pt-3 space-y-2">
-                            <p className="text-xs text-stone-500 font-medium text-left">
+                          <div className="border-t border-[var(--appearance-border)] pt-3 space-y-2">
+                            <p className="text-small text-[var(--appearance-text-muted)] font-medium text-left">
                               {props.lang === 'en'
                                 ? 'Payment is held. Ask the owner for their secret pickup code to complete the handover.'
                                 : 'Malipo yameshikiliwa. Muulize mmiliki msimbo wake wa siri wa kuchukua ili kukamilisha kukabidhi.'}
                             </p>
-                            <button
+                            <Button
                               type="button"
+                              variant="accent"
+                              size="md"
+                              className="w-full"
                               onClick={() => props.handleConfirmHandover(item.associatedClaim.id)}
                               disabled={isItemBusy(item.associatedClaim.id)}
                               aria-busy={isItemBusy(item.associatedClaim.id)}
-                              className="w-full bg-accent-orange text-white text-xs font-extrabold px-3 py-2 rounded-lg hover:bg-accent-hover flex items-center justify-center space-x-1.5 disabled:opacity-50 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange focus-visible:ring-offset-2"
                             >
                               {isItemBusy(item.associatedClaim.id) ? (
-                                <Loader2 className="animate-spin" size={12} aria-hidden={true} />
+                                <Loader2 className="animate-spin" size={ICON_SIZE.ui} aria-hidden={true} />
                               ) : (
                                 <span>{props.lang === 'en' ? 'Complete Handover' : 'Kamilisha Kukabidhi'}</span>
                               )}
-                            </button>
+                            </Button>
                           </div>
                         )}
                         </div>
@@ -631,32 +707,32 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
               Ownership is unchanged: this component is still hook-free
               presentation over values owned by useAgentOperations. */}
           {/* Hub Profile Banner */}
-          <div className="bg-primary-green text-white p-6 rounded-2xl flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+          <div className="bg-primary-green text-white p-6 rounded-panel flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <div>
-              <span className="bg-emerald-800 text-accent-orange border border-emerald-700 text-xs font-extrabold px-3 py-1 rounded-full uppercase tracking-wider inline-block mb-2">
+              <span className="bg-emerald-900/60 text-accent-orange border border-emerald-700 text-caption font-extrabold px-3 py-1 rounded-full uppercase tracking-wider inline-block mb-2">
                 Verified Return4me Partner Point
               </span>
-              <h1 className="text-2xl font-extrabold">{props.agentProfile.business_name}</h1>
-              <p className="text-stone-300 text-xs mt-0.5">{props.agentProfile.location_address}</p>
+              <h2 className="text-subsection font-extrabold">{props.agentProfile.business_name}</h2>
+              <p className="text-white/70 text-small mt-0.5">{props.agentProfile.location_address}</p>
             </div>
-            <div className="bg-white/10 p-4 rounded-2xl border border-white/5 text-right font-mono">
-              <span className="text-xs text-stone-300 block uppercase font-sans font-bold">Payout via {props.agentProfile.payout_method_type || "Till Number"}</span>
-              <span className="text-lg font-extrabold text-accent-orange">{props.agentProfile.mpesa_till_or_paybill}</span>
+            <div className="bg-white/10 p-4 rounded-standard border border-white/10 text-right font-mono">
+              <span className="text-caption text-white/70 block uppercase font-sans font-bold">Payout via {props.agentProfile.payout_method_type || "Till Number"}</span>
+              <span className="text-body-large font-extrabold text-accent-orange">{props.agentProfile.mpesa_till_or_paybill}</span>
             </div>
           </div>
 
           {/* Total Earnings Card — your commission share after each escrow release */}
           {props.agentEarnings && (
-            <div className="bg-white border border-stone-100 rounded-2xl p-6 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+            <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-panel p-6 shadow-raised flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
               <div>
-                <span className="text-stone-400 text-xs font-extrabold uppercase tracking-widest block">
+                <span className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)] block">
                   {props.lang === 'en' ? 'Total Earned (your commission share)' : 'Jumla Uliyopata (sehemu yako ya kamisheni)'}
                 </span>
-                <span className="text-3xl font-black text-primary-green block mt-1">
+                <span className="text-section font-black text-[var(--appearance-primary)] tabular-nums block mt-1">
                   KES {props.agentEarnings.totalEarned.toLocaleString()}
                 </span>
               </div>
-              <div className="bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-2xl px-4 py-2 text-xs font-bold">
+              <div className="bg-[var(--appearance-surface-muted)] text-[var(--appearance-success)] border border-[var(--appearance-border)] rounded-standard px-4 py-2 text-caption font-bold">
                 {props.agentEarnings.completedPayoutsCount} {props.lang === 'en' ? 'completed handovers paid out' : 'kukabidhi zilizolipwa'}
               </div>
             </div>

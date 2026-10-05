@@ -9,6 +9,8 @@ import { administrativeUnitsForCounty } from '../config/kenyaAdministrativeUnits
 import { detectBrowserLocation, type DetectedLocation } from '../services/browserLocation';
 import { useAgentOperations } from '../hooks/useAgentOperations';
 import { Banner, Button, ICON_SIZE, Input } from './ui';
+import Skeleton from './ui/Skeleton';
+
 // UX-12 imports the two shared primitives the registration steps need, by the
 // same direct path AdminView, OwnerView and BecomeAgentView already use.
 import Select from './ui/Select';
@@ -941,11 +943,18 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
           PHASE 16.1 BATCH 3 (F-5 / H-3): the very first paint must not claim a
           vetting state before the server has actually answered. */}
       {token && queueLoading && !agentProfile && !queueError && (
-        <div className="bg-white rounded-2xl border border-stone-100 p-8 shadow-sm max-w-md mx-auto text-center space-y-4 fade-in">
-          <Loader2 className="animate-spin text-primary-green mx-auto" size={28} aria-hidden={true} />
-          <p className="text-stone-600 text-sm font-semibold" role="status" aria-live="polite">
+        <div className="bg-[var(--appearance-surface)] rounded-panel border border-[var(--appearance-border)] p-6 shadow-raised max-w-2xl mx-auto space-y-4 fade-in" aria-busy="true">
+          <p className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]" role="status" aria-live="polite">
             {lang === 'en' ? 'Loading your agent hub…' : 'Inapakia ukurasa wako wa wakala…'}
           </p>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <Skeleton shape="card" />
+            <Skeleton shape="card" />
+            <Skeleton shape="card" />
+          </div>
+          <Skeleton shape="rect" className="h-11 w-full" />
+          <Skeleton shape="text" />
+          <Skeleton shape="text" className="w-2/3" />
         </div>
       )}
 
@@ -962,29 +971,31 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
           Nothing here asserts, grants or withholds any status: the server stays
           the sole authority. */}
       {token && !queueLoading && queueError && !agentProfile && (
-        <div className="bg-white rounded-2xl border border-stone-100 p-8 shadow-sm max-w-md mx-auto text-center space-y-5 fade-in">
-          <div className="w-16 h-16 bg-red-50 text-red-600 rounded-full flex items-center justify-center mx-auto">
-            <AlertCircle size={32} aria-hidden={true} />
+        <div className="bg-[var(--appearance-surface)] rounded-panel border border-[var(--appearance-border)] p-8 shadow-raised max-w-md mx-auto text-center space-y-5 fade-in">
+          <div className="w-16 h-16 bg-[var(--appearance-surface-muted)] text-[var(--appearance-danger)] rounded-full flex items-center justify-center mx-auto">
+            <AlertCircle size={ICON_SIZE.feature} aria-hidden={true} />
           </div>
           <div className="space-y-2">
-            <h2 className="text-2xl font-extrabold text-primary-green">
+            <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
               {lang === 'en' ? 'Agent Hub unavailable' : 'Ukurasa wa Wakala Haupatikani'}
             </h2>
-            <p className="text-stone-600 text-sm font-semibold" role="alert" aria-live="assertive">
+            <p className="text-body text-[var(--appearance-text-secondary)] font-semibold" role="alert" aria-live="assertive">
               {queueError}
             </p>
           </div>
-          <button
+          <Button
             type="button"
+            variant="primary"
+            size="lg"
+            className="w-full"
             onClick={retryQueue}
             disabled={queueLoading}
             aria-busy={queueLoading}
-            className="w-full bg-primary-green hover:bg-primary-hover text-white py-3 rounded-2xl font-bold transition flex items-center justify-center space-x-2 disabled:opacity-50"
           >
             {queueLoading
-              ? <Loader2 className="animate-spin" size={18} aria-hidden={true} />
+              ? <Loader2 className="animate-spin" size={ICON_SIZE.emphasis} aria-hidden={true} />
               : <span>{lang === 'en' ? 'Try again' : 'Jaribu tena'}</span>}
-          </button>
+          </Button>
         </div>
       )}
 
@@ -1001,15 +1012,15 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
           cannot meet. It is informational only: no agent data is rendered and
           no action is offered, so there is nothing here to authorize. */}
       {token && awaitingEmailVerification && (
-        <div className="bg-white rounded-2xl border border-stone-100 p-8 shadow-sm max-w-md mx-auto text-center space-y-5 fade-in">
-          <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mx-auto">
-            <Mail size={32} aria-hidden={true} />
+        <div className="bg-[var(--appearance-surface)] rounded-panel border border-[var(--appearance-border)] p-8 shadow-raised max-w-md mx-auto text-center space-y-5 fade-in">
+          <div className="w-16 h-16 bg-[var(--appearance-surface-muted)] text-[var(--appearance-text-secondary)] rounded-full flex items-center justify-center mx-auto">
+            <Mail size={ICON_SIZE.feature} aria-hidden={true} />
           </div>
           <div>
-            <h2 className="text-2xl font-extrabold text-primary-green">
+            <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
               {lang === 'sw' ? 'Thibitisha Barua Pepe Yako' : 'Verify Your Email'}
             </h2>
-            <p className="text-stone-600 text-sm mt-2 font-semibold leading-relaxed">
+            <p className="text-body text-[var(--appearance-text-secondary)] mt-2 font-semibold leading-relaxed">
               {lang === 'sw'
                 ? 'Tumetumia kiungo cha uthibitishaji kwenye barua pepe uliyoandika. Fungua barua pepe hiyo kwenye kifaa hiki na bonyeza kiungo kilichomo.'
                 : 'We sent a verification link to the business email you provided. Open that email on this device and click the link in it.'}
@@ -1018,7 +1029,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
           {/* role="status" announces the change of screen to assistive tech. The
               outcome is never signalled by the blue icon alone — the heading and
               the body text both change. */}
-          <div role="status" className="bg-brand-beige border border-stone-200 p-4 rounded-xl text-left text-xs text-stone-600 space-y-1.5 leading-tight">
+          <div role="status" className="bg-[var(--appearance-surface-muted)] border border-[var(--appearance-border)] p-4 rounded-standard text-left text-small text-[var(--appearance-text-secondary)] space-y-1.5 leading-tight">
             {lang === 'sw' ? (
               <>
                 <span className="font-bold block mb-1">Kuna hatua mbili:</span>
@@ -1043,19 +1054,19 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
           brief window before the server has answered, or by a future server
           response that states a non-active agent positively. */}
       {token && agentStatus === 'pending' && !queueError && !queueLoading && !awaitingEmailVerification && (
-        <div className="bg-white rounded-2xl border border-stone-100 p-8 shadow-sm max-w-md mx-auto text-center space-y-5 fade-in">
-          <div className="w-16 h-16 bg-orange-100 text-accent-orange rounded-full flex items-center justify-center mx-auto">
-            <Lock size={32} />
+        <div className="bg-[var(--appearance-surface)] rounded-panel border border-[var(--appearance-border)] p-8 shadow-raised max-w-md mx-auto text-center space-y-5 fade-in">
+          <div className="w-16 h-16 bg-[var(--appearance-surface-muted)] text-[var(--appearance-accent)] rounded-full flex items-center justify-center mx-auto">
+            <Lock size={ICON_SIZE.feature} aria-hidden={true} />
           </div>
           <div>
-            <h2 className="text-2xl font-extrabold text-primary-green">Vetting Pending</h2>
-            <p className="text-stone-600 text-sm mt-1 font-semibold">
+            <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">Vetting Pending</h2>
+            <p className="text-body text-[var(--appearance-text-secondary)] mt-1 font-semibold">
               {lang === 'sw'
                 ? 'Taarifa zako zitakaguliwa na utaarifiwa kuhusu maombi yako.'
                 : 'Their details will be checked and they\'ll be notified of their application.'}
             </p>
           </div>
-          <div className="bg-brand-beige border border-stone-200 p-4 rounded-xl text-left text-xs text-stone-600 space-y-1.5 leading-tight">
+          <div className="bg-[var(--appearance-surface-muted)] border border-[var(--appearance-border)] p-4 rounded-standard text-left text-small text-[var(--appearance-text-secondary)] space-y-1.5 leading-tight">
             {lang === 'sw' ? (
               <>
                 <span className="font-bold block mb-1">Mchakato wa Kuidhinisha:</span>
@@ -1148,15 +1159,15 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
             role="dialog"
             aria-modal="true"
             aria-labelledby="agent-confirm-modal-title"
-            className="bg-white border border-stone-200 rounded-2xl p-6 shadow-sm max-w-sm w-full space-y-4 fade-in outline-none"
+            className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-panel p-6 shadow-floating max-w-sm w-full space-y-4 fade-in outline-none"
           >
             <div className="flex items-start space-x-3 text-amber-600">
               <CheckCircle className="w-6 h-6 shrink-0 mt-0.5 animate-pulse" aria-hidden={true} />
               <div className="space-y-1">
-                <h3 id="agent-confirm-modal-title" className="font-extrabold text-sm text-stone-900 uppercase tracking-wider">
+                <h3 id="agent-confirm-modal-title" className="text-caption font-extrabold text-[var(--appearance-text-primary)] uppercase tracking-wider">
                   {confirmModal.title}
                 </h3>
-                <p className="text-stone-500 text-xs leading-relaxed font-semibold">
+                <p className="text-small text-[var(--appearance-text-muted)] leading-relaxed font-semibold">
                   {confirmModal.message}
                 </p>
               </div>
@@ -1165,7 +1176,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
               <button
                 onClick={() => setConfirmModal(null)}
                 disabled={modalBusy}
-                className="bg-stone-100 hover:bg-stone-200 text-stone-600 text-xs font-bold px-4 py-2 rounded-xl transition disabled:opacity-50"
+                className="min-h-11 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] hover:opacity-90 px-4 text-body font-bold text-[var(--appearance-text-primary)] transition disabled:opacity-50"
               >
                 {lang === 'en' ? 'Cancel' : 'Ghairi'}
               </button>
@@ -1189,7 +1200,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                     setModalBusy(false);
                   }
                 }}
-                className="bg-primary-green hover:bg-primary-hover text-white text-xs font-bold px-4 py-2 rounded-xl transition flex items-center space-x-1.5 disabled:opacity-50"
+                className="min-h-11 rounded-standard bg-primary-green hover:bg-primary-hover px-4 text-body font-bold text-white transition flex items-center space-x-1.5 disabled:opacity-50"
               >
                 {modalBusy ? <Loader2 className="animate-spin" size={12} aria-hidden={true} /> : null}
                 <span>{lang === 'en' ? 'Confirm' : 'Thibitisha'}</span>
@@ -1210,15 +1221,15 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
             role="dialog"
             aria-modal="true"
             aria-labelledby="agent-handover-modal-title"
-            className="bg-white border border-stone-200 rounded-2xl p-6 shadow-sm max-w-sm w-full space-y-4 fade-in outline-none"
+            className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-panel p-6 shadow-floating max-w-sm w-full space-y-4 fade-in outline-none"
           >
             <div className="flex items-start space-x-3 text-amber-600">
               <CheckCircle className="w-6 h-6 shrink-0 mt-0.5" aria-hidden={true} />
               <div className="space-y-1">
-                <h3 id="agent-handover-modal-title" className="font-extrabold text-sm text-stone-900 uppercase tracking-wider">
+                <h3 id="agent-handover-modal-title" className="text-caption font-extrabold text-[var(--appearance-text-primary)] uppercase tracking-wider">
                   {lang === 'en' ? 'Confirm Handover' : 'Thibitisha Kukabidhi'}
                 </h3>
-                <p className="text-stone-500 text-xs leading-relaxed font-semibold">
+                <p className="text-small text-[var(--appearance-text-muted)] leading-relaxed font-semibold">
                   {lang === 'en'
                     ? 'Ask the owner to read out their secret pickup code (sent to them by SMS/email when they paid). Enter it below to release payment. This cannot be undone.'
                     : 'Muulize mmiliki asome msimbo wake wa siri wa kuchukua (uliotumwa kwake kwa SMS/barua pepe alipolipa). Weka hapa chini kutoa malipo. Kitendo hiki hakiwezi kubatilishwa.'}
@@ -1233,11 +1244,11 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
               onChange={(e) => setPickupCodeModal({ ...pickupCodeModal, code: e.target.value })}
               placeholder={lang === 'en' ? 'Enter owner\'s secret pickup code' : 'Weka msimbo wa siri wa mmiliki'}
               aria-label={lang === 'en' ? 'Owner\'s secret pickup code' : 'Msimbo wa siri wa mmiliki'}
-              className="w-full border border-stone-300 rounded-xl px-4 py-3 text-center text-lg font-mono tracking-widest focus:outline-none focus:ring-2 focus:ring-primary-green"
+              className="w-full min-h-11 rounded-standard border border-[var(--appearance-border-strong)] bg-[var(--appearance-surface)] px-4 py-3 text-center text-heading font-mono tracking-widest text-[var(--appearance-text-primary)] focus:outline-none focus:border-[var(--appearance-focus)]"
             />
 
             <div className="space-y-2">
-              <p className="text-[11px] font-bold text-stone-600">
+              <p className="text-caption font-bold text-[var(--appearance-text-secondary)]">
                 {lang === 'en' ? 'Photo of claimant with the item (required)' : 'Picha ya mdai akiwa na bidhaa (inahitajika)'}
               </p>
               <input
@@ -1250,7 +1261,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
               />
 
               {useHandoverCamera ? (
-                <div className="relative bg-black rounded-xl overflow-hidden aspect-video">
+                <div className="relative bg-black rounded-standard overflow-hidden aspect-video">
                   {/* PHASE 16.1 BATCH 3 (A-7) — the live preview had no
                       accessible name, so assistive technology announced an
                       unnamed media element. Capture behaviour is unchanged; only
@@ -1266,21 +1277,21 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                     <button
                       type="button"
                       onClick={captureHandoverFrame}
-                      className="bg-accent-orange text-white px-4 py-2 rounded-lg font-bold text-xs shadow-lg transition hover:bg-accent-hover"
+                      className="rounded-standard bg-accent-orange px-4 py-2 text-caption font-bold text-white shadow-raised transition hover:bg-accent-hover"
                     >
                       {lang === 'en' ? 'Capture' : 'Piga'}
                     </button>
                     <button
                       type="button"
                       onClick={stopHandoverCamera}
-                      className="bg-stone-800 text-white px-4 py-2 rounded-lg font-bold text-xs transition hover:bg-stone-700"
+                      className="rounded-standard bg-stone-800 px-4 py-2 text-caption font-bold text-white transition hover:bg-stone-700"
                     >
                       {lang === 'en' ? 'Cancel' : 'Ghairi'}
                     </button>
                   </div>
                 </div>
               ) : pickupCodeModal.photoBase64 ? (
-                <div className="relative rounded-xl overflow-hidden border border-stone-200 group">
+                <div className="relative rounded-standard overflow-hidden border border-[var(--appearance-border)] group">
                   <img
                     src={pickupCodeModal.photoBase64}
                     alt="Handover evidence"
@@ -1290,43 +1301,43 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                     <button
                       type="button"
                       onClick={startHandoverCamera}
-                      className="bg-white text-primary-green p-2.5 rounded-full hover:bg-stone-100 shadow-md transition"
+                      className="rounded-full bg-[var(--appearance-surface)] p-2.5 text-[var(--appearance-primary)] hover:opacity-90 shadow-raised transition"
                       title={lang === 'en' ? 'Retake with camera' : 'Piga tena kwa kamera'}
                       aria-label={lang === 'en' ? 'Retake with camera' : 'Piga tena kwa kamera'}
                     >
-                      <Camera size={16} />
+                      <Camera size={ICON_SIZE.ui} aria-hidden={true} />
                     </button>
                     <button
                       type="button"
                       onClick={() => handoverPhotoInputRef.current?.click()}
-                      className="bg-white text-primary-green p-2.5 rounded-full hover:bg-stone-100 shadow-md transition"
+                      className="rounded-full bg-[var(--appearance-surface)] p-2.5 text-[var(--appearance-primary)] hover:opacity-90 shadow-raised transition"
                       title={lang === 'en' ? 'Upload a different photo' : 'Pakia picha nyingine'}
                       aria-label={lang === 'en' ? 'Upload a different photo' : 'Pakia picha nyingine'}
                     >
-                      <Upload size={16} />
+                      <Upload size={ICON_SIZE.ui} aria-hidden={true} />
                     </button>
                   </div>
                 </div>
               ) : (
-                <div className="border-2 border-dashed border-stone-300 rounded-xl py-5 text-center bg-stone-50 space-y-3">
-                  <p className="text-stone-400 text-[10px]">
+                <div className="rounded-standard border-2 border-dashed border-[var(--appearance-border-strong)] bg-[var(--appearance-surface-muted)] py-5 text-center space-y-3">
+                  <p className="text-caption text-[var(--appearance-text-muted)]">
                     {lang === 'en' ? 'Take a photo now, or upload one from this device' : 'Piga picha sasa, au pakia moja kutoka kwa kifaa hiki'}
                   </p>
                   <div className="flex items-center justify-center gap-2.5">
                     <button
                       type="button"
                       onClick={startHandoverCamera}
-                      className="bg-primary-green hover:bg-primary-hover text-white px-3.5 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5"
+                      className="min-h-11 rounded-standard bg-primary-green hover:bg-primary-hover px-3.5 text-caption font-bold text-white transition flex items-center gap-1.5"
                     >
-                      <Camera size={13} />
+                      <Camera size={ICON_SIZE.metadata} aria-hidden={true} />
                       <span>{lang === 'en' ? 'Take Photo' : 'Piga Picha'}</span>
                     </button>
                     <button
                       type="button"
                       onClick={() => handoverPhotoInputRef.current?.click()}
-                      className="bg-white border border-stone-300 hover:bg-stone-50 text-stone-700 px-3.5 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5"
+                      className="min-h-11 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface)] hover:opacity-90 px-3.5 text-caption font-bold text-[var(--appearance-text-primary)] transition flex items-center gap-1.5"
                     >
-                      <Upload size={13} />
+                      <Upload size={ICON_SIZE.metadata} aria-hidden={true} />
                       <span>{lang === 'en' ? 'Upload File' : 'Pakia Faili'}</span>
                     </button>
                   </div>
@@ -1351,7 +1362,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
               <button
                 onClick={() => { stopHandoverCamera(); setPickupCodeModal(null); setOperationError(''); }}
                 disabled={actionProcessing}
-                className="bg-stone-100 hover:bg-stone-200 text-stone-600 text-xs font-bold px-4 py-2 rounded-xl transition disabled:opacity-50"
+                className="min-h-11 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] hover:opacity-90 px-4 text-body font-bold text-[var(--appearance-text-primary)] transition disabled:opacity-50"
               >
                 {lang === 'en' ? 'Cancel' : 'Ghairi'}
               </button>
@@ -1359,7 +1370,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                 onClick={submitConfirmHandover}
                 disabled={actionProcessing}
                 aria-busy={actionProcessing}
-                className="bg-primary-green hover:bg-primary-hover text-white text-xs font-bold px-4 py-2 rounded-xl transition disabled:opacity-50"
+                className="min-h-11 rounded-standard bg-primary-green hover:bg-primary-hover px-4 text-body font-bold text-white transition disabled:opacity-50"
               >
                 {actionProcessing
                   ? (lang === 'en' ? 'Confirming…' : 'Inathibitisha…')
