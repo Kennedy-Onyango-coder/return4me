@@ -5,6 +5,9 @@ import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
 import * as Sentry from "@sentry/node";
+// Administrative 2FA hardening — the one-time plaintext -> encrypted TOTP secret
+// migration below reuses the SAME primitives the application uses at runtime.
+import { TOTP_CIPHER_PREFIX, encryptTOTPSecret, isEncryptedTOTPSecret } from "../services/totpCrypto";
 
 dotenv.config();
 
@@ -25,6 +28,9 @@ const mockDatabaseState: Record<string, any[]> = {
   audit_log: [],
   phone_reputations: [],
   admin_users: [],
+  // Admin 2FA single-use recovery codes (bcrypt hashes only). Present so the
+  // in-memory test double can model the atomic single-use consume.
+  admin_recovery_codes: [],
   payment_sessions: [],
   customers: [],
   customer_otps: [],
@@ -722,6 +728,63 @@ export const pool = createPool();
 export const db = drizzle(pool, { schema });
 
 /**
+ * ONE-TIME DATA MIGRATION: encrypt any legacy PLAINTEXT admin TOTP secret.
+ *
+ * The repository's migration mechanism (the `statements` array below) is a list
+ * of idempotent DDL strings run on every boot. A transformation that must consult
+ * an application-held encryption key cannot be expressed as a plain SQL statement
+ * (Postgres has no access to TOTP_ENCRYPTION_KEY), so it is implemented here as a
+ * dedicated, idempotent step that runs immediately after the DDL has been
+ * applied — the closest correct fit for this repository's architecture.
+ *
+ * SAFETY PROPERTIES
+ *   * Identifies plaintext by shape: only rows whose totp_secret is non-empty and
+ *     does NOT already carry TOTP_CIPHER_PREFIX are touched. A base32 secret
+ *     (A-Z, 2-7) can never begin with the prefix (which contains ':'), so the
+ *     predicate is exact and idempotent — after one successful run no rows match,
+ *     and every subsequent boot is a no-op.
+ *   * Preserves the enrolled secret EXACTLY (decrypt(cipher) round-trips to the
+ *     identical base32 string) and never changes totp_enabled.
+ *   * Never logs the secret; only a per-row admin id on failure, and a count.
+ *   * A failure on one row does not abort the others or the boot: the migration
+ *     is retried on the next boot, and the runtime read path tolerates a
+ *     not-yet-migrated plaintext value so no administrator is locked out.
+ */
+export async function encryptExistingTotpSecrets(pool: Pool): Promise<number> {
+  let rows: Array<{ id?: string; totp_secret?: string }> = [];
+  try {
+    const result = await pool.query(
+      `SELECT id, totp_secret FROM admin_users
+       WHERE totp_secret IS NOT NULL AND totp_secret <> ''
+         AND totp_secret NOT LIKE '${TOTP_CIPHER_PREFIX}%'`
+    );
+    rows = (result && (result as any).rows) || [];
+  } catch (err: any) {
+    console.warn('[TOTP MIGRATION] Could not scan admin_users for plaintext TOTP secrets:', err?.message || err);
+    return 0;
+  }
+
+  let migrated = 0;
+  for (const row of rows) {
+    const id = row?.id;
+    const secret = row?.totp_secret;
+    if (!id || typeof secret !== 'string' || secret === '' || isEncryptedTOTPSecret(secret)) continue;
+    try {
+      const encrypted = encryptTOTPSecret(secret);
+      await pool.query('UPDATE admin_users SET totp_secret = $1 WHERE id = $2', [encrypted, id]);
+      migrated++;
+    } catch (err: any) {
+      // Log the admin id and the error message ONLY — never the secret itself.
+      console.error(`[TOTP MIGRATION] Failed to encrypt the TOTP secret for admin id ${id}: ${err?.message || err}`);
+    }
+  }
+  if (migrated > 0) {
+    console.log(`[TOTP MIGRATION] Encrypted ${migrated} previously-plaintext admin TOTP secret(s) at rest.`);
+  }
+  return migrated;
+}
+
+/**
  * SCHEMA SYNC RULE FOR FUTURE UPDATES:
  * Every time a new column or table is added to schema.ts, the corresponding
  * "ADD COLUMN IF NOT EXISTS" or "CREATE TABLE IF NOT EXISTS" statement
@@ -913,6 +976,22 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     // the admin_users table is guaranteed to exist.
     `ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS totp_secret VARCHAR(255)`,
     `ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN NOT NULL DEFAULT false`,
+    // Administrative 2FA hardening — staged enrollment secret + recovery codes.
+    // totp_pending_secret keeps a freshly generated secret SEPARATE from the
+    // active totp_secret, so an already-enabled account is never downgraded or
+    // has its live authenticator replaced merely because /setup was called.
+    `ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS totp_pending_secret VARCHAR(255)`,
+    `ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS totp_pending_created_at TIMESTAMPTZ`,
+    // Single-use 2FA recovery codes (bcrypt hashes only). Additive table; the
+    // matching definition lives in schema.ts and sql/schema.sql.
+    `CREATE TABLE IF NOT EXISTS admin_recovery_codes (
+      id VARCHAR(40) PRIMARY KEY,
+      admin_id VARCHAR(40) NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+      code_hash VARCHAR(255) NOT NULL,
+      used_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_admin_recovery_codes_admin ON admin_recovery_codes(admin_id)`,
     `CREATE TABLE IF NOT EXISTS claim_payment_strikes (
       phone_number VARCHAR(15) PRIMARY KEY,
       strike_count INTEGER NOT NULL DEFAULT 0,
@@ -1577,5 +1656,17 @@ created_at TIMESTAMP WITH TIME ZONE NOT NULL
       throw new Error(message + ' Refusing to start in production with an unverified schema.');
     }
     console.warn(message + ' Continuing in non-production environment.');
+  }
+
+  // Administrative 2FA hardening — one-time, idempotent data migration that
+  // encrypts any legacy plaintext admin TOTP secret at rest. Runs after the DDL
+  // above so the columns are guaranteed to exist. Non-fatal and retried on every
+  // boot (the predicate above makes it a no-op once nothing plaintext remains),
+  // so a transient failure here can never take the service down while still
+  // converging on encrypted-at-rest.
+  try {
+    await encryptExistingTotpSecrets(pool);
+  } catch (err: any) {
+    console.warn('[TOTP MIGRATION] Skipped due to an unexpected error:', err?.message || err);
   }
 }

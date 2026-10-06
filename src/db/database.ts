@@ -15,6 +15,8 @@ import {
   // authoritative post-migration strike lifecycle.
   claim_payment_strike_records as claimPaymentStrikeRecordsTable,
   admin_users as adminUsersTable,
+  // Administrative 2FA hardening — single-use recovery codes (bcrypt hashes).
+  admin_recovery_codes as adminRecoveryCodesTable,
   otp_codes as otpCodesTable,
   claim_otps as claimOtpsTable,
   claim_pickup_codes as claimPickupCodesTable,
@@ -567,6 +569,11 @@ export interface AdminUser {
   last_login_at: string | null;
   totp_secret: string | null;
   totp_enabled: boolean;
+  // Staged (unconfirmed) enrollment secret — see schema.ts. NULL unless a setup
+  // is in flight. Never used to verify a login code; only /confirm reads it, and
+  // only to compute the code the admin is proving they can generate.
+  totp_pending_secret: string | null;
+  totp_pending_created_at: string | null;
   token_version: number;
 }
 
@@ -583,6 +590,10 @@ function parseAdminUser(row: any): AdminUser {
     last_login_at: row.last_login_at ? new Date(row.last_login_at).toISOString() : null,
     totp_secret: row.totp_secret ?? null,
     totp_enabled: !!row.totp_enabled,
+    totp_pending_secret: row.totp_pending_secret ?? null,
+    totp_pending_created_at: row.totp_pending_created_at
+      ? new Date(row.totp_pending_created_at).toISOString()
+      : null,
     token_version: row.token_version ?? 1,
   };
 }
@@ -5149,33 +5160,68 @@ await drizzleDb.transaction(async (tx) => {
     }
   }
 
-  // Stores a freshly-generated TOTP secret for an admin who has started
-  // 2FA enrollment. Deliberately does NOT set totp_enabled — that only
-  // happens in confirmAdminTotpEnrollment below, once the admin has proven
-  // they can actually generate a valid code from it. Storing the secret
-  // alone first (unconfirmed) means a half-finished enrollment can never
-  // lock the admin out: login still only requires a code once enabled=true.
-  public async setAdminTotpSecret(adminId: string, secret: string): Promise<void> {
+  // Stages a freshly-generated TOTP secret for an admin who has started (or
+  // re-started) 2FA enrollment. Writes ONLY the pending column — it never touches
+  // the ACTIVE totp_secret or totp_enabled. That separation is the fix for the
+  // silent-downgrade finding: an authenticated admin session calling /setup can
+  // no longer disable or replace live 2FA just by starting enrollment; the active
+  // secret is only ever replaced once a NEW secret is actually confirmed
+  // (promotePendingAdminTotpSecret). The value passed in is ALREADY encrypted
+  // (encryptTOTPSecret) before it reaches this layer.
+  public async setAdminPendingTotpSecret(adminId: string, encryptedPendingSecret: string): Promise<void> {
     try {
       await drizzleDb
         .update(adminUsersTable)
-        .set({ totp_secret: secret, totp_enabled: false })
+        .set({ totp_pending_secret: encryptedPendingSecret, totp_pending_created_at: new Date() })
         .where(eq(adminUsersTable.id, adminId));
     } catch (error) {
-      console.error("Failed to set admin TOTP secret:", error);
-      throw new Error("Failed to set admin TOTP secret.");
+      console.error("Failed to stage admin TOTP pending secret:", error);
+      throw new Error("Failed to stage admin TOTP pending secret.");
     }
   }
 
-  public async confirmAdminTotpEnrollment(adminId: string): Promise<void> {
+  // Discards any staged, unconfirmed enrollment secret. Never touches the active
+  // secret, so abandoning a setup can never affect working 2FA.
+  public async clearAdminPendingTotpSecret(adminId: string): Promise<void> {
     try {
       await drizzleDb
         .update(adminUsersTable)
-        .set({ totp_enabled: true })
+        .set({ totp_pending_secret: null, totp_pending_created_at: null })
         .where(eq(adminUsersTable.id, adminId));
     } catch (error) {
-      console.error("Failed to confirm admin TOTP enrollment:", error);
-      throw new Error("Failed to confirm admin TOTP enrollment.");
+      console.error("Failed to clear admin TOTP pending secret:", error);
+      throw new Error("Failed to clear admin TOTP pending secret.");
+    }
+  }
+
+  // Confirms a staged enrollment: the CALLER has already verified a real TOTP
+  // code against the pending secret. Promotes the pending value to the active
+  // secret, sets totp_enabled, and clears the pending slot — in ONE statement.
+  //
+  // The WHERE clause is a compare-and-swap on the pending value the caller
+  // validated: if a concurrent /setup (or a disable) changed or cleared the
+  // pending secret between the caller's read and this write, zero rows match and
+  // this returns false so the caller refuses the confirmation rather than
+  // promoting a secret it never verified.
+  public async promotePendingAdminTotpSecret(adminId: string, expectedEncryptedPendingSecret: string): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(adminUsersTable)
+        .set({
+          totp_secret: expectedEncryptedPendingSecret,
+          totp_enabled: true,
+          totp_pending_secret: null,
+          totp_pending_created_at: null,
+        })
+        .where(and(
+          eq(adminUsersTable.id, adminId),
+          eq(adminUsersTable.totp_pending_secret, expectedEncryptedPendingSecret),
+        ))
+        .returning({ id: adminUsersTable.id });
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Failed to promote admin TOTP pending secret:", error);
+      throw new Error("Failed to promote admin TOTP pending secret.");
     }
   }
 
@@ -5185,13 +5231,95 @@ await drizzleDb.transaction(async (tx) => {
   // change.
   public async disableAdminTotp(adminId: string): Promise<void> {
     try {
+      // Clears the active secret AND any staged enrollment, and sets
+      // totp_enabled false. Recovery codes are removed separately by the caller
+      // (deleteAdminRecoveryCodes); the FK ON DELETE CASCADE also covers a
+      // deleted admin account.
       await drizzleDb
         .update(adminUsersTable)
-        .set({ totp_enabled: false, totp_secret: null })
+        .set({
+          totp_enabled: false,
+          totp_secret: null,
+          totp_pending_secret: null,
+          totp_pending_created_at: null,
+        })
         .where(eq(adminUsersTable.id, adminId));
     } catch (error) {
       console.error("Failed to disable admin TOTP:", error);
       throw new Error("Failed to disable admin TOTP.");
+    }
+  }
+
+  // --- ADMIN 2FA RECOVERY CODES -------------------------------------------
+  // Replaces an admin's entire recovery-code set with freshly hashed codes.
+  // Called only after a successful 2FA enrollment confirmation. Delete-then-
+  // insert is deliberate: a new enrollment must invalidate every code issued for
+  // the previous secret. Hashes are produced by services/totpRecoveryCodes.ts;
+  // this layer never sees a plaintext code.
+  public async replaceAdminRecoveryCodes(adminId: string, codeHashes: string[]): Promise<void> {
+    try {
+      await drizzleDb
+        .delete(adminRecoveryCodesTable)
+        .where(eq(adminRecoveryCodesTable.admin_id, adminId));
+      for (const codeHash of codeHashes) {
+        await drizzleDb.insert(adminRecoveryCodesTable).values({
+          id: "ARC-" + Math.random().toString(36).substr(2, 9).toUpperCase(),
+          admin_id: adminId,
+          code_hash: codeHash,
+          used_at: null,
+          created_at: new Date(),
+        });
+      }
+    } catch (error) {
+      console.error("Failed to replace admin recovery codes:", error);
+      throw new Error("Failed to replace admin recovery codes.");
+    }
+  }
+
+  // Returns only the still-unused recovery codes for an admin (id + hash). Used
+  // by the login path to compare a presented code against candidate hashes.
+  public async getUnusedAdminRecoveryCodes(adminId: string): Promise<Array<{ id: string; code_hash: string }>> {
+    try {
+      const rows = await drizzleDb
+        .select({ id: adminRecoveryCodesTable.id, code_hash: adminRecoveryCodesTable.code_hash })
+        .from(adminRecoveryCodesTable)
+        .where(and(eq(adminRecoveryCodesTable.admin_id, adminId), isNull(adminRecoveryCodesTable.used_at)));
+      return rows as Array<{ id: string; code_hash: string }>;
+    } catch (error) {
+      console.error("Failed to load admin recovery codes:", error);
+      return [];
+    }
+  }
+
+  // Atomically consumes (marks used) a recovery code. The WHERE clause requires
+  // used_at to still be NULL, so this is a compare-and-swap: under two concurrent
+  // redemptions of the same code, exactly one UPDATE matches a row and returns
+  // true; the other sees zero rows and returns false. That is what makes a code
+  // single-use even without a transaction around the whole login flow.
+  public async consumeAdminRecoveryCode(id: string): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(adminRecoveryCodesTable)
+        .set({ used_at: new Date() })
+        .where(and(eq(adminRecoveryCodesTable.id, id), isNull(adminRecoveryCodesTable.used_at)))
+        .returning({ id: adminRecoveryCodesTable.id });
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Failed to consume admin recovery code:", error);
+      return false;
+    }
+  }
+
+  // Removes every recovery code for an admin. Called when 2FA is disabled so a
+  // stale code can never outlive the enrollment it was issued for.
+  public async deleteAdminRecoveryCodes(adminId: string): Promise<void> {
+    try {
+      await drizzleDb
+        .delete(adminRecoveryCodesTable)
+        .where(eq(adminRecoveryCodesTable.admin_id, adminId));
+    } catch (error) {
+      console.error("Failed to delete admin recovery codes:", error);
+      throw new Error("Failed to delete admin recovery codes.");
     }
   }
 

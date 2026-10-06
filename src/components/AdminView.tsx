@@ -4,7 +4,7 @@ import { translations } from '../types';
 // SAME authoritative engine the server uses, so the numbers an admin sees in
 // the console are the numbers the claim will actually be priced from.
 import { computeRecoveryFee } from '../services/feeEngine';
-import { ShieldCheck, BarChart2, Users, FileCheck, Coins, HelpCircle, Loader2, ArrowRight, AlertTriangle, RefreshCw, CheckCircle, ShieldAlert, Package, ClipboardList, FileSearch, X } from 'lucide-react';
+import { ShieldCheck, BarChart2, Users, FileCheck, Coins, HelpCircle, Loader2, ArrowRight, AlertTriangle, RefreshCw, CheckCircle, ShieldAlert, Copy, Package, ClipboardList, FileSearch, X } from 'lucide-react';
 // BATCH 1 (shared admin visual language) — the console reuses the SAME design
 // system every other surface uses. These are presentation primitives only:
 // they hold no data, make no requests and change no behaviour.
@@ -45,6 +45,12 @@ import { readAdminSessionIdentity, adminIdentityLabel } from '../services/adminS
 // public-recognition masking style. The console offers exactly these values (it
 // never re-types the list), and the admin category routes validate against it.
 import { PUBLIC_CLUE_STYLES } from '../services/publicRecognition';
+// BATCH 2 (2FA enrollment UX) — the QR code is generated LOCALLY in the browser
+// from the `otpauthUrl` the server already returned. `qrcode.react` renders a
+// React SVG into the existing tree: no canvas, no `dangerouslySetInnerHTML`, no
+// external request, no tracking — so the provisioning secret never leaves this
+// component's memory.
+import { QRCodeSVG } from 'qrcode.react';
 
 // P14A (P14-05) — human-readable labels for the canonical masking styles. Keyed
 // by the values in PUBLIC_CLUE_STYLES (the single source); an unmapped value
@@ -58,6 +64,14 @@ const PUBLIC_CLUE_STYLE_LABELS: Record<string, string> = {
   card: 'Card — last 4 digits only (e.g. •••• 4821)',
   generic: 'Generic — first character only (e.g. X********)',
 };
+
+// BATCH 2 (2FA enrollment UX) — the QR presentation values. Kept OUT of the JSX
+// so the code size is a named value rather than a magic literal, and the margin
+// is the QR specification's own 4-module quiet zone. Colours stay at the
+// library defaults (black on white): maximum scanner contrast in BOTH themes,
+// and no palette literal is introduced into the console source.
+const TWO_FA_QR_SIZE = 192;
+const TWO_FA_QR_MARGIN = 4;
 
 interface AdminViewProps {
   lang: 'en' | 'sw';
@@ -257,6 +271,10 @@ const CONSOLE_SECTIONS: Record<ConsoleSectionKey, { en: ConsoleSectionCopy; sw: 
 
 export default function AdminView({ lang, token, setToken, onCategoriesChanged }: AdminViewProps) {
   const t = translations[lang];
+  // BATCH 2 — the file's own bilingual shorthand (see DisputeClaimantPanel),
+  // used by the 2FA enrollment UX below so its long English/Swahili strings stay
+  // readable in JSX.
+  const en = lang === 'en';
 
   // §10 — the active administrator, derived from the session on every render so
   // it follows a login, a refresh and a sign-out. Display-only: it makes no
@@ -310,12 +328,28 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
   // Admin 2FA enrollment (Security section, stats tab)
   const [twoFaSetupData, setTwoFaSetupData] = useState<{ secret: string; otpauthUrl: string } | null>(null);
   const [twoFaConfirmCode, setTwoFaConfirmCode] = useState('');
+  // Password re-entry required to BEGIN 2FA enrollment (server verified). Kept
+  // separate from the disable password so the two flows never share a value.
+  const [twoFaStartPassword, setTwoFaStartPassword] = useState('');
   const [twoFaDisablePassword, setTwoFaDisablePassword] = useState('');
   const [twoFaShowDisableForm, setTwoFaShowDisableForm] = useState(false);
   const [twoFaProcessing, setTwoFaProcessing] = useState(false);
   const [twoFaMessage, setTwoFaMessage] = useState('');
   const [twoFaError, setTwoFaError] = useState('');
   const [adminTotpEnabled, setAdminTotpEnabled] = useState(false);
+  // BATCH 2 — whether the password re-entry step is revealed. ONE flag serves
+  // both first-time enablement and replacement enrollment; the copy differs, the
+  // behaviour does not, and the server is what actually re-verifies the password.
+  const [twoFaShowEnrollForm, setTwoFaShowEnrollForm] = useState(false);
+  // BATCH 2 — the one-time recovery codes returned by /confirm. They live ONLY
+  // in this component's memory, and only until the administrator acknowledges
+  // them. `null` means "no enrollment is awaiting acknowledgement".
+  const [twoFaRecoveryCodes, setTwoFaRecoveryCodes] = useState<string[] | null>(null);
+  // BATCH 2 — which clipboard action last succeeded ('secret' | 'codes' | '').
+  // Only one confirmation shows at a time, and a clipboard FAILURE is tracked in
+  // its own state so it can never be mistaken for a success.
+  const [twoFaCopied, setTwoFaCopied] = useState('');
+  const [twoFaCopyError, setTwoFaCopyError] = useState('');
   const [paymentStrikes, setPaymentStrikes] = useState<any[]>([]);
   const [paymentStrikesLoading, setPaymentStrikesLoading] = useState(false);
 
@@ -1099,22 +1133,107 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
     }
   };
 
+  // ===========================================================================
+  // BATCH 2 — ADMIN 2FA ENROLLMENT UX (QR code + one-time recovery codes)
+  // ===========================================================================
+  // A status-first translation of a failed 2FA request into copy the
+  // administrator can act on. The server's HTTP status is the stable contract;
+  // its `error` string (already bilingual, and free of any secret) is used only
+  // for the plain 4xx cases. A raw status code, internal identifier or stack
+  // trace is never shown.
+  const twoFaFailureMessage = (response: Response, fallback: string) => {
+    if (response.status === 429) {
+      return en
+        ? 'Too many attempts. Please wait a few minutes and try again.'
+        : 'Majaribio mengi mno. Tafadhali subiri dakika chache kisha ujaribu tena.';
+    }
+    if (response.status === 401) {
+      return en ? 'That password is not correct.' : 'Nenosiri hilo si sahihi.';
+    }
+    if (response.status === 403) {
+      return en
+        ? 'Your administrator session is no longer valid. Please sign in again.'
+        : 'Kipindi chako cha msimamizi hakifai tena. Tafadhali ingia tena.';
+    }
+    if (response.status >= 500) {
+      return en
+        ? 'The server could not complete that request. Please try again shortly.'
+        : 'Seva haikuweza kukamilisha ombi hilo. Tafadhali jaribu tena baadaye.';
+    }
+    return fallback;
+  };
+
+  // A stale enrollment is one whose staged secret /confirm can no longer match:
+  // the server answers 409 when a concurrent setup or disable replaced it, or
+  // 400 with "start again" when no valid pending secret is left. Either way the
+  // local provisioning state is discarded, so the console can never keep showing
+  // a QR code that corresponds to nothing.
+  const isStaleTwoFaEnrollment = (status: number, message: string) =>
+    status === 409 || /start (2fa setup first|again)/i.test(message);
+
+  // Every byte of provisioning material is dropped here. Nothing was ever
+  // written to storage, a query string, a log or the DOM outside the panel.
+  const discardTwoFaProvisioning = () => {
+    setTwoFaSetupData(null);
+    setTwoFaConfirmCode('');
+    setTwoFaStartPassword('');
+  };
+
+  // Reveal the password re-entry step. Nothing is requested and no secret exists
+  // yet: the server issues one only after the password is re-verified inside
+  // handleTwoFaStartSetup below.
+  const openTwoFaEnrollForm = () => {
+    setTwoFaError('');
+    setTwoFaMessage('');
+    setTwoFaShowDisableForm(false);
+    setTwoFaShowEnrollForm(true);
+  };
+
+  // Abandon enrollment: provisioning state, the re-entry password and every
+  // clipboard message are cleared.
+  const cancelTwoFaEnrollForm = () => {
+    setTwoFaShowEnrollForm(false);
+    setTwoFaError('');
+    setTwoFaCopyError('');
+    setTwoFaCopied('');
+    discardTwoFaProvisioning();
+  };
+
   // Begin 2FA enrollment: fetch a fresh secret/QR from the server. Nothing
   // is enabled yet — that only happens once handleTwoFaConfirm below
   // succeeds with a real code from the admin's authenticator app.
   const handleTwoFaStartSetup = async () => {
     setTwoFaError('');
     setTwoFaMessage('');
+    setTwoFaCopyError('');
+    setTwoFaCopied('');
     setTwoFaProcessing(true);
     try {
       const response = await fetch('/api/auth/admin-2fa/setup', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        // Password re-entry: the server requires the current password to begin
+        // (re-)enrollment, so a stolen session token alone cannot replace 2FA.
+        body: JSON.stringify({ password: twoFaStartPassword }),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to start 2FA setup');
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const serverMessage = typeof data?.error === 'string' ? data.error : '';
+        throw new Error(
+          twoFaFailureMessage(
+            response,
+            serverMessage || (en ? 'Could not start 2FA setup.' : 'Imeshindwa kuanza usanidi wa 2FA.')
+          )
+        );
+      }
+      // Component state ONLY: never localStorage / sessionStorage / IndexedDB,
+      // never a query string, never a log.
       setTwoFaSetupData({ secret: data.secret, otpauthUrl: data.otpauthUrl });
+      setTwoFaRecoveryCodes(null);
+      setTwoFaStartPassword('');
+      setTwoFaShowEnrollForm(false);
     } catch (e: any) {
+      // An incorrect password keeps the form open so it can simply be retyped.
       setTwoFaError(e.message);
     } finally {
       setTwoFaProcessing(false);
@@ -1125,6 +1244,8 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
     e.preventDefault();
     setTwoFaError('');
     setTwoFaMessage('');
+    setTwoFaCopyError('');
+    setTwoFaCopied('');
     setTwoFaProcessing(true);
     try {
       const response = await fetch('/api/auth/admin-2fa/confirm', {
@@ -1132,17 +1253,91 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ code: twoFaConfirmCode }),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Incorrect code');
-      setTwoFaMessage(data.message);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const serverMessage = typeof data?.error === 'string' ? data.error : '';
+        // A stale / replaced enrollment cannot be recovered by retrying: drop the
+        // provisioning state and send the administrator back to step one. The
+        // code is never retried automatically.
+        if (isStaleTwoFaEnrollment(response.status, serverMessage)) {
+          discardTwoFaProvisioning();
+          setTwoFaError(
+            en
+              ? 'This setup is no longer valid. Please start 2FA setup again.'
+              : 'Usanidi huu haufai tena. Tafadhali anza usanidi wa 2FA upya.'
+          );
+        } else {
+          setTwoFaError(
+            twoFaFailureMessage(response, serverMessage || (en ? 'Incorrect code.' : 'Msimbo si sahihi.'))
+          );
+        }
+        return;
+      }
+      setAdminTotpEnabled(true);
+      setTwoFaMessage(typeof data?.message === 'string' ? data.message : '');
       setTwoFaSetupData(null);
       setTwoFaConfirmCode('');
-      setAdminTotpEnabled(true);
+      setTwoFaStartPassword('');
+      setTwoFaShowEnrollForm(false);
+      // The one-time recovery codes are shown ONCE, here, and nowhere else. They
+      // stay in component memory only until the administrator acknowledges them.
+      const codes = Array.isArray(data?.recoveryCodes) ? data.recoveryCodes : [];
+      setTwoFaRecoveryCodes(codes.length > 0 ? codes : null);
     } catch (e: any) {
       setTwoFaError(e.message);
     } finally {
       setTwoFaProcessing(false);
     }
+  };
+
+  // The recovery codes have been acknowledged. Clearing them (with all other
+  // provisioning state) is the ONLY route back to the normal enabled state, so a
+  // code can never linger in memory after the screen is left.
+  const finishTwoFaEnrollment = () => {
+    setTwoFaRecoveryCodes(null);
+    setTwoFaCopied('');
+    setTwoFaCopyError('');
+    discardTwoFaProvisioning();
+  };
+
+  // Digits only: the field filters keystrokes rather than mapping arbitrary
+  // characters onto a code, and it can never exceed six digits.
+  const handleTwoFaCodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setTwoFaConfirmCode(e.target.value.replace(/[^0-9]/g, '').slice(0, 6));
+  };
+
+  // Copy a value to the clipboard. A missing or blocked Clipboard API is
+  // reported to the administrator with a manual instruction instead of failing
+  // silently; the copied text itself is NEVER logged or persisted.
+  const copyTwoFaValue = async (value: string, what: 'secret' | 'codes') => {
+    setTwoFaCopyError('');
+    setTwoFaCopied('');
+    try {
+      const clipboard = navigator.clipboard;
+      if (!clipboard || typeof clipboard.writeText !== 'function') {
+        throw new Error('clipboard-unavailable');
+      }
+      await clipboard.writeText(value);
+      setTwoFaCopied(what);
+    } catch {
+      setTwoFaCopyError(
+        en
+          ? 'Copying is not available in this browser. Please select the text and copy it manually.'
+          : 'Kunakili hakupatikani kwenye kivinjari hiki. Tafadhali chagua maandishi na uyanakili kwa mkono.'
+      );
+    }
+  };
+
+  const copyTwoFaSecret = () => {
+    if (!twoFaSetupData?.secret) return;
+    void copyTwoFaValue(twoFaSetupData.secret, 'secret');
+  };
+
+  const copyTwoFaRecoveryCodes = () => {
+    if (!twoFaRecoveryCodes || twoFaRecoveryCodes.length === 0) return;
+    // ONLY the codes themselves — never explanatory copy that could carry a
+    // value the administrator did not intend to share.
+    void copyTwoFaValue(twoFaRecoveryCodes.join('\n'), 'codes');
   };
 
   const handleTwoFaDisable = async (e: React.FormEvent) => {
@@ -1156,12 +1351,21 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ password: twoFaDisablePassword }),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Incorrect password');
-      setTwoFaMessage(data.message);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const serverMessage = typeof data?.error === 'string' ? data.error : '';
+        throw new Error(
+          twoFaFailureMessage(response, serverMessage || (en ? 'Incorrect password.' : 'Nenosiri si sahihi.'))
+        );
+      }
+      setTwoFaMessage(typeof data?.message === 'string' ? data.message : '');
       setTwoFaShowDisableForm(false);
       setTwoFaDisablePassword('');
       setAdminTotpEnabled(false);
+      // Disabling tears the enrollment down, so any recovery codes still on
+      // screen for this account are no longer valid and are dropped too.
+      setTwoFaRecoveryCodes(null);
+      discardTwoFaProvisioning();
     } catch (e: any) {
       setTwoFaError(e.message);
     } finally {
@@ -2505,85 +2709,285 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="font-extrabold text-caption text-[var(--appearance-text-muted)] uppercase tracking-widest flex items-center gap-2">
                     <ShieldCheck size={ICON_SIZE.ui} aria-hidden="true" />
-                    Two-Factor Authentication (2FA)
+                    {en ? 'Two-factor authentication (2FA)' : 'Uthibitishaji wa hatua mbili (2FA)'}
                   </h3>
                   <Badge variant={adminTotpEnabled ? 'success' : 'neutral'}>
-                    {adminTotpEnabled ? 'Enabled' : 'Not Enabled'}
+                    {adminTotpEnabled ? (en ? 'Enabled' : 'Imewashwa') : (en ? 'Not enabled' : 'Haijawashwa')}
                   </Badge>
                 </div>
 
                 {twoFaError && <Banner kind="error">{twoFaError}</Banner>}
                 {twoFaMessage && <Banner kind="success">{twoFaMessage}</Banner>}
 
-                {!adminTotpEnabled && !twoFaSetupData && (
-                  <div className="space-y-2">
+                {/* Idle state — nothing staged and no codes awaiting
+                    acknowledgement. This is also where the two entry points
+                    (enable, or re-enroll) and the disable control live. */}
+                {!twoFaSetupData && !twoFaRecoveryCodes && !twoFaShowEnrollForm && (
+                  <div className="space-y-3">
                     <p className="text-body text-[var(--appearance-text-muted)]">
-                      This admin account does not have 2FA enabled. Given this account controls dispute resolution, agent approval, and the full financial ledger, we strongly recommend enabling it.
+                      {adminTotpEnabled
+                        ? (en
+                            ? 'Your administrator account is protected by an authenticator app. You can configure a replacement authenticator at any time — the current one keeps working until the new one is confirmed.'
+                            : 'Akaunti yako ya msimamizi inalindwa na programu ya uthibitishaji. Unaweza kusanidi kifaa kipya cha uthibitishaji wakati wowote — kifaa cha sasa kinaendelea kufanya kazi hadi kipya kithibitishwe.')
+                        : (en
+                            ? 'This admin account does not have 2FA enabled. Given this account controls dispute resolution, agent approval, and the full financial ledger, we strongly recommend enabling it.'
+                            : 'Akaunti hii ya msimamizi haina 2FA. Kwa kuwa akaunti hii inasimamia usuluhishi wa migogoro, uidhinishaji wa mawakala, na leja kamili ya fedha, tunapendekeza sana kuiwasha.')}
                     </p>
-                    <Button variant="primary" loading={twoFaProcessing} onClick={handleTwoFaStartSetup} className="self-start">
-                      Enable 2FA
-                    </Button>
+
+                    {!twoFaShowDisableForm && (
+                      <div className="flex flex-wrap items-center gap-4">
+                        {adminTotpEnabled ? (
+                          <>
+                            <Button type="button" variant="secondary" onClick={openTwoFaEnrollForm}>
+                              {en ? 'Re-enroll authenticator' : 'Weka kifaa kipya cha uthibitishaji'}
+                            </Button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setTwoFaError('');
+                                setTwoFaMessage('');
+                                setTwoFaShowDisableForm(true);
+                              }}
+                              className="self-start text-caption font-bold text-status-danger underline hover:no-underline cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange/40 rounded"
+                            >
+                              {en ? 'Disable 2FA' : 'Zima 2FA'}
+                            </button>
+                          </>
+                        ) : (
+                          <Button type="button" variant="primary" onClick={openTwoFaEnrollForm} className="self-start">
+                            {en ? 'Enable 2FA' : 'Washa 2FA'}
+                          </Button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
 
+                {/* Enrollment / re-enrollment. The staged secret exists ONLY in
+                    component state (`twoFaSetupData`) for exactly as long as this
+                    panel is on screen: never logged, never stored, never in the
+                    URL. */}
                 {twoFaSetupData && (
-                  <div className="space-y-3 bg-[var(--appearance-surface-muted)] border border-[var(--appearance-border)] rounded-2xl p-4">
-                    <p className="text-body text-[var(--appearance-text-muted)]">
-                      Add this account to Google Authenticator, Authy, or any TOTP app — either by scanning a QR code generated from the URL below, or by entering the secret manually.
-                    </p>
-                    <div className="text-caption font-mono bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-lg p-2 break-all">{twoFaSetupData.otpauthUrl}</div>
-                    <div className="text-caption text-[var(--appearance-text-primary)]">
-                      <span className="font-bold">Manual entry secret:</span>{' '}
-                      <span className="font-mono">{twoFaSetupData.secret}</span>
-                    </div>
-                    <form onSubmit={handleTwoFaConfirm} className="flex gap-2 items-end">
-                      <div className="flex-1 space-y-1">
-                        <label htmlFor="twofa-confirm-code" className="block text-caption font-bold text-[var(--appearance-text-primary)]">Enter code to confirm</label>
-                        <input
-                          id="twofa-confirm-code"
-                          type="text"
-                          inputMode="numeric"
-                          maxLength={6}
-                          value={twoFaConfirmCode}
-                          onChange={(e) => setTwoFaConfirmCode(e.target.value)}
-                          placeholder="123456"
-                          className="w-full h-11 border border-[var(--appearance-border)] rounded-xl px-3 text-body font-mono text-center focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30"
-                          required
+                  <div className="space-y-4 bg-[var(--appearance-surface-muted)] border border-[var(--appearance-border)] rounded-2xl p-4">
+                    <h4 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
+                      {adminTotpEnabled
+                        ? (en ? 'Set up your replacement authenticator' : 'Sanidi kifaa chako kipya cha uthibitishaji')
+                        : (en ? 'Set up two-factor authentication' : 'Sanidi uthibitishaji wa hatua mbili')}
+                    </h4>
+                    {adminTotpEnabled && (
+                      <Banner kind="info">
+                        {en
+                          ? 'Your current authenticator stays active until you confirm a code from the new one — nothing is switched off while you set this up.'
+                          : 'Kifaa chako cha sasa kinaendelea kufanya kazi hadi uthibitishe msimbo kutoka kifaa kipya — hakuna kinachozimwa wakati wa usanidi huu.'}
+                      </Banner>
+                    )}
+                    <div className="space-y-2">
+                      <p className="text-body font-bold text-[var(--appearance-text-primary)]">
+                        {en ? '1. Scan this QR code with your authenticator app' : '1. Skani msimbo huu wa QR kwa programu yako ya uthibitishaji'}
+                      </p>
+                      <div className="inline-block rounded-2xl border border-[var(--appearance-border)] bg-[var(--appearance-surface)] p-3">
+                        <QRCodeSVG
+                          value={twoFaSetupData.otpauthUrl}
+                          size={TWO_FA_QR_SIZE}
+                          marginSize={TWO_FA_QR_MARGIN}
+                          level="M"
+                          role="img"
+                          aria-label={en
+                            ? 'QR code that adds this Return4me administrator account to an authenticator app'
+                            : 'Msimbo wa QR unaoongeza akaunti hii ya msimamizi wa Return4me kwenye programu ya uthibitishaji'}
+                          title={en
+                            ? 'Two-factor authentication setup QR code'
+                            : 'Msimbo wa QR wa kusanidi uthibitishaji wa hatua mbili'}
                         />
                       </div>
-                      <Button type="submit" variant="primary" loading={twoFaProcessing}>
-                        Confirm &amp; Enable
-                      </Button>
+                    </div>
+                    <div className="space-y-2">
+                      <p className="text-body font-bold text-[var(--appearance-text-primary)]">
+                        {en ? '2. Or enter this setup key manually' : '2. Au weka kitufe hiki cha kusanidi kwa mkono'}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <code className="font-mono text-caption bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-lg px-3 py-2 break-all select-all text-[var(--appearance-text-primary)]">
+                          {twoFaSetupData.secret}
+                        </code>
+                        <Button type="button" variant="secondary" size="sm" onClick={copyTwoFaSecret}>
+                          <Copy size={ICON_SIZE.metadata} aria-hidden="true" />
+                          {en ? 'Copy setup key' : 'Nakili kitufe'}
+                        </Button>
+                      </div>
+                      {twoFaCopied === 'secret' && (
+                        <p role="status" className="text-caption font-bold text-status-success">
+                          {en ? 'Setup key copied.' : 'Kitufe cha kusanidi kimekopiwa.'}
+                        </p>
+                      )}
+                      {twoFaCopyError && (
+                        <p role="alert" className="text-caption font-bold text-status-danger">{twoFaCopyError}</p>
+                      )}
+                    </div>
+                    <form onSubmit={handleTwoFaConfirm} className="space-y-2">
+                      <p className="text-body font-bold text-[var(--appearance-text-primary)]">
+                        {en ? '3. Enter the 6-digit code your app shows' : '3. Weka msimbo wa tarakimu 6 unaoonyeshwa na programu yako'}
+                      </p>
+                      <div className="flex flex-wrap gap-2 items-end">
+                        <div className="space-y-1">
+                          <label htmlFor="twofa-confirm-code" className="block text-caption font-bold text-[var(--appearance-text-primary)]">
+                            {en ? 'Verification code' : 'Msimbo wa uthibitishaji'}
+                          </label>
+                          <input
+                            id="twofa-confirm-code"
+                            type="text"
+                            inputMode="numeric"
+                            autoComplete="one-time-code"
+                            maxLength={6}
+                            value={twoFaConfirmCode}
+                            onChange={handleTwoFaCodeChange}
+                            placeholder="123456"
+                            className="w-full h-11 border border-[var(--appearance-border)] rounded-xl px-3 text-body font-mono text-center tracking-widest focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30"
+                            required
+                          />
+                        </div>
+                        <Button type="submit" variant="primary" loading={twoFaProcessing} disabled={twoFaConfirmCode.length !== 6}>
+                          {adminTotpEnabled
+                            ? (en ? 'Confirm and replace' : 'Thibitisha na ubadilishe')
+                            : (en ? 'Confirm and enable' : 'Thibitisha na uwashe')}
+                        </Button>
+                      </div>
                     </form>
+                    <button
+                      type="button"
+                      onClick={cancelTwoFaEnrollForm}
+                      className="text-caption font-bold text-[var(--appearance-text-muted)] underline hover:no-underline cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange/40 rounded"
+                    >
+                      {en ? 'Cancel setup' : 'Ghairi usanidi'}
+                    </button>
                   </div>
                 )}
 
-                {adminTotpEnabled && !twoFaShowDisableForm && (
-                  <button
-                    type="button"
-                    onClick={() => setTwoFaShowDisableForm(true)}
-                    className="self-start text-caption font-bold text-status-danger underline hover:no-underline cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange/40 rounded"
+                {/* Password re-entry: the server verifies the current password
+                    before it issues a secret, so a stolen session token alone
+                    cannot (re)enroll an authenticator. */}
+                {!twoFaSetupData && !twoFaRecoveryCodes && twoFaShowEnrollForm && (
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void handleTwoFaStartSetup();
+                    }}
+                    className="space-y-2 bg-[var(--appearance-surface-muted)] border border-[var(--appearance-border)] rounded-2xl p-4"
                   >
-                    Disable 2FA
-                  </button>
+                    <p className="text-body text-[var(--appearance-text-muted)]">
+                      {adminTotpEnabled
+                        ? (en
+                            ? 'Confirm your password to stage a replacement authenticator. Your current authenticator stays active until you confirm a code from the new one.'
+                            : 'Thibitisha nenosiri lako ili kuanza kusanidi kifaa kipya. Kifaa chako cha sasa kinaendelea kufanya kazi hadi uthibitishe msimbo kutoka kifaa kipya.')
+                        : (en
+                            ? 'Confirm your password to begin. A stolen session on its own can never turn 2FA on or replace it.'
+                            : 'Thibitisha nenosiri lako ili kuanza. Kipindi kilichoibiwa hakiwezi kuwasha wala kubadilisha 2FA peke yake.')}
+                    </p>
+                    <div className="space-y-1">
+                      <label htmlFor="twofa-start-password" className="block text-caption font-bold text-[var(--appearance-text-primary)]">
+                        {en ? 'Confirm your password' : 'Thibitisha nenosiri lako'}
+                      </label>
+                      <input
+                        id="twofa-start-password"
+                        type="password"
+                        autoComplete="current-password"
+                        value={twoFaStartPassword}
+                        onChange={(e) => setTwoFaStartPassword(e.target.value)}
+                        className="w-full h-11 border border-[var(--appearance-border)] rounded-xl px-3 text-body focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30"
+                        required
+                      />
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button type="submit" variant="primary" loading={twoFaProcessing} disabled={!twoFaStartPassword}>
+                        {adminTotpEnabled
+                          ? (en ? 'Generate new QR code' : 'Tengeneza msimbo mpya wa QR')
+                          : (en ? 'Continue' : 'Endelea')}
+                      </Button>
+                      <Button type="button" variant="ghost" onClick={cancelTwoFaEnrollForm}>
+                        {en ? 'Cancel' : 'Ghairi'}
+                      </Button>
+                    </div>
+                  </form>
+                )}
+
+                {/* Recovery codes — shown ONCE, immediately after a successful
+                    /confirm, and never hidden behind a timer. The list lives in
+                    component state only and is cleared when acknowledged. */}
+                {twoFaRecoveryCodes && (
+                  <div className="space-y-4 bg-[var(--appearance-surface-muted)] border border-[var(--appearance-border)] rounded-2xl p-4">
+                    <h4 className="text-heading font-extrabold text-[var(--appearance-text-primary)] flex items-center gap-2">
+                      <ShieldAlert size={ICON_SIZE.ui} aria-hidden="true" />
+                      {en ? 'Save your recovery codes' : 'Hifadhi misimbo yako ya urejeshaji'}
+                    </h4>
+                    <Banner kind="warning">
+                      {en
+                        ? 'These codes are your backup way in. Each one works a single time, and none of them will be shown again. Save them somewhere safe before you leave this screen.'
+                        : 'Misimbo hii ni njia yako mbadala ya kuingia. Kila mmoja hutumika mara moja tu, na hakuna utakaoonyeshwa tena. Hifadhi mahali salama kabla ya kuondoka kwenye skrini hii.'}
+                    </Banner>
+                    <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {twoFaRecoveryCodes.map((code) => (
+                        <li
+                          key={code}
+                          className="font-mono text-body tracking-widest text-center break-all bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-lg px-3 py-2 text-[var(--appearance-text-primary)] select-all"
+                        >
+                          {code}
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button type="button" variant="secondary" size="sm" onClick={copyTwoFaRecoveryCodes}>
+                        <Copy size={ICON_SIZE.metadata} aria-hidden="true" />
+                        {en ? 'Copy all codes' : 'Nakili misimbo yote'}
+                      </Button>
+                      <Button type="button" variant="primary" onClick={finishTwoFaEnrollment}>
+                        {en ? 'Done, I have saved them' : 'Nimemaliza, nimezihifadhi'}
+                      </Button>
+                    </div>
+                    {twoFaCopied === 'codes' && (
+                      <p role="status" className="text-caption font-bold text-status-success">
+                        {en ? 'Recovery codes copied.' : 'Misimbo ya urejeshaji imekopiwa.'}
+                      </p>
+                    )}
+                    {twoFaCopyError && (
+                      <p role="alert" className="text-caption font-bold text-status-danger">{twoFaCopyError}</p>
+                    )}
+                  </div>
                 )}
 
                 {adminTotpEnabled && twoFaShowDisableForm && (
-                  <form onSubmit={handleTwoFaDisable} className="flex gap-2 items-end bg-status-danger-surface border border-status-danger-border rounded-2xl p-4">
+                  <form
+                    onSubmit={handleTwoFaDisable}
+                    className="flex flex-wrap gap-2 items-end bg-status-danger-surface border border-status-danger-border rounded-2xl p-4"
+                  >
                     <div className="flex-1 space-y-1">
-                      <label htmlFor="twofa-disable-password" className="block text-caption font-bold text-status-danger">Confirm password to disable 2FA</label>
+                      <label htmlFor="twofa-disable-password" className="block text-caption font-bold text-status-danger">
+                        {en ? 'Confirm password to disable 2FA' : 'Thibitisha nenosiri ili kuzima 2FA'}
+                      </label>
                       <input
                         id="twofa-disable-password"
                         type="password"
+                        autoComplete="current-password"
                         value={twoFaDisablePassword}
                         onChange={(e) => setTwoFaDisablePassword(e.target.value)}
                         className="w-full h-11 border border-[var(--appearance-border)] rounded-xl px-3 text-body focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30"
                         required
                       />
                     </div>
-                    <Button type="submit" variant="danger" loading={twoFaProcessing}>
-                      Disable
-                    </Button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button type="submit" variant="danger" loading={twoFaProcessing}>
+                        {en ? 'Disable' : 'Zima'}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        onClick={() => {
+                          setTwoFaDisablePassword('');
+                          setTwoFaShowDisableForm(false);
+                          setTwoFaError('');
+                        }}
+                      >
+                        {en ? 'Cancel' : 'Ghairi'}
+                      </Button>
+                    </div>
                   </form>
                 )}
               </div>

@@ -635,8 +635,26 @@ export const admin_users = pgTable("admin_users", {
   // columns default to "not enrolled") — 2FA is additive, not retroactively
   // enforced, so this can't lock anyone out of an account that already
   // exists today.
+  //
+  // totp_secret holds the ACTIVE enrolled secret, encrypted at rest with
+  // AES-256-GCM (see src/services/totpCrypto.ts). It is the only secret used to
+  // verify codes at login, and it changes only when a NEW enrollment is
+  // confirmed.
   totp_secret: varchar("totp_secret", { length: 255 }),
   totp_enabled: boolean("totp_enabled").default(false).notNull(),
+  // STAGED ENROLLMENT SECRET. A freshly generated secret lives here — encrypted
+  // exactly like totp_secret — between /setup and /confirm. It is deliberately a
+  // SEPARATE column from totp_secret so that:
+  //   * an already-ENABLED account starting a re-enrollment keeps its active
+  //     secret (and totp_enabled = true) untouched until the new secret is
+  //     confirmed — a stolen session can never silently downgrade or replace
+  //     live 2FA just by calling /setup;
+  //   * the active secret can never be mistaken for an unconfirmed one.
+  // totp_pending_created_at lets an abandoned setup be recognised (and safely
+  // superseded by a later /setup) without affecting the active secret. Both are
+  // NULL unless an enrollment is in flight.
+  totp_pending_secret: varchar("totp_pending_secret", { length: 255 }),
+  totp_pending_created_at: timestamp("totp_pending_created_at", { withTimezone: true }),
   // Session-revocation mechanism (P0): a JWT proves it was validly signed
   // and hasn't expired, but says nothing about whether the account it
   // names should still be trusted *right now*. Every admin JWT embeds the
@@ -650,6 +668,29 @@ export const admin_users = pgTable("admin_users", {
   // whatever triggered the bump does NOT retroactively revalidate old
   // tokens; only a fresh login (which reads the current version) does.
   token_version: integer("token_version").default(1).notNull(),
+});
+
+// 10b. ADMIN 2FA RECOVERY CODES
+// A fixed set of single-use codes issued when an administrator confirms 2FA
+// enrollment, so losing the authenticator device is never a permanent lockout.
+// Only a bcrypt hash of each code is stored (never plaintext); the plaintext is
+// returned to the administrator exactly once, on the confirmation response. Each
+// row is consumed at most once — redemption is an atomic compare-and-swap on
+// used_at (see db.consumeAdminRecoveryCode), so a code can never be replayed even
+// under concurrent requests. A fresh enrollment replaces the whole set, and
+// disabling 2FA deletes it (admin_id FK), so stale codes can never outlive the
+// enrollment they were issued for.
+export const admin_recovery_codes = pgTable("admin_recovery_codes", {
+  id: varchar("id", { length: 40 }).primaryKey(),
+  admin_id: varchar("admin_id", { length: 40 }).notNull().references(() => admin_users.id, { onDelete: "cascade" }),
+  code_hash: varchar("code_hash", { length: 255 }).notNull(),
+  // NULL = unused and still redeemable. Timestamp = consumed at that moment.
+  used_at: timestamp("used_at", { withTimezone: true }),
+  created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => {
+  return {
+    idx_admin_recovery_codes_admin: index("idx_admin_recovery_codes_admin").on(table.admin_id),
+  };
 });
 
 // 11. OTP CODES TABLE

@@ -304,8 +304,36 @@ CREATE TABLE admin_users (
     full_name VARCHAR(100) NOT NULL,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    last_login_at TIMESTAMP WITH TIME ZONE
+    last_login_at TIMESTAMP WITH TIME ZONE,
+    -- Admin 2FA (TOTP), encrypted at rest with AES-256-GCM (see
+    -- src/services/totpCrypto.ts). totp_secret is the ACTIVE enrolled secret;
+    -- totp_pending_secret is a newly generated secret staged between /setup and
+    -- /confirm and is kept in a SEPARATE column so an already-enabled account
+    -- keeps its live secret until a replacement is actually confirmed. The
+    -- matching ADD COLUMN statements for an already-running database live in
+    -- ensureSchemaUpToDate() in src/db/index.ts.
+    totp_secret VARCHAR(255),
+    totp_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    totp_pending_secret VARCHAR(255),
+    totp_pending_created_at TIMESTAMP WITH TIME ZONE,
+    -- Session-revocation counter: every admin JWT embeds the value current at
+    -- issuance; requireCurrentAdminSession re-checks it on each request.
+    token_version INTEGER NOT NULL DEFAULT 1
 );
+
+-- 9b. ADMIN 2FA RECOVERY CODES
+-- Single-use recovery codes (bcrypt-hashed, never plaintext) issued on 2FA
+-- enrollment so a lost authenticator device is never a permanent lockout. Each
+-- row is redeemable at most once (atomic compare-and-swap on used_at). A fresh
+-- enrollment replaces the set; disabling 2FA deletes it via the FK.
+CREATE TABLE admin_recovery_codes (
+    id VARCHAR(40) PRIMARY KEY,
+    admin_id VARCHAR(40) NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+    code_hash VARCHAR(255) NOT NULL,
+    used_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_admin_recovery_codes_admin ON admin_recovery_codes(admin_id);
 
 -- 10. CLAIM PAYMENT STRIKES (For fraud detection and locking persistent non-payers)
 CREATE TABLE claim_payment_strikes (

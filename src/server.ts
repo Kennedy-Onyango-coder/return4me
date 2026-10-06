@@ -11,6 +11,10 @@ import { createServer as createViteServer } from 'vite';
 import { db, FoundItem, Claim, Agent, Dispute } from './db/database';
 import { pool, ensureSchemaUpToDate, isDatabaseConnectionError } from './db/index';
 import { AuthService, authenticateJWT, generateToken, verifyToken, toE164Kenyan, hashCode, timingSafeEqualHex, maskPhoneForLog, isAgentActionable, isAdminSessionCurrent } from './services/auth';
+// Administrative 2FA hardening — authenticated encryption of the admin TOTP
+// secret at rest, and the single-use recovery-code primitives.
+import { encryptTOTPSecret, decryptTOTPSecret, assertTotpEncryptionKeyConfigured } from './services/totpCrypto';
+import { generateRecoveryCodes, hashRecoveryCode, verifyRecoveryCode } from './services/totpRecoveryCodes';
 import { AgentMatchingService, geocodeAddress } from './services/agent';
 import { geocodeReverse } from './services/geocoding/index.ts';
 import {
@@ -462,6 +466,13 @@ function assertBootSecrets() {
   if (process.env.NODE_ENV === 'production') {
     checkSecret('JWT_SECRET', process.env.JWT_SECRET, 32);
     checkSecret('DOC_HASH_SALT', process.env.DOC_HASH_SALT, 32);
+    // Administrative 2FA hardening: TOTP secrets are encrypted at rest with
+    // AES-256-GCM, so a production deployment MUST supply a valid 32-byte
+    // TOTP_ENCRYPTION_KEY. Without it the server could neither stage a new
+    // enrollment nor decrypt an existing one; failing closed here (with a
+    // secret-free error) is safer than booting into an admin-2FA-broken state.
+    // Non-production is a no-op (a deterministic key is derived from JWT_SECRET).
+    assertTotpEncryptionKeyConfigured();
     if (!process.env.ADMIN_PASSCODE || process.env.ADMIN_PASSCODE === '4114' || process.env.ADMIN_PASSCODE === '1234') {
       throw new Error('FATAL: In production mode, ADMIN_PASSCODE must be configured and cannot use weak default codes like 4114 or 1234.');
     }
@@ -612,6 +623,22 @@ const adminLoginLimiter = rateLimit({
   legacyHeaders: false,
   validate: false,
   message: { error: 'Jaribio nyingi za kuingia zimefanyika kama msimamizi. Tafadhali subiri dakika 15 kabla ya kujaribu tena.' }
+});
+
+// Administrative 2FA hardening. Bounded attempts for the security-sensitive 2FA
+// management endpoints (setup / confirm / disable). Each requires a
+// password re-check and/or a valid code, so without a ceiling a stolen admin
+// session could brute-force the 6-digit confirm code or the account password.
+// Same express-rate-limit approach as the existing admin login limiter. The
+// login-time second factor (verify-2fa, both TOTP and recovery code) reuses
+// adminLoginLimiter above rather than duplicating a bucket.
+const adminTwoFactorLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // 10 attempts per 15 minutes per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: false,
+  message: { error: 'Jaribio nyingi za usimamizi wa 2FA zimefanyika. Tafadhali subiri dakika 15 kabla ya kujaribu tena. / Too many 2FA management attempts. Please wait 15 minutes and try again.' }
 });
 
 const otpIpLimiter = rateLimit({
@@ -2241,13 +2268,18 @@ async function createApp() {
   });
 
   // Second step of admin login when 2FA is enrolled: exchanges a
-  // password-verified 'admin_pending_2fa' token plus a valid TOTP code for
-  // the real admin session token.
+  // password-verified 'admin_pending_2fa' token plus EITHER a valid TOTP code OR
+  // a single-use recovery code for the real admin session token.
+  //
+  // A recovery code is an alternative SECOND factor only. It can never bypass the
+  // password stage: the 'admin_pending_2fa' token it must accompany is itself
+  // issued only after the account password has already been verified (see
+  // /api/auth/admin-login above), and that token's role check is re-asserted here.
   app.post('/api/auth/admin-login/verify-2fa', adminLoginLimiter, async (req, res) => {
     try {
-      const { pendingToken, code } = req.body;
-      if (!pendingToken || !code) {
-        return res.status(400).json({ error: 'Tokeni na msimbo wa 2FA zinahitajika.' });
+      const { pendingToken, code, recoveryCode } = req.body || {};
+      if (!pendingToken || (!code && !recoveryCode)) {
+        return res.status(400).json({ error: 'Tokeni na msimbo wa 2FA au msimbo wa akiba zinahitajika. / A pending token plus a 2FA code or recovery code are required.' });
       }
 
       const pendingPayload = verifyToken(pendingToken);
@@ -2263,23 +2295,54 @@ async function createApp() {
         return res.status(400).json({ error: '2FA haijawezeshwa kwa akaunti hii.' });
       }
 
-      const totp = new OTPAuth.TOTP({
-        issuer: 'Return4me',
-        label: admin.username,
-        algorithm: 'SHA1',
-        digits: 6,
-        period: 30,
-        secret: OTPAuth.Secret.fromBase32(admin.totp_secret),
-      });
-      // window: 1 tolerates the code from one 30s step before/after the
+      let verified = false;
+      let usedRecoveryCode = false;
+
+      // 1) TOTP. window: 1 tolerates the code from one 30s step before/after the
       // current one, to absorb ordinary clock drift between the admin's
-      // authenticator app and this server without meaningfully widening
-      // the brute-force window (still only 3 possible valid codes at once,
-      // same order of magnitude as the OTP tolerance used elsewhere in
-      // this codebase).
-      const delta = totp.validate({ token: String(code).trim(), window: 1 });
-      if (delta === null) {
-        return res.status(400).json({ error: 'Msimbo wa 2FA si sahihi. / Incorrect 2FA code.' });
+      // authenticator app and this server without meaningfully widening the
+      // brute-force window (still only 3 possible valid codes at once, same order
+      // of magnitude as the OTP tolerance used elsewhere in this codebase). The
+      // active secret is decrypted from its at-rest ciphertext; a malformed or
+      // undecryptable stored value simply fails the check (never a 500, and the
+      // secret is never surfaced).
+      if (code) {
+        try {
+          const totp = new OTPAuth.TOTP({
+            issuer: 'Return4me',
+            label: admin.username,
+            algorithm: 'SHA1',
+            digits: 6,
+            period: 30,
+            secret: OTPAuth.Secret.fromBase32(decryptTOTPSecret(admin.totp_secret)),
+          });
+          verified = totp.validate({ token: String(code).trim(), window: 1 }) !== null;
+        } catch {
+          verified = false;
+        }
+      }
+
+      // 2) Recovery code, only if TOTP did not already succeed. Hashes are
+      // salted, so lookup is by comparison against each unused code; the FIRST
+      // match is consumed by an atomic compare-and-swap, so a code two requests
+      // race on is redeemed exactly once and never reused.
+      if (!verified && recoveryCode) {
+        const candidates = await db.getUnusedAdminRecoveryCodes(admin.id);
+        for (const candidate of candidates) {
+          if (await verifyRecoveryCode(String(recoveryCode), candidate.code_hash)) {
+            if (await db.consumeAdminRecoveryCode(candidate.id)) {
+              verified = true;
+              usedRecoveryCode = true;
+            }
+            break;
+          }
+        }
+      }
+
+      if (!verified) {
+        // One generic message for every failure mode — never reveals whether a
+        // recovery code exists, was already used, or was simply incorrect.
+        return res.status(400).json({ error: 'Msimbo wa uthibitishaji si sahihi. / Incorrect verification code.' });
       }
 
       await db.updateAdminLastLogin(admin.id);
@@ -2291,6 +2354,10 @@ async function createApp() {
         username: admin.username,
         tokenVersion: admin.token_version,
       }, '4h');
+
+      if (usedRecoveryCode) {
+        await db.logAudit(admin.username, 'ADMIN_2FA_RECOVERY_USED', 'Admin completed login using a single-use 2FA recovery code.');
+      }
 
       return res.json({
         success: true,
@@ -2308,13 +2375,17 @@ async function createApp() {
     }
   });
 
-  // Begins 2FA enrollment for an already-logged-in admin. Generates a
-  // fresh secret and stores it UNCONFIRMED (totp_enabled stays false) â€”
-  // login continues to work password-only until the admin proves they can
-  // actually generate a valid code from it via the confirm endpoint below,
-  // so a half-finished enrollment (e.g. they closed the tab before
-  // scanning the QR code) can never lock them out.
-  app.post('/api/auth/admin-2fa/setup', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
+  // Begins 2FA enrollment (or re-enrollment) for an already-logged-in admin.
+  //
+  // HARDENING: starting enrollment now requires the admin's CURRENT password,
+  // re-verified here, so a stolen admin session token alone is no longer enough
+  // to (re)enroll an authenticator. The new secret is written to the PENDING
+  // column only — the ACTIVE secret and totp_enabled are untouched. For an
+  // already-enabled account this means calling /setup can never disable 2FA or
+  // replace the live secret; the replacement only takes effect once the new
+  // secret is confirmed (see /confirm). The pending secret is stored encrypted
+  // at rest and is never logged.
+  app.post('/api/auth/admin-2fa/setup', authenticateJWT, requireCurrentAdminSession, adminTwoFactorLimiter, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
@@ -2324,8 +2395,20 @@ async function createApp() {
         return res.status(404).json({ error: 'Msimamizi hakupatikana.' });
       }
 
+      // Password re-entry. Verified against the existing bcrypt hash. The
+      // password is never logged, never persisted, and a mismatch returns the
+      // same generic authentication error used elsewhere.
+      const { password } = req.body || {};
+      if (!password) {
+        return res.status(400).json({ error: 'Nenosiri linahitajika kuanza uwekaji wa 2FA. / Your password is required to begin 2FA enrollment.' });
+      }
+      const isMatch = await bcrypt.compare(password, admin.password_hash);
+      if (!isMatch) {
+        return res.status(401).json({ error: 'Nenosiri si sahihi.' });
+      }
+
       const secret = new OTPAuth.Secret({ size: 20 });
-      await db.setAdminTotpSecret(admin.id, secret.base32);
+      await db.setAdminPendingTotpSecret(admin.id, encryptTOTPSecret(secret.base32));
 
       const totp = new OTPAuth.TOTP({
         issuer: 'Return4me',
@@ -2335,6 +2418,15 @@ async function createApp() {
         period: 30,
         secret,
       });
+
+      // Audit the lifecycle start. Never records the secret or provisioning URI.
+      await db.logAudit(
+        admin.username,
+        admin.totp_enabled ? 'ADMIN_2FA_REENROLLMENT' : 'ADMIN_2FA_ENROLLMENT_STARTED',
+        admin.totp_enabled
+          ? 'Admin began re-enrollment of 2FA (active 2FA retained until the new secret is confirmed).'
+          : 'Admin began 2FA enrollment.'
+      );
 
       res.json({
         success: true,
@@ -2347,9 +2439,11 @@ async function createApp() {
     }
   });
 
-  // Confirms enrollment: the admin must prove the secret from /setup above
-  // actually works before 2FA is turned on and required at login.
-  app.post('/api/auth/admin-2fa/confirm', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
+  // Confirms enrollment: the admin must prove the PENDING secret from /setup
+  // above actually works before it becomes active. Only here — and only after a
+  // valid code — is the active secret replaced and totp_enabled turned on, and a
+  // fresh set of single-use recovery codes issued (returned once, never again).
+  app.post('/api/auth/admin-2fa/confirm', authenticateJWT, requireCurrentAdminSession, adminTwoFactorLimiter, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
@@ -2359,8 +2453,15 @@ async function createApp() {
         return res.status(400).json({ error: 'Msimbo wa 2FA unahitajika.' });
       }
       const admin = await db.getAdminByUsername(req.user.username || '');
-      if (!admin || !admin.totp_secret) {
+      if (!admin || !admin.totp_pending_secret) {
         return res.status(400).json({ error: 'Anza uwekaji wa 2FA kwanza. / Start 2FA setup first.' });
+      }
+
+      let pendingPlaintext: string;
+      try {
+        pendingPlaintext = decryptTOTPSecret(admin.totp_pending_secret);
+      } catch {
+        return res.status(400).json({ error: 'Uwekaji wa 2FA si sahihi. Anza tena. / The 2FA enrollment is invalid. Please start again.' });
       }
 
       const totp = new OTPAuth.TOTP({
@@ -2369,15 +2470,39 @@ async function createApp() {
         algorithm: 'SHA1',
         digits: 6,
         period: 30,
-        secret: OTPAuth.Secret.fromBase32(admin.totp_secret),
+        secret: OTPAuth.Secret.fromBase32(pendingPlaintext),
       });
       const delta = totp.validate({ token: String(code).trim(), window: 1 });
       if (delta === null) {
         return res.status(400).json({ error: 'Msimbo si sahihi. Jaribu tena. / Incorrect code. Please try again.' });
       }
 
-      await db.confirmAdminTotpEnrollment(admin.id);
-      res.json({ success: true, message: '2FA imewezeshwa kikamilifu kwa akaunti yako. / 2FA has been successfully enabled on your account.' });
+      // Atomically promote the staged secret to active. A false result means a
+      // concurrent setup/disable changed the pending secret after this request
+      // read it, so refuse rather than promote a secret we never verified.
+      const promoted = await db.promotePendingAdminTotpSecret(admin.id, admin.totp_pending_secret);
+      if (!promoted) {
+        return res.status(409).json({ error: 'Uwekaji wa 2FA umebadilika. Tafadhali anza tena. / The 2FA enrollment changed. Please start again.' });
+      }
+
+      // Issue a fresh set of single-use recovery codes. The PLAINTEXT is returned
+      // here and ONLY here; the database stores bcrypt hashes only. A new
+      // enrollment replaces any previous set, so old codes can never survive.
+      const recoveryCodes = generateRecoveryCodes();
+      const recoveryHashes = await Promise.all(recoveryCodes.map((c) => hashRecoveryCode(c)));
+      await db.replaceAdminRecoveryCodes(admin.id, recoveryHashes);
+
+      await db.logAudit(
+        admin.username,
+        'ADMIN_2FA_ENABLED',
+        'Admin completed 2FA enrollment; active secret set and a fresh set of recovery codes issued.'
+      );
+
+      res.json({
+        success: true,
+        recoveryCodes,
+        message: '2FA imewezeshwa kikamilifu kwa akaunti yako. Hifadhi misimbo yako ya akiba sasa; haitaonyeshwa tena. / 2FA has been enabled on your account. Save your recovery codes now; they will not be shown again.',
+      });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
@@ -2388,7 +2513,7 @@ async function createApp() {
   // applies to other sensitive account changes, since a stolen/left-open
   // session shouldn't be enough on its own to turn off an account's second
   // factor.
-  app.post('/api/auth/admin-2fa/disable', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
+  app.post('/api/auth/admin-2fa/disable', authenticateJWT, requireCurrentAdminSession, adminTwoFactorLimiter, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
@@ -2415,6 +2540,10 @@ async function createApp() {
       // silently continuing to work under the now-weaker 2FA-less posture
       // until each token's own 4h expiry.
       await db.bumpAdminTokenVersion(admin.username);
+      // Recovery codes belong to the enrollment being turned off, so they are
+      // removed. No secret, password or recovery code is ever logged here.
+      await db.deleteAdminRecoveryCodes(admin.id);
+      await db.logAudit(admin.username, 'ADMIN_2FA_DISABLED', 'Admin disabled 2FA on their account.');
       res.json({ success: true, message: '2FA imezimwa kwa akaunti hii. / 2FA has been disabled on this account.' });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');

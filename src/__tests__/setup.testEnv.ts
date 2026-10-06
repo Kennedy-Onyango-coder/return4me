@@ -135,6 +135,13 @@ process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET =
   'MY_TEST_ONLY_JWT_SIGNING_SECRET_0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0';
 
+// TOTP_ENCRYPTION_KEY: a deterministic, NON-secret 32-byte key so the admin-2FA
+// at-rest encryption (AES-256-GCM, services/totpCrypto.ts) has a stable key
+// under test, independent of any developer's local .env. It is a fixed fixture
+// byte repeated to 32 bytes — NOT a credential, never usable as a real key, and
+// must never be copied into any deployment. Production supplies its own key.
+process.env.TOTP_ENCRYPTION_KEY = Buffer.alloc(32, 0x42).toString('base64');
+
 // The mock-OTP bypass must stay off by default so no test can accidentally
 // pass because it accepted the hardcoded '1234'/'4114' development codes.
 process.env.ALLOW_MOCK_OTP_BYPASS = 'false';
