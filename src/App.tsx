@@ -55,6 +55,9 @@ const AdminView = lazy(() => import('./components/AdminView'));
 
 const PrivacyView = lazy(() => import('./components/PrivacyView'));
 const TermsView = lazy(() => import('./components/TermsView'));
+// Batch 13 — the public Help & FAQ surface. Addressable at /help so support can
+// hand out one link, and lazy like every other non-home screen.
+const HelpView = lazy(() => import('./components/HelpView'));
 const CustomerAccountView = lazy(() => import('./components/CustomerAccountView'));
 // Phase 7B: the public /item/:id detail page. Lazy like the other non-home
 // screens — a visitor landing on the homepage never downloads it.
@@ -128,7 +131,7 @@ export default function App() {
   const [effectiveAppearance, setEffectiveAppearance] = useState<EffectiveAppearance>(
     () => resolveAppearance(appearancePreference),
   );
-  const [currentView, setView] = useState<'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'privacy' | 'terms' | 'signin' | 'becomeAgent'>('home');
+  const [currentView, setView] = useState<'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'privacy' | 'terms' | 'help' | 'signin' | 'becomeAgent'>('home');
 
   // Language remains one App-owned state. Existing child controls continue to
   // call this same setter; persistence and document metadata are side effects
@@ -415,6 +418,7 @@ export default function App() {
       admin: { en: 'Admin Panel | Return4me', sw: 'Paneli ya Msimamizi | Return4me' },
       privacy: { en: 'Privacy Policy | Return4me', sw: 'Sera ya Faragha | Return4me' },
       terms: { en: 'Terms of Service | Return4me', sw: 'Vigezo vya Huduma | Return4me' },
+      help: { en: 'Help & FAQ | Return4me', sw: 'Msaada na Maswali | Return4me' },
       // Phase 8.1 public navigation screens.
       signin: { en: 'Sign In | Return4me', sw: 'Ingia | Return4me' },
       becomeAgent: { en: 'Become an Agent | Return4me', sw: 'Kuwa Wakala | Return4me' },
@@ -1044,6 +1048,15 @@ export default function App() {
               <TermsView lang={lang} setView={setView} />
             </div>
           )}
+
+          {/* Batch 13 — the public Help & FAQ surface. It is rendered only when
+              the visitor really is on /help (or picked the footer/drawer entry),
+              and it is routed through goToView so the URL stays on /help. */}
+          {currentView === 'help' && (
+            <div className="w-full p-4 sm:p-8">
+              <HelpView lang={lang} setView={goToView} />
+            </div>
+          )}
         </Suspense>
         )}
 
@@ -1058,20 +1071,31 @@ export default function App() {
             </p>
             <p className="mt-1">Vetted &amp; Physical Handovers only.</p>
             <p className="mt-2">
-              Data Protection Officer:{' '}
-              <a href="mailto:dpo@return4me.co.ke" className="font-semibold text-primary-green hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)]">
-                dpo@return4me.co.ke
+              Privacy &amp; data requests:{' '}
+              <a href="mailto:privacy@return4me.co.ke" className="font-semibold text-primary-green hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)]">
+                privacy@return4me.co.ke
+              </a>
+            </p>
+            <p className="mt-1">
+              Help &amp; support:{' '}
+              <a href="mailto:support@return4me.co.ke" className="font-semibold text-primary-green hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)]">
+                support@return4me.co.ke
               </a>
             </p>
           </div>
           <div className="flex flex-col sm:flex-row gap-2 sm:gap-6">
+            <button onClick={() => goToView('help')} className="text-xs sm:text-sm font-bold text-primary-green hover:underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)]">
+              Help &amp; FAQ
+            </button>
             <button onClick={() => setView('privacy')} className="text-xs sm:text-sm font-bold text-primary-green hover:underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)]">
               Privacy Policy
             </button>
             <button onClick={() => setView('terms')} className="text-xs sm:text-sm font-bold text-primary-green hover:underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)]">
               Terms of Service
             </button>
-            <span className="text-xs sm:text-sm font-semibold text-[var(--appearance-text-muted)]">Fee Schedule</span>
+            <button onClick={() => setView('terms')} className="text-xs sm:text-sm font-bold text-primary-green hover:underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)]">
+              Fee Schedule
+            </button>
           </div>
         </div>
       </footer>

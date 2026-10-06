@@ -84,6 +84,12 @@ With `SMS_ENABLED` off, the application fails closed in production rather than
 silently skipping a message. A user waiting on a one-time code is told the send
 did not happen, which is the correct outcome: silence would leave them waiting.
 
+That refusal is now the rare edge rather than the normal path. Since the E1
+migration no one-time codes are delivered by SMS at all — signing in,
+registering, filing a claim and linking a claim each send their code by email —
+so switching SMS off cannot withhold a code from anybody. The delivery seam and
+its two refusal messages are described in [notifications.md](notifications.md).
+
 Africa's Talking is the only SMS provider. There is no fallback provider.
 
 ## Email
@@ -218,7 +224,7 @@ as skipped rather than retried.
 
 | Variable | Purpose | Notes |
 |---|---|---|
-| `ALLOW_MOCK_OTP_BYPASS` | Skip one-time code verification without sending SMS | Development only |
+| `ALLOW_MOCK_OTP_BYPASS` | Skip one-time code verification without dispatching a message | Development only |
 | `ENABLE_DEV_PAYMENT_SIMULATION` | Enable payment simulation routes | Development only |
 | `NODE_ENV` | Runtime mode | Set by the environment |
 

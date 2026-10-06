@@ -67,7 +67,10 @@ issued tokens without waiting for expiry.
 
 An agent authenticates by phone number and a one-time code:
 
-1. `POST /api/auth/request-otp` — sends an SMS code to the registered number.
+1. `POST /api/auth/request-otp` — emails a one-time code to the agent's address:
+   the verified contact address on the account, or the address given at the
+   onboarding step when no agent row holds the phone yet. The destination is
+   resolved server-side in both cases.
 2. `POST /api/auth/verify-otp` — verifies the code and issues a bearer token.
 
 Agent operational routes additionally require that the agent is currently active
@@ -82,14 +85,16 @@ Agent registration additionally requires email activation before the agent can
 |---|---|
 | `POST /api/customer/register` | Create an account, send activation email |
 | `POST /api/customer/activate` | Redeem an activation token |
-| `POST /api/customer/login` | Request an SMS OTP |
+| `POST /api/customer/login` | Request an email OTP |
 | `POST /api/customer/login/verify` | Redeem the OTP and set the session cookie |
 | `POST /api/customer/logout` | Delete the session row, clear the cookie |
 | `GET /api/customer/me` | Current customer |
 | `POST /api/auth/request-data-deletion` | Erasure request |
 
 Customer OTP parameters: 5 minute lifetime, 5 attempts before the code is
-deleted, and a 30 second resend floor to control SMS cost.
+deleted, and a 30 second resend floor to control repeated sends. (`CUSTOMER_OTP_RESEND_MS`
+in `src/services/customerAuth.ts`; it predates the E1 email migration and is now a
+send-volume floor rather than an SMS-cost one.)
 
 A customer may file a claim without an account, using the claim-scoped OTP
 instead. Account sessions and claim OTPs are separate credential systems; the
@@ -147,7 +152,8 @@ Attempt ceilings:
 Reaching the ceiling deletes the code rather than merely refusing further
 attempts, so a new code must be requested.
 
-`ALLOW_MOCK_OTP_BYPASS` allows a code to be bypassed without sending an SMS. It
+`ALLOW_MOCK_OTP_BYPASS` allows a code to be bypassed without dispatching any
+message. It
 is read only when `NODE_ENV` is not production, and it does not cover email
 activation, which has no bypass path. See [configuration.md](configuration.md).
 

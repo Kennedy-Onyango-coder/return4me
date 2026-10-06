@@ -140,6 +140,13 @@ production boot guard refuses to start without them, so a running server that ha
 fails closed, so the affected request reports failure rather than appearing to
 succeed.
 
+Since the E1 migration this is a narrower class of incident than it used to be:
+no one-time codes travel by SMS any more (signing in, registering, filing a
+claim and linking a claim all deliver their code by email), so a customer
+waiting on a code is never waiting on SMS. When a code does not arrive, check
+the email path instead — the `RESEND_*` values, the verified sender, and the
+notification rows covered above.
+
 Note the durable limit: 3 SMS per 10 minutes per identity. A user testing several
 flows in quick succession will hit it, and that is expected.
 

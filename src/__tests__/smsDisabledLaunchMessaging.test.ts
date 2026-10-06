@@ -247,7 +247,7 @@ describe('the pickup-code panel tells the owner the truth', () => {
 });
 
 describe('the documentation states why the launch configuration is safe', () => {
-  it('names the SMS-only code flows in every document that recommends SMS_ENABLED=false', () => {
+  it('names the email-only code flows in every document that recommends SMS_ENABLED=false', () => {
     expect(readme).toContain('one-time-code flows');
     for (const [name, doc] of [
       ['.env.example', envExample],
@@ -256,7 +256,7 @@ describe('the documentation states why the launch configuration is safe', () => 
       ['docs/operations.md', operationsDoc],
       ['docs/notifications.md', notificationsDoc],
     ] as const) {
-      expect(doc, `${name} must state that the one-time codes are SMS-only`).toContain('one-time codes');
+      expect(doc, `${name} must state that no one-time codes are delivered by SMS`).toContain('one-time codes');
     }
     // The canonical notification document must point at the mechanism itself.
     expect(notificationsDoc).toContain('SMS_NOT_ENABLED_MESSAGE');

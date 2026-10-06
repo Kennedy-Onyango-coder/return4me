@@ -70,7 +70,7 @@ a customer the ability to present a token that a route reads as an agent. See
 
 | Service | Responsibility |
 |---|---|
-| `auth.ts` | Agent/admin sessions, phone OTP, password verification |
+| `auth.ts` | Agent/admin sessions, phone-keyed OTP, password verification |
 | `customerAuth.ts` | Customer registration, login, activation tokens, session cookies |
 | `notificationService.ts` | Event validation, idempotency, dispatch, outcome recording |
 | `notificationRetry.ts` | Retry eligibility, reconstruction, CAS claiming |

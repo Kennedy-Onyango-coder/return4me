@@ -1,7 +1,11 @@
 # Notifications
 
-Return4me sends two kinds of message: SMS, for codes a person must read out at
-a counter, and email, for asynchronous transactional notices. Every message is
+Return4me sends one kind of message in production: email. Since the E1 migration
+every one-time code — sign-in, onboarding, claim verification, claim linking,
+account deletion, phone and email change, and pickup-code resend — is delivered
+by email; the `sms` rows in the catalogue below are retired producers kept so
+that historical rows still name a known event (see "Channel availability when SMS
+is switched off"). Every message is
 recorded in `notification_events` before and after dispatch, and every failure is
 classified so that only messages which can be safely rebuilt are ever retried.
 

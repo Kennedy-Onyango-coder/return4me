@@ -31,7 +31,7 @@ the extracted text and a display name for search. An administrator reviews the
 item before it is surfaced publicly.
 
 **Finding and claiming an item** — an owner searches, submits a claim, and
-receives a one-time verification code by SMS. Once verified, an agent confirms
+receives a one-time verification code by email. Once verified, an agent confirms
 the item is at their location, which opens a short payment window. The owner
 pays, the payment is held in escrow, and a pickup code is issued. See
 [docs/claims-and-payments.md](docs/claims-and-payments.md).
@@ -100,6 +100,10 @@ not required to boot, no SMS is attempted, and transactional notifications are
 carried by email (Resend). Set `SMS_ENABLED="true"` later — once valid Africa's
 Talking credentials and an approved Sender ID exist — to activate SMS, at which
 point a missing or placeholder SMS value fails the production boot guard again.
+Either way the launch path needs no SMS: since the E1 migration all
+one-time-code flows are carried by email — signing in, registering, filing a
+claim and linking a claim — so no code is withheld while `SMS_ENABLED="false"`.
+See [docs/notifications.md](docs/notifications.md) for the delivery seam.
 [docs/configuration.md](docs/configuration.md) lists every variable and which
 ones are required to boot; `PUBLIC_APP_URL` in particular must be set to the real
 public origin in production, or activation links point at localhost.

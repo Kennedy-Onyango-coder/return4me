@@ -109,23 +109,13 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
       <div className="border-b border-brand-border pb-8 text-center sm:text-left">
         <span className="inline-flex items-center space-x-1 bg-emerald-50 text-primary-green border border-emerald-100 font-extrabold px-3 py-1 rounded-full text-xs uppercase mb-4">
           <ShieldCheck size={12} />
-          <span>Kenya ODPC Compliance Standards</span>
+          <span>{lang === 'en' ? 'Kenya Data Protection Act, 2019' : 'Sheria ya Ulinzi wa Data ya Kenya, 2019'}</span>
         </span>
         <h1 className="text-4xl font-extrabold text-primary-green tracking-tight">
           {lang === 'en' ? 'Privacy Policy' : 'Sera ya Faragha'}
         </h1>
         <p className="text-stone-500 text-sm mt-2 font-mono">
-          {lang === 'en' ? 'Last Updated: July 2026' : 'Imesasishwa Mwisho: Julai 2026'} | Elligrace Technologies Limited · CR No. [PENDING]
-        </p>
-      </div>
-
-      {/* Advisory Notice */}
-      <div className="p-4 bg-orange-50 border border-orange-200 rounded-2xl text-xs text-orange-800 space-y-1">
-        <p className="font-extrabold uppercase tracking-wider flex items-center gap-1.5">
-          <span>Legal Draft Status Notice</span>
-        </p>
-        <p>
-          This document is a professionally structured compliance draft prepared in accordance with the Kenya Data Protection Act, 2019. It is designed to be reviewed and signed off by a licensed advocate of the High Court of Kenya prior to formal public certification.
+          {lang === 'en' ? 'Last Updated: July 2026' : 'Imesasishwa Mwisho: Julai 2026'} | Elligrace Technologies Limited
         </p>
       </div>
 
@@ -164,12 +154,12 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
             <Award size={20} />
           </div>
           <h3 className="font-extrabold text-brand-dark-text text-sm">
-            {lang === 'en' ? 'Licensed Operations' : 'Shughuli Zenye Leseni'}
+            {lang === 'en' ? 'Payment Handling' : 'Ushughulikiaji wa Malipo'}
           </h3>
           <p className="text-xs text-stone-500 leading-relaxed">
             {lang === 'en'
-              ? 'We operate in tandem with licensed Central Bank of Kenya (CBK) payment partners for maximum trust.'
-              : 'Tunafanya kazi kwa karibu na washirika wa malipo walioidhinishwa na Benki Kuu ya Kenya (CBK).'}
+              ? 'Payments run through our payment provider, which processes the M-Pesa transaction for us.'
+              : 'Malipo hupitia kwa mtoa huduma wetu wa malipo, ambaye huchakata malipo ya M-Pesa kwa niaba yetu.'}
           </p>
         </div>
       </div>
@@ -183,10 +173,10 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
             <span className="text-accent-orange">1.</span> Who We Are
           </h2>
           <p>
-            Return4me is operated by <strong>Elligrace Technologies Limited</strong> (trading as "Return4me"), a private limited company incorporated under the Companies Act, 2015, operating in Kenya (Certificate of Incorporation No. [PENDING]). Elligrace Technologies Limited is registered as a Data Controller and Data Processor with the Office of the Data Protection Commissioner (ODPC) under Certificate No. [PENDING]. Registered office: Nairobi, Kenya. Elligrace Technologies Limited is the legal entity responsible for all obligations described in this policy; "Return4me" is the brand name under which this specific service operates.
+            Return4me is operated by <strong>Elligrace Technologies Limited</strong> (trading as "Return4me"), a private limited company incorporated under the Companies Act, 2015, operating in Kenya. Elligrace Technologies Limited is the data controller responsible for the personal data described in this policy; "Return4me" is the brand name under which this specific service operates.
           </p>
           <p>
-            For any data protection queries, requests to exercise your rights, or compliance feedback, please contact our designated Data Protection officer: <a href="mailto:privacy@return4me.co.ke" className="text-primary-green font-bold hover:underline">privacy@return4me.co.ke</a>.
+            For any data protection queries, requests to exercise your rights, or compliance feedback, please contact our privacy team: <a href="mailto:privacy@return4me.co.ke" className="text-primary-green font-bold hover:underline">privacy@return4me.co.ke</a>.
           </p>
         </section>
 
@@ -295,7 +285,7 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
             <span className="text-accent-orange">4.</span> Automated Decision-Making & OCR
           </h2>
           <p>
-            When a finder uploads a photo of a found document, our platform uses AI-assisted Optical Character Recognition (OCR) to parse and recommend document parameters (such as name and document type).
+            When a finder uploads a photo of a found document, our platform runs automated text extraction (optical character recognition, or OCR) over that image and suggests document details (such as a name and a document type).
           </p>
           <p>
             This automated tool is purely advisory. To prevent "decisions based solely on automated processing" (restricted under Section 35 of the Data Protection Act, 2019), <strong>all critical outcomes (including owner claims and dispute handovers) require active human intervention</strong> by the claimant, independent agents, or our administration team.
@@ -318,7 +308,7 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
               <strong>Masked Search:</strong> Public search queries never reveal full document numbers, names, or finder details. We display masked placeholders (e.g., "ID card ending in **456") to protect the owner's privacy.
             </li>
             <li>
-              <strong>Ephemeral Proof Storage:</strong> Goverment ID photos uploaded for Tier 3 dispute resolution are stored in encrypted object containers, access-controlled only to vetting administrators, and permanently purged within 30 days of resolution.
+              <strong>Ephemeral Proof Storage:</strong> Government ID photos uploaded for Tier 3 dispute resolution are stored in access-controlled object storage that only vetting administrators can read, and the images are purged 90 days after the claim is resolved — or 2 years where the claim was disputed or flagged for fraud, as set out in Section 7.
             </li>
           </ul>
         </section>
@@ -336,10 +326,10 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
               <strong>Return4me Agents:</strong> Vetted physical agents receive only the minimum data required to facilitate a physical pickup (such as the claimant's name and verification code). They never receive the owner's phone number or raw document photos.
             </li>
             <li>
-              <strong>Licensed Payment Provider:</strong> Transaction details and phone numbers are sent directly to our Central Bank of Kenya-authorized Payment Service Provider (PSP) to process secure escrow payments. We do not hold or touch your escrow funds directly.
+              <strong>Payment Provider:</strong> Transaction details and phone numbers are sent directly to our payment provider (IntaSend) to process secure escrow payments. We do not hold or touch your escrow funds directly.
             </li>
             <li>
-              <strong>Document Image Processing (OCR)</strong> When a document photograph is uploaded, the image itself is sent to an external Google Gemini / Google AI service, which uses AI to read the document and extract details such as names and document numbers. Return4me does not run its own offline OCR scanner on these images.
+              <strong>Document Image Processing (OCR)</strong> When a document photograph is uploaded, the image itself is sent to an external Google Gemini / Google AI service, which performs the text extraction used to suggest details such as names and document numbers. Return4me does not run its own offline OCR scanner on these images.
             </li>
           </ul>
           <p className="text-xs text-stone-500 mt-3">
@@ -403,18 +393,33 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
           </p>
           <ul className="list-disc pl-5 space-y-2 text-xs text-stone-600">
             <li>
-              <strong>Unmatched Found-Item Reports:</strong> Retained for 12 months. After this, raw photographs are deleted and any remaining index data is completely anonymized.
+              <strong>Unmatched Found-Item Reports:</strong> Retained for 2 years from the report's final status (claimed, expired or rejected). After that, raw photographs are deleted and the remaining index data is anonymized.
             </li>
             <li>
-              <strong>Matched / Completed Transactions:</strong> Retained for 7 years to meet standard statutory record-keeping expectations for commercial transactions under Kenyan tax and financial rules.
+              <strong>Matched / Completed Transactions:</strong> Payment amounts, dates and references are retained for 7 years to meet Kenyan tax and financial record-keeping expectations; the contact details attached to them are anonymized after 2 years.
             </li>
             <li>
-              <strong>Government ID Uploads (Tier 3):</strong> Permanently deleted within 30 days of claim resolution.
+              <strong>Government ID Uploads (Tier 3):</strong> The uploaded images are deleted 90 days after the claim is resolved — 2 years where the claim was disputed or flagged for fraud.
             </li>
             <li>
-              <strong>Agent KYC and Application Records:</strong> Retained for the duration of the agent partnership plus 5 years post-termination, aligning with regulatory expectations under POCAMLA.
+              <strong>Dispute Evidence:</strong> Retained for 2 years after the dispute is resolved.
+            </li>
+            <li>
+              <strong>Handover Evidence Photos:</strong> Automatically purged 2 years after the handover is completed.
+            </li>
+            <li>
+              <strong>Agent KYC and Application Records:</strong> Retained for the duration of the agent partnership, then archived for 2 years after the partnership ends (shop premises photos for 1 year).
+            </li>
+            <li>
+              <strong>Fraud and Reputation Signals:</strong> Retained for 1 year on a rolling basis, and deleted immediately when a verified erasure request is honoured.
+            </li>
+            <li>
+              <strong>Audit and Security Records:</strong> Retained for 7 years in a form that is never edited or deleted, so that our handling of access and erasure requests stays verifiable.
             </li>
           </ul>
+          <p>
+            These periods are the ones the Platform actually applies; the implementation reference is the published data retention policy, and this section is kept in step with it.
+          </p>
         </section>
 
         {/* Section 8 */}
@@ -434,7 +439,7 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
             <li>Lodge a formal complaint directly with the Office of the Data Protection Commissioner (odpc.go.ke).</li>
           </ul>
           <p>
-            To exercise these rights, please contact our DPO at <a href="mailto:privacy@return4me.co.ke" className="text-primary-green font-bold hover:underline">privacy@return4me.co.ke</a>. We will respond to and address your request within 30 days.
+            To exercise these rights, please contact our privacy team at <a href="mailto:privacy@return4me.co.ke" className="text-primary-green font-bold hover:underline">privacy@return4me.co.ke</a>. We will respond to and address your request within 30 days.
           </p>
 
           {/* Interactive DPA Section 40 Self-Service Portal */}
@@ -602,7 +607,7 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
             <span className="text-accent-orange">9.</span> Security Safeguards & Breach Management
           </h2>
           <p>
-            We protect your data using industry-standard security measures, including end-to-end TLS encryption in transit, encryption of sensitive fields at rest, strict database access controls, rate-limiting on sensitive endpoints (login, OTP, and payment), and one-way cryptographic hashing of national ID and document numbers so that raw identifiers are never stored in readable form.
+            We protect your data using industry-standard security measures, including HTTPS/TLS encryption in transit, encryption of sensitive fields at rest, strict database access controls, rate-limiting on sensitive endpoints (login, OTP, and payment), and one-way cryptographic hashing of national ID and document numbers so that raw identifiers are never stored in readable form.
           </p>
           <p>
             <strong>How we handle attempted or successful hacking incidents:</strong> If we detect unauthorized access, an attempted intrusion, or suspicious activity targeting the Platform, our incident response process includes: (1) immediately containing the affected system or account (including temporary suspension of affected agent or admin accounts where necessary), (2) investigating the scope and cause of the incident, (3) patching the vulnerability that enabled it, and (4) determining whether any personal data was actually accessed or exfiltrated, as opposed to merely being at risk.
@@ -624,7 +629,7 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
             <span className="text-accent-orange">10.</span> Contact & Complaints
           </h2>
           <p>
-            For general privacy questions, contact our Data Protection Officer at <a href="mailto:privacy@return4me.co.ke" className="text-primary-green font-bold hover:underline">privacy@return4me.co.ke</a>. For suspected security vulnerabilities, use <a href="mailto:security@return4me.co.ke" className="text-primary-green font-bold hover:underline">security@return4me.co.ke</a>. If you are unsatisfied with our response to a data protection concern, you may lodge a complaint directly with the Office of the Data Protection Commissioner of Kenya at <a href="https://www.odpc.go.ke" target="_blank" rel="noopener noreferrer" className="text-primary-green font-bold hover:underline">www.odpc.go.ke</a>.
+            For general privacy questions, contact our privacy team at <a href="mailto:privacy@return4me.co.ke" className="text-primary-green font-bold hover:underline">privacy@return4me.co.ke</a>. For suspected security vulnerabilities, use <a href="mailto:security@return4me.co.ke" className="text-primary-green font-bold hover:underline">security@return4me.co.ke</a>. If you are unsatisfied with our response to a data protection concern, you may lodge a complaint directly with the Office of the Data Protection Commissioner of Kenya at <a href="https://www.odpc.go.ke" target="_blank" rel="noopener noreferrer" className="text-primary-green font-bold hover:underline">www.odpc.go.ke</a>.
           </p>
         </section>
 

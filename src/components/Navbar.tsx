@@ -13,8 +13,8 @@ interface NavbarProps {
   setLang: (lang: 'en' | 'sw') => void;
   appearance: AppearancePreference;
   setAppearance: (appearance: AppearancePreference) => void;
-  currentView: 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy' | 'signin' | 'becomeAgent';
-  setView: (view: 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy' | 'signin' | 'becomeAgent') => void;
+  currentView: 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy' | 'help' | 'signin' | 'becomeAgent';
+  setView: (view: 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy' | 'help' | 'signin' | 'becomeAgent') => void;
   token: string | null;
   logout: () => void;
   /** True while the Account/dashboard surface is showing (Phase 2). Kept as a
@@ -34,7 +34,7 @@ interface NavbarProps {
   onOpenAccount?: () => void;
   /** Preferred handler for normal navigation when supplied; lets the app exit
    *  the account surface on any nav click. Falls back to setView. */
-  onNavigate?: (view: 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy' | 'signin' | 'becomeAgent') => void;
+  onNavigate?: (view: 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy' | 'help' | 'signin' | 'becomeAgent') => void;
 }
 
 // PHASE 8.1 — PUBLIC NAVIGATION IA
@@ -139,7 +139,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
     setIsAdmin(!!adminToken);
   }, [currentView, token]);
 
-  const handleNavClick = (view: 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy' | 'signin' | 'becomeAgent') => {
+  const handleNavClick = (view: 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy' | 'help' | 'signin' | 'becomeAgent') => {
     if (onNavigate) onNavigate(view);
     else setView(view);
     setIsOpen(false);
@@ -598,6 +598,26 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
                     {lang === 'en' ? 'Legals & Info' : 'Sheria na Taarifa'}
                   </p>
                   
+                  {/* Help (Batch 13) — the public FAQ, and the page the support
+                      mailboxes can point at as a single link. It belongs in THIS
+                      group because it is the same kind of destination as Terms and
+                      Privacy: public, static and informational. It is deliberately
+                      NOT added to the desktop row, whose width is measured to fit
+                      the four public destinations exactly (see the UX-02 note
+                      above) — a fifth entry there would re-create the crowding
+                      that row was rebuilt to fix. */}
+                  <button
+                    onClick={() => handleNavClick('help')}
+                    aria-current={currentView === 'help' ? 'page' : undefined}
+                    className={`w-full flex min-h-[44px] items-center gap-3 rounded-standard px-3 py-3 text-body font-semibold transition-colors text-left cursor-pointer ${
+                      currentView === 'help'
+                        ? 'bg-[var(--appearance-surface-muted)] font-bold text-[var(--appearance-primary)]'
+                        : 'text-[var(--appearance-text-primary)] hover:bg-[var(--appearance-surface-muted)]'
+                    }`}
+                  >
+                    <span>{lang === 'en' ? 'Help & FAQ' : 'Msaada na Maswali'}</span>
+                  </button>
+
                   {/* Terms */}
                   <button
                     onClick={() => handleNavClick('terms')}

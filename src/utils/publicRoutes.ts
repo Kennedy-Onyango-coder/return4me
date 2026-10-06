@@ -27,6 +27,11 @@
 //   /found            I Found Something (finder report journey)
 //   /become-an-agent  public Agent journey (leads to /agent_portal)
 //   /sign-in          the single Sign In chooser (Owner/Claimant vs Agent)
+//   /help             public Help & FAQ (Batch 13). It answers the questions the
+//                     public copy now depends on — the one-time code arrives by
+//                     EMAIL, the phone number only identifies an account, what a
+//                     retrieval fee covers, and how to escalate a handover — so
+//                     support can hand out a single addressable link.
 //   /console          admin console, now genuinely BOOKMARKABLE (see App.tsx —
 //                     it used to rewrite the URL to '/' the moment it opened,
 //                     which both destroyed the bookmark and, on the second
@@ -38,7 +43,7 @@
 //                     authentication or claim action, so an existing link can
 //                     never become a dead end.
 
-export type PublicViewName = 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'privacy' | 'terms' | 'signin' | 'becomeAgent';
+export type PublicViewName = 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'privacy' | 'terms' | 'help' | 'signin' | 'becomeAgent';
 
 export type PublicRoute =
   | { kind: 'home' }
@@ -98,6 +103,11 @@ const ACTIVATE_EMAIL_PATH = '/activate-email';
 const ACTIVATE_AGENT_EMAIL_PATH = '/activate-agent-email';
 const BECOME_AGENT_PATH = '/become-an-agent';
 const SIGNIN_PATH = '/sign-in';
+// Batch 13 — the public Help & FAQ page. It has its own path for the same
+// reason /sign-in does: the answers are worth linking to directly, and a
+// visitor who refreshes or follows a shared link must land on them instead of
+// being silently bounced to Home.
+const HELP_PATH = '/help';
 
 // Path -> view for the addressable, unauthenticated public screens. Every entry
 // here must also appear in RESTORABLE_VIEWS below: a path that can be entered
@@ -107,6 +117,7 @@ const VIEW_PATHS: ReadonlyArray<{ path: string; view: PublicViewName }> = [
   { path: FOUND_PATH, view: 'finder' },
   { path: BECOME_AGENT_PATH, view: 'becomeAgent' },
   { path: SIGNIN_PATH, view: 'signin' },
+  { path: HELP_PATH, view: 'help' },
 ];
 
 // The customer account surface is the authentication boundary the public item
@@ -145,7 +156,7 @@ const SAFE_RETURN_PATH = /^\/(?:item\/[^/]+|report-lost|lost)$/i;
 // 'finder' are. 'admin' and 'agent' stay excluded: restoring an
 // authentication-gated surface from a crafted history entry is exactly the
 // "hidden React state as a security control" this helper exists to prevent.
-const RESTORABLE_VIEWS: ReadonlyArray<PublicViewName> = ['home', 'finder', 'owner', 'privacy', 'terms', 'signin', 'becomeAgent'];
+const RESTORABLE_VIEWS: ReadonlyArray<PublicViewName> = ['home', 'finder', 'owner', 'privacy', 'terms', 'help', 'signin', 'becomeAgent'];
 
 export function normalizePath(pathname: string): string {
   if (!pathname) return '/';

@@ -531,7 +531,7 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
                   placeholder="123456"
                   required
                   disabled={busy}
-                  hint={t('We sent it to', 'Tuliituma kwa') + ' ' + formatPhoneForDisplay(phone)}
+                  hint={t('We emailed the code to the verified address on the account for', 'Tulituma msimbo kwa barua pepe iliyothibitishwa ya akaunti ya') + ' ' + formatPhoneForDisplay(phone)}
                 />
 
                 {error && <Banner kind="error">{error}</Banner>}

@@ -241,24 +241,35 @@ describe('UX-07 the account forms are real, labelled forms', () => {
     expect(GATE).toMatch(
       /t\(\r?\n\s*'You will sign in with this number after activating your account\.',\r?\n\s*'Utaingia kwa nambari hii baada ya kuiwasha akaunti yako\.'\r?\n\s*\)/,
     );
-    expect(GATE).toContain("t('We sent it to', 'Tuliituma kwa')");
+    // BATCH 13 (E1) finished the move: the sign-in hint names the EMAIL
+    // destination and keeps the number only as the locator for "which account".
+    // The retired wording promised delivery to the phone, so it must be gone.
+    expect(GATE).toContain(
+      "t('We emailed the code to the verified address on the account for', 'Tulituma msimbo kwa barua pepe iliyothibitishwa ya akaunti ya')",
+    );
+    expect(GATE).not.toContain('We sent it to');
+    expect(GATE).not.toContain('Tuliituma kwa');
     expect(GATE).toContain(
       "\"We'll email a one-time verification code to the verified email address on your account.\"",
     );
   });
 
-  it('keeps the code field accessible, with its SMS autofill and its hint', () => {
+  it('keeps the code field accessible, with its platform one-time-code autofill and its hint', () => {
     // UX-07 deliberately keeps the labelled single-field control here instead of
     // the shared OTPInput primitive: OTPInput renders one box per digit with
     // hardcoded English `Digit n of m` labels and no hint slot, so adopting it
-    // would cost both the SMS autofill below (the boxes deliberately set
-    // `autocomplete="off"`) and the "we sent it to 07XX…" association that
-    // Input wires through aria-describedby. The primitive gap is recorded in
-    // docs/design-system.md.
+    // would cost both the platform one-time-code autofill below (the boxes
+    // deliberately set `autocomplete="off"`) and the "we emailed the code to
+    // 07XX…" association that Input wires through aria-describedby. The
+    // primitive gap is recorded in docs/design-system.md.
     expect(GATE).toContain('autoComplete="one-time-code"');
     expect(GATE).toContain('inputMode="numeric"');
     expect(GATE).toContain('maxLength={6}');
-    expect(GATE).toContain("hint={t('We sent it to', 'Tuliituma kwa') + ' ' + formatPhoneForDisplay(phone)}");
+    // BATCH 13 (E1): the hint states the EMAIL delivery and keeps the number as
+    // the account locator, instead of promising a code on the phone.
+    expect(GATE).toContain(
+      "hint={t('We emailed the code to the verified address on the account for', 'Tulituma msimbo kwa barua pepe iliyothibitishwa ya akaunti ya') + ' ' + formatPhoneForDisplay(phone)}",
+    );
     expect(GATE).toContain("onChange={(e) => setCode(e.target.value.replace(/\\D/g, ''))}");
   });
 

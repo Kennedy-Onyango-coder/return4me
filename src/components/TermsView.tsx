@@ -18,26 +18,14 @@ export default function TermsView({ lang, setView }: TermsViewProps) {
         </p>
       </div>
 
-      {/* Advisory Notice */}
-      <div className="p-4 bg-orange-50 border border-orange-200 rounded-2xl text-xs text-orange-800 space-y-1">
-        <p className="font-extrabold uppercase tracking-wider">
-          {lang === 'en' ? 'Legal Draft Status Notice' : 'Tuhizo ya Hali ya Ratiba'}
-        </p>
-        <p>
-          {lang === 'en'
-            ? 'This document is a professionally structured compliance draft prepared in accordance with Kenyan commercial and consumer protection statutes. It is designed to be reviewed and signed off by a licensed advocate of the High Court of Kenya prior to formal public implementation.'
-            : 'Hati hii ni ratiba ya utaratibu iliyotengenezwa kwa kufuata sheria za biashara na usalama wa watumiaji wa Kenya. Inaundwa ili kuwa hakikisha na sahihiwa na mwanasheria mmiliki wa Mahakama ya Juu ya Kenya kabla ya utekelezaji wa umma.'}
-        </p>
-      </div>
-
       {/* Core principles */}
       <div className="border-l-2 border-accent-orange pl-6 space-y-4 text-sm text-stone-600">
         <p className="flex">
           <span className="w-2 h-2 rounded-full bg-accent-orange mr-3 mt-1.5 flex-shrink-0"></span>
           <span>
             {lang === 'en'
-              ? 'All retrieval fees are processed securely via our CBK-authorized payment partner. We never hold user balances directly.'
-              : 'Ada zote za urejeshaji huchakatwa kwa usalama kupitia mshirika wetu aliyopewa leseni na CBK. Sisi hutiririka viwimbi vya mtumiaji moja kwa moja.'}
+              ? 'All retrieval fees are processed securely through our payment provider. We never hold user balances directly.'
+              : 'Ada zote za urejeshaji huchakatwa kwa usalama kupitia mtoa huduma wetu wa malipo. Hatuwahi kushikilia salio la mtumiaji moja kwa moja.'}
           </span>
         </p>
         <p className="flex">
@@ -45,7 +33,7 @@ export default function TermsView({ lang, setView }: TermsViewProps) {
           <span>
             {lang === 'en'
               ? 'Submitting fraudulent document claims is illegal. We actively coordinate with Kenyan authorities (DCI) on violations.'
-              : 'Kupakia madai ghushi ya hati ni kinyume cha sheria. Tunashirikiana kwa karibu na mamlaka za usalama (DCI) kuhusu ukiwaaji.'}
+              : 'Kupakia madai ghushi ya hati ni kinyume cha sheria. Tunashirikiana kwa karibu na mamlaka za usalama (DCI) kuhusu ukiukaji wa sheria.'}
           </span>
         </p>
         <p className="flex">
@@ -121,10 +109,10 @@ export default function TermsView({ lang, setView }: TermsViewProps) {
             <span className="text-accent-orange">5.</span> Escrow System and Fund Disbursements
           </h2>
           <p>
-            To ensure complete transaction security, all retrieval fees paid by owners are processed by our licensed, CBK-authorized Payment Service Provider (PSP) partner. Elligrace Technologies Limited does not operate as a financial institution or deposit-taking wallet.
+            To ensure complete transaction security, all retrieval fees paid by owners are processed by our payment provider. Elligrace Technologies Limited does not operate as a financial institution or deposit-taking wallet.
           </p>
           <p>
-            <strong>Release Conditions:</strong> Escrowed funds are held securely in a trust account until:
+            <strong>Release Conditions:</strong> Escrowed funds are held by our payment provider until:
           </p>
           <ul className="list-disc pl-5 space-y-2 text-xs text-stone-600">
             <li>The physical agent verifies the owner's handover passcode and hands over the document;</li>
@@ -265,7 +253,7 @@ export default function TermsView({ lang, setView }: TermsViewProps) {
               Kiswahili
             </p>
             <p>
-              Ili kuhakikisha usalama kamili na kuzuia makosa ya ulinganishaji, mdai lazima asafiri hadi kituo cha Wakala husika na kukagua hati hiyo kwa macho <strong>kabla</strong> ya kufanya malipo. Malipo kupitia M-Pesa yatawezeshwa tu <strong>baada ya</strong> Wakala kuthibitisha kuwa mwenye mali amekagua na kuthibitisha bidhaa hiyo physically.
+              Ili kuhakikisha usalama kamili na kuzuia makosa ya ulinganishaji, Wakala aliyepangiwa huthibitisha kwanza kuwa hati hiyo ipo kituoni kwake. Uthibitisho huo hufungua dirisha fupi la malipo. Mwenye mali hukamilisha malipo kwa M-Pesa, na malipo hutambuliwa kama yamethibitishwa tu baada ya mtoa huduma wa malipo kuthibitisha. Baada ya uthibitisho, msimbo wa kuchukua hutolewa kwa mwenye mali, ambaye hufika kwa Wakala ili kuona na kuthibitisha hati hiyo kwa macho. Wakala hurekodi ukaguzi huo, kisha huthibitisha makabidhiano, na malipo hufuata dirisha la migogoro linalotumika.
             </p>
             <p>
               <strong>Kikomo cha Dakika 15 za Malipo:</strong> Baada ya uthibitisho wa Wakala, saa ya dakika 15 itaanza kuhesabu. Mwenye mali lazima akamilishe malipo ya eskrow ndani ya dakika hizi 15. Ikiwa malipo hayatapokelewa ndani ya muda huo, zuio litaondolewa, dai litaharibika, na hati itarudishwa kwenye mfumo wa utafutaji ili washindani wengine wasizuiwe.

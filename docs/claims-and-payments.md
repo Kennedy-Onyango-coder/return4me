@@ -61,7 +61,8 @@ application-level check before either commits.
 
 ### Verification
 
-The claimant receives a one-time code by SMS. Until it is redeemed the claim is
+The claimant receives a one-time code by email, at the verified email address on
+the claim. Until it is redeemed the claim is
 `pending_verification`, and the claimant is not entitled to pickup instructions.
 
 The code is stored only as a hash. This is what makes the claim and pickup codes

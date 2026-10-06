@@ -34,9 +34,14 @@ describe('Batch F incremental appearance surface migration', () => {
     expect(app).toContain('border-[var(--appearance-border)]');
   });
 
-  it('migrates the public footer without changing its content or behavior', () => {
+  it('migrates the public footer and publishes only the mailboxes that still have a reader', () => {
     expect(app).toContain('<footer className="bg-[var(--appearance-surface-muted)] border-t border-[var(--appearance-border)]');
-    expect(app).toContain('dpo@return4me.co.ke');
+    // BATCH 13 consolidated the public contacts onto the three addresses the
+    // privacy policy and the /help page name. The retired dpo@ mailbox must not
+    // reappear here: the footer would be publishing an address nobody reads.
+    expect(app).toContain('privacy@return4me.co.ke');
+    expect(app).toContain('support@return4me.co.ke');
+    expect(app).not.toContain('dpo@');
     expect(app).toContain("setView('privacy')");
     expect(app).toContain("setView('terms')");
   });

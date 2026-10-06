@@ -403,8 +403,8 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
           </h2>
           <p className="text-body leading-relaxed text-[var(--appearance-text-muted)]">
             {tr(
-              'The account is opened in your business name, and we text your phone number to confirm it. The email address is where your verification link is sent.',
-              'Akaunti hufunguliwa kwa jina la biashara yako, na tunatuma msimbo kwenye namba yako ya simu ili kuithibitisha. Barua pepe ni mahali kiungo chako cha uthibitishaji kinapotumwa.'
+              'The account is opened in your business name. We email a verification link to the address you give below, and you must open that link before you can use the Agent Hub. The phone number is what identifies your account; no code is sent by text message.',
+              'Akaunti hufunguliwa kwa jina la biashara yako. Tunatuma kiungo cha uthibitishaji kwa barua pepe utakayotoa hapa chini, na lazima ukifungue kiungo hicho kabla ya kutumia Kituo cha Mawakala. Nambari ya simu ni kitambulisho cha akaunti yako; hakuna msimbo unaotumwa kwa ujumbe mfupi.'
             )}
           </p>
           <Input
@@ -778,7 +778,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                 placeholder="••••"
                 required
                 disabled={authLoading}
-                hint={tr('Sent to', 'Umetumwa kwa') + ' ' + phone}
+                hint={tr('The code is emailed to the verified email address on your account, not to this number.', 'Msimbo hutumwa kwa barua pepe iliyothibitishwa ya akaunti yako, na si kwa nambari hii.')}
               />
               <Button type="submit" variant="primary" size="lg" loading={authLoading} className="w-full">
                 {authLoading
@@ -853,8 +853,8 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                   disabled={authLoading}
                   hint={isRegistering
                     ? tr(
-                        'We text a one-time code to this number to verify it.',
-                        'Tunatuma msimbo wa mara moja kwa nambari hii ili kuithibitisha.'
+                        'This number identifies your account. The verification link is emailed to the address above.',
+                        'Nambari hii ni kitambulisho cha akaunti yako. Kiungo cha uthibitishaji hutumwa kwa barua pepe iliyo juu.'
                       )
                     : tr(
                         'Use the number you registered with us.',

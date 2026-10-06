@@ -54,7 +54,7 @@ Requires a valid `r4m_customer_session` cookie.
 |---|---|---|
 | POST | `/api/customer/register` | Create an account; sends the activation email |
 | POST | `/api/customer/activate` | Redeem an activation token |
-| POST | `/api/customer/login` | Request an SMS OTP |
+| POST | `/api/customer/login` | Request an email OTP |
 | POST | `/api/customer/login/verify` | Redeem the OTP; sets the session cookie |
 | POST | `/api/customer/logout` | End the session |
 | GET | `/api/customer/me` | Current customer |
@@ -74,7 +74,7 @@ dashboard and the claim logic cannot drift apart.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| POST | `/api/auth/request-otp` | Public | Request an agent SMS OTP |
+| POST | `/api/auth/request-otp` | Public | Request an agent email OTP |
 | POST | `/api/auth/verify-otp` | Public | Redeem the agent OTP, or the agent activation token |
 | POST | `/api/auth/admin-login` | Public | Administrator password step |
 | POST | `/api/auth/admin-login/verify-2fa` | `admin_pending_2fa` | Administrator TOTP step |

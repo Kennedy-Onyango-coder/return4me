@@ -13,9 +13,11 @@ Registration runs through the general auth endpoints with `role: 'agent'`, which
 carries business name and location address alongside the phone number.
 
 1. The agent submits a phone number, business name and location address.
-2. An SMS one-time code is sent to that number.
-3. The agent redeems the code, which verifies control of the number and creates
-   the agent row.
+2. A one-time code is emailed to the agent's address: the verified contact
+   address on the account, or — for a phone no agent row holds yet — the address
+   given at this step. Both are resolved server-side.
+3. The agent redeems the code, which creates the agent row and records the
+   address the code was sent to as the account's mailbox.
 4. An activation email is sent to the agent's contact address.
 5. The agent redeems the activation token at `/activate-agent-email`.
 
@@ -23,10 +25,11 @@ The registration response includes `activationRequired`, which is true only for
 an agent whose email is not yet verified. The frontend uses it to show a
 "check your inbox" state rather than a logged-in console.
 
-Both the OTP and the activation email are required. The OTP proves the agent
-controls the phone number; the activation email proves the agent controls an
-address they can be reached at, and is the address settlement confirmations are
-sent to.
+Both the OTP and the activation email are required. Since the E1 email migration
+the code proves control of the mailbox it was sent to rather than the number — the
+number is the key the account is looked up by — and the activation email is the
+step that marks that mailbox verified, which is where settlement confirmations are
+sent.
 
 Activation email failure returns 503 rather than a successful registration. See
 [notifications.md](notifications.md) and [authentication.md](authentication.md).

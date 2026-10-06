@@ -42,7 +42,7 @@ const AGENT_API = read('src/services/agentApi.ts');
 const TYPES = read('src/types.ts');
 const DESIGN_SYSTEM = read('docs/design-system.md');
 
-const count = (src: string, needle: string) => src.split(needle).length - 1;
+const count = (src: string, needle: string | RegExp) => src.split(needle).length - 1;
 const at = (src: string, needle: string) => src.indexOf(needle);
 
 /** 9/10/11px are below the UX-01 floor and must never be visible UI. */

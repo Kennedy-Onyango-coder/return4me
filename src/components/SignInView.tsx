@@ -20,9 +20,9 @@ import { ICON_SIZE } from './ui';
 //     session logic — each path hands off to the authentication surface that
 //     already exists and is unchanged:
 //         Owner / Claimant -> the existing customer surface (/account),
-//                             HTTP-cookie session + phone OTP.
+//                             HTTP-cookie session + emailed one-time code.
 //         Agent            -> the existing agent surface (/agent_portal),
-//                             localStorage bearer token + phone OTP.
+//                             localStorage bearer token + emailed one-time code.
 //   * It does not introduce a second agent registration flow; the agent path
 //     opens the existing AgentView, which already contains both "Agent Login"
 //     and "Apply to be Agent".
