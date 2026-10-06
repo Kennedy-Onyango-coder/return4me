@@ -39,8 +39,8 @@ import { hashCode } from '../services/auth';
 import { CUSTOMER_SESSION_COOKIE } from '../services/customerAuth';
 import { registerCustomerAccountRoutes } from '../routes/customerAccount';
 import { registerCustomerClaimRoutes } from '../routes/customerClaims';
-import { recipientReferenceFor } from '../services/notificationService';
-import { sendSmsNotification, newSmsIssuanceId } from '../services/smsNotification';
+import { recipientReferenceFor, __setEmailProvider } from '../services/notificationService';
+import { sendEmailOtp, newEmailOtpIssuanceId } from '../services/emailOtp';
 
 const RUN = Math.floor(100000 + Math.random() * 899999).toString(36).toUpperCase();
 
@@ -66,10 +66,17 @@ function principal(i: number) {
   };
 }
 
-/** Scenario 1 drives both real SMS producers; 2 and 3 need only the identity route. */
+/** Scenario 1 drives both real metered producers; 2 and 3 need only the identity route. */
 const P1 = principal(1);
 const P2 = principal(2);
 const P3 = principal(3);
+
+/**
+ * E1: the verified address each principal's account owns — the SERVER-RESOLVED
+ * destination every one-time code is delivered to now (derived from the id, so
+ * unique per run and safe against the partial unique index on email).
+ */
+const emailFor = (who: { id: string }) => `${who.id.toLowerCase()}@example.test`;
 
 let server: any;
 let baseUrl = '';
@@ -85,20 +92,27 @@ const ALL_STATUSES = [
  * The real, durable dispatch record for ONE recipient, read straight from the
  * production read model.
  *
- * `recipient_reference` is deliberately NOT the raw phone: notificationService
+ * `recipient_reference` is deliberately NOT the raw address: notificationService
  * writes the opaque masked handle from `recipientReferenceFor`, so a leaked
  * audit row never carries an address. The test therefore derives the same handle
- * with the same exported function instead of comparing against the phone, which
- * also scopes the count to this scenario's unique number so concurrent test
- * files cannot pollute it.
+ * with the same exported function instead of comparing against the address,
+ * which also scopes the count to this scenario's unique recipient so concurrent
+ * test files cannot pollute it.
+ *
+ * E1: the channel is a parameter now, because the routed code events moved from
+ * SMS to email — the mask is computed per channel.
  */
-async function dispatchedFor(eventType: string, phone: string): Promise<number> {
+async function dispatchedFor(
+  eventType: string,
+  recipient: string,
+  channel: 'email' | 'sms' = 'email',
+): Promise<number> {
   const rows = await db.listNotificationEventsByStatus({
     statuses: ALL_STATUSES,
     eventType,
     limit: 500,
   });
-  const masked = recipientReferenceFor(phone, 'sms');
+  const masked = recipientReferenceFor(recipient, channel);
   return rows.filter((r: any) => r.recipient_reference === masked).length;
 }
 
@@ -124,9 +138,23 @@ async function post(path: string, who: { token: string }, body: any, ip: string)
 beforeAll(async () => {
   const week = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   for (const who of [P1, P2, P3]) {
-    await db.createCustomer(who.id, 'N10-B ' + who.id, who.phone);
+    // E1: every one-time code is delivered to the account's own VERIFIED EMAIL,
+    // so each fixture principal needs one. The real production pair
+    // (createCustomerPendingActivation + activateCustomerAccount) is the only
+    // writer of that state.
+    await db.createCustomerPendingActivation(who.id, 'N10-B ' + who.id, who.phone, emailFor(who));
+    await db.activateCustomerAccount(who.id);
     await db.createCustomerSession(who.session, who.id, hashCode(who.token), week);
   }
+  // The email provider is a CAPTURE adapter: dispatch SUCCEEDS, so the durable
+  // accounting below measures the application's own audit trail and never a
+  // missing credential. Nothing else is doubled.
+  __setEmailProvider({
+    name: 'capture-n10b',
+    async send() {
+      return { accepted: true, providerMessageId: null, error: null };
+    },
+  });
 
   // P1 also owns a claim on its registered number, not yet linked, so the
   // claim-link OTP route reaches its genuine dispatch.
@@ -157,27 +185,24 @@ beforeAll(async () => {
   app.set('trust proxy', 1);
   app.use(express.json());
   registerCustomerAccountRoutes(app, {
-    // The REAL delivery seam, mirroring server.ts: a phone identity change goes
-    // through sendSmsNotification exactly as production does, so it writes a
-    // genuine PHONE_VERIFICATION_OTP row in notification_events. Stubbing this
-    // to a no-op would make the durable accounting below vacuous — the claim-link
+    // The REAL delivery seam, mirroring server.ts: E1 routes an identity change
+    // through the shared email OTP seam, so this writes a genuine
+    // IDENTITY_CHANGE_OTP_EMAIL row in notification_events. Stubbing this to a
+    // no-op would make the durable accounting below vacuous — the claim-link
     // producer already writes its own row, so an identity stub would simply
     // contribute nothing, which is exactly the false "shared bucket" outcome
     // this file exists to rule out.
     //
-    // The provider itself is untouched: the suite runs in the existing
-    // console-only fallback, so no external SMS service is contacted.
+    // The destination is resolved by the route (verified email for a phone
+    // change, the new address for an email change) and is never taken from the
+    // body here.
     sendVerificationCode: async ({ destination, code, kind }) => {
-      if (kind !== 'phone') return true;
-      const outcome = await sendSmsNotification({
-        eventType: 'PHONE_VERIFICATION_OTP',
+      const outcome = await sendEmailOtp({
+        eventType: 'IDENTITY_CHANGE_OTP_EMAIL',
         recipient: destination,
-        issuanceId: newSmsIssuanceId('N10B'),
-        seam: 'code',
+        issuanceId: newEmailOtpIssuanceId('N10B'),
         code,
-        // Required by SmsNotificationInput. The live body for `seam: 'code'` is
-        // built by the provider from the code; this is the console/sandbox line.
-        message: `Msimbo wa uthibitisho wa Return4me ni ${code}. / Your Return4me verification code is ${code}.`,
+        purpose: kind === 'phone' ? 'identity_change_phone' : 'identity_change_email',
       });
       return outcome.accepted;
     },
@@ -196,14 +221,14 @@ afterAll(async () => {
   if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 describe('N10-B — the shared budget spans real producers, and a refusal dispatches nothing', () => {
-  it('CLAIM_LINK_OTP and PHONE_VERIFICATION_OTP draw one 3-per-10-minute bucket', async () => {
-    // One principal, one client IP, two DIFFERENT real SMS producers, in the
+  it('CLAIM_LINK_OTP_EMAIL and IDENTITY_CHANGE_OTP_EMAIL draw one 3-per-10-minute bucket', async () => {
+    // One principal, one client IP, two DIFFERENT real producers, in the
     // canonical order. The first three are the entire budget; the fourth must be
     // refused no matter which producer it arrives through.
     const ip = '10.70.0.1';
 
-    const linkSmsBefore = await dispatchedFor('CLAIM_LINK_OTP', P1.phone);
-    const identitySmsBefore = await dispatchedFor('PHONE_VERIFICATION_OTP', P1.phone);
+    const linkBefore = await dispatchedFor('CLAIM_LINK_OTP_EMAIL', emailFor(P1));
+    const identityBefore = await dispatchedFor('IDENTITY_CHANGE_OTP_EMAIL', emailFor(P1));
 
     // Producer 1 — the real claim-link OTP route.
     const first = await post('/api/customer/claims/link/request-otp', P1, { claimId: P1.claim }, ip);
@@ -228,15 +253,15 @@ describe('N10-B — the shared budget spans real producers, and a refusal dispat
     // ---------------------------------------------------------------------
     // DURABLE DISPATCH ACCOUNTING — the part N10-A cannot see.
     //
-    // Exactly ONE claim-link SMS and exactly TWO identity SMS were really
+    // Exactly ONE claim-link code and exactly TWO identity codes were really
     // dispatched, counted from notification_events rather than from a seam.
     // This proves both producers genuinely dispatched (neither silently
     // no-opped and masqueraded as a shared bucket) AND that the two refused
     // requests created NO notification record at all — so a refusal can
     // neither have reached the provider nor left a false "sent" audit trail.
     // ---------------------------------------------------------------------
-    expect(await dispatchedFor('CLAIM_LINK_OTP', P1.phone)).toBe(linkSmsBefore + 1);
-    expect(await dispatchedFor('PHONE_VERIFICATION_OTP', P1.phone)).toBe(identitySmsBefore + 2);
+    expect(await dispatchedFor('CLAIM_LINK_OTP_EMAIL', emailFor(P1))).toBe(linkBefore + 1);
+    expect(await dispatchedFor('IDENTITY_CHANGE_OTP_EMAIL', emailFor(P1))).toBe(identityBefore + 2);
   });
 
   it('a refused identity request records no notification and reaches no provider', async () => {
@@ -244,7 +269,7 @@ describe('N10-B — the shared budget spans real producers, and a refusal dispat
     // BEFORE the provider and BEFORE any durable row, so an exhausted customer
     // cannot accumulate phantom "sent" notifications.
     const ip = '10.70.0.2';
-    const before = await dispatchedFor('PHONE_VERIFICATION_OTP', P2.phone);
+    const before = await dispatchedFor('IDENTITY_CHANGE_OTP_EMAIL', emailFor(P2));
 
     const statuses: number[] = [];
     for (let i = 0; i < 4; i++) {
@@ -253,27 +278,52 @@ describe('N10-B — the shared budget spans real producers, and a refusal dispat
     expect(statuses).toEqual([200, 200, 200, 429]);
 
     // Three dispatches total; the fourth added nothing.
-    expect(await dispatchedFor('PHONE_VERIFICATION_OTP', P2.phone)).toBe(before + 3);
+    expect(await dispatchedFor('IDENTITY_CHANGE_OTP_EMAIL', emailFor(P2))).toBe(before + 3);
   });
 
-  it('email identity changes still spend no SMS budget and record no SMS event', async () => {
-    // Regression on the N10-A distinction: a change that never reaches the SMS
-    // provider must not be charged to the SMS budget, and must not create an
-    // SMS notification record.
+  it('email identity changes use their OWN budget and never draw on the shared one', async () => {
+    // E1-H2: the email branch is now metered — by its OWN 3-per-10-minutes
+    // budget — so a fourth consecutive request from one principal is refused,
+    // and a refusal dispatches nothing. What is unchanged is the N10-A
+    // distinction: none of these requests touched the shared code budget, which
+    // is proven at the end of the test rather than asserted from memory.
     const ip = '10.70.0.3';
-    const before = await dispatchedFor('PHONE_VERIFICATION_OTP', P3.phone);
+    const targets = [0, 1, 2, 3].map((i) => `n10b-${RUN}-${i}@example.test`);
+    const statuses: number[] = [];
 
-    for (let i = 0; i < 4; i++) {
+    for (const target of targets) {
+      // Counted as a DELTA per request: the durable table is shared across runs in
+      // the sandbox database, so an absolute count would depend on history rather
+      // than on this request. The property is one dispatch per ADMITTED request,
+      // and none at all for a refused one.
+      const before = await dispatchedFor('IDENTITY_CHANGE_OTP_EMAIL', target);
       const res = await post(
         '/api/customer/profile/identity',
         P3,
-        { kind: 'email', value: `n10b-${RUN}-${i}@example.test` },
+        { kind: 'email', value: target },
         ip,
       );
-      expect(res.status).toBe(200);
+      statuses.push(res.status);
+      expect(await dispatchedFor('IDENTITY_CHANGE_OTP_EMAIL', target)).toBe(
+        res.status === 200 ? before + 1 : before,
+      );
     }
 
-    expect(await dispatchedFor('PHONE_VERIFICATION_OTP', P3.phone)).toBe(before);
+    // Admitted three times by the email budget, refused by it on the fourth —
+    // and, crucially, the refused one is refused no matter which address it
+    // named, because the ACCOUNT dimension is charged on every request.
+    expect(statuses).toEqual([200, 200, 200, 429]);
+
+    // The shared code budget was never charged by any of the four: this phone
+    // change draws on it and is still admitted (its allowance is three, so four
+    // prior charges would have refused it).
+    const phone = await post(
+      '/api/customer/profile/identity',
+      P3,
+      { kind: 'phone', value: P3.phone },
+      ip,
+    );
+    expect(phone.status).toBe(200);
   });
 
   it('an unmounted limiter on the identity route would be caught here', async () => {

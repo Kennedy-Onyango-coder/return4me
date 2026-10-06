@@ -5,7 +5,7 @@ import path from 'path';
 // =============================================================================
 // PHASE 9 — PUBLIC SURFACE (Requests 01, 03, 06, 13)
 // =============================================================================
-// Source-level tripwires for the homepage/hero/marketing/category-explorer work.
+// Source-level tripwires for the homepage/hero/marketing work.
 // Same technique (and the same rationale) as publicNavigation.test.ts: this
 // repository has no DOM harness, so the contract is asserted against the real
 // source that ships.
@@ -20,8 +20,6 @@ const navbar = read('src/components/Navbar.tsx');
 // prose.
 const navbarCode = navbar.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ');
 const indexCss = read('src/index.css');
-const explorer = read('src/components/home/CategoryExplorer.tsx');
-const taxonomy = read('src/config/categoryTaxonomy.ts');
 
 describe('Request 01 — hero text legibility over the real photograph', () => {
   it('uses the documented directional scrim class instead of a flat black panel', () => {
@@ -94,33 +92,18 @@ describe('Request 03 — homepage marketing describes real capability only', () 
 });
 
 
-describe('Request 06 — category explorer over the real category list', () => {
-  it('is a presentation layer over the live categories, not a second taxonomy', () => {
-    expect(explorer).toContain('resolveTaxonomy');
-    // It must not hard-code a category list of its own.
-    expect(explorer).not.toMatch(/name_en:/);
-    expect(taxonomy).toContain('CATEGORY_TAXONOMY');
-  });
-
-  it('drops groups with no live categories instead of advertising them', () => {
-    expect(explorer).toContain('if (groups.length === 0 && !isSearching) return null;');
-    expect(explorer).toMatch(/\.filter\(\(group\) => group\.categories\.length > 0\)/);
-  });
-
-  it('is usable on a phone: searchable, collapsed by default, and announced', () => {
-    expect(explorer).toContain('type="search"');
-    expect(explorer).toContain('aria-live="polite"');
-    expect(explorer).toContain('htmlFor="category-explorer-search"');
-    expect(explorer).toContain('DEFAULT_VISIBLE_GROUPS');
-    expect(explorer).toMatch(/Show all/);
-    // No gradients (the design bar) and no emoji.
-    expect(explorer).not.toMatch(/gradient/);
-    expect(explorer).not.toMatch(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}]/u);
-  });
-
-  it('the homepage no longer renders the flat dot-joined wall of categories', () => {
+// Request 06 originally added the homepage category explorer. The entire
+// category-discovery section was later REMOVED from the homepage as a product
+// decision (it served no purpose there), so the presentation that block pinned
+// is gone by design and must not come back by accident. Category SELECTION is
+// untouched everywhere it is actually required: the lost/found reporting flows
+// and the public search surface keep consuming the same live category list.
+describe('Request 06 — homepage category explorer (removed)', () => {
+  it('the homepage renders no category-discovery section', () => {
+    expect(homeView).not.toContain('<CategoryExplorer');
+    expect(homeView).not.toContain('discover-heading');
+    // The flat, hand-typed wall of categories the explorer replaced stays gone.
     expect(homeView).not.toContain('const CATEGORY_GROUPS');
-    expect(homeView).toContain('<CategoryExplorer');
   });
 });
 

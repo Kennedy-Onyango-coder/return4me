@@ -671,9 +671,12 @@ describe('B2 G3 - profile and identity changes', () => {
     expect((await readCustomer()).phone).toBe('+254714440099');
   });
 
-  it('a VERIFIED email change CLEARS the verification stamp', async () => {
-    // A new address must never be treated as already proven: the existing login
-    // activation gate depends on email_verified_at being set by its own flow.
+  it('a VERIFIED email change COMMITS the new address as VERIFIED', async () => {
+    // E1-H2: redeeming the code sent to the new address IS proof of control of
+    // that mailbox, so the address and its verified stamp are committed in the
+    // SAME statement. The pre-E1-H2 behaviour cleared the stamp, which left the
+    // account unloginable (the activation gate reads a NULL stamp on an account
+    // that HAS an email as "not activated") with no flow able to set it again.
     await drizzleDb
       .update(customersTable)
       .set({ email_verified_at: new Date() })
@@ -685,7 +688,26 @@ describe('B2 G3 - profile and identity changes', () => {
 
     const row = await readCustomer();
     expect(row.email).toBe('new@example.test');
-    expect(row.email_verified_at).toBeNull();
+    expect(row.email_verified_at).not.toBeNull();
+    expect(new Date(row.email_verified_at).getTime()).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('a VERIFIED phone change leaves the email verification stamp untouched', async () => {
+    // The new phone number was never a proof of the mailbox, so it must not
+    // disturb the state the email verification flows own.
+    const stamped = new Date(Date.now() - 60_000);
+    await drizzleDb
+      .update(customersTable)
+      .set({ email_verified_at: stamped })
+      .where(eq(customersTable.id, cust));
+
+    const changeId = await recordChange('phone', '+254714440097', '565656');
+    await db.consumeCustomerIdentityChange({ id: changeId, customerId: cust });
+    await db.applyVerifiedCustomerIdentifier(cust, 'phone', '+254714440097');
+
+    const row = await readCustomer();
+    expect(row.phone).toBe('+254714440097');
+    expect(new Date(row.email_verified_at).getTime()).toBe(stamped.getTime());
   });
 
   it('an identifier already held by ANOTHER account is detected as taken', async () => {

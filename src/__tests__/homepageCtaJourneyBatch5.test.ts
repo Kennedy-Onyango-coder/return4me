@@ -335,25 +335,27 @@ describe('BATCH 5 — preservation: Batch 3 / Batch 4 contracts', () => {
   // HOMEPAGE BATCH 6C — section-level landmark naming.
   //
   // Before this batch only 1 of the homepage's 10 <section> elements carried an
-  // accessible name. Seven more now derive theirs from their OWN visible
-  // heading, which is why there is no `aria-label` duplicating the text and no
+  // accessible name. Six more derive theirs from their OWN visible heading (the
+  // seventh, `discover-heading`, belonged to the homepage category-discovery
+  // section that has since been removed), which is why there is no `aria-label`
+  // duplicating the text and no
   // `role="region"` added: a <section> with a name is already a region, and a
   // named landmark is more useful to a screen reader than a bare one.
   const B6C = {
     labelled: [
-      'discover-heading', 'earn-heading', 'how-heading',
+      'earn-heading', 'how-heading',
       'platform-heading', 'returns-heading', 'roles-heading', 'final-cta-heading',
     ],
-    titleIds: ['discover-heading', 'how-heading', 'platform-heading', 'roles-heading'],
+    titleIds: ['how-heading', 'platform-heading', 'roles-heading'],
     h2Ids: ['earn-heading', 'returns-heading', 'final-cta-heading'],
   };
 
-  it('BATCH 6C — names all seven major sections from their own heading', () => {
+  it('BATCH 6C — names all six major sections from their own heading', () => {
     for (const id of B6C.labelled) {
       expect(homeViewTsx, `section must be labelled by ${id}`)
         .toContain(`aria-labelledby="${id}"`);
     }
-    // The four SectionHeading-backed sections pass the id through the shared
+    // The three SectionHeading-backed sections pass the id through the shared
     // component's optional `titleId`, which SectionHeading renders onto the
     // real <h2> — so the name resolves to a heading, not a wrapper div.
     for (const id of B6C.titleIds) {
@@ -367,8 +369,8 @@ describe('BATCH 5 — preservation: Batch 3 / Batch 4 contracts', () => {
     }
   });
 
-  it('BATCH 6C — has no dangling references among the seven new labels', () => {
-    // Deliberately scoped to the SEVEN static ids. A blanket
+  it('BATCH 6C — has no dangling references among the six new labels', () => {
+    // Deliberately scoped to the SIX static ids. A blanket
     // "every aria-labelledby must match a literal id" rule would wrongly flag
     // Batch 6B's valid template-based carousel pairs
     // (`r4m-hero-tab-${i}` / `r4m-hero-panel-${i}`), which resolve at runtime
@@ -380,7 +382,7 @@ describe('BATCH 5 — preservation: Batch 3 / Batch 4 contracts', () => {
     }
   });
 
-  it('BATCH 6C — the seven static heading ids are unique', () => {
+  it('BATCH 6C — the six static heading ids are unique', () => {
     // `found-items-heading` is deliberately excluded: it predates this batch
     // and is already covered by Batch 4's uniqueness assertion.
     const all = [...B6C.titleIds, ...B6C.h2Ids, 'found-items-heading'];
@@ -462,7 +464,7 @@ describe('BATCH 5 — preservation: Batch 3 / Batch 4 contracts', () => {
     const body = homeViewTsx.slice(homeViewTsx.indexOf('return ('));
     const order = [
       'aria-roledescription="carousel"',               // 1. hero
-      '<CategoryExplorer',                            // 2. category explorer
+      'Vetted Agents Only',                            // 2. trust strip
       'Found something? Help it find its way home.', // 3. Earn & Return
       'id="found-items"',                             // 4. Recently found
       'id="how-it-works"',                            // 5. How it works

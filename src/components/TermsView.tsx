@@ -237,7 +237,7 @@ export default function TermsView({ lang, setView }: TermsViewProps) {
             <span className="text-accent-orange">12.</span> Changes to these Terms
           </h2>
           <p>
-            We reserve the right to update these Terms of Service at any time. We will provide registered users with at least 14 days’ notice via in-app banner notifications or SMS alerts prior to implementing material revisions.
+            We reserve the right to update these Terms of Service at any time. We will provide registered users with at least 14 days’ notice via in-app banner notifications or email alerts prior to implementing material revisions.
           </p>
         </section>
 

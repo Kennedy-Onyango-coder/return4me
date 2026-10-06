@@ -10,10 +10,6 @@ import Button from './ui/Button';
 import Badge from './ui/Badge';
 import SectionHeading from './ui/SectionHeading';
 import { ICON_SIZE } from './ui/iconSize';
-// REQUEST 06 — the homepage category explorer. It is a PRESENTATION layer over
-// the live /api/categories list (see src/config/categoryTaxonomy.ts); the old
-// inline, hand-typed group list it replaces lived at the bottom of this file.
-import CategoryExplorer from './home/CategoryExplorer';
 import EmptyState from './ui/EmptyState';
 import Skeleton from './ui/Skeleton';
 import { motion, AnimatePresence } from 'motion/react';
@@ -25,8 +21,6 @@ interface HomeViewProps {
   setLang: (lang: 'en' | 'sw') => void;
   setView: (view: ViewName) => void;
   categories: any[];
-  categoriesLoading: boolean;
-  categoriesError: boolean;
   activeAgentsCount: number | null;
   recentItems: any[];
   recentItemsLoading: boolean;
@@ -46,7 +40,7 @@ interface HomeViewProps {
 
 export default function HomeView(props: HomeViewProps) {
   const {
-    lang, setView, categories, categoriesLoading, categoriesError,
+    lang, setView, categories,
     activeAgentsCount, recentItems, recentItemsLoading, recentItemsError,
     onRetryRecentItems, onOpenItem,
   } = props;
@@ -458,7 +452,7 @@ export default function HomeView(props: HomeViewProps) {
       </section>
 
       {/* ───────── TRUST STRIP ───────── */}
-      <section className="bg-[var(--appearance-surface)] border-b border-[var(--appearance-border)]">
+      <section className="bg-[var(--appearance-surface)]">
         <div className="mx-auto max-w-7xl px-5 sm:px-12 py-5">
           <div className="flex flex-wrap items-center justify-center gap-x-8 gap-y-3 text-caption sm:text-body font-semibold text-[var(--appearance-text-muted)]">
             <span className="flex items-center gap-2">
@@ -480,46 +474,6 @@ export default function HomeView(props: HomeViewProps) {
               {lang === 'en' ? 'Payment held safely' : 'Pesa inashikiliwa kwa usalama'}
             </span>
           </div>
-        </div>
-      </section>
-
-      {/* ───────── SERVICE DISCOVERY / CATEGORIES ───────── */}
-      {/* BATCH 6C — `titleId` puts the id on the real <h2> (see SectionHeading),
-          and `aria-labelledby` names this section from that heading rather than
-          duplicating the visible text in an `aria-label`. */}
-      <section aria-labelledby="discover-heading" className="bg-[var(--appearance-background)] py-14 sm:py-20">
-        <div className="mx-auto max-w-7xl px-5 sm:px-12">
-          <SectionHeading
-            titleId="discover-heading"
-            titleClassName="text-section"
-            eyebrow={lang === 'en' ? 'What can we help recover?' : 'Tunaweza kusaidia nini kurejeshwa?'}
-            title={lang === 'en' ? 'Common items people lose' : 'Vitu vinavyopotea sana'}
-            description={lang === 'en' ? 'From identification documents and cards to money and vehicle records.' : 'Kutoka kwa hati na kadi hadi pesa na rekodi za magari.'}
-          />
-          {categoriesLoading ? (
-            <div className="mt-8">
-              <Skeleton shape="text" className="h-64" />
-            </div>
-          ) : categoriesError ? (
-            /* PHASE 11B: the category explorer is the DISCOVERY surface. Before
-               this branch existed, a failed /api/categories left this section
-               rendering its heading over nothing at all — a silent failure on
-               the one screen that tells a visitor what the platform recovers.
-               Deliberately the SAME lightweight bordered message the explorer
-               itself already renders for "no category matches that search", so
-               this section keeps ONE presentation for "nothing to show" (and
-               the Finder/Owner category selects already state this condition
-               too). */
-            <div className="mt-8 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface)] p-6 text-center">
-              <p className="text-body text-[var(--appearance-text-muted)]">
-                {lang === 'en'
-                  ? 'We could not load the list of item types. Please refresh the page to try again.'
-                  : 'Hatukuweza kupakia orodha ya aina za vitu. Tafadhali pakia upya ukurasa.'}
-              </p>
-            </div>
-          ) : (
-            <CategoryExplorer categories={categories} lang={lang} onReportLost={() => setView('owner')} onReportFound={() => setView('finder')} />
-          )}
         </div>
       </section>
 

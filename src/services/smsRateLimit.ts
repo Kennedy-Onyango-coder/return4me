@@ -69,8 +69,19 @@ const RATE_LIMIT_BODY = {
  * table is not a reverseable index of who connects from where. The `scope`
  * prefix keeps the IP and user dimensions in separate namespaces, so a user id
  * that happens to look like an address can never share a bucket with an IP.
+ *
+ * `scope` is a NAME, not a closed set: every limiter built on this primitive
+ * declares its own namespace so two different budgets can never share a bucket
+ * by accident (a user id that looks like an address, or an email-change budget
+ * colliding with the SMS one). The scope is the only thing that separates them,
+ * so a new caller MUST pick a distinct value.
+ *
+ * The original `'ip' | 'user'` union is relaxed to `string` for exactly that
+ * reason — adding a scope must not require editing the primitive — and the
+ * prefix is still baked into the same HMAC, so widening the type does not
+ * change a single existing bucket key.
  */
-export function buildSmsRateLimitBucketKey(scope: 'ip' | 'user', identifier: string): string {
+export function buildSmsRateLimitBucketKey(scope: string, identifier: string): string {
   const salt = process.env.DOC_HASH_SALT || process.env.JWT_SECRET || 'RETURN4ME_DEFAULT_SALT_VALUE_FOR_DOCUMENT_HASHING';
   return crypto
     .createHmac('sha256', salt)

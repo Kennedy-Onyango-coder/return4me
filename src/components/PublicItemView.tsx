@@ -22,8 +22,9 @@ import { Badge, Button, ICON_SIZE, SectionHeading } from './ui';
 //   not authenticated -> hand off to the existing customer sign-in/registration
 //                        surface, preserving /item/<id> as the return destination
 // The item id is carried in the URL, so the journey survives that boundary.
-// The ownership verification inside the claim flow (security answers + phone +
-// SMS OTP) is unchanged and remains the thing that actually proves ownership.
+// The ownership verification inside the claim flow (security answers + the
+// phone/claim match + a one-time code emailed to the owner's verified address)
+// is unchanged and remains the thing that actually proves ownership.
 //
 // UX-06 — PRESENTATION ONLY. This batch set the page's information hierarchy:
 //   1. return to discovery   2. item image (or its deliberate absence)

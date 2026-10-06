@@ -525,27 +525,28 @@ describe('N5-15..20 — provider abstraction and preserved existing behaviour', 
       expect(allSource, builder).toContain(builder);
       expect(emailTs, builder).toContain(builder);
     }
-    // N7's SMS migration assertions below are unchanged.
+    // E1 migrated the two claim-code producers onto the EMAIL OTP SEAM. The
+    // boundary property is unchanged and is asserted the same way: they go
+    // through the one shared seam, they no longer name a gateway, and neither
+    // file may construct a NotificationService directly — so key building and
+    // code handling cannot diverge between call sites.
     for (const rel of ['../routes/claims.ts', '../routes/customerClaims.ts']) {
       const src = fs.readFileSync(path.resolve(__dirname, rel), 'utf8');
-      // Migrated: they go through the notification seam and no longer name the
-      // gateway. Neither file may construct a NotificationService directly —
-      // it must go through the single smsNotification seam, so that key building
-      // and code handling cannot diverge between call sites.
       expect(src, rel).not.toContain('sendCodeViaSms(');
-      expect(src, rel).toContain('sendSmsNotification(');
+      expect(src, rel).not.toContain('sendSmsNotification(');
+      expect(src, rel).toContain('sendEmailOtp(');
       expect(src, rel).not.toContain('NotificationService');
     }
-    // server.ts dispatches the three SMS events whose flows it owns, and — the
+    // server.ts dispatches the OTP EMAIL events whose flows it owns, and — the
     // point of this block — still NO transactional email event (that is N8).
-    for (const smsEvent of ['CUSTOMER_LOGIN_OTP', 'AGENT_LOGIN_OTP', 'PICKUP_CODE']) {
-      expect(serverTs, smsEvent).toContain(`eventType: '${smsEvent}'`);
+    for (const emailEvent of ['CUSTOMER_LOGIN_OTP_EMAIL', 'IDENTITY_CHANGE_OTP_EMAIL']) {
+      expect(serverTs, emailEvent).toContain(`'${emailEvent}'`);
     }
     // The remaining two live in their own route modules, asserted above.
     expect(fs.readFileSync(path.resolve(__dirname, '../routes/claims.ts'), 'utf8'))
-      .toContain("eventType: 'OWNER_CLAIM_VERIFICATION_CODE'");
+      .toContain("eventType: 'OWNER_CLAIM_VERIFICATION_CODE_EMAIL'");
     expect(fs.readFileSync(path.resolve(__dirname, '../routes/customerClaims.ts'), 'utf8'))
-      .toContain("eventType: 'CLAIM_LINK_OTP'");
+      .toContain("eventType: 'CLAIM_LINK_OTP_EMAIL'");
   });
 
   it('introduces NO N6/N7/N8/N9 behaviour', () => {

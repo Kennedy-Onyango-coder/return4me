@@ -28,9 +28,14 @@
 
 import { requireCustomerAuth } from '../services/customerAuth.ts';
 import { smsRateLimit } from '../services/smsRateLimit.ts';
+import { identityEmailChangeRateLimit } from '../services/identityChangeRateLimit.ts';
 import { db } from '../db/database.ts';
 import { hashCode, toE164Kenyan } from '../services/auth.ts';
 import { generateSecureId } from '../services/customerAuth.ts';
+import {
+  emailOtpRecipientIsSafe,
+  EMAIL_VERIFICATION_REQUIRED_MESSAGE,
+} from '../services/emailOtp.ts';
 import {
   CUSTOMER_ACCOUNT_STRINGS,
   IDENTITY_CHANGE_VERIFICATION_TTL_MS,
@@ -59,7 +64,8 @@ export function registerCustomerAccountRoutes(app: any, deps: {
    *
    * Injected rather than called directly so this module never imports a
    * delivery mechanism: the account layer decides WHAT must be verified, and the
-   * existing SMS/email services decide how to deliver it. Delivery failure is
+   * injected seam decides how to deliver it (E1: the shared email OTP seam in
+   * services/emailOtp.ts, reached from server.ts). Delivery failure is
    * therefore invisible here and cannot roll back a business decision.
    */
   sendVerificationCode: (input: {
@@ -178,19 +184,23 @@ export function registerCustomerAccountRoutes(app: any, deps: {
   /**
    * Begin an email or phone change (G3).
    *
-   * The authoritative customer row is NOT touched. A verification code is sent to
-   * the NEW value, and until that code is redeemed the old identifier continues to
-   * authenticate exactly as before. If the customer abandons the change, nothing
-   * has moved - which is the property that makes this safe to attempt.
+   * The authoritative customer row is NOT touched. A one-time code is sent to the
+   * mailbox that proves the change (the NEW address for an email change, this
+   * account's existing VERIFIED email for a phone change), and until that code is
+   * redeemed the old identifier continues to authenticate exactly as before. If
+   * the customer abandons the change, nothing has moved - which is the property
+   * that makes this safe to attempt.
    */
   // ---------------------------------------------------------------------------
-  // N10-A — SHARED SMS BUDGET (PHONE KIND ONLY).
+  // N10-A — SHARED CODE BUDGET (PHONE) + E1-H2 EMAIL BUDGET.
   //
-  // `kind === 'phone'` is the only branch of this route that reaches an SMS
-  // provider, and this route was the one customer-facing SMS producer outside
-  // the shared N6 budget: it mounted `requireCustomerAuth` alone, so an
-  // authenticated customer could trigger an unbounded number of
-  // PHONE_VERIFICATION_OTP messages. Its only guard was the identifier-collision
+  // `kind === 'phone'` is the branch that carried the pre-E1 SMS. After the E1
+  // migration BOTH kinds are delivered by email. The PHONE branch's metering
+  // scope stayed exactly as N10-A left it. The EMAIL branch — which this route
+  // mounted with `requireCustomerAuth` alone for years, so an authenticated
+  // customer could trigger an unbounded number of codes to arbitrary addresses —
+  // was the remaining gap, and E1-H2 meters it (see below). Its only guard was
+  // the identifier-collision
   // 409, which deliberately EXCLUDES the caller's own id, so repeating the call
   // with the same number was always allowed.
   //
@@ -200,16 +210,17 @@ export function registerCustomerAccountRoutes(app: any, deps: {
   // CLAIM_LINK_OTP / CUSTOMER_LOGIN_OTP, the same generic bilingual 429 and the
   // same fail-closed behaviour. It is NOT a second limiter and NOT a
   // route-specific quota: the one middleware instance below is created once and
-  // consulted only when this request would actually spend an SMS.
+  // consulted only when this request comes from the branch that has always been
+  // metered.
   //
   // WHY THE CONDITION IS ON THE REQUEST BODY BUT NOT ON THE IDENTITY
-  //   `kind` decides only WHETHER AN SMS IS SENT — an email identity change
-  //   spends no SMS quota, so metering it would consume an SMS budget for a
-  //   channel that costs none and would 429 a customer for something that
-  //   never touched a provider. The rate-limit IDENTITY is still resolved
-  //   entirely server-side by `resolveSmsRateLimitIdentities`, which reads only
-  //   `req.ip` and the session-verified `req.customer.id`; `req.body` is never
-  //   consulted for the bucket, the recipient, or the principal.
+  //   `kind` decides only WHETHER THIS BRANCH IS METERED. The rate-limit IDENTITY
+  //   is still resolved entirely server-side by `resolveSmsRateLimitIdentities`,
+  //   which reads only `req.ip` and the session-verified `req.customer.id`;
+  //   `req.body` is never consulted for the bucket, the recipient, or the
+  //   principal. That is why the branch selection below reads `kind` and nothing
+  //   else from the body: `kind` chooses WHICH budget applies, never the bucket
+  //   key, and never the recipient.
   //
   // ORDERING
   //   `requireCustomerAuth, <budget>, <handler>` — the canonical N6/N7 order.
@@ -218,11 +229,50 @@ export function registerCustomerAccountRoutes(app: any, deps: {
   //   already parsed the body, which is what makes `kind` readable here.
   // ---------------------------------------------------------------------------
   const identitySmsBudget = smsRateLimit();
+  // ---------------------------------------------------------------------------
+  // E1-H2 — THE EMAIL BRANCH'S OWN BUDGET (the residual N10-A left open).
+  //
+  // N10-A metered `kind: 'phone'` and stopped there, so `kind: 'email'` remained
+  // the one unmetered code producer in the product: one authenticated session
+  // could ask for an unbounded number of codes, each addressed to an arbitrary
+  // live mailbox. THIS is that gap closed.
+  //
+  // WHY NOT `smsRateLimit()` HERE
+  //   The SMS budget's buckets ARE the "3 SMS per 10 minutes" promise shared by
+  //   login, claim-link, pickup-code and the phone change. Charging an email
+  //   send to them would let an email change eat an SMS allowance it never
+  //   spends, and would let unrelated SMS activity refuse an email change — a
+  //   semantic change to flows this batch must not touch. So the email branch
+  //   gets a NARROW second budget built on the SAME canonical primitive
+  //   (`buildSmsRateLimitBucketKey` + `db.consumeSmsRateLimitSlot`) in its own
+  //   namespace: one limiter implementation, two independent budgets.
+  //
+  // ITS IDENTITY IS STILL SERVER-RESOLVED
+  //   `resolveIdentityEmailRateLimitIdentities` reads `req.customer.id` (from
+  //   the hashed session lookup requireCustomerAuth performed) and `req.ip`
+  //   first; the requested address contributes ONE extra, ADDITIVE dimension so
+  //   a spray aimed at a single mailbox is refused at that mailbox too. Because
+  //   the account dimension is always charged, changing the requested address on
+  //   every request cannot widen anything.
+  //
+  // ORDERING: `requireCustomerAuth, <budget>, <handler>` — the same canonical
+  // order as the phone branch. Auth first (so the principal is the verified
+  // session), budget second (so a refusal happens before any code is generated,
+  // before any change row is written and before any mailbox is written to).
+  // ---------------------------------------------------------------------------
+  const identityEmailBudget = identityEmailChangeRateLimit();
   app.post(
     '/api/customer/profile/identity',
     requireCustomerAuth,
-    (req: any, res: any, next: any) =>
-      req.body?.kind === 'phone' ? identitySmsBudget(req, res, next) : next(),
+    (req: any, res: any, next: any) => {
+      // `kind` selects WHICH budget applies and nothing else — it is never a
+      // bucket key, a destination or an authorization input. An unknown kind is
+      // passed through unmetred on purpose: the handler rejects it with a 400
+      // before any code could be issued.
+      if (req.body?.kind === 'phone') return identitySmsBudget(req, res, next);
+      if (req.body?.kind === 'email') return identityEmailBudget(req, res, next);
+      return next();
+    },
     async (req: any, res: any) => {
     try {
       const kind = req.body?.kind;
@@ -234,6 +284,29 @@ export function registerCustomerAccountRoutes(app: any, deps: {
       // Another account already holding this identifier must not be claimable.
       if (await db.isCustomerIdentifierTaken(kind, normalized, req.customer.id)) {
         return res.status(409).json({ error: takenMessage(kind) });
+      }
+
+      // E1 - WHO RECEIVES THE CODE (destination resolved SERVER-SIDE).
+      //   kind 'email'  -> the NEW address itself: proving control of it is the
+      //                    whole point of the change.
+      //   kind 'phone'  -> THIS account's existing VERIFIED email, read from the
+      //                    session's own authoritative record. The new number is
+      //                    never a delivery destination: an unproven number must
+      //                    not be handed a code that would mark it verified, and
+      //                    nothing in this flow may trust a destination from the
+      //                    body. An account without a verified email FAILS CLOSED
+      //                    BEFORE any challenge row is written, so no orphan
+      //                    change exists to be redeemed later.
+      let destination = normalized;
+      if (kind === 'phone') {
+        const account = await db.getCustomerById(req.customer.id);
+        destination =
+          account && account.email && account.email_verified_at && emailOtpRecipientIsSafe(account.email)
+            ? account.email
+            : '';
+        if (!destination) {
+          return res.status(403).json({ error: EMAIL_VERIFICATION_REQUIRED_MESSAGE });
+        }
       }
 
       const code = newVerificationCode();
@@ -252,7 +325,7 @@ export function registerCustomerAccountRoutes(app: any, deps: {
       // A delivery failure must NOT roll back the recorded change and must not
       // be described to the customer in transport terms; the honest message is
       // that the verification is on its way, and the customer can retry.
-      const delivered = await sendVerificationCode({ destination: normalized, code, kind }).catch(
+      const delivered = await sendVerificationCode({ destination, code, kind }).catch(
         () => false,
       );
       if (!delivered) {
@@ -317,8 +390,24 @@ export function registerCustomerAccountRoutes(app: any, deps: {
       );
       if (!applied) return res.status(404).json(NOT_FOUND);
 
-      // A changed email must be re-proven before it can sign anyone in, so the
-      // existing login activation gate continues to do its job.
+      // E1-H2 — THE NEW ADDRESS COMPLETES ITS LIFECYCLE HERE.
+      //
+      // Redeeming this code IS the proof of control of the mailbox being claimed:
+      // the code was generated server-side, delivered ONLY to that address
+      // (never to a destination named by a request), stored hash-only, expiring
+      // in 30 minutes, single-use, and redeemable only by the authenticated
+      // session that owns the pending change. That is strictly stronger evidence
+      // than the emailed activation LINK the registration flow relies on, which
+      // proves mailbox control with no session binding at all.
+      //
+      // So `applyVerifiedCustomerIdentifier` commits the new address AND its
+      // verified stamp in ONE statement. Before this batch an email change left
+      // `email_verified_at` NULL, and the login activation gate reads exactly
+      // that state as "account not activated" - a state the customer could not
+      // leave, because a code is only ever sent to the address on the account.
+      // The write is still fail-safe in the direction that matters: the account
+      // row is untouched until this point, so an abandoned or unproven change
+      // moves nothing.
       const customer = await db.getCustomerById(req.customer.id);
       return res.json({ success: true, customer: toSafeProfile(customer) });
     } catch (e) {

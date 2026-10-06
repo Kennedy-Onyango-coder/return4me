@@ -16,6 +16,19 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
   const [error, setError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
+  // E1 — THE ERASURE JOURNEY IS EMAIL-AUTHORIZED, AND THIS REQUEST MUST SAY SO.
+  //
+  // `purpose: 'data_deletion'` is not decoration. It is the ONLY thing that tells
+  // the server which journey this is, and therefore WHERE the code may go:
+  //
+  //   with it    -> the code is sent to the VERIFIED EMAIL ADDRESS of the account
+  //                 that holds this phone number (customer first, then agent);
+  //   without it -> the request is read as an agent sign-in, so a customer's
+  //                 phone number resolves to NO destination and nothing is sent.
+  //
+  // It changes ONLY the destination and the recorded event type. The phone number
+  // still identifies the account, and authorization is still "redeem the code at
+  // /api/auth/request-data-deletion with explicit consent" — unchanged.
   const handleRequestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!phone) {
@@ -30,7 +43,7 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ phone }),
+        body: JSON.stringify({ phone, purpose: 'data_deletion' }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -330,7 +343,7 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
             </li>
           </ul>
           <p className="text-xs text-stone-500 mt-3">
-            The table below lists the external services that process information on Return4me's behalf, and the categories of information involved. It describes what each service receives; it does not address the legal status of any provider.
+            The table below lists the external services that process information on Return4me's behalf, and the categories of information involved. It describes what each service receives; it does not address the legal status of any provider. SMS delivery is currently switched off: Return4me sends no text messages, so our SMS provider receives nothing about you while it remains disabled.
           </p>
           <div className="overflow-x-auto border border-stone-200 rounded-xl mt-2">
             <table className="min-w-full divide-y divide-stone-200 text-xs">
@@ -349,7 +362,7 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
                 </tr>
                 <tr className="bg-stone-50/40">
                   <td className="px-4 py-3 font-bold text-stone-900">Africa's Talking</td>
-                  <td className="px-4 py-3 text-stone-600">SMS delivery</td>
+                  <td className="px-4 py-3 text-stone-600">SMS delivery (optional channel — currently disabled)</td>
                   <td className="px-4 py-3 text-stone-600">Phone number and the text of the message being sent</td>
                 </tr>
                 <tr>
@@ -436,8 +449,8 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
                 </h3>
                 <p className="text-xs text-stone-500 leading-relaxed">
                   {lang === 'en'
-                    ? 'Request the immediate permanent deletion or anonymization of your personal record. Requires OTP mobile verification.'
-                    : 'Omba ufutaji wa kudumu au ufichaji wa utambulisho wa kumbukumbu zako za kibinafsi mara moja. Inahitaji uhakiki wa OTP wa simu.'}
+                    ? 'Request the immediate permanent deletion or anonymization of your personal record. We use your registered phone number to find your account, and we send the verification code to the verified email address on that account.'
+                    : 'Omba ufutaji wa kudumu au ufichaji wa utambulisho wa kumbukumbu zako za kibinafsi mara moja. Tunatumia nambari yako ya simu iliyosajiliwa kupata akaunti yako, na msimbo wa uthibitisho tunautuma kwenye barua pepe iliyothibitishwa ya akaunti hiyo.'}
                 </p>
               </div>
             </div>
@@ -470,6 +483,11 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
                         placeholder={lang === 'en' ? 'e.g. 0712345678' : 'mfano 0712345678'}
                         className="w-full max-w-sm bg-white border border-stone-200 rounded-xl px-3 py-2 text-xs focus:ring-1 focus:ring-primary-green outline-none"
                       />
+                      <p className="text-xs text-stone-500 leading-relaxed max-w-xl">
+                        {lang === 'en'
+                          ? 'We use this number only to find your account. The code is emailed to the verified email address on that account — it is never sent to this number, and getting it is not a check that the number is yours.'
+                          : 'Tunatumia nambari hii kupata akaunti yako pekee. Msimbo unatumwa kwa barua pepe iliyothibitishwa ya akaunti hiyo — hautumwi kwa nambari hii, na kusoma msimbo si uthibitisho kwamba nambari hii ni yako.'}
+                      </p>
                     </div>
 
                     {error && <p className="text-red-600 text-xs font-bold">{error}</p>}
@@ -480,7 +498,7 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
                         disabled={loading}
                         className="bg-primary-green hover:bg-primary-hover disabled:bg-stone-300 text-white text-xs font-bold px-4 py-2 rounded-xl transition cursor-pointer"
                       >
-                        {loading ? (lang === 'en' ? 'Sending...' : 'Inatuma...') : (lang === 'en' ? 'Send OTP Code' : 'Tuma Msimbo wa OTP')}
+                        {loading ? (lang === 'en' ? 'Sending...' : 'Inatuma...') : (lang === 'en' ? 'Email Me the Code' : 'Nitumie Msimbo kwa Barua Pepe')}
                       </button>
                       <button
                         type="button"
@@ -495,7 +513,9 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
                   <form onSubmit={handleVerifyAndDelete} className="space-y-4">
                     <div className="p-3 bg-stone-100 rounded-xl flex items-center justify-between">
                       <span className="text-xs text-stone-600 font-medium">
-                        {lang === 'en' ? `OTP Sent to ${phone}` : `OTP Imetumwa kwa ${phone}`}
+                        {lang === 'en'
+                          ? `Code emailed to the verified address on the account for ${phone}`
+                          : `Msimbo umetumwa kwa barua pepe iliyothibitishwa ya akaunti ya ${phone}`}
                       </span>
                       <button
                         type="button"
@@ -508,7 +528,7 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
 
                     <div className="space-y-1">
                       <label className="text-xs font-bold text-stone-700 block">
-                        {lang === 'en' ? 'Enter Verification Code (OTP)' : 'Ingiza Msimbo wa Uhakiki (OTP)'}
+                        {lang === 'en' ? 'Enter the Verification Code We Emailed' : 'Ingiza Msimbo wa Uthibitisho Uliotumwa kwa Barua Pepe'}
                       </label>
                       <input
                         type="text"
@@ -519,6 +539,11 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
                         maxLength={6}
                         className="w-full max-w-sm bg-white border border-stone-200 rounded-xl px-3 py-2 text-xs font-mono focus:ring-1 focus:ring-primary-green outline-none"
                       />
+                      <p className="text-xs text-stone-500 leading-relaxed max-w-xl">
+                        {lang === 'en'
+                          ? 'The code confirms that this deletion request is really from you. It does not prove ownership of the phone number.'
+                          : 'Msimbo unathibitisha kwamba ombi hili la ufutaji linatoka kwako kweli. Hauthibitishi umiliki wa nambari ya simu.'}
+                      </p>
                     </div>
 
                     <div className="flex items-start space-x-2 bg-red-50/50 border border-red-100 p-3 rounded-xl max-w-xl">
@@ -589,7 +614,7 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
             <strong>Responsible disclosure:</strong> If you are a security researcher or member of the public and believe you have found a vulnerability in the Platform (including but not limited to authentication bypass, data exposure, or payment manipulation), please report it privately to <a href="mailto:security@return4me.co.ke" className="text-primary-green font-bold hover:underline">security@return4me.co.ke</a> before disclosing it publicly. We commit to acknowledging good-faith reports within 5 business days and will not pursue legal action against researchers who report vulnerabilities responsibly, do not access other users' data beyond what is strictly necessary to demonstrate the issue, and do not disrupt the Platform for other users.
           </p>
           <p>
-            <strong>Your role in keeping your account secure:</strong> OTP codes and claim pickup codes are single-use and time-limited, and Return4me staff, agents, or administrators will never ask you to read out or share an OTP or pickup code with them over the phone, WhatsApp, or SMS outside of the app flow itself. Requests of that kind, even if the caller claims to be from Return4me, are a sign of an attempted scam — do not share the code, and report the incident to us immediately.
+            <strong>Your role in keeping your account secure:</strong> OTP codes and claim pickup codes are single-use and time-limited, and Return4me staff, agents, or administrators will never ask you to read out or share an OTP or pickup code with them over the phone, WhatsApp, email, or SMS outside of the app flow itself. Requests of that kind, even if the caller claims to be from Return4me, are a sign of an attempted scam — do not share the code, and report the incident to us immediately.
           </p>
         </section>
 

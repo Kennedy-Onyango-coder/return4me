@@ -6582,9 +6582,25 @@ await drizzleDb.transaction(async (tx) => {
   /**
    * Apply a verified identifier to the customer row.
    *
-   * Deliberately narrow: it writes ONE column, and clears the email verification
-   * stamp when the email changes, so a new address is never treated as already
-   * proven. Callers must have redeemed the change first.
+   * Callers must have redeemed the change first: this method is only reachable
+   * after a one-time code sent to the claimed value has been proved, and the code
+   * is single-use.
+   *
+   * DISPOSITION OF `email_verified_at` (E1-H2)
+   *   The email patch sets the address AND its verified stamp in the SAME
+   *   statement. Redeeming an email identity change IS proof of control of the
+   *   new mailbox — the code is issued only to that address, resolved
+   *   server-side, stored hash-only, expiring, single-use, and redeemable only by
+   *   the authenticated session that owns the change — so the address is not
+   *   "unproven" when it lands. Clearing the stamp instead (the pre-E1-H2
+   *   behaviour) left the account readable by the login activation gate as
+   *   "not activated" with no flow that could ever set it, because no code is
+   *   sent to the old mailbox again: an irreversible lock-out for a successful
+   *   change.
+   *
+   *   The phone patch deliberately does NOT touch `email_verified_at`: the new
+   *   number was never a proof of the mailbox, so it must not disturb the
+   *   existing email verification state.
    */
   public async applyVerifiedCustomerIdentifier(
     customerId: string,
@@ -6594,7 +6610,7 @@ await drizzleDb.transaction(async (tx) => {
     try {
       const patch =
         kind === 'email'
-          ? { email: value, email_verified_at: null, updated_at: new Date() }
+          ? { email: value, email_verified_at: new Date(), updated_at: new Date() }
           : { phone: value, updated_at: new Date() };
       const rows = await drizzleDb
         .update(customersTable)

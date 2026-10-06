@@ -139,8 +139,10 @@ describe('UX-11 gives the agent sign-in surface an identity of its own', () => {
     // that copy); the code step names itself instead of still saying "Hub".
     expect(IDENTITY).toContain('t.agentTitle');
     expect(IDENTITY).toContain("tr('Confirm your code', 'Thibitisha msimbo wako')");
-    expect(IDENTITY).toContain('Enter the one-time code we sent to your phone by SMS.');
-    expect(IDENTITY).toContain('Weka msimbo wa mara moja tulioutuma kwa simu yako kwa SMS.');
+    // E1: the agent sign-in code is emailed to the agent's verified contact
+    // address, so the step must name the EMAIL channel and stop promising an SMS.
+    expect(IDENTITY).toContain('Enter the one-time code we sent to your verified email address.');
+    expect(IDENTITY).toContain('Weka msimbo wa mara moja tulioutuma kwenye barua pepe yako iliyothibitishwa.');
   });
 });
 

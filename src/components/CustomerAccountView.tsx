@@ -26,7 +26,7 @@ interface Props {
 
 type Mode = 'register' | 'login';
 // N3: 'pendingActivation' is a REGISTER-ONLY terminal step. Registration no
-// longer ends in an SMS code — the backend creates an INACTIVE account and
+// longer ends in an emailed code — the backend creates an INACTIVE account and
 // emails a single-use activation link (POST /api/customer/activate is the only
 // path that can create a session). 'otp' therefore now belongs to LOGIN alone;
 // the old '/api/customer/register/verify' step no longer exists in the product.
@@ -172,7 +172,7 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
       setStep('otp');
       setNotice(
         data?.message ||
-        t('A verification code has been sent to your phone.', 'Msimbo wa uthibitisho umetumwa kwenye simu yako.')
+        t('A verification code has been sent to the verified email address on your account.', 'Msimbo wa uthibitisho umetumwa kwenye barua pepe iliyothibitishwa ya akaunti yako.')
       );
     } catch {
       setError(t('Network error. Please try again.', 'Hitilafu ya mtandao. Tafadhali jaribu tena.'));
@@ -188,7 +188,7 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
     e.preventDefault();
     resetMessages();
     if (!/^\d{6}$/.test(code.trim())) {
-      setError(t('Enter the 6-digit code from the SMS.', 'Weka msimbo wa tarakimu 6 kutoka kwa SMS.'));
+      setError(t('Enter the 6-digit code from the email.', 'Weka msimbo wa tarakimu 6 kutoka kwa barua pepe.'));
       return;
     }
     setBusy(true);
@@ -417,8 +417,12 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
                         'Utaingia kwa nambari hii baada ya kuiwasha akaunti yako.'
                       )
                     : t(
-                        "We'll text a one-time verification code to this number.",
-                        'Tutatuma msimbo wa uthibitisho wa mara moja kwa nambari hii kwa SMS.'
+                        // E1: sign-in no longer texts this number. The code is
+                        // delivered to the account's verified email address, and
+                        // the number is only the identity the account is looked
+                        // up by — so the hint says exactly that.
+                        "We'll email a one-time verification code to the verified email address on your account.",
+                        'Tutatuma msimbo wa uthibitisho wa mara moja kwenye barua pepe iliyothibitishwa ya akaunti yako.'
                       )}
                 />
 

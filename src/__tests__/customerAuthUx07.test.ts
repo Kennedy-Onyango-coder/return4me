@@ -233,8 +233,9 @@ describe('UX-07 the account forms are real, labelled forms', () => {
 
   it('says what each phone number is actually for', () => {
     // N3 made registration email-first, so the register hint must NOT promise an
-    // SMS code that registration no longer sends; the sign-in hint must still
-    // say the code arrives by SMS. Both are bilingual.
+    // SMS code that registration no longer sends; E1 then moved sign-in delivery
+    // to email too (the number identifies the account, the code is emailed to the
+    // verified address). Both hints are bilingual.
     // The two-line call is matched as a pattern so the check does not depend on
     // the file's line endings (the sources are checked out with CRLF).
     expect(GATE).toMatch(
@@ -242,7 +243,7 @@ describe('UX-07 the account forms are real, labelled forms', () => {
     );
     expect(GATE).toContain("t('We sent it to', 'Tuliituma kwa')");
     expect(GATE).toContain(
-      "\"We'll text a one-time verification code to this number.\"",
+      "\"We'll email a one-time verification code to the verified email address on your account.\"",
     );
   });
 

@@ -88,8 +88,8 @@ export default function SignInView({ lang, onOwnerSignIn, onAgentSignIn, onBecom
             </Button>
             <p className="mt-3 text-caption text-[var(--appearance-text-muted)]">
               {t(
-                'You sign in with your phone number and a one-time code sent by SMS.',
-                'Unaingia kwa nambari yako ya simu na msimbo wa mara moja unaotumwa kwa SMS.',
+                'You sign in with your phone number and a one-time code sent to your verified email address.',
+                'Unaingia kwa nambari yako ya simu na msimbo wa mara moja unaotumwa kwenye barua pepe yako iliyothibitishwa.',
               )}
             </p>
           </div>

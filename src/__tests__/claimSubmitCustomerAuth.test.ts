@@ -63,6 +63,27 @@ const serverTs = fs.readFileSync(path.resolve(__dirname, '../server.ts'), 'utf8'
 // Capture the claim OTP instead of dispatching a real SMS.
 const sms = vi.hoisted(() => ({ sent: [] as Array<{ phone: string; code: string }> }));
 
+// E1: the codes these routes issue are EMAILED, so the capture hook is the email
+// OTP seam. Capture-only: the recipient guard and the message constants stay
+// REAL, and the claim OTP challenge itself is still generated, hashed and
+// persisted by the route under test.
+const emailOtp = vi.hoisted(() => ({ sent: [] as Array<{ to: string; code: string; eventType: string }> }));
+
+vi.mock('../services/emailOtp', async (importOriginal) => {
+  const actual = await importOriginal<any>();
+  return {
+    ...actual,
+    sendEmailOtp: vi.fn(async (input: any) => {
+      emailOtp.sent.push({
+        to: String(input?.recipient ?? ''),
+        code: String(input?.code ?? ''),
+        eventType: String(input?.eventType ?? ''),
+      });
+      return { accepted: true, dispatched: true, eventId: 'test-email-event', status: 'sent' };
+    }),
+  };
+});
+
 vi.mock('../services/smsNotification', async (importOriginal) => {
   const actual = await importOriginal<any>();
   return {
@@ -189,7 +210,17 @@ let createdClaimId = '';
 
 async function seed(): Promise<void> {
   await ensureTestCategory(CATEGORY_ID);
-  await db.createCustomer(CUSTOMER, 'PI1 B Owner', PHONE);
+  // E1: the claim OTP now travels to the account's own VERIFIED EMAIL, resolved
+  // server-side from the phone the claim was filed with. The real production
+  // pair (createCustomerPendingActivation + activateCustomerAccount) is what
+  // produces that state.
+  await db.createCustomerPendingActivation(
+    CUSTOMER,
+    'PI1 B Owner',
+    PHONE,
+    `${CUSTOMER.toLowerCase()}@example.test`,
+  );
+  await db.activateCustomerAccount(CUSTOMER);
   await db.createCustomer(CUSTOMER_SUSPENDED, 'PI1 B Suspended', PHONE_SUSPENDED);
   // Live session for the owner; the other three differ only in the one property
   // under test (expiry / revocation / account status).
@@ -374,14 +405,14 @@ describe('PI-1 B — the owner with a live session is unaffected', () => {
 
   it('B9. the claim-OTP journey still works with NO cookie at all', async () => {
     expect(createdClaimId).not.toBe('');
-    sms.sent.length = 0;
+    emailOtp.sent.length = 0;
 
     const otp = await api(`/api/claims/${createdClaimId}/request-otp`, { body: { phone: PHONE } });
     // NOT 401: the boundary applies to claim CREATION only.
     expect(otp.status).toBe(200);
     expect(otp.body?.success).toBe(true);
 
-    const code = sms.sent.length ? sms.sent[sms.sent.length - 1].code : '';
+    const code = emailOtp.sent.length ? emailOtp.sent[emailOtp.sent.length - 1].code : '';
     expect(code).toMatch(/^\d{4}$/);
 
     const verified = await api(`/api/claims/${createdClaimId}/verify-otp`, { body: { code } });

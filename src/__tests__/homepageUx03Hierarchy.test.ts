@@ -42,8 +42,6 @@ const stripComments = (src: string) =>
 
 const homeViewTsx = read('src/components/HomeView.tsx');
 const homeCode = stripComments(homeViewTsx);
-const explorerTsx = read('src/components/home/CategoryExplorer.tsx');
-const explorerCode = stripComments(explorerTsx);
 const sectionHeadingTsx = stripComments(read('src/components/ui/SectionHeading.tsx'));
 const buttonTsx = read('src/components/ui/Button.tsx');
 const indexCss = read('src/index.css');
@@ -246,22 +244,18 @@ describe('UX-03 states - loading, empty and error stay deliberate', () => {
     // reload, no raw error text.
     expect(DISCOVERY).toContain('onClick={onRetryRecentItems}');
     expect(DISCOVERY).not.toMatch(/fetch\(|window\.location|reload\(/);
-    // The category surface keeps its own non-silent failure state too.
-    expect(homeCode).toContain('We could not load the list of item types.');
-    expect(homeCode).toContain('Hatukuweza kupakia orodha ya aina za vitu.');
   });
 
   it('never shows a browser-native or raw error string', () => {
     for (const pattern of [/e\.message/, /err\.message/, /response\.text\(\)/, /error\.toString\(\)/]) {
       expect(homeViewTsx, String(pattern)).not.toMatch(pattern);
-      expect(explorerTsx, String(pattern)).not.toMatch(pattern);
     }
   });
 });
 
 describe('UX-03 homepage-local legacy audit (ladders, focus, palette)', () => {
   it('carries no local focus or outline treatment on the homepage', () => {
-    for (const [name, source] of [['HomeView', homeCode], ['CategoryExplorer', explorerCode]] as const) {
+    for (const [name, source] of [['HomeView', homeCode]] as const) {
       expect(source, `${name} must not suppress or duplicate the global focus ring`)
         .not.toMatch(/focus(-visible)?:(outline-none|ring)/);
       expect(source, `${name} must not use a focus-within ring`).not.toMatch(/focus-within:ring/);
@@ -273,17 +267,16 @@ describe('UX-03 homepage-local legacy audit (ladders, focus, palette)', () => {
   });
 
   it('keeps every homepage surface on the radius and elevation ladder', () => {
-    for (const [name, source] of [['HomeView', homeCode], ['CategoryExplorer', explorerCode]] as const) {
+    for (const [name, source] of [['HomeView', homeCode]] as const) {
       expect(source, `${name} must not hand-roll a shadow`)
         .not.toMatch(/shadow-\[|shadow-lg|shadow-xl|shadow-2xl/);
     }
     // Exactly one legacy radius NAME survives in HomeView: the "Earn & Return"
     // media placeholder, whose Batch 3 literal (byte-identical to
     // rounded-standard) is pinned by homepageAppearanceBatch3. Nothing else may
-    // use an off-ladder name, and the explorer has none at all.
+    // use an off-ladder name.
     expect((homeCode.match(/rounded-(?:md|lg|xl|2xl|3xl)\b/g) || []).length).toBe(1);
     expect(homeCode).toContain('bg-[var(--appearance-surface-muted)] rounded-xl');
-    expect((explorerCode.match(/rounded-(?:md|lg|xl|2xl|3xl)\b/g) || []).length).toBe(0);
     // ...and the ladders it leans on are the locked UX-01 ones.
     for (const token of ['--radius-compact: 6px', '--radius-small: 8px', '--radius-standard: 12px', '--radius-panel: 16px', '--radius-hero: 24px']) {
       expect(indexCss, `${token} must exist`).toContain(token);
@@ -294,13 +287,11 @@ describe('UX-03 homepage-local legacy audit (ladders, focus, palette)', () => {
   it('reads every homepage Lucide icon from the UX-01 ladder', () => {
     expect(homeCode).toContain("import { ICON_SIZE } from './ui/iconSize'");
     expect(homeCode).not.toMatch(/size=\{\d+\}/);
-    expect(explorerCode).toContain("import { ICON_SIZE } from '../ui/iconSize'");
-    expect(explorerCode).not.toMatch(/size=\{\d+\}/);
     expect(read('src/components/ui/iconSize.ts')).toContain('export const ICON_LADDER');
   });
 
   it('keeps the homepage on the 8-point spacing rhythm', () => {
-    for (const [name, source] of [['HomeView', homeCode], ['CategoryExplorer', explorerCode]] as const) {
+    for (const [name, source] of [['HomeView', homeCode]] as const) {
       expect(source, `${name} must not invent spacing steps`)
         .not.toMatch(/\b(?:p|px|py|pt|pb|pl|pr|m|mx|my|mt|mb|ml|mr|gap|gap-x|gap-y|space-x|space-y)-(?:0\.5|1\.5|2\.5|3\.5|7|9|11|13)\b/);
       expect(source, `${name} must not use an arbitrary spacing value`)
@@ -309,7 +300,7 @@ describe('UX-03 homepage-local legacy audit (ladders, focus, palette)', () => {
   });
 
   it('has no sub-12px and no arbitrary type anywhere on the homepage', () => {
-    for (const [name, source] of [['HomeView', homeCode], ['CategoryExplorer', explorerCode]] as const) {
+    for (const [name, source] of [['HomeView', homeCode]] as const) {
       expect(source, `${name} must stay on the caption floor`).not.toMatch(/text-\[\d+px\]/);
       expect(source, `${name} must not use a sub-caption size`).not.toMatch(/text-(?:\[(?:9|10|11)px\]|xs)/);
     }
@@ -317,9 +308,9 @@ describe('UX-03 homepage-local legacy audit (ladders, focus, palette)', () => {
 });
 describe('UX-03 page hierarchy, grid and theme', () => {
   it('puts every major section heading on the section step', () => {
-    // Four sections are headed by the shared SectionHeading, which is passed the
+    // Three sections are headed by the shared SectionHeading, which is passed the
     // opt-in 24/32 step instead of its 18px card-heading default.
-    expect((homeCode.match(/titleClassName="text-section"/g) || []).length).toBe(4);
+    expect((homeCode.match(/titleClassName="text-section"/g) || []).length).toBe(3);
     // Three are hand-written and carry the same step directly.
     for (const id of ['earn-heading', 'returns-heading', 'final-cta-heading']) {
       expect(homeCode, `${id} must sit on the section step`).toContain(`<h2 id="${id}" className="text-section`);
@@ -333,9 +324,9 @@ describe('UX-03 page hierarchy, grid and theme', () => {
     // The public navbar grid and the homepage grid are the same container.
     expect(navbarTsx).toContain('mx-auto max-w-7xl px-5 sm:px-12');
     expect((homeCode.match(/mx-auto max-w-7xl px-5 sm:px-12/g) || []).length).toBeGreaterThanOrEqual(8);
-    // Eight major sections share the same band rhythm; the closing CTA keeps a
+    // Seven major sections share the same band rhythm; the closing CTA keeps a
     // narrower column for its centred composition.
-    expect((homeCode.match(/py-14 sm:py-20/g) || []).length).toBe(8);
+    expect((homeCode.match(/py-14 sm:py-20/g) || []).length).toBe(7);
     expect(homeCode).toContain('mx-auto max-w-3xl px-5 sm:px-12');
     expect(homeCode).not.toMatch(/py-\[\d/);
   });
@@ -344,22 +335,6 @@ describe('UX-03 page hierarchy, grid and theme', () => {
     expect(DISCOVERY).toContain('grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4');
     expect(homeCode).toContain('grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-16 items-center');
     expect(homeCode).toContain('grid grid-cols-1 md:grid-cols-2 gap-5');
-    expect(explorerCode).toContain('grid grid-cols-1 sm:grid-cols-2 gap-4');
-  });
-
-  it('is theme-aware: the explorer carries no light-only surface', () => {
-    // The explorer used raw light-token surfaces (bg-white, text-ink, ...), so
-    // dark mode rendered it as light cards on a dark page.
-    expect(explorerCode).not.toMatch(/\bbg-white\b/);
-    expect(explorerCode).not.toContain('text-ink');
-    expect(explorerCode).not.toContain('line-subtle');
-    expect(explorerCode).not.toContain('canvas-muted');
-    expect(explorerCode).toContain('bg-[var(--appearance-surface)]');
-    expect(explorerCode).toContain('text-[var(--appearance-text-primary)]');
-    expect(explorerCode).toContain('border-[var(--appearance-border)]');
-    expect(explorerCode).toContain('focus:border-[var(--appearance-focus)]');
-    // ...and its search control is a real 44px field on the appearance tokens.
-    expect(explorerCode).toContain('h-11 w-full rounded-standard border border-[var(--appearance-border)]');
   });
 
   it('keeps exactly the two documented fixed brand-green surfaces', () => {
@@ -392,12 +367,6 @@ describe('UX-03 language, copy and boundaries', () => {
     // The slide indicator states its position in both languages.
     expect(HERO).toContain('`Nenda kwenye slaidi ${i + 1} kati ya ${slides.length}`');
     expect(HERO).toContain("'Slide indicator' : 'Kiashiria cha slaidi'");
-    // The explorer now offers the two journeys under the canonical labels, which
-    // resolve in BOTH languages from types.ts instead of a fourth local wording.
-    expect(explorerCode).toContain('{t.ownerBtn}');
-    expect(explorerCode).toContain('{t.finderBtn}');
-    expect(explorerCode).not.toContain('I lost something');
-    expect(explorerCode).not.toContain('I found something');
     expect(read('src/types.ts')).toContain("ownerBtn: 'Nimepoteza Kitu'");
     expect(read('src/types.ts')).toContain("finderBtn: 'Nimepata Kitu'");
     // The discovery catalogue speaks both languages throughout its states.
@@ -428,7 +397,6 @@ describe('UX-03 language, copy and boundaries', () => {
     }
     // The homepage reaches no authenticated surface and imports no dashboard.
     expect(homeCode).not.toMatch(/AgentView|AdminView|OwnerView|FinderView|DashboardShell/);
-    expect(explorerCode).not.toMatch(/AgentView|AdminView|OwnerView|FinderView|DashboardShell/);
     // No fetch, no API contract and no state library entered the homepage.
     expect(homeCode).not.toMatch(/fetch\(/);
     expect(homeCode).not.toMatch(/axios|react-query|redux|zustand/);
@@ -437,7 +405,6 @@ describe('UX-03 language, copy and boundaries', () => {
   it('touches neither the router nor the authentication handoff', () => {
     for (const pattern of [/useNavigate/, /react-router/, /localStorage/, /sessionStorage/, /\/api\//]) {
       expect(homeCode, String(pattern)).not.toMatch(pattern);
-      expect(explorerCode, String(pattern)).not.toMatch(pattern);
     }
   });
 });

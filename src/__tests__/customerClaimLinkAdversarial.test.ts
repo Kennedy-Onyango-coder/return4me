@@ -48,6 +48,10 @@ import { verificationProfiles, getVerificationFields } from '../config/verificat
 // ---------------------------------------------------------------------------
 
 const sms = vi.hoisted(() => ({ sent: [] as Array<{ phone: string; code: string }> }));
+// E1: the codes these routes issue are EMAILED, so the capture list is the email
+// one. `to` is the server-resolved destination (the account's own verified
+// address), and the code is the value the route persisted a hash of.
+const emailOtp = vi.hoisted(() => ({ sent: [] as Array<{ to: string; code: string; eventType: string }> }));
 
 vi.mock('../services/auth', async (importOriginal) => {
   const actual = await importOriginal<any>();
@@ -56,6 +60,26 @@ vi.mock('../services/auth', async (importOriginal) => {
     sendCodeViaSms: vi.fn(async (phone: string, code: string) => {
       sms.sent.push({ phone, code });
       return { success: true, message: 'simulated in test' };
+    }),
+  };
+});
+
+vi.mock('../services/emailOtp', async (importOriginal) => {
+  const actual = await importOriginal<any>();
+  return {
+    ...actual,
+    // Capture-only: the recipient guard, the message constants and the rendered
+    // copy all stay REAL. What is doubled is the transport, exactly as the SMS
+    // gateway used to be doubled here — the OTP challenge itself is still
+    // generated and persisted by the route under test, so the verification path
+    // these suites exist to prove is untouched.
+    sendEmailOtp: vi.fn(async (input: any) => {
+      emailOtp.sent.push({
+        to: String(input?.recipient ?? ''),
+        code: String(input?.code ?? ''),
+        eventType: String(input?.eventType ?? ''),
+      });
+      return { accepted: true, dispatched: true, eventId: 'test-email-event', status: 'sent' };
     }),
   };
 });
@@ -71,6 +95,11 @@ const PHONE_B = phone(1);
 
 const CUSTOMER_A = `TEST-ADV-CUS-A-${RUN}`;
 const CUSTOMER_B = `TEST-ADV-CUS-B-${RUN}`;
+// E1: the verified address each fixture account owns. Derived from the id so it
+// is unique per run and cannot collide on the partial unique index. These are the
+// SERVER-RESOLVED destinations every one-time code is delivered to now.
+const EMAIL_A = `${CUSTOMER_A.toLowerCase()}@example.test`;
+const EMAIL_B = `${CUSTOMER_B.toLowerCase()}@example.test`;
 const TOKEN_A = 'p'.repeat(64);
 const TOKEN_B = 'q'.repeat(64);
 
@@ -120,9 +149,21 @@ function claimRow(id: string, itemId: string, ownerPhone: string, answers: any) 
   } as any;
 }
 
+// E1: every one-time-code flow now resolves its destination SERVER-SIDE from the
+// account's own VERIFIED EMAIL. createCustomerPendingActivation +
+// activateCustomerAccount is the real production pair that produces exactly that
+// state — and it is the only writer of status='active' + email_verified_at, so a
+// fixture built this way cannot drift from what registration actually creates.
+// The address is derived from the customer id, so it is unique per test run and
+// can never collide on the partial unique index.
+async function verifiedCustomer(id: string, name: string, phone: string) {
+  await db.createCustomerPendingActivation(id, name, phone, `${id.toLowerCase()}@example.test`);
+  await db.activateCustomerAccount(id);
+}
+
 async function seed() {
-  await db.createCustomer(CUSTOMER_A, 'Asha Mwangi', PHONE_A);
-  await db.createCustomer(CUSTOMER_B, 'Brian Otieno', PHONE_B);
+  await verifiedCustomer(CUSTOMER_A, 'Asha Mwangi', PHONE_A);
+  await verifiedCustomer(CUSTOMER_B, 'Brian Otieno', PHONE_B);
   const in7 = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   await db.createCustomerSession(`TEST-ADV-SESS-A-${RUN}`, CUSTOMER_A, hashCode(TOKEN_A), in7);
   await db.createCustomerSession(`TEST-ADV-SESS-B-${RUN}`, CUSTOMER_B, hashCode(TOKEN_B), in7);
@@ -182,11 +223,11 @@ async function api(method: string, urlPath: string, token?: string, body?: any) 
 }
 
 // Requests a link OTP through the real route and returns the code that was
-// actually generated and "SMSed".
+// actually generated and EMAILED to the account's own verified address.
 async function requestCode(token: string, claimId: string) {
-  sms.sent.length = 0;
+  emailOtp.sent.length = 0;
   const res = await api('POST', '/api/customer/claims/link/request-otp', token, { claimId });
-  return { res, code: sms.sent.length ? sms.sent[sms.sent.length - 1].code : null };
+  return { res, code: emailOtp.sent.length ? emailOtp.sent[emailOtp.sent.length - 1].code : null };
 }
 
 async function verify(token: string, claimId: string, code: string | null, answers: any) {
@@ -213,8 +254,9 @@ describe('OTP proof: binding, freshness, single-use', () => {
     expect(ttl).toBeLessThanOrEqual(5 * 60 * 1000 + 1000);
     // D: attempt counter starts at zero and is capped by the route.
     expect(record!.attempts).toBe(0);
-    // B: issued only to the claim's registered owner phone (the SMS target).
-    expect(sms.sent[sms.sent.length - 1]?.phone).toBe(PHONE_A);
+    // B: issued only to the account's own VERIFIED EMAIL — resolved server-side
+    // from the account bound to the claim's registered phone (E1).
+    expect(emailOtp.sent[emailOtp.sent.length - 1]?.to).toBe(EMAIL_A);
 
     // G/F: a successful verification consumes the challenge BEFORE creating
     // anything, so replay is impossible.
@@ -363,7 +405,7 @@ describe('session binding and cross-customer attempts', () => {
     expect(await db.getCustomerClaimLinkForClaim(claim(6))).toBeUndefined();
     // The rejected attempt consumed the proof (fail-closed), so a retry needs a
     // fresh challenge — seeded directly here because the route's 30s resend
-    // throttle would otherwise (correctly) refuse a second SMS this quickly.
+    // throttle would otherwise (correctly) refuse a second dispatch this quickly.
     expect(await db.getClaimOtp(claim(6))).toBeUndefined();
     const fresh = '1357';
     await db.setClaimOtp(claim(6), hashCode(fresh), new Date(Date.now() + 5 * 60 * 1000));
@@ -373,13 +415,13 @@ describe('session binding and cross-customer attempts', () => {
   });
 
   it('a foreign session cannot use another customer\'s phone as an authorization shortcut', async () => {
-    sms.sent.length = 0;
+    emailOtp.sent.length = 0;
     const res = await api('POST', '/api/customer/claims/link/request-otp', TOKEN_A, {
       claimId: claim(6), phone: PHONE_B, owner_phone: PHONE_B,
     });
     expect(res.status).toBe(404);
-    // No SMS was dispatched to anyone.
-    expect(sms.sent.length).toBe(0);
+    // No code was dispatched to anyone.
+    expect(emailOtp.sent.length).toBe(0);
   });
 });
 

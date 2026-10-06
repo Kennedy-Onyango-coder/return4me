@@ -119,7 +119,9 @@ describe('N3-F: registration ends in activation-pending, not a session', () => {
     // The phone hint is mode-dependent: login still gets the SMS promise,
     // registration gets the truth (this number is how you will sign in).
     expect(gate).toContain('You will sign in with this number after activating your account.');
-    expect(gate).toContain("We'll text a one-time verification code to this number.");
+    // E1: sign-in no longer texts this number either — the code is emailed to the
+    // verified address on the account, so the hint must not promise an SMS.
+    expect(gate).toContain("We'll email a one-time verification code to the verified email address on your account.");
     expect(gate).toContain("We'll email you a link to activate your account.");
   });
 

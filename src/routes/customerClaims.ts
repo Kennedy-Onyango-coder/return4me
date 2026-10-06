@@ -22,7 +22,13 @@ import crypto from 'crypto';
 import rateLimit from 'express-rate-limit';
 import { db } from '../db/database.ts';
 import { toE164Kenyan, hashCode, timingSafeEqualHex } from '../services/auth.ts';
-import { newSmsIssuanceId, sendSmsNotification } from '../services/smsNotification.ts';
+import {
+  newEmailOtpIssuanceId,
+  sendEmailOtp,
+  emailOtpRecipientIsSafe,
+  EMAIL_OTP_UNAVAILABLE_MESSAGE,
+  EMAIL_VERIFICATION_REQUIRED_MESSAGE,
+} from '../services/emailOtp.ts';
 import { smsRateLimit } from '../services/smsRateLimit.ts';
 import { requireCustomerAuth, generateSecureId, customerOtpLastSent } from '../services/customerAuth.ts';
 import { INACTIVE_CLAIM_STATUSES, isPickupEligibleClaimStatus } from '../config/claimStatuses';
@@ -30,65 +36,75 @@ import { toOwnerSafeAgentView, toOwnerSafeItemView } from '../services/ownerSafe
 import { compareVerificationAnswers, isAnswerValidationFailure } from '../services/verificationValidation';
 
 /**
- * N7 seam for the customer pickup-code resend.
+ * E1 seam for the customer pickup-code resend.
  *
- * Only `accepted` is surfaced, because that is all the caller consumed before
- * N7: it gates whether `db.createPickupCode` is allowed to make the new code
+ * Only `accepted` is surfaced, because that is all the caller consumed before:
+ * it gates whether `db.createPickupCode` is allowed to make the new code
  * authoritative. Preserving that gate exactly is what keeps the existing
- * send-first-then-persist safety property intact — a provider failure must leave
+ * send-first-then-persist safety property intact - a provider failure must leave
  * the previous, still-working code in place.
  *
- * `code` is passed as `smsCode`, never inside `message`, so the durable
- * notification row and every log line stay free of the secret.
+ * The destination is the SIGNED-IN account's own verified email, resolved by
+ * the route from `req.customer` and passed in here; it is never read from the
+ * request body. `code` crosses only as the transient dispatch parameter, so the
+ * durable notification row and every log line stay free of the secret.
  */
-async function sendPickupCodeSms(params: {
-  recipient: string;
+async function sendPickupCodeEmail(params: {
+  destination: string;
   code: string;
 }): Promise<{ success: boolean }> {
-  const outcome = await sendSmsNotification({
-    eventType: 'PICKUP_CODE',
-    recipient: params.recipient,
-    // Each resend regenerates and OVERWRITES the claim's pickup code, so each is
-    // a distinct notification; deduplicating by claimId would suppress every
-    // resend after the first and leave the customer with an undelivered code.
-    //
-    // The claim id is deliberately NOT embedded: N5's key guard rejects any key
-    // whose final token runs 40+ characters of credential-shaped base64url, and
-    // "PICK-<claim id>-<20 hex>" crosses that line, which would silently refuse
-    // every resend with `idempotency_key_contains_secret`.
-    issuanceId: newSmsIssuanceId('PICK'),
-    seam: 'code',
-    code: params.code,
-    label: 'PICKUP CODE',
-    message: `Msimbo wako wa kuchukua bidhaa ni ${params.code}. Tumia msimbo huu wakati wa kukabidhi bidhaa. / Your item pickup code is ${params.code}. Use it when collecting your item.`,
-  });
-  return { success: outcome.accepted };
+  try {
+    const outcome = await sendEmailOtp({
+      eventType: 'PICKUP_CODE_EMAIL',
+      recipient: params.destination,
+      // Each resend regenerates and OVERWRITES the claim's pickup code, so each is
+      // a distinct notification; deduplicating by claimId would suppress every
+      // resend after the first and leave the customer with an undelivered code.
+      //
+      // The claim id is deliberately NOT embedded: N5's key guard rejects any key
+      // whose final token runs 40+ characters of credential-shaped base64url, and
+      // "PICK-<claim id>-<20 hex>" crosses that line, which would silently refuse
+      // every resend with `idempotency_key_contains_secret`.
+      issuanceId: newEmailOtpIssuanceId('PICK'),
+      code: params.code,
+      purpose: 'pickup_code',
+    });
+    return { success: outcome.accepted };
+  } catch (e) {
+    console.error('[PICKUP_CODE_EMAIL_ERROR]', e);
+    return { success: false };
+  }
 }
 
 /**
- * N7 seam for the customer claim-link OTP.
+ * E1 seam for the customer claim-link OTP.
  *
  * The caller already established that this claim's registered number belongs to
- * this customer, so surfacing a delivery failure was safe before N7 and remains
- * safe: the 500/503 status and MESSAGES.smsFailed body are unchanged.
+ * this customer, so surfacing a delivery failure is safe: the status is
+ * unchanged and the body is the sanitised bilingual provider-retry copy. The
+ * destination is the SIGNED-IN account's own verified email, resolved by the
+ * route from `req.customer` - never from the request body.
  */
-async function sendClaimLinkSms(params: {
-  recipient: string;
+async function sendClaimLinkEmail(params: {
+  destination: string;
   code: string;
 }): Promise<{ success: boolean }> {
-  const outcome = await sendSmsNotification({
-    eventType: 'CLAIM_LINK_OTP',
-    recipient: params.recipient,
-    // A new code overwrites the claim's stored challenge, so a new request is a
-    // new notification — see sendPickupCodeSms. As there, the claim id is not
-    // embedded, because it would push the key past N5's secret-shape guard.
-    issuanceId: newSmsIssuanceId('LINK'),
-    seam: 'code',
-    code: params.code,
-    label: 'CLAIM LINK OTP',
-    message: `Msimbo wa kuunganisha claim hii kwenye akaunti yako ni ${params.code}. Unadumu dakika 5. / Your code to link this claim to your account is ${params.code}. It is valid for 5 minutes.`,
-  });
-  return { success: outcome.accepted };
+  try {
+    const outcome = await sendEmailOtp({
+      eventType: 'CLAIM_LINK_OTP_EMAIL',
+      recipient: params.destination,
+      // A new code overwrites the claim's stored challenge, so a new request is a
+      // new notification - see sendPickupCodeEmail. As there, the claim id is not
+      // embedded, because it would push the key past N5's secret-shape guard.
+      issuanceId: newEmailOtpIssuanceId('LINK'),
+      code: params.code,
+      purpose: 'claim_link',
+    });
+    return { success: outcome.accepted };
+  } catch (e) {
+    console.error('[CLAIM_LINK_OTP_EMAIL_ERROR]', e);
+    return { success: false };
+  }
 }
 
 // Claim OTP parameters — deliberately identical to the existing Track Claim OTP
@@ -99,9 +115,9 @@ const CLAIM_OTP_TTL_MS = 5 * 60 * 1000;
 const CLAIM_OTP_MAX_ATTEMPTS = 5;
 const CLAIM_LINK_RESEND_MS = 30 * 1000;
 // P1 (B-2). Cooldown between pickup-code regenerations, per claim. Sized above
-// the SMS round-trip so a client that ignores the UI cannot drive SMS spend
-// against a victim's claim, and small enough that an owner who genuinely lost
-// the first SMS is not locked out for long.
+// the email round-trip so a client that ignores the UI cannot drive delivery
+// spend against a victim's claim, and small enough that an owner who genuinely
+// lost the first message is not locked out for long.
 const PICKUP_CODE_RESEND_COOLDOWN_MS = 2 * 60 * 1000;
 // The payment window the claim lifecycle already uses (agent_confirmed_at + 15
 // minutes — see checkClaimExpiry in server.ts). Used only to derive a
@@ -114,7 +130,11 @@ const MESSAGES = {
   answersInvalid: 'Taarifa ulizotoa hazilingani na claim hii. / The details provided do not match this claim.',
   alreadyLinkedOther: 'Claim hii imeunganishwa na akaunti nyingine. / This claim is already linked to another account.',
   claimIdRequired: 'Weka msimbo wa claim. / Enter the claim ID.',
-  smsFailed: 'Imeshindwa kutuma msimbo kwa sasa. Tafadhali jaribu tena. / Could not send the code right now. Please try again.',
+  // E1 renamed from `smsFailed`: the code no longer travels by SMS, and the
+  // wording itself was always channel-neutral ("could not send the code"). The
+  // route uses it for the unexpected-error path; a provider REFUSAL is a 503
+  // carrying EMAIL_OTP_UNAVAILABLE_MESSAGE instead.
+  codeSendFailed: 'Imeshindwa kutuma msimbo kwa sasa. Tafadhali jaribu tena. / Could not send the code right now. Please try again.',
   // P1 (B-2). Reuses the SAME message as every other "not your claim" refusal in
   // this file so the recovery endpoint cannot become an existence oracle.
   pickupNotAvailable: 'Msimbo wa kuchukua bidhaa haupatikani kwa claim hii kwa sasa. / A pickup code is not available for this claim at this stage.',
@@ -136,8 +156,9 @@ const pickupCodeResendLimiter = rateLimit({
   message: { error: 'Majaribio mengi ya kupata msimbo wa kuchukua bidhaa. Tafadhali subiri kidogo. / Too many pickup code requests. Please wait before trying again.' },
 });
 
-// Every regeneration costs a real SMS, so — exactly as with the claim-link OTP
-// above — there is a hard platform-wide ceiling that does not depend on IP.
+// Every regeneration costs a real email dispatch, so — exactly as with the
+// claim-link OTP above — there is a hard platform-wide ceiling that does not
+// depend on IP.
 const pickupCodeResendGlobalLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: process.env.NODE_ENV === 'production' ? 30 : 1000,
@@ -159,8 +180,8 @@ const claimLinkLimiter = rateLimit({
 });
 
 // IP-independent platform-wide ceiling on claim-link OTP sends. Mirrors
-// otpGlobalLimiter in server.ts: every send costs a real SMS and a per-IP
-// limiter alone is bypassable on a deployment where `trust proxy` does not
+// otpGlobalLimiter in server.ts: every send costs a real email dispatch and a
+// per-IP limiter alone is bypassable on a deployment where `trust proxy` does not
 // match the real hop count, so the hard ceiling must not depend on IP.
 const claimLinkGlobalOtpLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -228,8 +249,9 @@ export function registerCustomerClaimRoutes(
   // PICKUP-CODE RECOVERY (P1 / B-2).
   //
   // WHY THIS EXISTS. When a claim reaches 'escrow_held' the platform generates a
-  // 6-digit pickup code, persists ONLY its hash, and sends the plaintext by SMS
-  // (fire-and-forget). If that SMS is never delivered the owner holds no copy at
+  // 6-digit pickup code, persists ONLY its hash, and sends the plaintext by email
+  // (fire-and-forget at payment time; E1 then re-homed this resend onto the email
+  // OTP seam). If that message never arrives the owner holds no copy at
   // all, the agent is correctly blocked from completing the handover, and the
   // money stays in escrow with no way forward. There was previously NO recovery
   // path: the plaintext is not stored, so it is not recoverable.
@@ -282,9 +304,21 @@ export function registerCustomerClaimRoutes(
           return res.status(409).json({ error: MESSAGES.pickupNotAvailable });
         }
 
+        // E1: the destination is THIS session's own verified email, resolved
+        // server-side; the request body never supplies one. Fail closed BEFORE
+        // the cooldown is spent and before a code is generated, so an account
+        // without a verified address cannot burn its own throttle.
+        const destination =
+          req.customer.email && req.customer.email_verified_at && emailOtpRecipientIsSafe(req.customer.email)
+            ? req.customer.email
+            : null;
+        if (!destination) {
+          return res.status(403).json({ error: EMAIL_VERIFICATION_REQUIRED_MESSAGE });
+        }
+
         // Cooldown. Keyed on the claim, mirroring the existing customerOtpLastSent
         // throttle used by the claim-link OTP, so a client that ignores the UI
-        // cannot drive SMS spend against a victim's claim.
+        // cannot drive delivery spend against a victim's claim.
         const throttleKey = claimId + ':pickup-resend';
         if (Date.now() - (customerOtpLastSent.get(throttleKey) || 0) < PICKUP_CODE_RESEND_COOLDOWN_MS) {
           return res.status(429).json({ error: MESSAGES.pickupCooldown });
@@ -298,7 +332,7 @@ export function registerCustomerClaimRoutes(
         // SEND BEFORE PERSIST — this ordering is deliberate and IS the fix for
         // the original defect.
         //
-        // If we stored first and the SMS then failed, the previous (possibly
+        // If we stored first and the email then failed, the previous (possibly
         // already-known-to-the-agent) code would be destroyed and the new one
         // would never arrive: the owner would have NO usable code and no way to
         // obtain one, which is exactly the permanent strand we are removing.
@@ -310,19 +344,19 @@ export function registerCustomerClaimRoutes(
         // Delivery is judged on the provider's ACCEPTANCE result, never on the
         // absence of an exception. The system can prove acceptance, never
         // handset delivery, and the message must not overclaim.
-        const smsResult = await sendPickupCodeSms({
-          recipient: claim.owner_phone,
+        const emailResult = await sendPickupCodeEmail({
+          destination,
           code,
         });
 
-        if (!smsResult.success) {
+        if (!emailResult.success) {
           // Nothing was persisted, so the previous code is still the live one.
           await db.logAudit(
             String(req.customer.id),
             'PICKUP_CODE_RESEND_FAILED',
-            `Claim ${claimId}: pickup code resend attempted but the SMS provider did not accept the message. The existing pickup code was left unchanged.`
+            `Claim ${claimId}: pickup code resend attempted but the email provider did not accept the message. The existing pickup code was left unchanged.`
           );
-          return res.status(503).json({ error: MESSAGES.smsFailed });
+          return res.status(503).json({ error: EMAIL_OTP_UNAVAILABLE_MESSAGE });
         }
 
         // Provider accepted. Only now is the new code made authoritative, which
@@ -331,14 +365,14 @@ export function registerCustomerClaimRoutes(
         await db.logAudit(
           String(req.customer.id),
           'PICKUP_CODE_RESENT',
-          `Claim ${claimId}: a new pickup code was generated and accepted by the SMS provider. The previous code is now invalid.`
+          `Claim ${claimId}: a new pickup code was generated and accepted by the email provider. The previous code is now invalid.`
         );
 
         // Deliberately minimal: no code, no hash, no phone, no provider reference.
         return res.json({ success: true });
       } catch (e) {
         console.error('[CUSTOMER_PICKUP_CODE_RESEND_ERROR]', e);
-        return res.status(500).json({ error: MESSAGES.smsFailed });
+        return res.status(500).json({ error: MESSAGES.codeSendFailed });
       }
     }
   );
@@ -347,7 +381,7 @@ export function registerCustomerClaimRoutes(
   // STEP 1 — request the claim OTP for an explicit link.
   //
   // Reuses the EXISTING claim-OTP challenge store (db.setClaimOtp) and the
-  // existing SMS gateway. It deliberately does NOT call the public
+  // existing notification seam (E1: email, was the SMS gateway). It deliberately does NOT call the public
   // POST /api/claims/:id/verify-otp route, because that route also performs a
   // lifecycle transition (status -> awaiting_agent_confirmation). Running that
   // against an already-paid or already-collected claim during linking would
@@ -379,7 +413,18 @@ export function registerCustomerClaimRoutes(
           return res.status(404).json({ error: MESSAGES.notLinked });
         }
 
-        // Already linked? Say so plainly rather than sending another SMS.
+        // E1: the destination is THIS session's own verified email, resolved
+        // server-side; the request body never supplies one. Fail closed BEFORE
+        // the throttle window is set and before a code is persisted.
+        const destination =
+          req.customer.email && req.customer.email_verified_at && emailOtpRecipientIsSafe(req.customer.email)
+            ? req.customer.email
+            : null;
+        if (!destination) {
+          return res.status(403).json({ error: EMAIL_VERIFICATION_REQUIRED_MESSAGE });
+        }
+
+        // Already linked? Say so plainly rather than issuing another code.
         const existingLink = await db.getCustomerClaimLinkForClaim(claimId);
         if (existingLink && existingLink.customer_id === req.customer.id) {
           return res.json({ success: true, alreadyLinked: true, claimId });
@@ -407,18 +452,18 @@ export function registerCustomerClaimRoutes(
         await db.setClaimOtp(claimId, hashCode(code), new Date(Date.now() + CLAIM_OTP_TTL_MS));
         customerOtpLastSent.set(throttleKey, Date.now());
 
-        const smsResult = await sendClaimLinkSms({
-          recipient: claim.owner_phone,
+        const emailResult = await sendClaimLinkEmail({
+          destination,
           code,
         });
         // Safe to surface a delivery failure here: the claim is already
         // confirmed to be this customer's own registered number, so there is no
         // enumeration signal to leak.
-        if (!smsResult.success) {
-          return res.status(500).json({ error: MESSAGES.smsFailed });
+        if (!emailResult.success) {
+          return res.status(503).json({ error: EMAIL_OTP_UNAVAILABLE_MESSAGE });
         }
 
-        return res.json({ success: true, categoryId, message: 'Msimbo umetumwa kwa nambari iliyosajiliwa kwenye claim hii. / A code has been sent to the phone number registered on this claim.' });
+        return res.json({ success: true, categoryId, message: 'Msimbo umetumwa kwenye barua pepe yako iliyothibitishwa. / A code has been sent to your verified email address.' });
       } catch (e) {
         console.error('[CUSTOMER_CLAIM_LINK_OTP_ERROR]', e);
         return res.status(500).json({ error: 'Hitilafu imetokea upande wa seva. Tafadhali jaribu tena baadaye.' });

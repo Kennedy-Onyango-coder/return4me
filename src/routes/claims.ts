@@ -60,8 +60,14 @@
 //    stays anonymous. Full rationale and blast radius are on the route itself.
 import crypto from 'crypto';
 import { db } from '../db/database.ts';
-import { toE164Kenyan, hashCode, timingSafeEqualHex, SMS_UNAVAILABLE_MESSAGE } from '../services/auth.ts';
-import { newSmsIssuanceId, sendSmsNotification } from '../services/smsNotification.ts';
+import { toE164Kenyan, hashCode, timingSafeEqualHex } from '../services/auth.ts';
+import {
+  newEmailOtpIssuanceId,
+  sendEmailOtp,
+  emailOtpRecipientIsSafe,
+  EMAIL_OTP_UNAVAILABLE_MESSAGE,
+  EMAIL_VERIFICATION_REQUIRED_MESSAGE,
+} from '../services/emailOtp.ts';
 import { smsRateLimit } from '../services/smsRateLimit.ts';
 import { isValidImageSignature } from '../services/imageSignature.ts';
 import { uploadBase64Image } from '../services/storage.ts';
@@ -74,51 +80,69 @@ import { produceClaimVerificationAccepted } from '../services/claimNotificationP
 import { toOwnerSafeClaimView } from '../services/ownerSafeViews.ts';
 
 /**
- * N7 seam for the Track-Claim OTP.
+ * E1 seam for the Track-Claim OTP.
  *
- * Maps the notification outcome back onto the EXACT contract
- * `sendCodeViaSms` returned to this route before N7, so the handler's status
- * codes and user-facing strings are untouched:
+ * The destination is resolved SERVER-SIDE from the authoritative record and is
+ * never taken from the request: the customer account registered to this claim's
+ * owner phone, and only when its email address is already verified. A claim
+ * whose phone has no such account FAILS CLOSED - no email is attempted - and
+ * that refusal is flagged so the route can answer 403 rather than the 503
+ * reserved for a temporary delivery failure.
  *
- *   accepted -> { success: true,  message: <the composed message> }
- *   rejected -> { success: false, message: <the generic provider retry text> }
+ * Maps the notification outcome back onto the route's contract:
+ *   accepted -> { success: true,  message: <bilingual confirmation> }
+ *   refused -> { success: false, message: <sanitised retry text> }
  *
- * Note the failure message is deliberately the gateway's own sanitised text
- * (SMS_UNAVAILABLE_MESSAGE), not `NotificationResult.reason` — `reason` names
- * internal policy (duplicate / rate-limited / provider error) and this route
- * forwards the message straight to the end user on 503. Surfacing it would leak
- * notification internals and, for a duplicate, would tell a legitimate user
- * something the gateway never told them.
+ * Note the failure message is deliberately sanitised bilingual copy, not
+ * `NotificationResult.reason` - `reason` names internal policy (duplicate /
+ * rate-limited / provider error) and this route forwards the message straight
+ * to the end user on 503. Surfacing it would leak notification internals and,
+ * for a duplicate, would tell a legitimate user something the gateway never
+ * told them.
  */
-async function sendClaimVerificationSms(params: {
-  recipient: string;
+async function sendClaimVerificationEmail(params: {
+  ownerPhone: string;
   code: string;
-}): Promise<{ success: boolean; message: string }> {
-  const message = `Msimbo mpya wa thibitisho la claim umetumwa kwa nambari ya simu ya ${params.recipient}.`;
-  const outcome = await sendSmsNotification({
-    eventType: 'OWNER_CLAIM_VERIFICATION_CODE',
-    recipient: params.recipient,
-    // The claim-OTP store is keyed by claimId and OVERWRITES on each request,
-    // so a new code is a new notification. Binding the key to the claimId alone
-    // would suppress every resend after the first — leaving the owner with a
-    // code they never received. Each issuance gets its own opaque reference.
-    //
-    // The claim id is deliberately NOT part of this reference. N5's key guard
-    // rejects any key whose final token runs 40+ characters of credential-shaped
-    // base64url, and "CLM-<id>-<20 hex>" crosses that line — every claim OTP
-    // would have been silently refused with `idempotency_key_contains_secret`.
-    // The issuance reference alone is unique and sufficient; the claim is
-    // already identifiable from the event type and the masked recipient.
-    issuanceId: newSmsIssuanceId('CLMOTP'),
-    seam: 'code',
-    code: params.code,
-    label: 'CLAIM OTP',
-    message,
-  });
-  return {
-    success: outcome.accepted,
-    message: outcome.accepted ? message : SMS_UNAVAILABLE_MESSAGE,
-  };
+}): Promise<{ success: boolean; message: string; noVerifiedEmail?: boolean }> {
+  const canonicalPhone = toE164Kenyan(String(params.ownerPhone || '').replace(/\s+/g, ''));
+  const customer = await db.getCustomerByPhone(canonicalPhone).catch(() => null);
+  const destination =
+    customer && customer.email && customer.email_verified_at && emailOtpRecipientIsSafe(customer.email)
+      ? customer.email
+      : null;
+  if (!destination) {
+    return { success: false, message: EMAIL_VERIFICATION_REQUIRED_MESSAGE, noVerifiedEmail: true };
+  }
+  const message =
+    'Msimbo mpya wa thibitisho la claim umetumwa kwenye barua pepe yako iliyothibitishwa. / A new claim verification code has been sent to your verified email address.';
+  try {
+    const outcome = await sendEmailOtp({
+      eventType: 'OWNER_CLAIM_VERIFICATION_CODE_EMAIL',
+      recipient: destination,
+      // The claim-OTP store is keyed by claimId and OVERWRITES on each request,
+      // so a new code is a new notification. Binding the key to the claimId
+      // alone would suppress every resend after the first - leaving the owner
+      // with a code they never received. Each issuance gets its own opaque
+      // reference.
+      //
+      // The claim id is deliberately NOT part of this reference. N5's key guard
+      // rejects any key whose final token runs 40+ characters of credential-shaped
+      // base64url, and "CLM-<id>-<20 hex>" crosses that line - every claim OTP
+      // would have been silently refused with `idempotency_key_contains_secret`.
+      // The issuance reference alone is unique and sufficient; the claim is
+      // already identifiable from the event type.
+      issuanceId: newEmailOtpIssuanceId('CLMOTP'),
+      code: params.code,
+      purpose: 'claim_verification',
+    });
+    return {
+      success: outcome.accepted,
+      message: outcome.accepted ? message : EMAIL_OTP_UNAVAILABLE_MESSAGE,
+    };
+  } catch (e) {
+    console.error('[CLAIM_OTP_EMAIL_ERROR]', e);
+    return { success: false, message: EMAIL_OTP_UNAVAILABLE_MESSAGE };
+  }
 }
 
 export function registerClaimRoutes(
@@ -497,7 +521,7 @@ export function registerClaimRoutes(
       }
 
       // P0: claim ID alone (a guessable, ~900k-combination numeric space)
-      // used to be sufficient to trigger an OTP SMS to this claim's real
+      // used to be sufficient to trigger an OTP to this claim's real
       // owner_phone — no proof the caller was that owner at all. Now
       // requires the same phone-match standard already used by /lookup,
       // /pay, and /payment-auth elsewhere in this file.
@@ -516,7 +540,7 @@ export function registerClaimRoutes(
 
       // SC-1 (companion guard): an OTP is only meaningful for a claim still
       // awaiting its first verification. Without this, the route would happily
-      // send a real SMS to the owner of an already-paid/handed-over/refunded
+      // send a real one-time code to the owner of an already-paid/handed-over/refunded
       // claim and set up exactly the backward transition the verify-otp guard
       // above now refuses. Returns 409 (a state conflict, not a bad request).
       //
@@ -536,36 +560,38 @@ export function registerClaimRoutes(
       await db.setClaimOtp(claimId, hashCode(code), expiresAt);
 
       // BUGFIX: this used to only console.log the raw OTP code and the
-      // owner's full phone number — unconditionally, even in production —
-      // and never actually sent an SMS at all. A real owner in production
-      // would never have received this code on their phone. Now routed
-      // through the same gateway phone-verification OTP uses; the raw
-      // code is only ever printed to the console in dev/sandbox
-      // simulation mode (no real Africa's Talking credentials configured),
-      // clearly labeled as such — see sendCodeViaSms in services/auth.ts.
-      // N7: delivery now goes through the notification boundary, so this route gains
-      // a durable notification record and N5/N6 idempotency. Code generation, the
-      // 5-minute expiry, the claim-OTP store key and the persist-then-send ordering
-      // above are unchanged; the result is mapped back onto the exact pre-N7
-      // response shape, including the 503 + provider retry message below.
-      const smsResult = await sendClaimVerificationSms({
-        recipient: claim.owner_phone,
+      // owner's full phone number - unconditionally, even in production - and
+      // never actually sent anything at all. A real owner in production would
+      // never have received this code. E1: delivery goes to the owner's
+      // VERIFIED EMAIL through the notification boundary, so this route gains a
+      // durable notification record (OWNER_CLAIM_VERIFICATION_CODE_EMAIL) and
+      // N5/N6 idempotency. Code generation, the 5-minute expiry, the claim-OTP
+      // store key and the persist-then-send ordering above are unchanged; the
+      // result is mapped back onto the response shape below.
+      const emailResult = await sendClaimVerificationEmail({
+        ownerPhone: claim.owner_phone,
         code,
       });
-      if (!smsResult.success) {
-        // P1 (B-4). A provider-side SMS rejection is a TEMPORARY, RETRYABLE
+      if (!emailResult.success) {
+        if (emailResult.noVerifiedEmail) {
+          // NOT retryable by the caller: this claim's owner phone has no
+          // customer account with a verified email address. Reachable only
+          // AFTER the phone-match proof above, so it discloses nothing to a
+          // caller who does not already hold the owner's number.
+          return res.status(403).json({ error: emailResult.message });
+        }
+        // P1 (B-4). A provider-side rejection is a TEMPORARY, RETRYABLE
         // condition, not an internal server fault. 500 told the user (and any
         // monitoring) that our application broke, which is both false and
         // discourages a retry that would very likely now succeed. 503 with the
-        // provider's own (already-sanitised) Swahili/English retry message is
-        // the honest signal. The message never contains provider credentials or
-        // raw provider detail — it is composed by sendCodeViaSms.
-        return res.status(503).json({ error: smsResult.message });
+        // sanitised Swahili/English retry message is the honest signal. The
+        // message never contains provider credentials or raw provider detail.
+        return res.status(503).json({ error: emailResult.message });
       }
 
       res.json({
         success: true,
-        message: smsResult.message,
+        message: emailResult.message,
       });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
@@ -648,7 +674,8 @@ export function registerClaimRoutes(
       // F11 (Phase 7C.3) — IDENTITY CONTINUITY. Everything above is the
       // authoritative, already-committed verification and must NOT depend on
       // anything below. The claim journey has always been valid for anonymous
-      // visitors (the claim OTP is sent to the claim's own registered phone),
+      // visitors (the claim OTP is emailed to the verified address registered
+      // against the claim's own phone),
       // so the customer-account link is strictly ADDITIVE and is attempted
       // only once the OTP is spent:
       //

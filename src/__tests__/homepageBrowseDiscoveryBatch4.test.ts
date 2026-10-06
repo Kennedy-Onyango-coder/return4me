@@ -260,7 +260,7 @@ describe('HOMEPAGE BATCH 4 — preservation tripwires', () => {
     const body = homeViewTsx.slice(homeViewTsx.indexOf('return ('));
     const order = [
       'aria-roledescription="carousel"',           // 1. hero
-      '<CategoryExplorer',                        // 2. service discovery
+      'Vetted Agents Only',                        // 2. trust strip
       'Found something? Help it find its way home.', // 3. Earn & Return
       'id="found-items"',                         // 4. Recently found
       'id="how-it-works"',                        // 5. How it works

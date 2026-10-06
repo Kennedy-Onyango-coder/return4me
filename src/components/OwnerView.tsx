@@ -89,8 +89,8 @@ const CLAIM_STAGE_GUIDE: {
   {
     title: { en: 'Prove ownership', sw: 'Thibitisha umiliki' },
     what: {
-      en: 'Answer the security questions, then enter the SMS code we send to your phone.',
-      sw: 'Jibu maswali ya usalama, kisha weka msimbo wa SMS tutakaotuma kwenye simu yako.',
+      en: 'Answer the security questions, then enter the code we send to your verified email address.',
+      sw: 'Jibu maswali ya usalama, kisha weka msimbo tutakaotuma kwenye barua pepe yako iliyothibitishwa.',
     },
     actor: { en: 'You', sw: 'Wewe' },
   },
@@ -370,9 +370,11 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
   // only { success: true }, so there is nothing secret to keep in client state
   // and nothing that could end up in localStorage/sessionStorage. Deliberately
   // not persisted across a refresh — the owner's real source of truth remains
-  // the SMS the server sent.
+  // the message the server sent: the payment email, if the claim carried an
+  // address, or the fresh code the signed-in dashboard resend issues to the
+  // account's verified email. Which of those applies is not a client-side fact.
   const [pickupCodeResendState, setPickupCodeResendState] = useState<
-    { status: 'idle' | 'sending' | 'sent' | 'error' }
+    { status: 'idle' | 'sending' | 'sent' | 'error'; message?: string }
   >({ status: 'idle' });
 
   // P1 (B-2). Asks the server to issue a fresh pickup code. It never reads,
@@ -393,7 +395,15 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
         setPickupCodeResendState({ status: 'sent' });
         return;
       }
-      setPickupCodeResendState({ status: 'error' });
+      // The SERVER decides why a code could not be sent, and its wording is the
+      // accurate one: a transient provider refusal and email delivery being
+      // unavailable (no verified address on file, or the provider rejecting) are
+      // different situations, and only the server knows
+      // which applies. A hard-coded client string here told every owner to
+      // "try again shortly", including when retrying could not possibly help.
+      // The fallback below is used only when the response carries no text.
+      const data = await response.json().catch(() => ({}));
+      setPickupCodeResendState({ status: 'error', message: data?.error || undefined });
     } catch {
       setPickupCodeResendState({ status: 'error' });
     }
@@ -815,7 +825,10 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
     }
   };
 
-  // Request fresh SMS OTP for Owner validation (Tier 2 OTP)
+  // Request a fresh claim OTP for Owner validation (Tier 2 OTP). E1: the code is
+  // delivered to the claim owner's VERIFIED EMAIL ADDRESS; the phone number below
+  // is what the server matches the claim against, and the destination is resolved
+  // from that authoritative record — never from the browser.
   const triggerOtpRequest = async (claimId: string) => {
     setErrorMsg('');
     try {
@@ -1499,7 +1512,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
             {/* Contact Phone for OTP */}
             <div className="space-y-1">
-              <label htmlFor="owner-phone" className="block text-caption font-bold text-ink uppercase tracking-wider">{lang === 'en' ? 'Your Phone Number (For SMS OTP)' : 'Nambari Yako ya Simu (Kwa OTP ya SMS)'} *</label>
+              <label htmlFor="owner-phone" className="block text-caption font-bold text-ink uppercase tracking-wider">{lang === 'en' ? 'Your Phone Number (Matched Against Your Claim)' : 'Nambari Yako ya Simu (Inayolinganishwa na Dai Lako)'} *</label>
               <input
                 id="owner-phone"
                 type="tel"
@@ -1623,12 +1636,12 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           </div>
           <div>
             <h2 className="text-xl font-extrabold text-primary-green mb-1">
-              {lang === 'en' ? 'Verify your SMS code' : 'Thibitisha msimbo wako wa SMS'}
+              {lang === 'en' ? 'Verify your code' : 'Thibitisha msimbo wako'}
             </h2>
             <p className="text-ink-muted text-xs">
               {lang === 'en'
-                ? `Enter the 4-digit code we sent to ${ownerPhone}.`
-                : `Weka msimbo wa tarakimu 4 tulioutuma kwa ${ownerPhone}.`}
+                ? 'Enter the 4-digit code we sent to the verified email address on this claim.'
+                : 'Weka msimbo wa tarakimu 4 tulioutuma kwenye barua pepe iliyothibitishwa ya dai hili.'}
             </p>
           </div>
 
@@ -2016,8 +2029,8 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             ) : (
               <p className="text-sm text-stone-100 font-semibold">
                 {lang === 'sw'
-                  ? 'Tumekutumia msimbo wa siri wa nambari 6 kwa SMS na barua pepe. Tafuta ujumbe kutoka Return4me.'
-                  : 'We\'ve sent a secret 6-digit code to your phone (SMS) and email. Look for a message from Return4me.'}
+                  ? 'Tumekutumia msimbo wako wa siri wa nambari 6. Tafuta barua pepe kutoka Return4me.'
+                  : 'We\'ve sent your secret 6-digit code. Look for an email from Return4me.'}
               </p>
             )}
             <p className="text-caption text-stone-300">
@@ -2050,15 +2063,17 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               {pickupCodeResendState.status === 'sent' && (
                 <p role="status" className="text-caption font-bold text-accent-orange mt-2">
                   {lang === 'sw'
-                    ? 'Msimbo mpya umetumwa kwa nambari yako. Angalia ujumbe wa Return4me.'
-                    : 'A new code has been sent to your phone. Look for a message from Return4me.'}
+                    ? 'Msimbo mpya umetumwa kwenye barua pepe yako. Angalia barua pepe kutoka Return4me.'
+                    : 'A new code has been sent to your email address. Look for an email from Return4me.'}
                 </p>
               )}
               {pickupCodeResendState.status === 'error' && (
                 <p role="alert" className="text-caption font-bold text-stone-100 mt-2">
-                  {lang === 'sw'
-                    ? 'Hatukuweza kutuma msimbo kwa sasa. Hakuna msimbo uliobadilishwa — jaribu tena baadaye.'
-                    : 'We could not send a code right now. Your existing code is unchanged — please try again shortly.'}
+                  {pickupCodeResendState.message
+                    ? pickupCodeResendState.message
+                    : lang === 'sw'
+                      ? 'Hatukuweza kutuma msimbo kwa sasa. Hakuna msimbo uliobadilishwa — jaribu tena baadaye.'
+                      : 'We could not send a code right now. Your existing code is unchanged — please try again shortly.'}
                 </p>
               )}
             </div>
@@ -2066,7 +2081,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
           {simulatedPickupCode && (
             <div className="bg-status-warning-surface border border-dashed border-status-warning-border text-status-warning p-3 rounded-xl text-caption font-bold">
-              {lang === 'sw' ? 'Hali ya majaribio: msimbo huu umeonyeshwa hapa kwa sababu SMS/barua pepe halisi haitumwi wakati wa majaribio ya ndani.' : 'Test mode: this code is shown here because real SMS/email isn\'t sent during local testing.'}
+              {lang === 'sw' ? 'Hali ya majaribio: msimbo huu umeonyeshwa hapa kwa sababu barua pepe halisi haitumwi wakati wa majaribio ya ndani.' : 'Test mode: this code is shown here because real email isn\'t sent during local testing.'}
             </div>
           )}
 
@@ -2079,8 +2094,8 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               </p>
               <p className="text-status-warning">
                 {lang === 'sw'
-                  ? 'Lazima umpe wakala msimbo huu wa siri ili kuchukua bidhaa yako physically. Kuupoteza kunaweza kuchelewesha kuchukua kwako — angalia SMS/barua pepe yako tena ikiwa unahitaji kuupata tena.'
-                  : 'You must give this exact secret code to the agent in person to collect your item. Losing it may delay your pickup — check your SMS/email again if you need to retrieve it.'}
+                  ? 'Lazima umpe wakala msimbo huu wa siri ili kuchukua bidhaa yako physically. Kuupoteza kunaweza kuchelewesha kuchukua kwako — angalia barua pepe yako tena ikiwa unahitaji kuupata tena.'
+                  : 'You must give this exact secret code to the agent in person to collect your item. Losing it may delay your pickup — check your email again if you need to retrieve it.'}
               </p>
             </div>
           </div>

@@ -245,7 +245,9 @@ describe('UX-10 explains the role in six ordered sections', () => {
   it('reports the stages the existing agent surface already states, in the same order', () => {
     expect(AGENT_VIEW).toContain('1. Verification of Business Details & Location');
     expect(AGENT_VIEW).toContain('2. Secure KYC & National ID Hash Review');
-    expect(AGENT_VIEW).toContain('3. SMS or Email notification dispatch upon activation!');
+    // E1: activation notice is email-only (SMS_ENABLED=false), so the stage
+    // AgentView states must match what the platform actually sends.
+    expect(AGENT_VIEW).toContain('3. Email notification dispatch upon activation!');
     const steps = sliceBetween(VIEW_TSX, 'const approvalSteps = [', 'const approvalNotes');
     const labels = [...steps.matchAll(/label: t\('([^']+)'/g)].map((m) => m[1]);
     expect(labels[0]).toMatch(/location/i);

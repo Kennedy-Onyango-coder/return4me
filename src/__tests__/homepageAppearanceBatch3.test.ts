@@ -29,8 +29,8 @@ describe('HOMEPAGE BATCH 3 - appearance token migration', () => {
   // ------------------------------------------- migrated page surfaces
   it('renders page surfaces with the semantic appearance tokens', () => {
     // The light-mode page sections (Trust strip, Earn & Return, Recently found,
-    // How it works, One network) are the surface token; the category section and
-    // the media placeholders are the muted surface.
+    // How it works, One network) are the surface token; the media placeholders
+    // are the muted surface.
     expect(code).toMatch(/section className="bg-\[var\(--appearance-surface\)\]/);
     expect(code).toMatch(/bg-\[var\(--appearance-surface\)\] p-6/);
     expect(code).toMatch(/bg-\[var\(--appearance-background\)\] py-14/);
@@ -145,7 +145,6 @@ describe('HOMEPAGE BATCH 3 - appearance token migration', () => {
     const order = [
       'HERO STORY SLIDESHOW',
       'TRUST STRIP',
-      'SERVICE DISCOVERY / CATEGORIES',
       'EARN & RETURN MARKETING',
       'RECENT FOUND ITEMS',
       'ONE NETWORK',

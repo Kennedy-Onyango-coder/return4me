@@ -741,8 +741,8 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
             <p className="mx-auto max-w-sm text-body leading-relaxed text-[var(--appearance-text-muted)]">
               {showOtp
                 ? tr(
-                    'Enter the one-time code we sent to your phone by SMS.',
-                    'Weka msimbo wa mara moja tulioutuma kwa simu yako kwa SMS.'
+                    'Enter the one-time code we sent to your verified email address.',
+                    'Weka msimbo wa mara moja tulioutuma kwenye barua pepe yako iliyothibitishwa.'
                   )
                 : isRegistering
                   ? t.agentSubtitle
@@ -1072,14 +1072,14 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                 <span className="font-bold block mb-1">Mchakato wa Kuidhinisha:</span>
                 <span>1. Uhakiki wa maelezo ya biashara na mahali ilipo</span>
                 <span>2. Uhakiki salama wa Kitambulisho cha Kitaifa (KYC)</span>
-                <span>3. Utapokea ujumbe wa SMS au barua pepe maombi yako yakishaidhinishwa!</span>
+                <span>3. Utapokea barua pepe maombi yako yakishaidhinishwa!</span>
               </>
             ) : (
               <>
                 <span className="font-bold block mb-1">Onboarding Process:</span>
                 <span>1. Verification of Business Details & Location</span>
                 <span>2. Secure KYC & National ID Hash Review</span>
-                <span>3. SMS or Email notification dispatch upon activation!</span>
+                <span>3. Email notification dispatch upon activation!</span>
               </>
             )}
           </div>
@@ -1231,8 +1231,8 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                 </h3>
                 <p className="text-small text-[var(--appearance-text-muted)] leading-relaxed font-semibold">
                   {lang === 'en'
-                    ? 'Ask the owner to read out their secret pickup code (sent to them by SMS/email when they paid). Enter it below to release payment. This cannot be undone.'
-                    : 'Muulize mmiliki asome msimbo wake wa siri wa kuchukua (uliotumwa kwake kwa SMS/barua pepe alipolipa). Weka hapa chini kutoa malipo. Kitendo hiki hakiwezi kubatilishwa.'}
+                    ? 'Ask the owner to read out their secret pickup code (emailed to them when they paid). Enter it below to release payment. This cannot be undone.'
+                    : 'Muulize mmiliki asome msimbo wake wa siri wa kuchukua (uliotumwa kwake kwa barua pepe alipolipa). Weka hapa chini kutoa malipo. Kitendo hiki hakiwezi kubatilishwa.'}
                 </p>
               </div>
             </div>

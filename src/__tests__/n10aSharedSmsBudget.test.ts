@@ -42,6 +42,8 @@ import { hashCode } from '../services/auth';
 import { CUSTOMER_SESSION_COOKIE } from '../services/customerAuth';
 import { registerCustomerAccountRoutes } from '../routes/customerAccount';
 import { registerCustomerClaimRoutes } from '../routes/customerClaims';
+import { __setEmailProvider } from '../services/notificationService';
+import { IDENTITY_EMAIL_RATE_LIMIT_MESSAGE } from '../services/identityChangeRateLimit';
 
 const RUN = Math.floor(100000 + Math.random() * 899999).toString(36).toUpperCase();
 
@@ -71,6 +73,13 @@ const B = scenario(2);
 const C = scenario(3);
 const D = scenario(4);
 const E = scenario(5);
+
+/**
+ * E1: the verified address each scenario's account owns — the SERVER-RESOLVED
+ * destination every code is delivered to now (derived from the id, so unique per
+ * run and safe against the partial unique index on email).
+ */
+const emailFor = (who: { id: string }) => `${who.id.toLowerCase()}@example.test`;
 
 /** The claim owned by C's registered number, used by the cross-producer test. */
 const ITEM_C = 'TEST-N10A-ITEM-C-' + RUN;
@@ -117,9 +126,24 @@ const RATE_LIMIT_MESSAGE =
 beforeAll(async () => {
   const week = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   for (const who of [A, B, C, D, E]) {
-    await db.createCustomer(who.id, 'N10-A ' + who.id, who.phone);
+    // E1: every one-time code is delivered to the account's own VERIFIED EMAIL,
+    // so each fixture principal needs one. The real production pair
+    // (createCustomerPendingActivation + activateCustomerAccount) is the only
+    // writer of that state.
+    await db.createCustomerPendingActivation(who.id, 'N10-A ' + who.id, who.phone, emailFor(who));
+    await db.activateCustomerAccount(who.id);
     await db.createCustomerSession(who.session, who.id, hashCode(who.token), week);
   }
+  // The email provider is a CAPTURE adapter, exactly as the SMS provider is in
+  // the N6/N7 suites: dispatch SUCCEEDS, so what these tests measure is the
+  // budget and the route behaviour, never a missing credential. The real seam is
+  // untouched, so a genuine notification_events row is still written.
+  __setEmailProvider({
+    name: 'capture-n10a',
+    async send() {
+      return { accepted: true, providerMessageId: null, error: null };
+    },
+  });
 
   // A claim owned by C's registered number and NOT yet linked, so the claim-link
   // OTP route reaches its real SMS dispatch in the cross-producer test.
@@ -176,10 +200,11 @@ describe('N10-A — the identity route spends the shared SMS budget', () => {
     expect(res.status).toBe(200);
     expect(res.body?.success).toBe(true);
     // The existing flow is untouched: a changeId is returned and a verification
-    // code really was handed to the delivery seam.
+    // code really was handed to the delivery seam — addressed to the account's
+    // own verified email (E1: the new number is never a delivery destination).
     expect(typeof res.body?.changeId).toBe('string');
     expect(sentCodes.length).toBe(before + 1);
-    expect(sentCodes[sentCodes.length - 1].destination).toBe(A.phone);
+    expect(sentCodes[sentCodes.length - 1].destination).toBe(emailFor(A));
   });
 
   it('B: the fourth request from the same principal and IP is refused with the standard 429', async () => {
@@ -235,11 +260,18 @@ describe('N10-A — the identity route spends the shared SMS budget', () => {
     expect(res.body?.success).toBe(true);
   });
 
-  it('E: an email identity change spends no SMS budget', async () => {
-    // The limiter is consulted only when an SMS would actually be dispatched.
-    // Metering an email change would consume an SMS budget for a channel that
-    // never touches the SMS provider, so four email changes must all succeed.
+  it('E: email changes spend no SMS budget, and are metered by their own', async () => {
+    // E1-H2: an email identity change now has its OWN budget (3 per rolling 10
+    // minutes), so four attempts from one account are 200/200/200/429 and the
+    // refusal dispatches nothing. What must ALSO stay true is the N10-A property
+    // this test has always asserted: the email branch never charges the SHARED
+    // SMS budget — proven here by still being allowed a shared-budget phone
+    // change after the email budget is exhausted.
     const ip = '10.60.0.5';
+    const before = sentCodes.length;
+
+    const statuses: number[] = [];
+    let refused: any = null;
     for (let i = 0; i < 4; i++) {
       const res = await postAs(
         '/api/customer/profile/identity',
@@ -247,8 +279,31 @@ describe('N10-A — the identity route spends the shared SMS budget', () => {
         { kind: 'email', value: `n10a-${RUN}-${i}@example.test` },
         ip,
       );
-      expect(res.status).toBe(200);
+      statuses.push(res.status);
+      if (i === 3) refused = res;
     }
+
+    expect(statuses).toEqual([200, 200, 200, 429]);
+    // The refusal carries the email-change budget's own generic body — not the
+    // SMS wording, which would misdescribe the channel — plus the standard
+    // Retry-After the other limiters emit.
+    expect(refused.body?.error).toBe(IDENTITY_EMAIL_RATE_LIMIT_MESSAGE);
+    expect(refused.body?.error).not.toBe(RATE_LIMIT_MESSAGE);
+    expect(refused.headers.get('retry-after')).toBeTruthy();
+    // Three dispatches, not four: a refused request never reaches the seam.
+    expect(sentCodes.length).toBe(before + 3);
+    // Every dispatched code went to the NEW address being proved. The route
+    // normalizes the address before it becomes a destination, so the comparison
+    // is against the normalized (lowercased) form of this run's marker.
+    expect(sentCodes[sentCodes.length - 1].destination).toContain('n10a-' + RUN.toLowerCase());
+
+    // THE SHARED BUDGET IS UNTOUCHED BY ALL OF THAT: this phone change draws on
+    // it and is still admitted. Had the four email requests charged it (three is
+    // the whole allowance), this request would have been refused with the SMS
+    // message instead.
+    const phone = await phoneChange(ip, E);
+    expect(phone.status).toBe(200);
+    expect(phone.body?.error).toBeUndefined();
   });
 
   it('F: the route mounts the shared limiter rather than a second one', () => {

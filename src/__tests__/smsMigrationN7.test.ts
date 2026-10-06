@@ -1,5 +1,5 @@
-// =============================================================================
-// N7 ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â SMS MIGRATION.
+﻿// =============================================================================
+// N7 ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â SMS MIGRATION.
 //
 // Every production SMS call site in Return4me was moved onto the N5
 // NotificationService / N6 durable limiter. This suite proves the migration did
@@ -8,16 +8,16 @@
 // The four things a migration like this can silently get wrong, and what each
 // block below is aimed at:
 //
-//   1. Coverage   ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â a call site quietly left calling the provider directly, so
+//   1. Coverage   ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â a call site quietly left calling the provider directly, so
 //                   the SMS still costs money but no longer has a durable record.
-//   2. Fidelity   ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â a "harmless" refactor that changes the LIVE SMS body, the
+//   2. Fidelity   ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â a "harmless" refactor that changes the LIVE SMS body, the
 //                   response status, or the order of send-versus-persist. The
 //                   live body is the sharpest trap here: sendCodeViaSms builds
 //                   it from the CODE, so a seam that forwards only the composed
 //                   message sends a real, billable SMS with no code in it.
-//   3. Secrets    ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â a code or phone number reaching the durable row, a log, an
+//   3. Secrets    ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â a code or phone number reaching the durable row, a log, an
 //                   error, or the idempotency key.
-//   4. Policy     ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â the limiter refusing before any provider call, and idempotency
+//   4. Policy     ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â the limiter refusing before any provider call, and idempotency
 //                   producing exactly one dispatch under concurrency.
 //
 // Providers are capture adapters; no SMS or email is ever sent.
@@ -40,7 +40,7 @@ let accept = true;
 
 // The capture adapter records the `code` separately from the body, mirroring the
 // real seam, so a test can assert the code reached the provider even though the
-// provider ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â not the caller ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â is what builds the live text.
+// provider ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â not the caller ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â is what builds the live text.
 const captureSms = {
   name: 'capture-sms',
   async send(to: string, body: string, label?: string, code?: string) {
@@ -70,14 +70,21 @@ const PRODUCTION_SMS_FILES = [
   '../routes/claimPayments.ts',
 ];
 
-// The six migrated SMS flows and the file that now owns each one.
+// The six migrated code flows, re-homed onto the EMAIL seam by E1, and the file
+// that now owns each one. The values are the literal event names as they appear
+// in the source (quoted), because server.ts resolves the agent/deletion event
+// through a variable and only the literal string is a stable anchor.
 const MIGRATED_FLOWS: Array<{ file: string; event: string }> = [
-  { file: '../server.ts', event: 'AGENT_LOGIN_OTP' },
-  { file: '../server.ts', event: 'CUSTOMER_LOGIN_OTP' },
-  { file: '../server.ts', event: 'PICKUP_CODE' },
-  { file: '../routes/claims.ts', event: 'OWNER_CLAIM_VERIFICATION_CODE' },
-  { file: '../routes/customerClaims.ts', event: 'PICKUP_CODE' },
-  { file: '../routes/customerClaims.ts', event: 'CLAIM_LINK_OTP' },
+  { file: '../server.ts', event: "'AGENT_LOGIN_OTP_EMAIL'" },
+  { file: '../server.ts', event: "'CUSTOMER_LOGIN_OTP_EMAIL'" },
+  { file: '../server.ts', event: "'ACCOUNT_DELETION_OTP_EMAIL'" },
+  { file: '../server.ts', event: "'IDENTITY_CHANGE_OTP_EMAIL'" },
+  // The payment-time pickup code is no longer an OTP event of its own: it rides
+  // inside the transactional PAYMENT_RECEIVED email rendered by server.ts.
+  { file: '../server.ts', event: "'PAYMENT_RECEIVED'" },
+  { file: '../routes/claims.ts', event: "'OWNER_CLAIM_VERIFICATION_CODE_EMAIL'" },
+  { file: '../routes/customerClaims.ts', event: "'PICKUP_CODE_EMAIL'" },
+  { file: '../routes/customerClaims.ts', event: "'CLAIM_LINK_OTP_EMAIL'" },
 ];
 
 let n = 0;
@@ -95,14 +102,14 @@ beforeEach(async () => {
   __setEmailProvider({ name: 'capture', async send() { return { accepted: true }; } });
 });
 // =============================================================================
-// A ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â MIGRATION COVERAGE
+// A ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â MIGRATION COVERAGE
 // =============================================================================
 
-describe('N7-A ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â migration coverage', () => {
+describe('N7-A ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â migration coverage', () => {
   it('every migrated flow dispatches a typed notification event', () => {
     for (const flow of MIGRATED_FLOWS) {
       expect(read(flow.file), `${flow.file} -> ${flow.event}`)
-        .toContain(`eventType: '${flow.event}'`);
+        .toContain(flow.event);
     }
   });
 
@@ -136,16 +143,21 @@ describe('N7-A ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢Ãƒ�
     expect(adapter).toMatch(/AuthService\.sendSms\(phone, message\)/);
   });
 
-  it('all SMS flows go through ONE seam, so they cannot drift apart', () => {
+  it('all code flows go through ONE seam, so they cannot drift apart', () => {
+    // E1: the seam every code-bearing flow now goes through is the EMAIL OTP
+    // seam. The property is unchanged â€” one place builds the idempotency key and
+    // carries the code, so call sites cannot invent their own â€” only the seam it
+    // names is different.
     for (const rel of ['../server.ts', '../routes/claims.ts', '../routes/customerClaims.ts']) {
       const src = read(rel);
-      expect(src, rel).toContain('sendSmsNotification(');
+      expect(src, rel).toContain('sendEmailOtp(');
+      expect(src, rel).not.toContain('sendSmsNotification(');
     }
     // Key building and code handling must live in exactly one place. A direct
-    // NotificationService.notify() is still legitimate in server.ts for the two
-    // pre-existing account-activation EMAILS, so what is forbidden is a direct
-    // call that carries an SMS code ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â that is the path that would let a call
-    // site invent its own key and quietly bypass idempotency.
+    // NotificationService.notify() is still legitimate in server.ts for the N8
+    // transactional emails, so what is forbidden is a direct call that carries a
+    // code â€” that is the path that would let a call site invent its own key and
+    // quietly bypass idempotency.
     for (const rel of ['../server.ts', '../routes/claims.ts', '../routes/customerClaims.ts']) {
       const src = read(rel);
       const direct = src.indexOf('NotificationService.notify(');
@@ -166,11 +178,13 @@ describe('N7-A ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢Ãƒ�
     let inspected = 0;
     for (const rel of PRODUCTION_SMS_FILES) {
       const src = read(rel);
-      const blocks = src.match(/sendSmsNotification\(\{[\s\S]*?\n\s*\}\)/g) ?? [];
-      const hasCallSite = /sendSmsNotification\(\{/.test(src);
+      // E1: the seam every code-bearing flow goes through is now sendEmailOtp's
+      // object argument, so the inspected shape is that call.
+      const blocks = src.match(/sendEmailOtp\(\{[\s\S]*?\n\s*\}\)/g) ?? [];
+      const hasCallSite = /sendEmailOtp\(\{/.test(src);
       // The shape is uniform across every production call site, so a guard that
       // silently matched nothing would be worse than no guard. (The DEFINITION in
-      // services/smsNotification.ts is not a call site and is therefore not
+      // services/emailOtp.ts is not a call site and is therefore not
       // required to produce a block.)
       if (hasCallSite) {
         expect(blocks.length, `${rel} produced no inspectable call block`).toBeGreaterThan(0);
@@ -188,22 +202,27 @@ describe('N7-A ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢Ãƒ�
       }
       inspected += blocks.length;
     }
-    // 7 today: server.ts x4, routes/claims.ts x1, routes/customerClaims.ts x2.
-    expect(inspected).toBeGreaterThanOrEqual(7);
+    // 6 today: server.ts x3 (login, identity change, agent/deletion share one
+    // ternary-shaped call), routes/claims.ts x1, routes/customerClaims.ts x2. The
+    // floor is the guard against a seam that silently stopped being called
+    // anywhere. (The payment-time pickup code is not one of these: it rides in the
+    // N8 transactional PAYMENT_RECEIVED email, which is why that flow is anchored
+    // on its event name above rather than on this seam.)
+    expect(inspected).toBeGreaterThanOrEqual(6);
 
     // ...and the key is derived in exactly ONE place, from the caller's own
     // issuance reference, never from a caller-supplied key.
-    const seam = read('../services/smsNotification.ts');
+    const seam = read('../services/emailOtp.ts');
     expect(seam).toContain('buildNotificationIdempotencyKey(input.eventType, input.issuanceId)');
     expect(seam).not.toContain('input.idempotencyKey');
 
     // The INPUT CONTRACT itself must not accept a key either: declaring the field
     // is the change that would make a second, competing idempotency identity
-    // expressible again - and it is exactly the "correction" a TS2353 error at a
+    // expressible again - and it is exactly the "correction" a TS error at a
     // call site invites.
     const iface = seam.slice(
-      seam.indexOf('export interface SmsNotificationInput'),
-      seam.indexOf('export async function sendSmsNotification'),
+      seam.indexOf('export interface EmailOtpInput'),
+      seam.indexOf('export async function sendEmailOtp'),
     );
     expect(iface.length).toBeGreaterThan(0);
     expect(iface).not.toMatch(/^\s*idempotencyKey\??:/m);
@@ -239,10 +258,10 @@ describe('N7-A ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢Ãƒ�
   });
 });
 // =============================================================================
-// B ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â IDEMPOTENCY
+// B ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â IDEMPOTENCY
 // =============================================================================
 
-describe('N7-B ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â idempotency', () => {
+describe('N7-B ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â idempotency', () => {
   it('a duplicate logical SMS request is suppressed and re-dispatches nothing', async () => {
     const issuanceId = nextIssuance();
     const first = await sendSmsNotification({
@@ -256,7 +275,7 @@ describe('N7-B ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢Ãƒ�
 
     expect(first.accepted).toBe(true);
     expect(first.dispatched).toBe(true);
-    // The duplicate is SUPPRESSED ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â `dispatched: false`, and the provider is not
+    // The duplicate is SUPPRESSED ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â `dispatched: false`, and the provider is not
     // called a second time. It still reports accepted: true because the message
     // genuinely WAS delivered on the first attempt; a caller must not be told a
     // code failed to send merely because it asked twice.
@@ -318,8 +337,8 @@ describe('N7-B ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢Ãƒ�
     // The issuance reference is a FIXED fixture rather than a random one. The
     // invariant under test is that the key is a pure function of (event type,
     // issuance) and carries neither the OTP nor the recipient. Asserting that
-    // with a random 20-char hex reference is a coin flip ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â a hex run can
-    // legitimately contain '9876' or a phone fragment ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â so the test would flake
+    // with a random 20-char hex reference is a coin flip ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â a hex run can
+    // legitimately contain '9876' or a phone fragment ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â so the test would flake
     // for reasons that have nothing to do with the behaviour it claims to check.
     const issuanceId = 'N7-FIXED-ISSUANCE-REFERENCE';
     await sendSmsNotification({
@@ -354,10 +373,10 @@ describe('N7-B ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢Ãƒ�
   });
 });
 // =============================================================================
-// C ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â RATE LIMITING (over real HTTP)
+// C ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â RATE LIMITING (over real HTTP)
 // =============================================================================
 
-describe('N7-C ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â rate limiting over real HTTP', () => {
+describe('N7-C ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â rate limiting over real HTTP', () => {
   let server: any;
   let base = '';
 
@@ -465,15 +484,15 @@ describe('N7-C ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â rate limiting over real HT
   });
 });
 // =============================================================================
-// D ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â BUSINESS-FLOW PRESERVATION (live SMS fidelity)
+// D ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â BUSINESS-FLOW PRESERVATION (live SMS fidelity)
 // =============================================================================
 
-describe('N7-D ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â business-flow preservation', () => {
+describe('N7-D ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â business-flow preservation', () => {
   it('the CODE reaches the provider, because the provider builds the live body', async () => {
     // THE fidelity trap. sendCodeViaSms composes the live SMS from the code and
     // ignores the caller's message; N5's adapter originally passed code: ''.
     // Routing a code-bearing OTP through it would send a real, billable SMS
-    // reading "Msimbo wako wa Return4me ni ." ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â accepted by the provider,
+    // reading "Msimbo wako wa Return4me ni ." ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â accepted by the provider,
     // delivered to the handset, and completely useless.
     await sendSmsNotification({
       eventType: 'OWNER_CLAIM_VERIFICATION_CODE', recipient: PHONE,
@@ -511,10 +530,10 @@ describe('N7-D ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢Ãƒ�
     const claims = read('../routes/claims.ts');
     expect(claims).toMatch(/crypto\.randomInt\(1000, 10000\)/);
     expect(claims).toMatch(/5 \* 60 \* 1000/);
-    expect(claims.indexOf('await sendClaimVerificationSms(')).toBeGreaterThan(-1);
+    expect(claims.indexOf('await sendClaimVerificationEmail(')).toBeGreaterThan(-1);
 
     const customer = read('../routes/customerClaims.ts');
-    const pickAt = customer.indexOf('await sendPickupCodeSms(');
+    const pickAt = customer.indexOf('await sendPickupCodeEmail(');
     expect(pickAt).toBeGreaterThan(-1);
     // Send strictly BEFORE persisting, so a provider failure cannot destroy the
     // pickup code that is currently working.
@@ -531,23 +550,23 @@ describe('N7-D ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢Ãƒ�
   it('the anti-enumeration customer-login contract is unchanged', () => {
     // The customer login route ignores the dispatch result entirely and always
     // answers identically, so it cannot be used to discover which numbers are
-    // registered. N7 routes the SMS through the notification layer but must not
+    // registered. E1 moved the delivery from SMS to email but must not
     // weaken that.
     const src = read('../server.ts');
     const at = src.indexOf("'/api/customer/login'");
     expect(at).toBeGreaterThan(-1);
     const route = src.slice(at, src.indexOf("'/api/customer/login/verify'"));
-    expect(route).toContain('sendSmsNotification(');
+    expect(route).toContain('sendEmailOtp(');
     // The result is awaited but deliberately not branched on.
     expect(route).not.toMatch(/if \(\s*!?\w*outcome\.accepted\s*\)/);
-    expect(route).toContain('If this number is registered');
+    expect(route).toContain('If this account has a verified email address');
   });
 });
 // =============================================================================
-// E ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â FAILURE AND CONCURRENCY
+// E ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â FAILURE AND CONCURRENCY
 // =============================================================================
 
-describe('N7-E ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â failure behaviour', () => {
+describe('N7-E ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â failure behaviour', () => {
   it('a provider rejection is a failure, never a false success', async () => {
     accept = false;
     const result = await sendSmsNotification({
@@ -587,7 +606,7 @@ describe('N7-E ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â failure behaviour', () => 
     expect(retry.status).toBe('duplicate');
     expect(smsSent).toHaveLength(1);
 
-    // A genuine resend ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â new code, new key ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â is allowed and dispatched.
+    // A genuine resend ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â new code, new key ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â is allowed and dispatched.
     accept = true;
     const resend = await sendSmsNotification({
       eventType: 'PICKUP_CODE', recipient: PHONE, issuanceId: nextIssuance(),
@@ -627,10 +646,10 @@ describe('N7-E ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â failure behaviour', () => 
 });
 
 // =============================================================================
-// F ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â SECRETS AND RESTART SAFETY
+// F ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â SECRETS AND RESTART SAFETY
 // =============================================================================
 
-describe('N7-F ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â secrets and durability', () => {
+describe('N7-F ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â secrets and durability', () => {
   it('neither the code nor the phone number reaches the durable record', async () => {
     const issuanceId = nextIssuance();
     await sendSmsNotification({
@@ -663,10 +682,10 @@ describe('N7-F ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â secrets and durability', (
 });
 
 // =============================================================================
-// G ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â SCOPE BOUNDARY
+// G ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â SCOPE BOUNDARY
 // =============================================================================
 
-describe('N7-G ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â scope boundary', () => {
+describe('N7-G ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â scope boundary', () => {
   it('N8 (transactional email) and N9 (SMS->email fallback) are NOT started', () => {
     const seam = read('../services/smsNotification.ts');
     expect(seam).not.toMatch(/fallback|createFallback|fallback_sent/);
@@ -685,7 +704,7 @@ describe('N7-G ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â scope boundary', () => {
     // social retry sweep, evidence retention) that have nothing to do with
     // notifications and were not touched by N7; asserting against the whole
     // file would flag unrelated, correct code. What must be true is that the
-    // migrated SMS path does no retrying of its own — a retried send would
+    // migrated SMS path does no retrying of its own â€” a retried send would
     // defeat the idempotency guarantee N6 exists to provide.
     expect(read('../services/smsNotification.ts')).not.toMatch(/setTimeout|setInterval|maxRetries/);
     expect(read('../services/notificationProviders.ts')).not.toMatch(/setTimeout|setInterval|maxRetries/);
@@ -694,7 +713,7 @@ describe('N7-G ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â scope boundary', () => {
     }
     // ...and each migrated server.ts dispatch is a single awaited call, not a loop.
     const src = read('../server.ts');
-    for (const event of ['CUSTOMER_LOGIN_OTP', 'AGENT_LOGIN_OTP', 'PICKUP_CODE']) {
+    for (const event of ['CUSTOMER_LOGIN_OTP_EMAIL', 'IDENTITY_CHANGE_OTP_EMAIL']) {
       const at = src.indexOf(`eventType: '${event}'`);
       expect(at, event).toBeGreaterThan(-1);
       expect(src.slice(at, at + 200), event).not.toMatch(/for\s*\(|while\s*\(/);

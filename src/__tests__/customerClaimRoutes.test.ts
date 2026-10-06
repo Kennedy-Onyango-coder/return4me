@@ -66,6 +66,28 @@ vi.mock('../services/auth', async (importOriginal) => {
   };
 });
 
+// E1: the codes these routes issue are EMAILED to the account's own verified
+// address, so the capture hook is the email OTP seam. Capture-only: the
+// recipient guard, the message constants and the rendered copy stay REAL, and
+// the OTP challenge itself is still generated and persisted by the route under
+// test — so the verification path these suites exist to prove is untouched.
+const emailOtp = vi.hoisted(() => ({ sent: [] as Array<{ to: string; code: string; eventType: string }> }));
+
+vi.mock('../services/emailOtp', async (importOriginal) => {
+  const actual = await importOriginal<any>();
+  return {
+    ...actual,
+    sendEmailOtp: vi.fn(async (input: any) => {
+      emailOtp.sent.push({
+        to: String(input?.recipient ?? ''),
+        code: String(input?.code ?? ''),
+        eventType: String(input?.eventType ?? ''),
+      });
+      return { accepted: true, dispatched: true, eventId: 'test-email-event', status: 'sent' };
+    }),
+  };
+});
+
 const { registerCustomerClaimRoutes } = await import('../routes/customerClaims');
 
 // NOTE: the dynamic import above (rather than a static one) is deliberate — it
@@ -194,9 +216,20 @@ beforeEach(() => {
   TEST_CLIENT_IP = `10.90.${a}.${b}`;
 });
 
+// E1: a code can only reach an account whose email is VERIFIED (the destination
+// is resolved server-side from that record). createCustomerPendingActivation +
+// activateCustomerAccount is the real production pair that produces exactly that
+// state, so the fixture cannot drift from what registration actually creates. The
+// address derives from the id, so it is unique per run and can never collide on
+// the partial unique index.
+async function verifiedCustomer(id: string, name: string, phone: string) {
+  await db.createCustomerPendingActivation(id, name, phone, `${id.toLowerCase()}@example.test`);
+  await db.activateCustomerAccount(id);
+}
+
 async function seed() {
-  await db.createCustomer(CUSTOMER_A, 'Asha Mwangi', PHONE_A);
-  await db.createCustomer(CUSTOMER_B, 'Brian Otieno', PHONE_B);
+  await verifiedCustomer(CUSTOMER_A, 'Asha Mwangi', PHONE_A);
+  await verifiedCustomer(CUSTOMER_B, 'Brian Otieno', PHONE_B);
   await db.createCustomer(CUSTOMER_SUSPENDED, 'Suspended User', PHONE_SUSPENDED);
   await db.updateCustomerStatus(CUSTOMER_SUSPENDED, 'suspended');
 
@@ -310,9 +343,9 @@ async function api(method: string, urlPath: string, token?: string, body?: any) 
 }
 
 async function requestLinkCode(token: string, claimId: string) {
-  sms.sent.length = 0;
+  emailOtp.sent.length = 0;
   const res = await api('POST', '/api/customer/claims/link/request-otp', token, { claimId });
-  return { res, code: sms.sent.length ? sms.sent[sms.sent.length - 1].code : null };
+  return { res, code: emailOtp.sent.length ? emailOtp.sent[emailOtp.sent.length - 1].code : null };
 }
 
 describe('customer claims: authentication boundary', () => {

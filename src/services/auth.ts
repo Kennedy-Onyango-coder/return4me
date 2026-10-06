@@ -206,6 +206,54 @@ export const SMS_UNAVAILABLE_MESSAGE =
   'Imeshindwa kutuma SMS. Tafadhali jaribu tena au tumia njia nyingine. / SMS delivery is temporarily unavailable. Please try again or use another method.';
 
 /**
+ * EMAIL-FIRST LAUNCH — the message for the OTHER reason a code cannot be sent.
+ *
+ * `SMS_UNAVAILABLE_MESSAGE` above describes a TRANSIENT delivery failure, so it
+ * correctly tells the reader to try again. That is the wrong thing to say when
+ * SMS is not enabled on the deployment at all (`SMS_ENABLED` is not exactly
+ * "true"), which is the documented initial production posture: the reader would
+ * retry forever against a switch that cannot change by itself, and a deliberate
+ * configuration choice would be presented as a system malfunction.
+ *
+ * This message states what is actually true — SMS code delivery is not switched
+ * on for this service — and points at the only honest recourse. It deliberately
+ * does NOT promise delivery on another channel from HERE, because this string is
+ * returned by the SMS sender alone. Post-E1 that makes it reachable only from a
+ * residual, non-production SMS call path: every one-time-code flow (customer and
+ * agent sign-in, claim verification, claim linking, phone and email change,
+ * account deletion, pickup-code resend) is dispatched through the shared EMAIL
+ * OTP seam in services/emailOtp.ts, and no production caller emits an SMS event
+ * any more — see docs/notifications.md.
+ *
+ * Choose between the two with `smsDeliveryFailureMessage()` below rather than
+ * branching on the flag at each call site, so no route can drift out of step
+ * with the sender's own gate.
+ */
+export const SMS_NOT_ENABLED_MESSAGE =
+  'Huduma ya msimbo kwa SMS haijawashwa kwenye mfumo huu, kwa hivyo hatukuweza kutuma msimbo. Tafadhali wasiliana na msaada wa Return4me. / SMS code delivery is not switched on for this service, so we could not send a code. Please contact Return4me support.';
+
+/**
+ * The ONE predicate that answers "is live SMS switched on?".
+ *
+ * It reads the SAME module-level `smsEnabled` value that gates every real send
+ * below (and the identical `SMS_ENABLED === 'true'` comparison the production
+ * boot guard in server.ts uses), so user-facing copy cannot be chosen from a
+ * second, divergent reading of the environment.
+ */
+export function isLiveSmsEnabled(): boolean {
+  return smsEnabled;
+}
+
+/**
+ * The user-facing message for a code that could not be sent: the transient
+ * provider wording when SMS is live, the configuration notice when it is not.
+ * Never a provider payload, never a provider error string.
+ */
+export function smsDeliveryFailureMessage(): string {
+  return smsEnabled ? SMS_UNAVAILABLE_MESSAGE : SMS_NOT_ENABLED_MESSAGE;
+}
+
+/**
  * Normalizes an Africa's Talking SMS `send()` response into a safe,
  * caller-facing result. Africa's Talking resolves (does NOT throw) for many
  * per-recipient rejections — most importantly a `UserInBlacklist` recipient,

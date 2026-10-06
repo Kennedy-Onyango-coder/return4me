@@ -50,7 +50,11 @@ export type NotificationRecipientKind =
   | 'admin';
 
 /** Which stage of the programme owns actually ROUTING this event. */
-export type NotificationMigrationStage = 'N5' | 'N6' | 'N7' | 'N8' | 'N9';
+// E1 — the EMAIL OTP MIGRATION: the six one-time-code flows and the pickup-code
+// resend now route over email (Resend-first, SMS_ENABLED=false). The new events
+// it introduced are marked `stage: 'E1'` so their provenance is as auditable as
+// the N-stages before them.
+export type NotificationMigrationStage = 'N5' | 'N6' | 'N7' | 'N8' | 'N9' | 'E1';
 
 /**
  * N9 — whether a FAILED delivery of this event may be retried later.
@@ -121,11 +125,14 @@ const EVENT_DEFINITIONS: readonly NotificationEventDefinition[] = [
     origin: 'server.ts POST /api/auth/verify-otp agent branch (N4)',
   },
   // ---------------------------------------------------------------------------
-  // HIGH-URGENCY COUNTER INTERACTIONS — SMS.
+  // HIGH-URGENCY COUNTER INTERACTIONS - SMS.
   //
-  // Each is a code a person must READ ALOUD or type within minutes. N1's routing
-  // decision reserved SMS for exactly this class, and none may be moved to email
-  // in N5: N7 owns that migration, N6 owns their idempotency and rate limiting.
+  // EACH OF THESE SIX EVENTS IS NOW RETIRED AS A PRODUCER (E1). The email OTP
+  // migration replaced every dispatch below with an `*_EMAIL` twin (see the E1
+  // block further down). They stay in the vocabulary on purpose: historical
+  // notification_events rows still name them, the retry classifier still reads
+  // their policy, and removing them would make every past row an unknown event.
+  // No production call site emits them any more.
   // ---------------------------------------------------------------------------
   {
     eventType: 'PHONE_VERIFICATION_OTP',
@@ -135,15 +142,14 @@ const EVENT_DEFINITIONS: readonly NotificationEventDefinition[] = [
     templateId: 'phone_verification_otp',
     retryClass: 'not_retryable',
     stage: 'N7',
-    // N10-C RECONCILIATION. This annotation previously read
-    // `services/auth.ts AuthService.requestOTP (pre-existing)`, which the live
-    // call graph does not support. auth.ts never emits this event type: its
-    // requestOTP transport is INJECTED by its only production caller, and that
-    // caller (server.ts POST /api/auth/request-otp) injects an `AGENT_LOGIN_OTP`
-    // dispatcher. The single live emitter of PHONE_VERIFICATION_OTP is the
-    // customer identity-change seam in server.ts, which is where a customer
-    // re-verifies a NEW phone number on their own account.
-    origin: 'server.ts customer identity-change sendVerificationCode (POST /api/customer/profile/identity, kind=phone)',
+    // E1 RETIREMENT NOTE. This event has NO live emitter any more. Its last
+    // production source was the customer identity-change seam (kind=phone),
+    // which now resolves the account's own VERIFIED EMAIL as the destination
+    // and dispatches `IDENTITY_CHANGE_OTP_EMAIL` instead - an unproven number
+    // must not be handed a code channel that marks it verified. The annotation
+    // below records where the emitter WAS for historical rows; it is not a live
+    // call graph.
+    origin: 'retired (E1): formerly server.ts customer identity-change sendVerificationCode (kind=phone)',
   },
   {
     eventType: 'CUSTOMER_LOGIN_OTP',
@@ -193,7 +199,94 @@ const EVENT_DEFINITIONS: readonly NotificationEventDefinition[] = [
     templateId: 'claim_link_otp',
     retryClass: 'not_retryable',
     stage: 'N7',
-    origin: 'routes/customerClaims.ts claim-link OTP (pre-existing)',
+    origin: 'routes/customerClaims.ts claim-link OTP (pre-existing; RETIRED by E1)',
+  },
+  // ---------------------------------------------------------------------------
+  // E1 - EMAIL OTP MIGRATION: the one-time-code flows, re-homed to email.
+  //
+  // Each event below is the EMAIL TWIN of a retired SMS event above, created
+  // rather than mutated: rewriting `channel` on the old rows would make the
+  // durable ledger claim that a historical SMS was always an email. Channel is
+  // `email`, so priority MUST be 'transactional' (the N5 invariant at
+  // notificationServiceN5: channel === (priority === 'urgent' ? 'sms' : 'email')),
+  // and retryClass is 'not_retryable' for the same reason every secret-bearing
+  // event is: the code inside is persisted only as a hash, so a failed message
+  // can never be rebuilt, and minting a replacement would invalidate a code the
+  // user may be mid-way through typing.
+  //
+  // DESTINATIONS ARE NEVER REQUEST-SUPPLIED. Every producer resolves the
+  // recipient server-side from the authoritative record (verified customer
+  // email, verified agent contact_email) and fails closed when there is none.
+  // ---------------------------------------------------------------------------
+  {
+    eventType: 'CUSTOMER_LOGIN_OTP_EMAIL',
+    channel: 'email',
+    priority: 'transactional',
+    recipientKind: 'customer',
+    templateId: 'customer_login_otp_email',
+    retryClass: 'not_retryable',
+    stage: 'E1',
+    origin: 'server.ts POST /api/customer/login (email OTP migration)',
+  },
+  {
+    eventType: 'AGENT_LOGIN_OTP_EMAIL',
+    channel: 'email',
+    priority: 'transactional',
+    recipientKind: 'agent',
+    templateId: 'agent_login_otp_email',
+    retryClass: 'not_retryable',
+    stage: 'E1',
+    origin: 'server.ts POST /api/auth/request-otp (agent login / onboarding, email OTP migration)',
+  },
+  {
+    eventType: 'ACCOUNT_DELETION_OTP_EMAIL',
+    channel: 'email',
+    priority: 'transactional',
+    recipientKind: 'customer',
+    templateId: 'account_deletion_otp_email',
+    retryClass: 'not_retryable',
+    stage: 'E1',
+    origin: 'server.ts POST /api/auth/request-otp with purpose=data_deletion (PrivacyView erasure journey)',
+  },
+  {
+    eventType: 'OWNER_CLAIM_VERIFICATION_CODE_EMAIL',
+    channel: 'email',
+    priority: 'transactional',
+    recipientKind: 'owner',
+    templateId: 'owner_claim_verification_code_email',
+    retryClass: 'not_retryable',
+    stage: 'E1',
+    origin: 'routes/claims.ts POST /api/claims/:id/request-otp (email OTP migration)',
+  },
+  {
+    eventType: 'CLAIM_LINK_OTP_EMAIL',
+    channel: 'email',
+    priority: 'transactional',
+    recipientKind: 'customer',
+    templateId: 'claim_link_otp_email',
+    retryClass: 'not_retryable',
+    stage: 'E1',
+    origin: 'routes/customerClaims.ts POST /api/customer/claims/link/request-otp (email OTP migration)',
+  },
+  {
+    eventType: 'IDENTITY_CHANGE_OTP_EMAIL',
+    channel: 'email',
+    priority: 'transactional',
+    recipientKind: 'customer',
+    templateId: 'identity_change_otp_email',
+    retryClass: 'not_retryable',
+    stage: 'E1',
+    origin: 'server.ts registerCustomerAccountRoutes sendVerificationCode (POST /api/customer/profile/identity; both kinds authorized by email OTP)',
+  },
+  {
+    eventType: 'PICKUP_CODE_EMAIL',
+    channel: 'email',
+    priority: 'transactional',
+    recipientKind: 'owner',
+    templateId: 'pickup_code_email',
+    retryClass: 'not_retryable',
+    stage: 'E1',
+    origin: 'routes/customerClaims.ts customer pickup-code resend (email OTP migration; payment-time delivery stays PAYMENT_RECEIVED)',
   },
   // ---------------------------------------------------------------------------
   // TRANSACTIONAL EMAIL — asset-heavy, asynchronous, read at a desk.

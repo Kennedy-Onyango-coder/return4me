@@ -10,7 +10,7 @@ import rateLimit from 'express-rate-limit';
 import { createServer as createViteServer } from 'vite';
 import { db, FoundItem, Claim, Agent, Dispute } from './db/database';
 import { pool, ensureSchemaUpToDate, isDatabaseConnectionError } from './db/index';
-import { AuthService, authenticateJWT, generateToken, verifyToken, toE164Kenyan, hashCode, timingSafeEqualHex, maskPhoneForLog, isAgentActionable, isAdminSessionCurrent, SMS_UNAVAILABLE_MESSAGE } from './services/auth';
+import { AuthService, authenticateJWT, generateToken, verifyToken, toE164Kenyan, hashCode, timingSafeEqualHex, maskPhoneForLog, isAgentActionable, isAdminSessionCurrent } from './services/auth';
 import { AgentMatchingService, geocodeAddress } from './services/agent';
 import { geocodeReverse } from './services/geocoding/index.ts';
 import {
@@ -23,7 +23,7 @@ import {
 // happens. Nothing else is migrated in N5; N6/N7/N8/N9 own the remaining
 // call sites.
 import { NotificationService, buildNotificationIdempotencyKey } from './services/notificationService';
-import { newSmsIssuanceId, sendSmsNotification } from './services/smsNotification';
+import { newEmailOtpIssuanceId, sendEmailOtp, emailOtpRecipientIsSafe, EMAIL_OTP_UNAVAILABLE_MESSAGE } from './services/emailOtp';
 import { smsRateLimit } from './services/smsRateLimit';
 import { PaymentService, isPlaceholderKey, reconcileWebhookAmount } from './services/payments';
 import { OcrService } from './services/ocr';
@@ -182,11 +182,12 @@ import { resolveContainedSourcePath } from './utils/safeStaticPath';
 // PHASE 10 (F-2): the escrow-holdings aggregate. The admin "Escrow Funds Held"
 // card previously displayed a claim COUNT where a monetary total belongs.
 import { computeEscrowFundsHeld } from './services/escrowFunds';
-// N3 note: the activation email reuses the EXISTING EmailService (imported
-// above), whose `send()` already fails closed in production â€” it returns false
-// when Resend has no usable credentials and true only on real provider
-// acceptance (or the explicit dev/sandbox outbox). That boolean is the signal
-// the activation gate depends on, so no new mailer is introduced.
+// N3 note: the activation email reuses the EXISTING EmailService (its provider
+// adapter under services/notificationProviders.ts), whose `send()` already fails
+// closed in production â€” it returns false when Resend has no usable credentials
+// and true only on real provider acceptance (or the explicit dev/sandbox
+// outbox). That boolean is the signal the activation gate depends on, so no new
+// mailer is introduced.
 // PHASE 10 (F-4): the dev payment-simulation gate, extracted so it is testable.
 // This predicate was private to this file, which cannot be imported by a test
 // (it boots the application on import), so the gate that protects a
@@ -195,10 +196,6 @@ import { computeEscrowFundsHeld } from './services/escrowFunds';
 import { resolveDevPaymentSimulationEnabled } from './config/devPaymentSimulation';
 import { getAdminNotificationEmail } from './config/adminNotificationEmail';
 import { assertEmailTransportConfiguration } from './config/emailConfig';
-// BATCH 2 (G3) â€” the EXISTING email sender is reused for the email-change
-// verification message. Imported here rather than inside routes/customerAccount.ts
-// so that module stays free of any delivery dependency.
-import { EmailService } from './services/email';
 import {
   runNotificationRetrySweep,
   retryNotificationEvent,
@@ -633,9 +630,9 @@ const otpIpLimiter = rateLimit({
 // misconfigured one, or an extra hop such as a CDN in front of it), a client
 // can trivially defeat IP-based limiting by sending a different fake
 // X-Forwarded-For value on every request. Since each OTP send costs real
-// money (SMS) and can be aimed at anyone's phone number, not just the
-// attacker's own, this global cap ensures there is still a hard ceiling on
-// total OTP sends platform-wide even if the per-IP limiter is bypassed.
+// money (an email dispatch) and can be aimed at any address the platform holds,
+// not just the attacker's own, this global cap ensures there is still a hard
+// ceiling on total OTP sends platform-wide even if the per-IP limiter is bypassed.
 const otpGlobalLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
   max: process.env.NODE_ENV === 'production' ? 60 : 1000,
@@ -663,7 +660,7 @@ const otpPhoneLimiter = rateLimit({
 // per IP) and otpGlobalLimiter (a system-wide bucket). Neither is keyed to
 // the specific claim being targeted, so an attacker who found or guessed a
 // claim ID (the same 900k-combination numeric space documented elsewhere
-// in this file) could repeatedly trigger real OTP SMS messages to that
+// in this file) could repeatedly trigger real OTP emails to that
 // claim's real registered owner_phone â€” a harassment/cost-abuse vector
 // against a third party who never initiated anything â€” bounded only by a
 // generous IP-wide budget that resets every 5 minutes and doesn't stop an
@@ -739,12 +736,12 @@ const claimGuessLimiter = rateLimit({
 });
 
 // Customer account auth (register/login) is fully unauthenticated and each
-// request can trigger a real, billable OTP SMS aimed at an arbitrary phone
-// number. customerAuthLimiter is the per-connection cap; otpGlobalLimiter
+// request can trigger a real, billable OTP email aimed at an address the
+// platform holds. customerAuthLimiter is the per-connection cap; otpGlobalLimiter
 // (applied on the two OTP-sending routes below) is the IP-independent
 // platform-wide ceiling â€” the same defense-in-depth pair the claim OTP route
 // (/api/claims/:id/request-otp) already uses, so a per-IP bypass cannot turn
-// this into an unbounded SMS-cost/abuse vector. The verify endpoints reuse
+// this into an unbounded email-cost/abuse vector. The verify endpoints reuse
 // the existing tighter otpVerifyLimiter below.
 const customerAuthLimiter = rateLimit({
   windowMs: 5 * 60 * 1000, // 5 minutes
@@ -1474,11 +1471,18 @@ async function createApp() {
       }
 
       const customer = await db.getCustomerByPhone(phone);
-      // Only a genuinely registered, active account gets a code â€” but the
-      // response is identical either way, so this cannot be used to discover
-      // whether an arbitrary number is registered. Login NEVER creates an
-      // account (an unknown phone cannot be turned into a takeover).
-      if (customer && customer.status === 'active') {
+      // Only a genuinely registered, active account WITH A VERIFIED EMAIL gets a
+      // code — but the response is identical either way, so this cannot be used
+      // to discover whether an arbitrary number is registered. Login NEVER
+      // creates an account (an unknown phone cannot be turned into a takeover).
+      //
+      // E1 — EMAIL DESTINATION, RESOLVED SERVER-SIDE. The recipient is
+      // `customer.email` read from the authoritative row; nothing the browser
+      // supplies is ever used as a destination. A legacy account with no email
+      // (or an unverified one) simply receives no code — fail closed — and the
+      // generic response below tells it, without telling anyone ELSE anything,
+      // that email verification is the thing to do next.
+      if (customer && customer.status === 'active' && customer.email && customer.email_verified_at) {
         const throttleKey = phone + ':login';
         if (Date.now() - (customerOtpLastSent.get(throttleKey) || 0) >= CUSTOMER_OTP_RESEND_MS) {
           const code = generateCustomerOtp();
@@ -1496,26 +1500,25 @@ async function createApp() {
             customer.id
           );
           customerOtpLastSent.set(throttleKey, Date.now());
-          // N7: routed through the notification boundary. The result is
-          // deliberately ignored, exactly as before â€” the anti-enumeration
+          // E1: routed through the email OTP seam, which records a durable
+          // notification_events row and never persists the code. The result is
+          // deliberately ignored, exactly as before — the anti-enumeration
           // response below is returned whether or not a code was sent, so the
           // endpoint cannot be used to probe which numbers are registered.
-          await sendSmsNotification({
-            eventType: 'CUSTOMER_LOGIN_OTP',
-            recipient: phone,
+          await sendEmailOtp({
+            eventType: 'CUSTOMER_LOGIN_OTP_EMAIL',
+            recipient: customer.email,
             issuanceId: customerOtpId,
-            seam: 'code',
             code,
-            label: 'Return4me',
-            message: `Your Return4me login code is ${code}. It expires in 5 minutes. Do not share it with anyone.`,
+            purpose: 'customer_login',
             actorUserId: customer.id,
-          });
+          }).catch((e) => console.error('[CUSTOMER_LOGIN_OTP_EMAIL_ERROR]', e));
         }
       }
 
       return res.json({
         success: true,
-        message: 'Kama nambari hii imesajiliwa, msimbo wa kuingia umetumwa. / If this number is registered, a login code has been sent.'
+        message: 'Kama akaunti hii ina barua pepe iliyothibitishwa, msimbo wa kuingia umetumwa kwake. Vinginevyo, thibitisha barua pepe yako kwanza. / If this account has a verified email address, a sign-in code has been sent to it. Otherwise, verify your email address first.'
       });
     } catch (e: any) {
       return sendServerError(res, e, 'CUSTOMER_LOGIN_ERROR');
@@ -1649,46 +1652,38 @@ async function createApp() {
   // ---------------------------------------------------------------------------
   registerCustomerAccountRoutes(app, {
     sendVerificationCode: async ({ destination, code, kind }) => {
-      if (kind === 'phone') {
-        // Routed through the EXISTING N7 SMS seam rather than the low-level
-        // sender: smsMigrationN7 asserts that server.ts never calls
-        // sendCodeViaSms directly, and this keeps rate limiting, idempotency and
-        // the durable notification event record on the one existing path.
-        //
-        // PHONE_VERIFICATION_OTP is the honest fit from N5's CLOSED vocabulary â€”
-        // it is precisely "a one-time code proving control of this phone number",
-        // sent to a customer by SMS. No new event type is invented, so the N5
-        // vocabulary and its retry classification are unchanged.
-        const outcome = await sendSmsNotification({
-          eventType: 'PHONE_VERIFICATION_OTP',
-          recipient: destination,
-          // A FRESH issuance reference per request is what keeps a RETRIED
-          // verification deliverable. N7 derives the idempotency key centrally
-          // as buildNotificationIdempotencyKey(eventType, issuanceId), so two
-          // requests for the same number are two genuinely different
-          // notifications (the second code overwrites the first) instead of one
-          // being suppressed as a duplicate. There is deliberately NO
-          // caller-supplied idempotencyKey here: this seam is the ONE place a key
-          // is derived, and a second derivation would compete with it.
-          issuanceId: newSmsIssuanceId('PCHG'),
-          seam: 'code',
-          code,
-          // Required by SmsNotificationInput for `seam: 'code'`: the dev/sandbox
-          // console line only. sendCodeViaSms builds the LIVE body from `code`
-          // itself, so this text never reaches a real handset.
-          message: `Msimbo wa uthibitisho wa Return4me ni ${code}. / Your Return4me verification code is ${code}.`,
-        }).catch(() => null);
-        return Boolean(outcome && (outcome as any).accepted);
-      }
-      // The EXISTING generic email sender is reused rather than a new template
-      // being added, so no N8 notification vocabulary or retry behaviour changes.
-      const result = await EmailService.sendWithId(
-        destination,
-        'Confirm your email address',
-        `<p>Your verification code is <strong>${code}</strong>.</p>` +
-          `<p>If you did not ask to change your email address, you can ignore this message.</p>`,
-      );
-      return Boolean(result && result.accepted);
+      // E1 — BOTH IDENTITY CHANGES ARE NOW AUTHORIZED BY AN EMAIL OTP.
+      //
+      // The account layer still decides WHAT must be verified; the transport is
+      // the shared email OTP seam (services/emailOtp.ts), which records a
+      // durable notification_events row (IDENTITY_CHANGE_OTP_EMAIL), keeps the
+      // code out of every stored row, and reuses the shared code budget mounted
+      // by the route. `destination` is:
+      //
+      //   kind 'phone' => the account's OWN verified email, resolved
+      //                   server-side by the route — the code is an
+      //                   AUTHORIZATION to change the number, NOT proof the new
+      //                   number works, and nothing here sets any phone-verified
+      //                   flag (the schema has none to set);
+      //   kind 'email' => the NEW address, so only its owner can confirm it.
+      const outcome = await sendEmailOtp({
+        eventType: 'IDENTITY_CHANGE_OTP_EMAIL',
+        recipient: destination,
+        // A FRESH issuance reference per request keeps a RETRIED verification
+        // deliverable: the key is derived centrally as
+        // buildNotificationIdempotencyKey(eventType, issuanceId), so two
+        // requests are two genuinely different notifications instead of one
+        // being suppressed as a duplicate. There is deliberately NO
+        // caller-supplied idempotencyKey here: this seam is the ONE place a key
+        // is derived.
+        issuanceId: newEmailOtpIssuanceId('PCHG'),
+        code,
+        purpose: kind === 'phone' ? 'identity_change_phone' : 'identity_change_email',
+      }).catch((e) => {
+        console.error('[IDENTITY_CHANGE_OTP_EMAIL_ERROR]', e);
+        return null;
+      });
+      return Boolean(outcome && outcome.accepted);
     },
   });
 
@@ -1776,42 +1771,115 @@ async function createApp() {
   // 2. OTP AUTHENTICATION GATEWAY (IP + Phone Rate-limited)
   app.post('/api/auth/request-otp', otpGlobalLimiter, otpIpLimiter, otpPhoneLimiter, smsRateLimit(), async (req, res) => {
     try {
-      const { phone } = req.body;
+      const { phone, purpose, email } = req.body;
       if (!phone) {
         return res.status(400).json({ error: 'Nambari ya simu inahitajika.' });
       }
-      // N7: AuthService owns code generation, expiry and persistence and is
-      // unchanged; only the transport is redirected into the notification
-      // boundary, so this route gains a durable notification record and N5/N6
-      // idempotency. The returned shape is mapped back to the exact pre-N7
-      // contract â€” including the generic message on failure â€” so no response
-      // semantics change.
-      const result = await AuthService.requestOTP(
+
+      // E1 — EMAIL DELIVERY. This gateway now serves two journeys with the
+      // same phone-keyed OTP store as before (agent login / onboarding, and the
+      // erasure request when `purpose === 'data_deletion'`); only the TRANSPORT
+      // and the DESTINATION RESOLUTION changed:
+      //
+      //   * The destination is ALWAYS resolved server-side from the
+      //     authoritative record — the verified `contact_email` of the agent
+      //     that holds this phone, or the verified email of the customer whose
+      //     erasure is being requested. Nothing the browser supplies is ever
+      //     used as a destination for an EXISTING account.
+      //   * The one exception is brand-new agent onboarding, where no account
+      //     exists yet: the address typed at the onboarding step is used as
+      //     mailbox proof for the very email verify-otp will store as
+      //     contact_email — and only when no agent holds this phone, so it can
+      //     never redirect an existing account.
+      //   * Every legacy/unresolved case FAILS CLOSED: no code is sent. The
+      //     response below is deliberately IDENTICAL in all cases (registered,
+      //     unregistered, legacy, provider failure) so this endpoint stays an
+      //     anti-enumeration dead end, and it tells a legacy account what to
+      //     fix without telling anyone else what exists.
+      const cleanPhone = String(phone).replace(/\s+/g, '');
+      const isKenyan = /^(\+254|0)(7|1)[0-9]{8}$/.test(cleanPhone);
+      if (!isKenyan) {
+        // Same validation message AuthService.requestOTP has always returned.
+        return res.status(400).json({ error: 'Tafadhali weka nambari sahihi ya simu ya Safaricom/Airtel (e.g., 0712345678).' });
+      }
+      const canonicalPhone = toE164Kenyan(cleanPhone);
+      const isDeletionPurpose = purpose === 'data_deletion';
+      const eventType = isDeletionPurpose ? 'ACCOUNT_DELETION_OTP_EMAIL' : 'AGENT_LOGIN_OTP_EMAIL';
+
+      const findByPhone = (list: any[]) =>
+        list.find((a) => a?.contact_phone === phone) ??
+        list.find((a) => toE164Kenyan(String(a?.contact_phone || '').replace(/\s+/g, '')) === canonicalPhone);
+
+      let destination: string | null = null;
+      if (isDeletionPurpose) {
+        // Erasure is destructive: the code must reach an address the account
+        // has ALREADY proven. Customer first (the common case), agent second.
+        const customer = await db.getCustomerByPhone(canonicalPhone);
+        if (customer && customer.email && customer.email_verified_at) {
+          destination = customer.email;
+        } else {
+          const agent = findByPhone(await db.getAgents());
+          if (agent && agent.contact_email && agent.email_verified_at) {
+            destination = agent.contact_email;
+          }
+        }
+      } else {
+        const existingAgent = findByPhone(await db.getAgents());
+        if (existingAgent) {
+          // Existing account: SERVER-RESOLVED verified contact_email only.
+          // Legacy pre-N4 agents (no email) and unverified emails fail closed —
+          // see the generic response note above.
+          if (existingAgent.contact_email && existingAgent.email_verified_at) {
+            destination = existingAgent.contact_email;
+          }
+        } else {
+          // Onboarding: no agent row exists for this phone yet.
+          const rawEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+          if (emailOtpRecipientIsSafe(rawEmail)) {
+            destination = rawEmail;
+          }
+        }
+      }
+      // AuthService still owns code generation, the hash, the 5-minute expiry,
+      // the canonical E.164 store key and the persist-then-send ordering — only
+      // the injected transport is the email seam. The phone remains the OTP
+      // store key, so verify-otp and the erasure endpoint below are untouched.
+      await AuthService.requestOTP(
         phone,
-        async (cleanPhone, code, label, message) => {
-          const outcome = await sendSmsNotification({
-            eventType: 'AGENT_LOGIN_OTP',
-            recipient: cleanPhone,
-            // Each request issues a fresh code that OVERWRITES the previous one,
-            // so each is a distinct notification. Suppressing by recipient would
-            // leave the user holding a code that was never delivered.
-            issuanceId: newSmsIssuanceId('AOTP'),
-            seam: 'code',
-            code,
-            label,
-            message,
-          });
-          return {
-            success: outcome.accepted,
-            message: outcome.accepted ? message : SMS_UNAVAILABLE_MESSAGE,
-          };
+        async (_cleanPhone, code) => {
+          if (!destination) {
+            // Fail closed: no destination, no send. (requestOTP has already
+            // persisted the code; nobody can receive it, which is harmless.)
+            return { success: false, message: EMAIL_OTP_UNAVAILABLE_MESSAGE };
+          }
+          try {
+            const outcome = await sendEmailOtp({
+              eventType,
+              recipient: destination,
+              issuanceId: newEmailOtpIssuanceId('AOTP'),
+              code,
+              purpose: isDeletionPurpose ? 'account_deletion' : 'agent_login',
+            });
+            return {
+              success: outcome.accepted,
+              message: outcome.accepted ? 'sent' : EMAIL_OTP_UNAVAILABLE_MESSAGE,
+            };
+          } catch (e) {
+            console.error('[AUTH_OTP_EMAIL_ERROR]', e);
+            return { success: false, message: EMAIL_OTP_UNAVAILABLE_MESSAGE };
+          }
         },
       );
-      if (!result.success) {
-        return res.status(400).json({ error: result.message });
-      }
-      const { otp, ...safeResult } = result as any;
-      res.json(safeResult);
+
+      // ANTI-ENUMERATION: the dispatch outcome above is deliberately NOT
+      // branched on. Whether the phone is unknown, the account is legacy, the
+      // provider refused or a code is on its way — every valid phone gets this
+      // exact response, so the endpoint cannot confirm that any number is
+      // registered.
+      res.json({
+        success: true,
+        message: 'Kama akaunti hii ina barua pepe iliyothibitishwa, msimbo wa uthibitisho umetumwa kwake. Vinginevyo, thibitisha barua pepe yako kwanza. / If this account has a verified email address, a verification code has been sent to it. Otherwise, verify your email address first.',
+      });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
@@ -2618,7 +2686,7 @@ async function createApp() {
   //     `security_answers` (the exact last-4-digits/color/lost-details answers
   //     used to verify someone is the real owner), `owner_phone`, `owner_email`,
   //     `owner_identifying_details`, and `owner_id_proof_url`. Anyone who
-  //     obtained a claim ID â€” from a URL, an SMS, a shared screenshot, or
+  //     obtained a claim ID â€” from a URL, a forwarded email, a shared screenshot, or
   //     simple enumeration of the ~900k-combination claim-ID space â€” could read
   //     the correct security answers for that claim and use them to impersonate
   //     the real owner. That was already narrowed to the hand-built whitelist
@@ -2782,7 +2850,7 @@ async function createApp() {
     // 'pending_payment' -> 'escrow_held' transition proceeds past this
     // point. A duplicate/retried webhook for an already-confirmed claim
     // returns false here and is dropped as a no-op, instead of re-running
-    // the confirmation flow (new pickup code, duplicate emails/SMS) a
+    // the confirmation flow (new pickup code, duplicate emails) a
     // second time.
     const won = await db.attemptClaimEscrowHold(claimId, invoiceId);
     if (!won) return null;
@@ -2864,7 +2932,7 @@ async function createApp() {
     // that code is public (it's broadcast on Telegram/Facebook/X in the
     // claim link), so it proves nothing about who is physically present
     // at the agent hub. Only the HMAC hash is ever stored; the plaintext
-    // code is sent once, privately, to the owner via SMS and email, and
+    // code is sent once, privately, to the owner's verified email address, and
     // the agent must have the owner read it out at handover.
     const pickupCode = crypto.randomInt(100000, 1000000).toString();
     await db.createPickupCode(claim.id, hashCode(pickupCode));
@@ -2900,32 +2968,23 @@ async function createApp() {
       }).catch(err => console.error('[EMAIL NOTIFICATION ERROR] Payment received email failed:', err));
     }
 
-    // 1b. Send the pickup code via SMS too â€” many owners won't have
-    // provided an email, and SMS is the more reliable channel in Kenya.
+    // 1b. THE PICKUP CODE NO LONGER TRAVELS BY SMS (E1).
     //
-    // N7: routed through the notification boundary. Note this flow is triggered
-    // by the IntaSend WEBHOOK (a provider callback), not by a client request, so
-    // it deliberately has NO N6 rate limiter attached: N6 keys on IP/user
-    // identity, every webhook shares the provider's IP, and rate-limiting them
-    // would suppress legitimate paid-order notifications while doing nothing
-    // about the actual abuse surface (the payment endpoints). It still gets the
-    // durable notification record and idempotency, which is what protects
-    // against a replayed webhook sending the same code twice.
+    // The payment-time email above (PAYMENT_RECEIVED) already carries the
+    // secret pickup code to the owner's address, and SMS is switched off for
+    // this deployment (`SMS_ENABLED=false`) — an OTP-bearing SMS path is
+    // exactly what the email OTP migration retires. An owner who did not give
+    // an address at payment time can obtain a fresh code from the signed-in
+    // customer dashboard resend (routes/customerClaims.ts -> PICKUP_CODE_EMAIL),
+    // which delivers to the account's verified email after the shared code
+    // budget is spent.
     //
-    // Still fire-and-forget, exactly as before: a payment must never be
-    // reported as failed because an SMS provider was slow.
-    sendSmsNotification({
-      eventType: 'PICKUP_CODE',
-      recipient: claim.owner_phone,
-      // Bound to this claim's pickup code, not to the order event: the code is
-      // regenerated per claim and the old one stops working.
-      issuanceId: newSmsIssuanceId('PKC'),
-      // This notification's live body is a full sentence, not a bare code, so
-      // it uses the message seam â€” preserving the exact text users get today.
-      seam: 'message',
-      message: `Return4me: Malipo yamethibitishwa. Msimbo wako wa siri wa kuchukua bidhaa ni ${pickupCode}. Toa msimbo huu kwa Agent PEKEE wakati wa kuchukua bidhaa yako. Usimshirikishe mtu mwingine. / Payment confirmed. Your secret pickup code is ${pickupCode}. Give this ONLY to the Agent when collecting your item. Do not share it with anyone else.`,
-      label: 'PICKUP',
-    }).catch(err => console.error('[SMS NOTIFICATION ERROR] Pickup code SMS failed:', err));
+    // This flow is triggered by the IntaSend WEBHOOK (a provider callback), not
+    // by a client request, so it deliberately has NO rate limiter attached: N6
+    // keys on IP/user identity and every webhook shares the provider's IP.
+    // Idempotency for the payment emails above is unchanged (claim-scoped keys),
+    // which is what still protects against a replayed webhook re-sending the
+    // same code.
 
     // 2. Send email to agent if provided
     if (agent && agent.contact_email && agent.contact_email.trim() !== '') {
@@ -3027,7 +3086,7 @@ async function createApp() {
       const updatedClaim = await db.getClaim(req.params.claimId);
       // pickupCode is only ever returned here â€” a dev/test-only endpoint,
       // already hard-gated off in production above. In the real flow it's
-      // never exposed via any API response, only sent privately by SMS/email.
+      // never exposed via any API response, only sent privately by email.
       res.json({ success: true, claim: updatedClaim, pickupCode });
     } catch (e: any) {
       console.error('[DEV SIMULATE PAYMENT] Failed:', e);

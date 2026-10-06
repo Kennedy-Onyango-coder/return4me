@@ -238,7 +238,7 @@ export default function CustomerDashboard({
       setLinkStep('code');
       setLinkNotice(
         data.message ||
-        t('A verification code has been sent by SMS.', 'Msimbo wa uthibitisho umetumwa kwa SMS.')
+        t('A verification code has been sent to your verified email address.', 'Msimbo wa uthibitisho umetumwa kwenye barua pepe yako iliyothibitishwa.')
       );
     } catch {
       setLinkError(t('Network error. Please try again.', 'Hitilafu ya mtandao. Tafadhali jaribu tena.'));
@@ -251,7 +251,7 @@ export default function CustomerDashboard({
     e.preventDefault();
     setLinkError(null);
     if (!/^\d{4}$/.test(linkCode)) {
-      setLinkError(t('Enter the 4-digit code from the SMS.', 'Weka msimbo wa tarakimu 4 kutoka kwa SMS.'));
+      setLinkError(t('Enter the 4-digit code from the email.', 'Weka msimbo wa tarakimu 4 kutoka kwa barua pepe.'));
       return;
     }
     const fields = getVerificationFields(linkCategory);

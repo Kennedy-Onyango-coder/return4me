@@ -448,8 +448,9 @@ export default function App() {
   // ---------------------------------------------------------------------------
   // PHASE 11B — THE CUSTOMER SESSION IS PART OF THE SITE CHROME TOO.
   //
-  // A customer signs in through /account with an SMS OTP, and that session is
-  // held server-side and referenced by an httpOnly cookie
+  // A customer signs in through /account with a one-time code emailed to their
+  // verified address, and that session is held server-side and referenced by an
+  // httpOnly cookie
   // (services/customerAuth.ts). Because it is NOT a localStorage token, App
   // never knew about it: `token={agentToken}` therefore left a freshly signed-in
   // customer looking at the PUBLIC bar ("Guest" + "Sign In"). This is the single
@@ -925,8 +926,10 @@ export default function App() {
                  public path (/lost, /found, /become-an-agent). */
               setView={goToView}
               categories={categories}
-              categoriesLoading={categoriesLoading}
-              categoriesError={categoriesError}
+              /* App still owns the live category request state, but the homepage
+                 no longer renders the category-discovery section that consumed
+                 its loading/error flags; FinderView and OwnerView below still
+                 receive them unchanged. */
               activeAgentsCount={activeAgentsCount}
               recentItems={recentItems}
               recentItemsLoading={recentItemsLoading}

@@ -22,8 +22,8 @@ import { getClaimStatusDisplay, CLAIM_STATUS_VALUES } from '../components/claimS
 // This repository has NO DOM harness (vitest.config.ts runs `environment:
 // 'node'`; Batch 1C confirmed jsdom/RTL is not installed and must not be added
 // for one batch), so ΓÇö following the same convention as
-// phase9PublicSurface.test.ts, publicNavigation.test.ts and Batch 1C's
-// categoryExplorerDisclosure.test.ts ΓÇö the contract is pinned two ways:
+// phase9PublicSurface.test.ts, publicNavigation.test.ts and the other
+// source-level contract suites, the contract is pinned two ways:
 //   1. BEHAVIOURALLY, where a pure function was factored out for the purpose
 //      (agentClaimBadge, and the shared claim-status map it delegates to);
 //   2. SOURCE-LEVEL, against the real component and the real server that ship.

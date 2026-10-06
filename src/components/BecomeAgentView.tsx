@@ -164,7 +164,7 @@ export default function BecomeAgentView({ lang, onContinueToAgentPortal, onSignI
     },
     {
       label: t('Activation notice', 'Taarifa ya kuwashwa'),
-      description: t('You are notified by SMS or email once you are activated.', 'Unaarifiwa kwa SMS au barua pepe mara unapowashwa.'),
+      description: t('You are notified by email once you are activated.', 'Unaarifiwa kwa barua pepe mara unapowashwa.'),
     },
   ];
 

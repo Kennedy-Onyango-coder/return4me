@@ -29,6 +29,13 @@ durable record.
 | `OWNER_CLAIM_VERIFICATION_CODE` | sms | urgent | owner | not retryable |
 | `PICKUP_CODE` | sms | urgent | owner | not retryable |
 | `CLAIM_LINK_OTP` | sms | urgent | customer | not retryable |
+| `CUSTOMER_LOGIN_OTP_EMAIL` | email | transactional | customer | not retryable |
+| `AGENT_LOGIN_OTP_EMAIL` | email | transactional | agent | not retryable |
+| `ACCOUNT_DELETION_OTP_EMAIL` | email | transactional | customer | not retryable |
+| `OWNER_CLAIM_VERIFICATION_CODE_EMAIL` | email | transactional | owner | not retryable |
+| `CLAIM_LINK_OTP_EMAIL` | email | transactional | customer | not retryable |
+| `IDENTITY_CHANGE_OTP_EMAIL` | email | transactional | customer | not retryable |
+| `PICKUP_CODE_EMAIL` | email | transactional | owner | not retryable |
 | `PAYMENT_RECEIVED` | email | transactional | owner | not retryable |
 | `AGENT_PAYMENT_CONFIRMED` | email | transactional | agent | retryable |
 | `ITEM_HANDED_OVER` | email | transactional | owner | retryable |
@@ -36,9 +43,42 @@ durable record.
 | `ADMIN_TRANSACTION_LOG` | email | transactional | admin | retryable |
 | `ADMIN_REASSIGNMENT` | email | transactional | admin | retryable |
 
+The `*_EMAIL` rows are the events the E1 email OTP migration introduced; the
+`sms` rows immediately above them are the events it RETIRED as producers. They
+are kept in the vocabulary on purpose: historical `notification_events` rows
+name them, and the retry classifier still reads their policy, so removing them
+would make every past row an unknown event. No production call site emits one.
+
 Priority describes what the recipient must do next, not how the message is
 styled. `urgent` means the human is blocked until the message arrives, which is
-why it is SMS only.
+why the retired SMS rows carry it.
+
+### Channel availability when SMS is switched off
+
+`SMS_ENABLED` is a dispatch switch as well as a boot switch. When it is not
+exactly `"true"`, every `sms`-channel event in the catalogue above fails closed in
+production: the provider is never called, the notification row records a definite
+non-delivery, and the caller receives a failure. Email is unaffected, so every
+`email`-channel event is still delivered through Resend.
+
+The refusal wording a user sees is deliberately not the same in both cases,
+because they are not the same situation. A transient provider refusal returns
+`SMS_UNAVAILABLE_MESSAGE` and invites a retry. A channel that is switched off
+returns `SMS_NOT_ENABLED_MESSAGE`, which states that SMS code delivery is not
+switched on for this service and does not invite a retry that cannot succeed.
+`services/auth.ts` exposes `isLiveSmsEnabled()` and
+`smsDeliveryFailureMessage()` as the single source of that choice, so a route
+cannot describe the same refusal in a second, contradictory way. The durable row
+records the gateway's own sanitised refusal in `last_error` either way — the
+distinction is a user-facing one, chosen by the route that surfaces it.
+
+No one-time codes travel by SMS on this deployment. The E1 migration moved
+customer sign-in, agent sign-in and onboarding, account deletion, claim
+verification, claim linking, phone and email change, and pickup-code resend onto
+the shared email OTP seam, so every one-time code is delivered by Resend and
+recorded as its `*_EMAIL` event. Moving them did change which factor proves
+identity — that is why each flow resolves its destination server-side from the
+authoritative record and fails closed when there is none.
 
 The module also records, in `ABSENT_EVENTS`, events that were considered and
 deliberately not defined because the application does not emit them. Defining an
@@ -219,20 +259,31 @@ for the operational consequence.
 - Recipient addresses are referenced, not copied, so an address change is
   reflected on a retry rather than frozen at first dispatch.
 - Error text from providers is sanitized before storage.
+- One-time-code issuance through the identity route is admission-controlled in
+  BOTH of its code-issuing branches, and the address named in the request cannot
+  widen that control. `kind: 'phone'` keeps the shared code budget it has always
+  used — 3 sends per rolling 10 minutes, shared with the other one-time-code
+  flows. `kind: 'email'` has its own budget of the same shape: 3 attempts per
+  rolling 10 minutes, charged on every dimension the request carries — the
+  authenticated customer (taken from the verified session, never from the body),
+  the client IP, and the target address being proved. Every dimension is consumed
+  even after one of them is already exhausted, so a request is admitted only when
+  ALL of them admit it, and a refusal reports the longest retry window among the
+  dimensions that refused. The target-address dimension is additive only: it is
+  never the sole key and never an authorization input, and because the account
+  dimension is always charged, naming a different address on every request cannot
+  buy extra attempts. A refused request dispatches nothing — no code is generated,
+  no identity-change row is written and no mailbox is written to.
 
 ## Known limitations
 
 - Provider acceptance is not delivery confirmation, and the integration returns
   no delivery receipts. See above.
-- The durable SMS rate limit is keyed per identity per request. Two different
+- The durable rate limit is keyed per identity per request. Two different
   send paths that resolve the same phone number to different identity keys are
   not reconciled against a single shared budget.
-- `PHONE_VERIFICATION_OTP` is dispatched through the pre-existing
-  `AuthService.requestOTP` path rather than the notification service, so it does
-  not produce a `notification_events` row. Its dispatch is therefore not
-  reconciled against the durable notification record.
 
-Neither of the last two is resolved in the current code. They are recorded here
+Neither of these is resolved in the current code. They are recorded here
 so that the notification system is not read as covering more than it does.
 
 ## Related

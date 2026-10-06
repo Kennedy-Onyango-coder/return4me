@@ -694,10 +694,10 @@ describe('UX-09 keeps every new string bilingual, with no new i18n mechanism', (
     expect(GUIDE).toContain("what: {");
     expect(GUIDE).toContain("actor: {");
     expect(GUIDE).toContain(
-      "en: 'Answer the security questions, then enter the SMS code we send to your phone.',",
+      "en: 'Answer the security questions, then enter the code we send to your verified email address.',",
     );
     expect(GUIDE).toContain(
-      "sw: 'Jibu maswali ya usalama, kisha weka msimbo wa SMS tutakaotuma kwenye simu yako.',",
+      "sw: 'Jibu maswali ya usalama, kisha weka msimbo tutakaotuma kwenye barua pepe yako iliyothibitishwa.',",
     );
     expect(count(GUIDE, /\{ en: 'You', sw: 'Wewe' \}/g)).toBe(2);
     expect(count(GUIDE, /actor: \{ en: 'You and the agent', sw: 'Wewe na wakala' \}/g)).toBe(2);

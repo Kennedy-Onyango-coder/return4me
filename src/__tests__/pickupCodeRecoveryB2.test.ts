@@ -52,9 +52,20 @@ describe('pickup-code recovery — no claim-existence oracle', () => {
   it('returns the SAME 404 and SAME message for unknown, unlinked and other-owner claims', () => {
     const notLinkedCount = (resendBody.match(/MESSAGES\.notLinked/g) || []).length;
     expect(notLinkedCount).toBeGreaterThanOrEqual(2);
-    // 403 here would immediately distinguish "exists but not yours" from
-    // "does not exist", which is exactly the leak this must avoid.
-    expect(resendBody).not.toMatch(/res\.status\(403\)/);
+    // E1 INTRODUCED A 403 — but for a reason that cannot be an oracle: "this
+    // account has no verified email destination". The ownership refusals still
+    // return 404 MESSAGES.notLinked FIRST, so the status a non-owner sees is
+    // unchanged; the 403 is unreachable without passing that proof. Asserted as
+    // an ORDER property, which is the property that actually matters here.
+    expect(resendBody).toContain('EMAIL_VERIFICATION_REQUIRED_MESSAGE');
+    const first403 = resendBody.indexOf('res.status(403)');
+    // The LAST ownership refusal that precedes it: every 404 branch comes first,
+    // and the 403 is unreachable without passing them. (`resendBody` also covers
+    // the neighbouring claim-link route, hence scoping to the offset.)
+    const lastNotLinkedBefore403 = resendBody.lastIndexOf('MESSAGES.notLinked', first403);
+    expect(first403).toBeGreaterThan(-1);
+    expect(lastNotLinkedBefore403).toBeGreaterThan(-1);
+    expect(lastNotLinkedBefore403).toBeLessThan(first403);
   });
 
   it('never words a refusal so as to reveal existence or ownership', () => {
@@ -104,16 +115,16 @@ describe('pickup-code recovery — invalidation and send-before-persist ordering
     expect(fnBody).toMatch(/verified_at: null/);
   });
 
-  it('sends the SMS BEFORE persisting, so a failed send cannot destroy the working code', () => {
+  it('sends the EMAIL BEFORE persisting, so a failed send cannot destroy the working code', () => {
     // THE ordering fix. Storing first and then failing to deliver would destroy
     // the previous code and never deliver the new one, leaving the owner with
     // no usable code and no way to get one — the permanent strand we removed.
     //
-    // N7 UPDATED THE ANCHOR ONLY. The seam is now sendPickupCodeSms (the
-    // notification wrapper) instead of sendCodeViaSms (the raw gateway). The
-    // property under test — send strictly before persist — is unchanged and is
-    // asserted exactly as strictly as before.
-    const sendIdx = resendBody.indexOf('await sendPickupCodeSms(');
+    // E1 UPDATED THE ANCHOR ONLY. The seam is now sendPickupCodeEmail (the email
+    // OTP wrapper) instead of sendPickupCodeSms (the SMS notification wrapper).
+    // The property under test — send strictly before persist — is unchanged and
+    // is asserted exactly as strictly as before.
+    const sendIdx = resendBody.indexOf('await sendPickupCodeEmail(');
     const persistIdx = resendBody.indexOf('await db.createPickupCode');
     expect(sendIdx).toBeGreaterThan(-1);
     expect(persistIdx).toBeGreaterThan(-1);
@@ -121,31 +132,34 @@ describe('pickup-code recovery — invalidation and send-before-persist ordering
   });
 
   it('persists nothing at all when the provider rejects the message', () => {
-    // N7: same anchor change as above; the ordering property is identical.
-    const sendIdx = resendBody.indexOf('await sendPickupCodeSms(');
-    const failIdx = resendBody.indexOf('if (!smsResult.success)');
+    // E1: same anchor change as above; the ordering property is identical.
+    const sendIdx = resendBody.indexOf('await sendPickupCodeEmail(');
+    const failIdx = resendBody.indexOf('if (!emailResult.success)');
     const persistIdx = resendBody.indexOf('await db.createPickupCode');
     expect(failIdx).toBeGreaterThan(sendIdx);
     expect(failIdx).toBeLessThan(persistIdx);
   });
 });
 
-describe('pickup-code recovery — SMS failure UX (B-4)', () => {
+describe('pickup-code recovery — email failure UX (B-4)', () => {
   it('returns 503 with a retryable message when the provider rejects', () => {
     // 503 (retryable) — not 500 (our fault) and never 200 (a lie).
-    expect(resendBody).toMatch(/if \(!smsResult\.success\)[\s\S]{0,600}?res\.status\(503\)/);
+    expect(resendBody).toMatch(/if \(!emailResult\.success\)[\s\S]{0,600}?res\.status\(503\)/);
   });
 
   it('judges delivery on the provider ACCEPTANCE result, not on absence of a throw', () => {
-    expect(resendBody).toMatch(/smsResult\.success/);
+    expect(resendBody).toMatch(/emailResult\.success/);
   });
 
-  it('the claim-OTP SMS failure path was also converted from 500 to 503', () => {
+  it('the claim-OTP failure path was also converted from 500 to 503', () => {
     // P2-A3.1: the claim-OTP route was extracted VERBATIM into routes/claims.ts,
-    // so the window is read from whichever file now owns it. The guarantee (a
-    // provider rejection is retryable 503, never 500) is unchanged.
+    // so the window is read from whichever file now owns it. E1 then re-homed its
+    // transport onto the shared email OTP seam (sendClaimVerificationEmail), so
+    // the anchor moved from the literal gateway label ('CLAIM OTP') to the seam
+    // call site. The guarantee (a provider rejection is retryable 503, never 500)
+    // is unchanged.
     const src = serverTs.includes("'CLAIM OTP'") ? serverTs : CLAIMS_ROUTE_TS;
-    const fnStart = src.indexOf("'CLAIM OTP'");
+    const fnStart = src.indexOf('await sendClaimVerificationEmail({');
     expect(fnStart).toBeGreaterThan(-1);
     const window = src.slice(fnStart, fnStart + 6000);
     // N7: the window was widened from 1400 chars. The property under test — a
@@ -179,7 +193,7 @@ describe('pickup-code recovery — abuse resistance', () => {
     expect(limBody).toMatch(/keyGenerator:[\s\S]{0,220}?params\?\.claimId/);
   });
 
-  it('adds an IP-independent global ceiling because every send costs a real SMS', () => {
+  it('adds an IP-independent global ceiling because every send costs real money', () => {
     expect(routeTs).toMatch(/global-pickup-code-resend-bucket/);
     expect(resendBody).toMatch(/pickupCodeResendGlobalLimiter/);
   });

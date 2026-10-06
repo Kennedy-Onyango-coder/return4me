@@ -44,10 +44,12 @@ async function send(method: string, path: string, token: string | undefined, bod
     headers: {
       ...(token ? { cookie: CUSTOMER_SESSION_COOKIE + '=' + token } : {}),
       'content-type': 'application/json',
-      // N10-A: only the N10-A cases below pass an explicit IP, so every
-      // pre-existing request here is unchanged and continues to arrive from
-      // 127.0.0.1 — none of them spends an SMS budget unit (they are email
-      // kind), so they are unaffected by the new limiter.
+      // Rate-limit identity: only the cases that pass an explicit IP are
+      // isolated from one another, so every pre-existing request above continues
+      // to arrive from 127.0.0.1. E1-H2 metered the email identity-change branch
+      // on the session CUSTOMER and on the client IP, so the scenarios below that
+      // exercise that branch declare their own client IP — the same
+      // per-scenario isolation n10aSharedSmsBudget.test.ts documents.
       ...(ip ? { 'x-forwarded-for': ip } : {}),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -207,6 +209,33 @@ describe('B2 HTTP - revoke other sessions (H9-b)', () => {
 });
 
 describe('B2 HTTP - profile (G3)', () => {
+  /**
+   * A FRESH authenticated customer for ONE scenario.
+   *
+   * E1-H2 metered this endpoint's email branch on the session-verified CUSTOMER
+   * and on the client IP, so reusing one account (or one client address) across
+   * scenarios would exhaust the shared 3-per-10-minutes allowance and a later
+   * assertion would observe a 429 instead of the property under test. One
+   * principal and one client IP per scenario is the remedy
+   * n10aSharedSmsBudget.test.ts already documents for the same limiter.
+   */
+  let scenario = 0;
+  async function freshPrincipal() {
+    scenario += 1;
+    const id = 'TEST-B2-P' + scenario + '-' + RUN;
+    const token = (String(scenario % 10) + 'p').repeat(32);
+    const phone = '+2547' + String(70000000 + scenario * 6151 + Math.floor(Math.random() * 5000)).slice(-8);
+    // Each scenario also gets its OWN client address. E1-H2 charges the client IP
+    // dimension on every request, so two scenarios sharing 127.0.0.1 would starve
+    // one another even with distinct principals — the same per-scenario isolation
+    // n10aSharedSmsBudget.test.ts documents.
+    const ip = '10.20.0.' + scenario;
+    const week = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    await db.createCustomer(id, 'Batch Two Principal ' + scenario, phone);
+    await db.createCustomerSession('TEST-B2-PS' + scenario + '-' + RUN, id, hashCode(token), week);
+    return { id, token, phone, ip };
+  }
+
   it('updates the name', async () => {
     const res = await send('PATCH', '/api/customer/profile', TOKEN_A, { fullName: 'Renamed Person' });
     expect(res.status).toBe(200);
@@ -218,97 +247,117 @@ describe('B2 HTTP - profile (G3)', () => {
   });
 
   it('an email change does NOT take effect until verified', async () => {
-    const before = (await (await get('/api/customer/data-export', TOKEN_A)).json()).account.email;
+    const P = await freshPrincipal();
+    const before = (await (await get('/api/customer/data-export', P.token)).json()).account.email;
     const newEmail = 'changed-' + RUN.toLowerCase() + '@example.test';
-    const res = await send('POST', '/api/customer/profile/identity', TOKEN_A, { kind: 'email', value: newEmail });
+    const res = await send('POST', '/api/customer/profile/identity', P.token, { kind: 'email', value: newEmail }, P.ip);
     expect(res.status).toBe(200);
     const payload = await res.json();
     const { changeId } = payload;
     // Unverified: the account still carries the OLD address.
-    expect((await (await get('/api/customer/data-export', TOKEN_A)).json()).account.email).toBe(before);
+    expect((await (await get('/api/customer/data-export', P.token)).json()).account.email).toBe(before);
     // And the customer is told plainly that nothing has moved yet.
     expect(payload.message).toContain('unchanged');
     expect(changeId).toBeTruthy();
   });
 
   it('completes the email change with the correct code', async () => {
-    const before = (await (await get('/api/customer/data-export', TOKEN_A)).json()).account.email;
+    const P = await freshPrincipal();
+    const before = (await (await get('/api/customer/data-export', P.token)).json()).account.email;
     const newEmail = 'done-' + RUN.toLowerCase() + '@example.test';
-    const start = await send('POST', '/api/customer/profile/identity', TOKEN_A, { kind: 'email', value: newEmail });
+    const start = await send('POST', '/api/customer/profile/identity', P.token, { kind: 'email', value: newEmail }, P.ip);
     const { changeId } = await start.json();
     const issued = sent[sent.length - 1];
 
-    const res = await send('POST', '/api/customer/profile/identity/verify', TOKEN_A, {
+    const res = await send('POST', '/api/customer/profile/identity/verify', P.token, {
       changeId,
       code: issued.code,
     });
     expect(res.status).toBe(200);
-    const after = (await (await get('/api/customer/data-export', TOKEN_A)).json()).account.email;
+    const after = (await (await get('/api/customer/data-export', P.token)).json()).account.email;
     expect(after).toBe(newEmail);
     expect(after).not.toBe(before);
+
+    // E1-H2 — THE LIFECYCLE COMPLETES. The address proved by a code sent to it is
+    // not left in the "new address, unverified" state: that state is exactly what
+    // the login activation gate reads as "account not activated", and because no
+    // code is ever sent to the previous mailbox again it was a one-way door.
+    const row = await db.getCustomerById(P.id);
+    expect(row.email).toBe(newEmail);
+    expect(row.email_verified_at).not.toBeNull();
   });
 
   it('a WRONG code changes nothing', async () => {
-    const before = (await (await get('/api/customer/data-export', TOKEN_A)).json()).account.email;
+    const P = await freshPrincipal();
+    const before = (await (await get('/api/customer/data-export', P.token)).json()).account.email;
     const newEmail = 'wrong-' + RUN.toLowerCase() + '@example.test';
-    const start = await send('POST', '/api/customer/profile/identity', TOKEN_A, { kind: 'email', value: newEmail });
+    const start = await send('POST', '/api/customer/profile/identity', P.token, { kind: 'email', value: newEmail }, P.ip);
     const { changeId } = await start.json();
 
-    const res = await send('POST', '/api/customer/profile/identity/verify', TOKEN_A, { changeId, code: '000000' });
+    const res = await send('POST', '/api/customer/profile/identity/verify', P.token, { changeId, code: '000000' });
     expect(res.status).toBe(400);
-    expect((await (await get('/api/customer/data-export', TOKEN_A)).json()).account.email).toBe(before);
+    expect((await (await get('/api/customer/data-export', P.token)).json()).account.email).toBe(before);
   });
 
   it('a code can be redeemed only ONCE', async () => {
+    const P = await freshPrincipal();
     const newEmail = 'once-' + RUN.toLowerCase() + '@example.test';
-    const start = await send('POST', '/api/customer/profile/identity', TOKEN_A, { kind: 'email', value: newEmail });
+    const start = await send('POST', '/api/customer/profile/identity', P.token, { kind: 'email', value: newEmail }, P.ip);
     const { changeId } = await start.json();
     const issued = sent[sent.length - 1];
 
-    expect((await send('POST', '/api/customer/profile/identity/verify', TOKEN_A, { changeId, code: issued.code })).status).toBe(200);
+    expect((await send('POST', '/api/customer/profile/identity/verify', P.token, { changeId, code: issued.code })).status).toBe(200);
     // Replaying the same change is refused.
-    expect((await send('POST', '/api/customer/profile/identity/verify', TOKEN_A, { changeId, code: issued.code })).status).toBe(400);
+    expect((await send('POST', '/api/customer/profile/identity/verify', P.token, { changeId, code: issued.code })).status).toBe(400);
   });
 
   it('customer B cannot redeem customer A change', async () => {
-    const start = await send('POST', '/api/customer/profile/identity', TOKEN_A, {
+    const A2 = await freshPrincipal();
+    const B2 = await freshPrincipal();
+    const start = await send('POST', '/api/customer/profile/identity', A2.token, {
       kind: 'email',
       value: 'cross-' + RUN.toLowerCase() + '@example.test',
-    });
+    }, A2.ip);
     const { changeId } = await start.json();
     const issued = sent[sent.length - 1];
 
     // B holds the genuine changeId and code, and still cannot use them.
-    const res = await send('POST', '/api/customer/profile/identity/verify', TOKEN_B, { changeId, code: issued.code });
+    const res = await send('POST', '/api/customer/profile/identity/verify', B2.token, { changeId, code: issued.code });
     expect(res.status).toBe(404);
   });
 
   it('refuses an email already held by another account', async () => {
-    const res = await send('POST', '/api/customer/profile/identity', TOKEN_A, {
+    const A2 = await freshPrincipal();
+    const B2 = await freshPrincipal();
+    const res = await send('POST', '/api/customer/profile/identity', A2.token, {
       kind: 'email',
       value: 'someone-else-' + RUN.toLowerCase() + '@example.test',
-    });
+    }, A2.ip);
     expect(res.status).toBe(200);
     // B claims an address, then A tries to claim the same one.
-    const bStart = await send('POST', '/api/customer/profile/identity', TOKEN_B, {
+    const bStart = await send('POST', '/api/customer/profile/identity', B2.token, {
       kind: 'email',
       value: 'contested-' + RUN.toLowerCase() + '@example.test',
-    });
+    }, B2.ip);
     const { changeId } = await bStart.json();
-    await send('POST', '/api/customer/profile/identity/verify', TOKEN_B, {
+    await send('POST', '/api/customer/profile/identity/verify', B2.token, {
       changeId,
       code: sent[sent.length - 1].code,
     });
-    const aTry = await send('POST', '/api/customer/profile/identity', TOKEN_A, {
+    const aTry = await send('POST', '/api/customer/profile/identity', A2.token, {
       kind: 'email',
       value: 'contested-' + RUN.toLowerCase() + '@example.test',
-    });
+    }, A2.ip);
     expect(aTry.status).toBe(409);
   });
 
   it('rejects an invalid email and an unknown kind', async () => {
-    expect((await send('POST', '/api/customer/profile/identity', TOKEN_A, { kind: 'email', value: 'nope' })).status).toBe(400);
-    expect((await send('POST', '/api/customer/profile/identity', TOKEN_A, { kind: 'fax', value: 'x' })).status).toBe(400);
+    const P = await freshPrincipal();
+    expect((await send('POST', '/api/customer/profile/identity', P.token, { kind: 'email', value: 'nope' }, P.ip)).status).toBe(400);
+    // An unknown kind is passed through UNMETERED on purpose (the handler rejects
+    // it before a code could be issued), so it is a 400 regardless of the budget —
+    // and it must not consume the caller's email allowance either.
+    expect((await send('POST', '/api/customer/profile/identity', P.token, { kind: 'fax', value: 'x' }, P.ip)).status).toBe(400);
   });
 });
 

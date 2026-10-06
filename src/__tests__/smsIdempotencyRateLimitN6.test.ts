@@ -550,23 +550,25 @@ describe('N6 — security review and scope boundary', () => {
     expect(read('services/auth.ts')).toContain('export async function sendCodeViaSms');
   });
 
-  it('N7 MOUNTED the durable limiter and dispatched all six SMS events', () => {
+  it('N7 MOUNTED the durable limiter and dispatched all six code events', () => {
     // N7 UPDATED THIS TEST. It previously asserted the exact inverse — that no
     // SMS event was dispatched and that the limiter was built but not mounted —
     // in order to pin the N6/N7 scope boundary. N7 is that boundary crossing, so
     // the assertion is inverted rather than removed.
+    //
+    // E1 UPDATED IT AGAIN, for the same reason: the six flows now dispatch the
+    // EMAIL TWIN of each retired SMS event, and PHONE_VERIFICATION_OTP's twin is
+    // IDENTITY_CHANGE_OTP_EMAIL (the phone-change code is emailed to the
+    // account's own verified address). The durable limiter mountings are
+    // unchanged — the shared code budget still gates every code we issue.
     const allSource = ['server.ts', 'routes/agentOps.ts', 'routes/finderReport.ts',
       'routes/claims.ts', 'routes/customerClaims.ts'].map(read).join('\n');
     for (const event of [
-      'PHONE_VERIFICATION_OTP', 'CUSTOMER_LOGIN_OTP', 'AGENT_LOGIN_OTP',
-      'OWNER_CLAIM_VERIFICATION_CODE', 'PICKUP_CODE', 'CLAIM_LINK_OTP',
+      'CUSTOMER_LOGIN_OTP_EMAIL', 'AGENT_LOGIN_OTP_EMAIL',
+      'IDENTITY_CHANGE_OTP_EMAIL',
+      'OWNER_CLAIM_VERIFICATION_CODE_EMAIL', 'PICKUP_CODE_EMAIL', 'CLAIM_LINK_OTP_EMAIL',
     ]) {
-      // PHONE_VERIFICATION_OTP and AGENT_LOGIN_OTP are the SAME route
-      // (/api/auth/request-otp -> AuthService.requestOTP), which now dispatches
-      // AGENT_LOGIN_OTP. PHONE_VERIFICATION_OTP therefore has no distinct
-      // production call site and is deliberately not asserted as dispatched.
-      if (event === 'PHONE_VERIFICATION_OTP') continue;
-      expect(allSource, event).toContain(`eventType: '${event}'`);
+      expect(allSource, event).toContain(`'${event}'`);
     }
     // The limiter is now MOUNTED, after authentication and before the handler.
     expect(read('server.ts')).toContain('smsRateLimit()');

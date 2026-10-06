@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+﻿import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import crypto from 'crypto';
 import { db } from '../db/database';
 // ---------------------------------------------------------------------------
-// N7 — isolate the durable SMS rate limiter out of these business-logic tests.
+// N7 â€” isolate the durable SMS rate limiter out of these business-logic tests.
 //
 // These routes now carry N6's limiter, which enforces 3 SMS requests per
 // rolling 10 minutes on BOTH the client IP AND the verified principal
@@ -13,8 +13,8 @@ import { db } from '../db/database';
 //
 // That is the limiter working correctly, not a defect in the flows: a real
 // customer doing the same thing would be limited too. What these files exist to
-// test is the logic BEHIND the limiter — OTP binding, freshness, single use,
-// cross-claim and cross-customer authorization — and that logic is only
+// test is the logic BEHIND the limiter â€” OTP binding, freshness, single use,
+// cross-claim and cross-customer authorization â€” and that logic is only
 // observable with a non-exhausting budget.
 //
 // Rate limiting itself is verified exhaustively, and over real HTTP, by
@@ -31,33 +31,37 @@ import { administrativeUnitsForCounty } from '../config/kenyaAdministrativeUnits
 import { resolveCountyName } from '../config/kenyaCounties';
 
 // ===========================================================================
-// P2-A5 — REAL HTTP END-TO-END LIFECYCLE TEST.
+// P2-A5 â€” REAL HTTP END-TO-END LIFECYCLE TEST.
 //
 // The first test in this repository that drives the COMPLETE found-item
 // lifecycle over real HTTP against the REAL application: `createApp()` from
 // src/server.ts, an ephemeral TCP socket, the real Express middleware chain,
 // the six real route modules, the real database and the real state transitions.
 //
-// P2-A1 … P2-A3.4B extracted 21 route handlers out of server.ts. P2-A4 removed
+// P2-A1 â€¦ P2-A3.4B extracted 21 route handlers out of server.ts. P2-A4 removed
 // the import-time boot so the app could finally be mounted. Until now, NOTHING
-// proved those modules still work together inside the real application — every
+// proved those modules still work together inside the real application â€” every
 // proof was a source-text assertion. This file closes that gap.
 //
 // Only EXTERNAL providers are doubled, each with the pattern already
 // established in this repo (customerClaimRoutes.test.ts): SMS capture, S3
-// upload, email, and IntaSend `fetch`. Every business function — hashing,
+// upload, email, and IntaSend `fetch`. Every business function â€” hashing,
 // timing-safe comparison, state machines, CAS transitions, fee computation,
-// signature verification — stays REAL. `authenticateJWT` and `requireActiveAgent`
+// signature verification â€” stays REAL. `authenticateJWT` and `requireActiveAgent`
 // are NOT bypassed: a genuine HS256 token is minted with the real
 // generateToken() and verified by the real middleware.
 // ===========================================================================
 
 const sms = vi.hoisted(() => ({ sent: [] as Array<{ phone: string; code: string; label: string }> }));
-const emails = vi.hoisted(() => ({ sent: [] as Array<{ to: string; subject: string }> }));
+const emails = vi.hoisted(() => ({ sent: [] as Array<{ to: string; subject: string; html?: string }> }));
+// E1: every one-time code is now EMAILED. The seam is doubled the same way the
+// SMS gateway used to be â€” capture-only â€” so a test can read the code the ROUTE
+// generated (and hashed) without an email ever leaving the process.
+const emailOtp = vi.hoisted(() => ({ sent: [] as Array<{ to: string; code: string; eventType: string }> }));
 
 vi.mock('../services/auth', async (importOriginal) => {
   const actual = await importOriginal<any>();
-  // The bulk SMS path is reached as `AuthService.sendSms(...)` — a property of
+  // The bulk SMS path is reached as `AuthService.sendSms(...)` â€” a property of
   // the exported object. Overriding only the module-level `sendSms` would NOT
   // intercept it, so both shapes are captured.
   const captureSms = vi.fn(async (phone: string, message: string) => {
@@ -96,9 +100,36 @@ vi.mock('../services/email', async (importOriginal) => {
         if (prop === 'send') {
           return vi.fn(async (to: string, subject: string) => { emails.sent.push({ to, subject }); return true; });
         }
+        // E1/N9: the notification boundary reaches email through `sendWithId`,
+        // which must report ACCEPTANCE plus a provider id â€” the shape
+        // resendEmailProvider reads. Returning a bare `true` here (the old
+        // catch-all) would make every transactional email look REJECTED, and the
+        // payment-time pickup code would be recorded as a failure. The rendered
+        // body is captured too, so a test can read what was actually delivered.
+        if (prop === 'sendWithId') {
+          return vi.fn(async (to: string, subject: string, html: string) => {
+            emails.sent.push({ to, subject, html });
+            return { accepted: true, providerMessageId: 'test-email-id', providerError: null };
+          });
+        }
         const v = target[prop];
         return typeof v === 'function' ? vi.fn(async () => true) : v;
       },
+    }),
+  };
+});
+
+vi.mock('../services/emailOtp', async (importOriginal) => {
+  const actual = await importOriginal<any>();
+  return {
+    ...actual,
+    sendEmailOtp: vi.fn(async (input: any) => {
+      emailOtp.sent.push({
+        to: String(input?.recipient ?? ''),
+        code: String(input?.code ?? ''),
+        eventType: String(input?.eventType ?? ''),
+      });
+      return { accepted: true, dispatched: true, eventId: 'test-email-event', status: 'sent' };
     }),
   };
 });
@@ -136,7 +167,7 @@ let app: any;
 let server: any;
 let base = '';
 // ---------------------------------------------------------------------------
-// N7 â€” per-test client identity for the durable SMS rate limiter.
+// N7 Ã¢â‚¬â€ per-test client identity for the durable SMS rate limiter.
 //
 // The SMS routes now carry N6's DURABLE per-IP limiter: 3 requests per rolling
 // 10 minutes. The app sets `trust proxy`, so `req.ip` is derived from
@@ -166,7 +197,7 @@ async function http(
   // Customer-authenticated routes (requireCustomerAuth) authenticate from the
   // httpOnly session cookie and from nothing else, so a caller that needs to be
   // signed in must present it here. The raw token is only ever passed to this
-  // header — it is never logged, printed or asserted on.
+  // header â€” it is never logged, printed or asserted on.
   if (opts.cookie) headers['Cookie'] = `r4m_customer_session=${opts.cookie}`;
   // N7: the SMS routes now carry N6's DURABLE per-IP limiter (3 per rolling 10
   // minutes). The app sets `trust proxy`, so req.ip derives from
@@ -192,6 +223,38 @@ const agentToken = (id: string) => generateToken({ id: `e2e-${id}`, role: 'agent
 function lastCodeFor(phone: string): string | undefined {
   for (let i = sms.sent.length - 1; i >= 0; i--) if (sms.sent[i].phone === phone) return sms.sent[i].code;
   return undefined;
+}
+
+/**
+ * E1: the code the route generated for a RECIPIENT ADDRESS. The destination is
+ * server-resolved (the account's own verified email), which is what makes
+ * asserting on it meaningful rather than tautological.
+ */
+function lastCodeForRecipient(to: string): string | undefined {
+  for (let i = emailOtp.sent.length - 1; i >= 0; i--) if (emailOtp.sent[i].to === to) return emailOtp.sent[i].code;
+  return undefined;
+}
+
+/** The rendered body of the most recent transactional email sent to `to`. */
+function lastEmailBodyFor(to: string): string | undefined {
+  for (let i = emails.sent.length - 1; i >= 0; i--) {
+    if (emails.sent[i].to === to && emails.sent[i].html) return emails.sent[i].html;
+  }
+  return undefined;
+}
+
+/**
+ * The 6-digit code out of a rendered email body.
+ *
+ * Scoped to the region FOLLOWING the visible label, because the message is a
+ * styled document that legitimately contains other numbers (an item reference, a
+ * phone number, a fee). Reading the code block itself is what keeps this
+ * assertion about the delivered code rather than about a regex accident.
+ */
+function codeFromEmailBody(html: string, label = 'Secret pickup code'): string | undefined {
+  const at = html.indexOf(label);
+  const region = at >= 0 ? html.slice(at, at + 800) : html;
+  return /\b(\d{6})\b/.exec(region)?.[1];
 }
 
 let itemId = '';
@@ -248,7 +311,7 @@ beforeAll(async () => {
         national_id_hash: `E2E-HASH-${id}`,
         // The REAL AgentMatchingService ranks active agents by county first,
         // then sub-county. Giving the fixture the same canonical geography as
-        // the reported item means genuine matching runs and assigns the agent —
+        // the reported item means genuine matching runs and assigns the agent â€”
         // this is geography setup, not a bypass of the matching logic.
         county: COUNTY,
         administrative_unit_id: NAIROBI_UNIT,
@@ -282,7 +345,7 @@ const reportBody = (over: Record<string, any> = {}) => ({
 const ownerAnswers = { lastDigits: '1234', fullName: 'E2E Owner' };
 
 // Resolved from the REAL canonical geography config rather than hardcoded, so
-// the test cannot drift if Kenya's administrative units are updated — and so
+// the test cannot drift if Kenya's administrative units are updated â€” and so
 // the county/sub-county pairing is genuinely server-valid. Note the canonical
 // county name is 'Nairobi City'; 'Nairobi' is only a user-typed alias that
 // resolveFoundCountyInput() normalises.
@@ -299,9 +362,9 @@ const NAIROBI_LAT = -1.286389;
 const NAIROBI_LON = 36.817223;
 
 // ===========================================================================
-// STAGE 1 — FINDER REPORT
+// STAGE 1 â€” FINDER REPORT
 // ===========================================================================
-describe('stage 1 — finder reports a found item over HTTP', () => {
+describe('stage 1 â€” finder reports a found item over HTTP', () => {
   it('rejects an invalid county', async () => {
     const r = await http('/api/items/report', { body: reportBody({ foundCounty: 'Atlantis' }) });
     expect(r.status).toBe(400);
@@ -339,9 +402,9 @@ describe('stage 1 — finder reports a found item over HTTP', () => {
 });
 
 // ===========================================================================
-// STAGE 2 — PUBLIC DISCOVERY + PRIVACY PROJECTION
+// STAGE 2 â€” PUBLIC DISCOVERY + PRIVACY PROJECTION
 // ===========================================================================
-describe('stage 2 — public discovery exposes nothing sensitive', () => {
+describe('stage 2 â€” public discovery exposes nothing sensitive', () => {
   it('hides the item while it is awaiting dropoff', async () => {
     const r = await http('/api/items/search');
     expect(r.status).toBe(200);
@@ -355,7 +418,7 @@ describe('stage 2 — public discovery exposes nothing sensitive', () => {
     // item's primary key) and additionally requires categoryId + foundArea.
     // recordItemVerification additionally REQUIRES a `reason` whenever any
     // field is corrected (database.ts: "A reason is required for any
-    // correction") — and found_area differs from the report's
+    // correction") â€” and found_area differs from the report's
     // location_description, so this is a correction. Supplying the reason is
     // what a real agent does; the guard is left untouched.
     const verify = await http('/api/agents/verify-item', {
@@ -371,7 +434,7 @@ describe('stage 2 — public discovery exposes nothing sensitive', () => {
     expect(verify.status).toBe(200);
 
     // confirm-dropoff ALSO resolves the item by drop-off code, which is the
-    // item's primary key — proven by verify-item succeeding with the same value.
+    // item's primary key â€” proven by verify-item succeeding with the same value.
     // The report response's `dropoffCode` field is not the lookup key.
     const drop = await http('/api/agents/confirm-dropoff', {
       token: agentToken(AGENT_ID), body: { dropoffCode: itemId },
@@ -396,14 +459,14 @@ describe('stage 2 — public discovery exposes nothing sensitive', () => {
 });
 
 // ===========================================================================
-// STAGE 3 — OWNER CLAIM, DUPLICATE PROTECTION, CLAIM OTP
+// STAGE 3 â€” OWNER CLAIM, DUPLICATE PROTECTION, CLAIM OTP
 //
 // NOTE the real contracts read from the current source, not assumed:
 //  * claims/submit is IDEMPOTENT per (item, owner phone): a second submission
 //    returns 200 with the EXISTING claim, not a 409. Asserting 409 here would be
 //    testing a behaviour the application does not have.
 //  * claims/:id/request-otp requires { phone } and must match owner_phone.
-//  * claims/:id/verify-otp takes { code } ONLY — no phone.
+//  * claims/:id/verify-otp takes { code } ONLY â€” no phone.
 //  * An unknown category falls back to the 'other-item' verification profile,
 //    which requires a `description` answer (config/verificationProfiles.ts).
 //  * claims/submit is now an AUTHENTICATED WRITE: every submission below
@@ -411,8 +474,8 @@ describe('stage 2 — public discovery exposes nothing sensitive', () => {
 //    the first middleware on the route. Even the two VALIDATION-rejection cases
 //    are authenticated, so they still prove the 400 validation order instead of
 //    short-circuiting at the 401 boundary. The claim OTP steps stay
-//    deliberately cookie-less — the claim OTP, not an account, is what proves
-//    ownership of a claim — which is exactly the property the OTP tests below
+//    deliberately cookie-less â€” the claim OTP, not an account, is what proves
+//    ownership of a claim â€” which is exactly the property the OTP tests below
 //    (and Stage 7A) continue to demonstrate.
 // ===========================================================================
 const claimAnswers = { description: 'Black phone in a dark case, scratched back.' };
@@ -432,11 +495,22 @@ const claimAnswers = { description: 'Black phone in a dark case, scratched back.
 // cookie -> hash -> session lookup is what validates it. Nothing is mocked.
 // ---------------------------------------------------------------------------
 const OWNER_CUSTOMER_ID = `E2E-CUS-OWNER-${RUN}`;
+// E1: the owner's account must carry a VERIFIED EMAIL, because that is the only
+// destination a claim code can now be delivered to. Derived from the id so it is
+// unique per run.
+const OWNER_EMAIL = `${OWNER_CUSTOMER_ID.toLowerCase()}@example.test`;
 let ownerCookie = '';
 const ownerSession = async (): Promise<string> => {
   if (ownerCookie) return ownerCookie;
   let owner: any = await db.getCustomerByPhone(OWNER_PHONE);
-  if (!owner) owner = await db.createCustomer(OWNER_CUSTOMER_ID, 'E2E Owner', OWNER_PHONE);
+  if (!owner) {
+    // The real production pair: the ONLY writer of status='active' +
+    // email_verified_at. A fixture built any other way would not match what
+    // registration actually creates.
+    await db.createCustomerPendingActivation(OWNER_CUSTOMER_ID, 'E2E Owner', OWNER_PHONE, OWNER_EMAIL);
+    await db.activateCustomerAccount(OWNER_CUSTOMER_ID);
+    owner = await db.getCustomerByPhone(OWNER_PHONE);
+  }
   const raw = crypto.randomBytes(32).toString('hex');
   await db.createCustomerSession(
     `E2E-CSES-${owner.id}-${RUN}`, owner.id, hashCode(raw),
@@ -446,7 +520,7 @@ const ownerSession = async (): Promise<string> => {
   return ownerCookie;
 };
 
-describe('stage 3 — owner claim, duplicate protection and claim OTP', () => {
+describe('stage 3 â€” owner claim, duplicate protection and claim OTP', () => {
   it('rejects a claim that omits the identifying detail', async () => {
     const r = await http('/api/claims/submit', {
       cookie: await ownerSession(),
@@ -460,7 +534,7 @@ describe('stage 3 — owner claim, duplicate protection and claim OTP', () => {
       cookie: await ownerSession(),
       body: {
         itemId, ownerPhone: OWNER_PHONE, securityAnswers: {}, termsAccepted: true,
-        ownerIdentifyingDetails: 'Serial 12345',
+        ownerIdentifyingDetails: 'Serial 12345', ownerEmail: OWNER_EMAIL,
       },
     });
     expect(r.status).toBe(400);
@@ -471,7 +545,7 @@ describe('stage 3 — owner claim, duplicate protection and claim OTP', () => {
       cookie: await ownerSession(),
       body: {
         itemId, ownerPhone: OWNER_PHONE, securityAnswers: claimAnswers,
-        termsAccepted: true, ownerIdentifyingDetails: 'Serial 12345',
+        termsAccepted: true, ownerIdentifyingDetails: 'Serial 12345', ownerEmail: OWNER_EMAIL,
       },
     });
     expect(r.status).toBe(200);
@@ -497,7 +571,7 @@ describe('stage 3 — owner claim, duplicate protection and claim OTP', () => {
       cookie: await ownerSession(),
       body: {
         itemId, ownerPhone: OWNER_PHONE, securityAnswers: claimAnswers,
-        termsAccepted: true, ownerIdentifyingDetails: 'Serial 12345',
+        termsAccepted: true, ownerIdentifyingDetails: 'Serial 12345', ownerEmail: OWNER_EMAIL,
       },
     });
     // The real contract: the existing claim is RETURNED, not rejected.
@@ -517,16 +591,18 @@ describe('stage 3 — owner claim, duplicate protection and claim OTP', () => {
   });
 
   it('requests an OTP, never returns it, and persists a HASH only', async () => {
-    const before = sms.sent.length;
+    const before = emailOtp.sent.length;
     const r = await http(`/api/claims/${claimId}/request-otp`, { body: { phone: OWNER_PHONE } });
     expect(r.status).toBe(200);
 
     // The response must not leak the code.
     expect(JSON.stringify(r.body)).not.toMatch(/\b\d{4}\b/);
 
-    // It went out through the controlled SMS seam.
-    expect(sms.sent.length).toBe(before + 1);
-    const captured = lastCodeFor(OWNER_PHONE);
+    // It went out through the controlled EMAIL seam (E1), addressed to the
+    // account's own verified address â€” never to the number in the body.
+    expect(emailOtp.sent.length).toBe(before + 1);
+    expect(emailOtp.sent[emailOtp.sent.length - 1].to).toBe(OWNER_EMAIL);
+    const captured = lastCodeForRecipient(OWNER_EMAIL);
     expect(captured).toMatch(/^\d{4}$/);
 
     // Hash-only persistence: the plaintext must not be in the stored record.
@@ -541,7 +617,7 @@ describe('stage 3 — owner claim, duplicate protection and claim OTP', () => {
   });
 
   it('rejects an invalid OTP without advancing or consuming the challenge', async () => {
-    const good = lastCodeFor(OWNER_PHONE)!;
+    const good = lastCodeForRecipient(OWNER_EMAIL)!;
     const wrong = good === '0000' ? '9999' : '0000';
     const r = await http(`/api/claims/${claimId}/verify-otp`, { body: { code: wrong } });
     expect(r.status).toBe(400);
@@ -553,7 +629,7 @@ describe('stage 3 — owner claim, duplicate protection and claim OTP', () => {
   });
 
   it('accepts the valid OTP exactly once and advances the lifecycle', async () => {
-    const good = lastCodeFor(OWNER_PHONE)!;
+    const good = lastCodeForRecipient(OWNER_EMAIL)!;
     const r = await http(`/api/claims/${claimId}/verify-otp`, { body: { code: good } });
     expect(r.status).toBe(200);
 
@@ -565,7 +641,7 @@ describe('stage 3 — owner claim, duplicate protection and claim OTP', () => {
   });
 
   it('refuses to replay the same OTP', async () => {
-    const good = lastCodeFor(OWNER_PHONE)!;
+    const good = lastCodeForRecipient(OWNER_EMAIL)!;
     const r = await http(`/api/claims/${claimId}/verify-otp`, { body: { code: good } });
     expect(r.status).toBe(400);
     // The claim must not regress or advance a second time.
@@ -574,11 +650,11 @@ describe('stage 3 — owner claim, duplicate protection and claim OTP', () => {
 });
 
 // ===========================================================================
-// STAGE 3b — CLAIM SUBMISSION IS A CUSTOMER-AUTHENTICATED WRITE.
+// STAGE 3b â€” CLAIM SUBMISSION IS A CUSTOMER-AUTHENTICATED WRITE.
 //
 // The hole being closed: a claim could be created with NO session at all. The
 // UI gated entry (PublicItemView checks /api/customer/me; OwnerView hands a
-// signed-out visitor to /account), the server never checked — so hiding the
+// signed-out visitor to /account), the server never checked â€” so hiding the
 // form was the only thing standing between an anonymous caller and an
 // unbounded, unnotified point of claim creation.
 //
@@ -586,25 +662,25 @@ describe('stage 3 — owner claim, duplicate protection and claim OTP', () => {
 // requireCustomerAuth: it is not mocked, stubbed, monkey-patched or bypassed
 // anywhere in this file. Each rejection asserts the 401 AND the absence of
 // every side effect the caller would otherwise have caused (a claim row, an
-// SMS/notification fan-out, a lifecycle move) — "refused" only means something
+// SMS/notification fan-out, a lifecycle move) â€” "refused" only means something
 // if nothing happened.
 //
 // The positive half of the same contract is Stage 3 above: the accepted
 // submission there carries the owner's genuine cookie, and the claim-OTP steps
-// that follow it stay deliberately cookie-less, because the claim OTP — not an
-// account — is what proves ownership of a claim.
+// that follow it stay deliberately cookie-less, because the claim OTP â€” not an
+// account â€” is what proves ownership of a claim.
 // ===========================================================================
-describe('stage 3b — POST /api/claims/submit requires a real customer session', () => {
+describe('stage 3b â€” POST /api/claims/submit requires a real customer session', () => {
   const claimCountFor = async (id: string) =>
     (await db.getClaims()).filter((c: any) => c.item_id === id).length;
   const submitBody = (id: string) => ({
     itemId: id, ownerPhone: OWNER_PHONE, securityAnswers: claimAnswers,
-    termsAccepted: true, ownerIdentifyingDetails: 'Serial 12345',
+    termsAccepted: true, ownerIdentifyingDetails: 'Serial 12345', ownerEmail: OWNER_EMAIL,
   });
 
   it('3b.1 an ANONYMOUS caller is refused with 401 and NOTHING happens', async () => {
     const before = await claimCountFor(itemId);
-    const smsBefore = sms.sent.length;
+    const emailBefore = emailOtp.sent.length;
     const statusBefore = (await db.getClaim(claimId))!.status;
 
     const r = await http('/api/claims/submit', { body: submitBody(itemId) });
@@ -615,13 +691,13 @@ describe('stage 3b — POST /api/claims/submit requires a real customer session'
     expect(r.body?.claim).toBeUndefined();
     expect(r.text).not.toMatch(/CLM-\d/);
 
-    // No row, no SMS, no lifecycle movement: the handler body never ran.
+    // No row, no code dispatched, no lifecycle movement: the handler body never ran.
     expect(await claimCountFor(itemId)).toBe(before);
-    expect(sms.sent.length).toBe(smsBefore);
+    expect(emailOtp.sent.length).toBe(emailBefore);
     expect((await db.getClaim(claimId))!.status).toBe(statusBefore);
   });
 
-  it('3b.2 the boundary runs BEFORE the item lookup — an unknown item is not an oracle', async () => {
+  it('3b.2 the boundary runs BEFORE the item lookup â€” an unknown item is not an oracle', async () => {
     const r = await http('/api/claims/submit', { body: submitBody('ITEM-DOES-NOT-EXIST') });
     // 401, NOT the handler's own "not claimable" answer: an unauthenticated
     // caller cannot use this route to probe which item ids exist.
@@ -699,12 +775,12 @@ describe('stage 3b — POST /api/claims/submit requires a real customer session'
     expect((await db.getItem(freshItemId))!.status).toBe('at_agent');
     expect(await claimCountFor(freshItemId)).toBe(0);
 
-    // (1) ANONYMOUS — refused, and not one claim was created.
+    // (1) ANONYMOUS â€” refused, and not one claim was created.
     const anon = await http('/api/claims/submit', { body: submitBody(freshItemId) });
     expect(anon.status).toBe(401);
     expect(await claimCountFor(freshItemId)).toBe(0);
 
-    // (2) AUTHENTICATED — the IDENTICAL body plus the owner's real session
+    // (2) AUTHENTICATED â€” the IDENTICAL body plus the owner's real session
     // cookie. The session is the only difference between the two calls, which
     // is exactly what the boundary is supposed to depend on.
     const auth = await http('/api/claims/submit', {
@@ -723,7 +799,7 @@ describe('stage 3b — POST /api/claims/submit requires a real customer session'
     // claim creation and deliberately does not follow the owner journey further.
     const otp = await http(`/api/claims/${freshClaimId}/request-otp`, { body: { phone: OWNER_PHONE } });
     expect(otp.status).toBe(200);
-    const code = lastCodeFor(OWNER_PHONE);
+    const code = lastCodeForRecipient(OWNER_EMAIL);
     expect(code).toMatch(/^\d{4}$/);
 
     const verified = await http(`/api/claims/${freshClaimId}/verify-otp`, { body: { code: code! } });
@@ -733,7 +809,7 @@ describe('stage 3b — POST /api/claims/submit requires a real customer session'
 });
 
 // ===========================================================================
-// STAGE 4 — AGENT AUTHORIZATION BOUNDARY
+// STAGE 4 â€” AGENT AUTHORIZATION BOUNDARY
 //
 // The real contract of POST /api/agents/claims/:claimId/confirm-viewing, read
 // from source, in order:
@@ -757,7 +833,7 @@ const snapshot = async () => {
   return { claimStatus: c?.status, itemStatus: i?.status, agent: i?.assigned_agent_id, at: c?.agent_confirmed_at ?? null };
 };
 
-describe('stage 4 — agent authorization boundary', () => {
+describe('stage 4 â€” agent authorization boundary', () => {
   it('rejects an UNAUTHENTICATED mutation (no Authorization header)', async () => {
     const before = await snapshot();
     const r = await http(VIEWING(), { body: {} });
@@ -770,14 +846,14 @@ describe('stage 4 — agent authorization boundary', () => {
     const r = await http(VIEWING(), { token: 'not-a-real-jwt', body: {} });
     // REAL contract (services/auth.ts, authenticateJWT): 401 is reserved for a
     // missing/non-Bearer header; a header that IS present but whose token fails
-    // verification answers 403. Preserved deliberately — not normalised.
+    // verification answers 403. Preserved deliberately â€” not normalised.
     expect(r.status).toBe(403);
     expect(await snapshot()).toEqual(before);
   });
 
   it('rejects a valid token for a SUSPENDED agent (active-agent enforcement)', async () => {
     const before = await snapshot();
-    // Genuine, correctly signed token — for an agent that is not actionable.
+    // Genuine, correctly signed token â€” for an agent that is not actionable.
     const r = await http(VIEWING(), { token: agentToken(INACTIVE_AGENT_ID), body: {} });
     expect(r.status).toBe(403);
     expect(await snapshot()).toEqual(before);
@@ -785,7 +861,7 @@ describe('stage 4 — agent authorization boundary', () => {
 
   it('rejects a valid ACTIVE agent that is NOT the assignee (IDOR boundary)', async () => {
     const before = await snapshot();
-    // Fully valid + active + correctly signed — and still refused, because the
+    // Fully valid + active + correctly signed â€” and still refused, because the
     // application determines the assignment, not the caller.
     const other: any = await db.getAgent(OTHER_AGENT_ID);
     expect(other).toBeTruthy();
@@ -816,16 +892,16 @@ describe('stage 4 — agent authorization boundary', () => {
 });
 
 // ===========================================================================
-// STAGE 5 — PAYMENT AUTHORIZATION, SESSION, SERVER-AUTHORITATIVE AMOUNT
+// STAGE 5 â€” PAYMENT AUTHORIZATION, SESSION, SERVER-AUTHORITATIVE AMOUNT
 //
 // Real contracts read from source:
 //  * payment-auth   : { phone } -> 404 CLAIM_UNAVAILABLE for unknown claim AND
 //                     for wrong phone (one shared body: the F4/R2 oracle rule).
 //                     Mints a 20-minute token, stored hash-only.
-//  * payment-session: { phone, payerPhone } — there is NO amount field. The
+//  * payment-session: { phone, payerPhone } â€” there is NO amount field. The
 //                     amount is resolveAuthoritativePaymentFee(item, category),
 //                     server-side only. An existing active session is REUSED.
-//  * pay            : { phone, paymentAuthToken } — 400 missing token, 403
+//  * pay            : { phone, paymentAuthToken } â€” 400 missing token, 403
 //                     invalid/expired, 404 unknown claim/wrong phone, 400 wrong
 //                     state, 423 not claimable, then STK with the server fee.
 //
@@ -839,7 +915,7 @@ let secondClaimId = '';
 
 const paySessions = async (id: string) => (await db.listPaymentSessionsForClaim(id)).map((s: any) => s.id);
 
-describe('stage 5 — payment authorization, session and authoritative amount', () => {
+describe('stage 5 â€” payment authorization, session and authoritative amount', () => {
   it('mints a payment authorization token and stores it HASH only', async () => {
     const r = await http(`/api/claims/${claimId}/payment-auth`, { body: { phone: OWNER_PHONE } });
     expect(r.status).toBe(200);
@@ -910,7 +986,7 @@ describe('stage 5 — payment authorization, session and authoritative amount', 
       body: reportBody({ description: 'Second item used for cross-claim proof' }),
     });
     expect(rep.status).toBe(200);
-    // The real report response is { success, item, message } — there is NO
+    // The real report response is { success, item, message } â€” there is NO
     // `itemId` key. Stage 1 already reads `item.id`; this must match.
     secondItemId = String(rep.body?.itemId || rep.body?.item?.id || '');
     expect(secondItemId).toBeTruthy();
@@ -972,7 +1048,7 @@ describe('stage 5 — payment authorization, session and authoritative amount', 
 });
 
 // ===========================================================================
-// STAGE 6 — SIGNED INTASEND WEBHOOK, RECONCILIATION, ESCROW, PICKUP CODE
+// STAGE 6 â€” SIGNED INTASEND WEBHOOK, RECONCILIATION, ESCROW, PICKUP CODE
 //
 // Real contracts read from source:
 //  * Signature is HMAC-SHA256 over JSON.stringify(payload) with
@@ -984,7 +1060,7 @@ describe('stage 5 — payment authorization, session and authoritative amount', 
 //  * Malformed amounts (non-numeric/object/boolean/array) make
 //    reconcileWebhookAmount return 'unknown', which routes to
 //    fetchAuthoritativeCollectionStatus. Under test INTASEND_SECRET_KEY is a
-//    placeholder, so that lookup fails CLOSED and escrow is withheld — the P1
+//    placeholder, so that lookup fails CLOSED and escrow is withheld â€” the P1
 //    behaviour, with no outbound provider call.
 // ===========================================================================
 const WEBHOOK = '/api/webhooks/intasend';
@@ -1019,7 +1095,7 @@ const escrowSnapshot = async (id: string) => {
 
 let pickupPhaseOnly = '';
 
-describe('stage 6 — signed IntaSend webhook, reconciliation and escrow', () => {
+describe('stage 6 â€” signed IntaSend webhook, reconciliation and escrow', () => {
   it('refuses a MISSING signature in production mode (no financial mutation)', async () => {
     const before = await escrowSnapshot(claimId);
     const body = { invoice_id: 'INV-MISSING-SIG', state: 'COMPLETE', api_ref: claimId, value: '500' };
@@ -1039,7 +1115,7 @@ describe('stage 6 — signed IntaSend webhook, reconciliation and escrow', () =>
   it('refuses a signature computed over a DIFFERENT body', async () => {
     const before = await escrowSnapshot(claimId);
     const bodyB = { invoice_id: 'INV-SWAP', state: 'COMPLETE', api_ref: claimId, value: '500' };
-    // Signed for body A, transmitting body B — proves the signature covers the
+    // Signed for body A, transmitting body B â€” proves the signature covers the
     // actual raw payload rather than a loose field.
     const r = await asProduction(() => postHook(bodyB, sign({ ...bodyB, value: '1' })));
     expect(r.status).toBe(401);
@@ -1089,18 +1165,21 @@ describe('stage 6 — signed IntaSend webhook, reconciliation and escrow', () =>
     expect((await db.getClaim(claimId))!.status).toBe('escrow_held');
   });
 
-  it('persists the pickup code as a HASH only and delivered it via the SMS seam', async () => {
+  it('persists the pickup code as a HASH only and delivered it BY EMAIL', async () => {
     const row: any = await db.getPickupCode(claimId);
     expect(row).toBeTruthy();
     expect(row.code_hash).toBeTruthy();
-    // 64 hex chars (HMAC-SHA256) — never the 6-digit plaintext.
+    // 64 hex chars (HMAC-SHA256) â€” never the 6-digit plaintext.
     expect(String(row.code_hash)).toMatch(/^[0-9a-f]{64}$/i);
 
-    // The owner received a real 6-digit code through the controlled seam.
-    // The bulk-SMS seam records the whole message, so pull the code out of it.
-    const bulk = [...sms.sent].reverse().find((m) => m.phone === OWNER_PHONE && /\d{6}/.test(m.code));
-    expect(bulk).toBeTruthy();
-    const delivered = /\d{6}/.exec(bulk!.code)![0];
+    // The owner received a real 6-digit code, inside the transactional
+    // PAYMENT_RECEIVED email (E1 retired the SMS pickup path). The rendered body
+    // is where the delivered code is read from, because the durable row stores
+    // only its hash and the plaintext never touches the database.
+    const html = lastEmailBodyFor(OWNER_EMAIL);
+    expect(html).toBeTruthy();
+    const delivered = codeFromEmailBody(html!);
+    expect(delivered).toBeTruthy();
     // The delivered plaintext is NOT what was persisted.
     expect(String(row.code_hash)).not.toBe(delivered);
     // (the code itself is deliberately not logged)
@@ -1125,10 +1204,10 @@ describe('stage 6 — signed IntaSend webhook, reconciliation and escrow', () =>
 });
 
 // ===========================================================================
-// STAGE 7A — PICKUP-CODE RESEND (owner-bound, customer-session authenticated)
+// STAGE 7A â€” PICKUP-CODE RESEND (owner-bound, customer-session authenticated)
 //
 // Placement: this block runs immediately after Stage 6 and BEFORE the Stage 7
-// handover, so claim-1 is still genuinely `escrow_held` — the state Stage 6
+// handover, so claim-1 is still genuinely `escrow_held` â€” the state Stage 6
 // produced through real HTTP. Nothing here is seeded: paid_at,
 // payment_reference and the pickup-code hash all arrive from the real
 // webhook-driven lifecycle, and are asserted before any resend is attempted.
@@ -1136,7 +1215,7 @@ describe('stage 6 — signed IntaSend webhook, reconciliation and escrow', () =>
 // Auth contract read from source (services/customerAuth.ts):
 //   cookie name : r4m_customer_session   (CUSTOMER_SESSION_COOKIE)
 //   the raw token is hashed with hashCode() before the session row is looked
-//   up; requireCustomerAuth reads ONLY that cookie — nothing else
+//   up; requireCustomerAuth reads ONLY that cookie â€” nothing else
 //   authenticates, and no customer id from the body is trusted.
 // requireCustomerAuth is NOT mocked, monkey-patched or bypassed: the genuine
 // cookie is presented over real HTTP and the real middleware resolves it.
@@ -1164,7 +1243,7 @@ let otherCookie = '';
  * Full 7A security snapshot: the claim's lifecycle/financial state plus the
  * canonical pickup-code storage fields. Field names come from the real schema
  * (claims.status / claims.paid_at / claims.payment_reference and
- * pickup_codes.code_hash / pickup_codes.verified_at) — nothing is invented.
+ * pickup_codes.code_hash / pickup_codes.verified_at) â€” nothing is invented.
  */
 const moneyAndPickup = async (id: string) => {
   const c: any = await db.getClaim(id);
@@ -1190,7 +1269,7 @@ const cookiePost = async (url: string, cookie: string, body: any) => {
   return { status: res.status, body: json, text };
 };
 
-describe('stage 7A — owner-bound pickup-code resend over real HTTP', () => {
+describe('stage 7A â€” owner-bound pickup-code resend over real HTTP', () => {
   it('7A.0 preconditions: claim-1 is escrow_held, paid and hash-backed by Stage 6', async () => {
     const s = await moneyAndPickup(claimId);
     expect(s.status).toBe('escrow_held');
@@ -1220,9 +1299,9 @@ describe('stage 7A — owner-bound pickup-code resend over real HTTP', () => {
     // writes a genuine customer_claim_links row.
     expect((await linkVerifiedClaimToCustomer(owner, await db.getClaim(claimId))).linked).toBe(true);
     // claim-2 is submitted by the same owner phone, so the same account owns it
-    // — that is what makes it a valid fixture for the 7A.3 lifecycle test.
+    // â€” that is what makes it a valid fixture for the 7A.3 lifecycle test.
     expect((await linkVerifiedClaimToCustomer(owner, await db.getClaim(secondClaimId))).linked).toBe(true);
-    // The owner's session already exists — Stage 3 needed it to submit both
+    // The owner's session already exists â€” Stage 3 needed it to submit both
     // claims. This returns that same live session rather than minting a second
     // one, so the /api/customer/me assertion below validates the very cookie the
     // claims were submitted on.
@@ -1250,9 +1329,9 @@ describe('stage 7A — owner-bound pickup-code resend over real HTTP', () => {
     expect(meOtherBody).not.toBe(meBody);
   });
 
-  it('7A.1 the OWNER can resend: 200, one real SMS, hash-only persistence, no plaintext leak', async () => {
+  it('7A.1 the OWNER can resend: 200, one real email, hash-only persistence, no plaintext leak', async () => {
     const before = await moneyAndPickup(claimId);
-    const smsBefore = sms.sent.length;
+    const emailBefore = emailOtp.sent.length;
 
     const r = await cookiePost(`/api/customer/claims/${claimId}/pickup-code/resend`, ownerCookie, {});
     expect(r.status).toBe(200);
@@ -1262,14 +1341,15 @@ describe('stage 7A — owner-bound pickup-code resend over real HTTP', () => {
     expect(r.text).not.toMatch(/\d{6}/);
     expect(r.text.toLowerCase()).not.toMatch(/code_hash|pickup_code|phone/);
 
-    // EXACTLY one SMS went out, to the claim's owner phone, through the seam.
-    expect(sms.sent.length).toBe(smsBefore + 1);
-    const delivered = sms.sent[sms.sent.length - 1];
-    expect(delivered.phone).toBe(OWNER_PHONE);
-    expect(delivered.label).toBe('PICKUP CODE');
+    // EXACTLY one EMAIL went out, to the signed-in account's own verified
+    // address (E1: never to a number from the request), through the seam.
+    expect(emailOtp.sent.length).toBe(emailBefore + 1);
+    const delivered = emailOtp.sent[emailOtp.sent.length - 1];
+    expect(delivered.to).toBe(OWNER_EMAIL);
+    expect(delivered.eventType).toBe('PICKUP_CODE_EMAIL');
     const plain = /\d{6}/.exec(delivered.code)?.[0];
     expect(plain).toBeTruthy();
-    // `plain` lives in test memory only — never logged, never asserted by value.
+    // `plain` lives in test memory only â€” never logged, never asserted by value.
 
     const after = await moneyAndPickup(claimId);
     // The claim is untouched: still escrow_held, money unmoved, not verified.
@@ -1287,7 +1367,7 @@ describe('stage 7A — owner-bound pickup-code resend over real HTTP', () => {
 
   it('7A.2 a DIFFERENT customer is refused with the shared non-disclosing 404', async () => {
     const before = await moneyAndPickup(claimId);
-    const smsBefore = sms.sent.length;
+    const emailBefore = emailOtp.sent.length;
 
     const r = await cookiePost(`/api/customer/claims/${claimId}/pickup-code/resend`, otherCookie, {});
     expect(r.status).toBe(404);
@@ -1297,29 +1377,29 @@ describe('stage 7A — owner-bound pickup-code resend over real HTTP', () => {
     expect(r.body).toEqual(unknown.body);
 
     // No SMS, no hash rotation, no lifecycle or financial movement.
-    expect(sms.sent.length).toBe(smsBefore);
+    expect(emailOtp.sent.length).toBe(emailBefore);
     expect(await moneyAndPickup(claimId)).toEqual(before);
   });
 
   it('7A.2b an UNAUTHENTICATED caller is refused with 401 by requireCustomerAuth', async () => {
     const before = await moneyAndPickup(claimId);
-    const smsBefore = sms.sent.length;
+    const emailBefore = emailOtp.sent.length;
     const res = await fetch(base + `/api/customer/claims/${claimId}/pickup-code/resend`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
     });
     expect(res.status).toBe(401);
-    expect(sms.sent.length).toBe(smsBefore);
+    expect(emailOtp.sent.length).toBe(emailBefore);
     expect(await moneyAndPickup(claimId)).toEqual(before);
   });
 
   it('7A.3 an INELIGIBLE lifecycle is refused with 409 and creates nothing', async () => {
     // claim-2 was created through the real HTTP lifecycle and deliberately left
-    // at pending_verification — an explicitly pickup-INELIGIBLE status. It was
+    // at pending_verification â€” an explicitly pickup-INELIGIBLE status. It was
     // NOT seeded into escrow_held / pending_settlement / released.
     const before = await moneyAndPickup(secondClaimId);
     expect(before.status).toBe('pending_verification');
     expect(before.hash).toBeNull();
-    const smsBefore = sms.sent.length;
+    const emailBefore = emailOtp.sent.length;
 
     // The LEGITIMATE owner of claim-2 (same owner phone) is the caller here, so
     // this is a lifecycle rejection and not an ownership rejection.
@@ -1328,7 +1408,7 @@ describe('stage 7A — owner-bound pickup-code resend over real HTTP', () => {
     expect(r.body?.error).toBeTruthy();
 
     // No pickup code created, no SMS, no financial mutation.
-    expect(sms.sent.length).toBe(smsBefore);
+    expect(emailOtp.sent.length).toBe(emailBefore);
     expect(await moneyAndPickup(secondClaimId)).toEqual(before);
     expect((await db.getPickupCode(secondClaimId).catch(() => undefined)) ?? null).toBeNull();
     // claim-1 is entirely unaffected by the other claim's rejection.
@@ -1341,14 +1421,14 @@ describe('stage 7A — owner-bound pickup-code resend over real HTTP', () => {
     // already armed the bucket, so this is the blocked second attempt. The
     // limiter is neither weakened nor disabled, and no clock is faked.
     const before = await moneyAndPickup(claimId);
-    const smsBefore = sms.sent.length;
+    const emailBefore = emailOtp.sent.length;
 
     const r = await cookiePost(`/api/customer/claims/${claimId}/pickup-code/resend`, ownerCookie, {});
     expect(r.status).toBe(429);
     expect(r.body?.error).toBeTruthy();
 
     // The blocked request costs nothing and changes nothing.
-    expect(sms.sent.length).toBe(smsBefore);
+    expect(emailOtp.sent.length).toBe(emailBefore);
     expect(await moneyAndPickup(claimId)).toEqual(before);
   });
 
@@ -1357,16 +1437,16 @@ describe('stage 7A — owner-bound pickup-code resend over real HTTP', () => {
     // the CLAIM and not the customer, so it cannot be used to lock a user out
     // of an unrelated claim.
     const second = await moneyAndPickup(secondClaimId);
-    const smsBefore = sms.sent.length;
+    const emailBefore = emailOtp.sent.length;
     const r = await cookiePost(`/api/customer/claims/${secondClaimId}/pickup-code/resend`, ownerCookie, {});
-    // Still refused — but with the LIFECYCLE reason, not the cooldown reason.
+    // Still refused â€” but with the LIFECYCLE reason, not the cooldown reason.
     expect(r.status).toBe(409);
-    expect(sms.sent.length).toBe(smsBefore);
+    expect(emailOtp.sent.length).toBe(emailBefore);
     expect(await moneyAndPickup(secondClaimId)).toEqual(second);
   });
 });
 // ===========================================================================
-// STAGE 7 — PICKUP-CODE HANDOFF -> pending_settlement
+// STAGE 7 â€” PICKUP-CODE HANDOFF -> pending_settlement
 //
 // Real contract of POST /api/agents/confirm-handover, read from source, in the
 // exact order the route enforces:
@@ -1401,11 +1481,24 @@ const moneySnapshot = async (id: string) => {
   };
 };
 
-describe('stage 7 — pickup-code handover to pending_settlement', () => {
+describe('stage 7 â€” pickup-code handover to pending_settlement', () => {
   it('captures the delivered pickup plaintext in test memory only', () => {
-    const bulk = [...sms.sent].reverse().find((m) => m.phone === OWNER_PHONE && /\d{6}/.test(m.code));
-    expect(bulk).toBeTruthy();
-    pickupPlain = /\d{6}/.exec(bulk!.code)![0];
+    // E1: the pickup code is delivered by email now â€” read it from the rendered
+    // payment body rather than from an SMS capture list.
+    // The LIVE code is the most recent delivery to the account: a resend
+    // regenerates and atomically INVALIDATES the previous code, exactly as the
+    // earlier SMS capture list made the latest code the live one. The
+    // payment-time body is the fallback when no resend has happened yet.
+    const resent = [...emailOtp.sent]
+      .reverse()
+      .find((m) => m.to === OWNER_EMAIL && m.eventType === 'PICKUP_CODE_EMAIL');
+    if (resent) {
+      pickupPlain = resent.code;
+    } else {
+      const html = lastEmailBodyFor(OWNER_EMAIL);
+      expect(html).toBeTruthy();
+      pickupPlain = codeFromEmailBody(html!) ?? '';
+    }
     expect(pickupPlain).toMatch(/^\d{6}$/);
     // The DB holds only the hash, never this value.
     // (the value itself is never logged)
@@ -1545,17 +1638,17 @@ describe('stage 7 — pickup-code handover to pending_settlement', () => {
     // Still not terminal, and the dispute window is what gates release.
     expect(claim.status).not.toBe('released');
     expect(claim.status).not.toBe('settled');
-    // Sessions remain as created — handover books no new financial state.
+    // Sessions remain as created â€” handover books no new financial state.
     expect((await paySessions(claimId)).length).toBeGreaterThan(0);
   });
 });
 
 // ===========================================================================
-// STAGE 8 — SETTLEMENT: pending_settlement -> released
+// STAGE 8 â€” SETTLEMENT: pending_settlement -> released
 //
 // SOURCE CONTRACT AUDIT (read from the current source, not assumed).
 //
-// 1. SETTLEMENT ENTRY POINTS — there are exactly two callers of the settlement
+// 1. SETTLEMENT ENTRY POINTS â€” there are exactly two callers of the settlement
 //    machinery and only ONE is reachable over HTTP:
 //      a) POST /api/admin/claims/:id/release-settlement  (server.ts)
 //         authenticateJWT -> requireCurrentAdminSession -> role==='admin'
@@ -1563,7 +1656,7 @@ describe('stage 7 — pickup-code handover to pending_settlement', () => {
 //         -> executeClaimSettlement(claimId)
 //         force=true is the DOCUMENTED admin override: it skips the settle_at
 //         check but still requires status==='pending_settlement'.
-//      b) releaseDueSettlements() — a setInterval(5min) sweep started by
+//      b) releaseDueSettlements() â€” a setInterval(5min) sweep started by
 //         startServer(), using attemptSettlementRelease(claimId, false) so it
 //         DOES honour settle_at. Not HTTP-reachable: createApp() does not
 //         start it and this suite never calls startServer().
@@ -1572,14 +1665,14 @@ describe('stage 7 — pickup-code handover to pending_settlement', () => {
 //    attemptSettlementRelease / executeClaimSettlement / finalizeSettlement
 //    directly.
 //
-// 2. DISPUTE WINDOW — claims.settle_at, written by enterPendingSettlement() as
+// 2. DISPUTE WINDOW â€” claims.settle_at, written by enterPendingSettlement() as
 //    now + DISPUTE_WINDOW_MS (DISPUTE_WINDOW_HOURS, default 48). It gates the
 //    AUTOMATIC sweep only; the admin route deliberately overrides it. Both
 //    halves are asserted below, the window guard itself through
-//    db.getClaimsDueForSettlement() — a READ-ONLY query, not a settlement
+//    db.getClaimsDueForSettlement() â€” a READ-ONLY query, not a settlement
 //    function, returning exactly the rows the sweep would act on.
 //
-// 3. PAYOUT PROVIDER SEAM — PaymentService.triggerIntasendPayout() ->
+// 3. PAYOUT PROVIDER SEAM â€” PaymentService.triggerIntasendPayout() ->
 //    fetchWithTimeout() -> the global fetch() against
 //    <INTASEND_BASE_URL>/send-money/. The provider is controlled AT THAT
 //    EXISTING SEAM by a passthrough global.fetch that intercepts only the
@@ -1588,25 +1681,25 @@ describe('stage 7 — pickup-code handover to pending_settlement', () => {
 //    abstraction, payload construction, amount calculation, response parsing
 //    and every ledger write all stay REAL.
 //
-// 4. PAYOUT AMOUNT — computed server-side in executeClaimSettlement() from
+// 4. PAYOUT AMOUNT â€” computed server-side in executeClaimSettlement() from
 //    item.locked_finder_share / locked_agent_share (falling back to the
 //    category's shares). The route reads NO amount from the request.
 //
-// 5. IDEMPOTENCY — two independent mechanisms, both asserted below:
+// 5. IDEMPOTENCY â€” two independent mechanisms, both asserted below:
 //      a) attemptSettlementRelease()'s CAS pending_settlement -> releasing.
 //      b) per-recipient ledger rows: only rows still 'pending' are ever sent,
 //         so a retry can never re-pay a recipient that already succeeded.
 //
-// 6. FINAL STATE — claims.status='released' via finalizeSettlement()'s own
+// 6. FINAL STATE â€” claims.status='released' via finalizeSettlement()'s own
 //    releasing -> released CAS, plus ledger rows flipped to 'completed' and a
 //    FINALIZE_SETTLEMENT audit row. The schema has no settled_at / released_at
 //    columns, so none is asserted.
 //
-// 7. PROVIDER OUTCOMES — 'failed' (non-2xx), 'pending' (batch accepted, the
+// 7. PROVIDER OUTCOMES â€” 'failed' (non-2xx), 'pending' (batch accepted, the
 //    individual B2C transfer not yet confirmed) and 'unknown' (network or
 //    timeout: the outcome is genuinely not known). Only 'success' finalises.
 //    'unknown' is the mode used for the failure/retry cycle because
-//    recordPayoutAttempt() maps 'unknown' back to a 'pending' ledger row — it
+//    recordPayoutAttempt() maps 'unknown' back to a 'pending' ledger row â€” it
 //    is the one provider failure the application itself treats as safely
 //    retryable.
 // ===========================================================================
@@ -1689,7 +1782,7 @@ const financialSnapshot = async (id: string) => {
 const auditFor = async (action: string, needle: string) =>
   (await db.getAuditLogs()).filter((l: any) => l.action === action && String(l.details).includes(needle));
 
-describe('stage 8 — settlement release to `released` over real HTTP', () => {
+describe('stage 8 â€” settlement release to `released` over real HTTP', () => {
   beforeAll(async () => {
     // A real, non-placeholder key so triggerIntasendPayout() takes its genuine
     // HTTP branch instead of the non-production simulation shortcut, and
@@ -1758,7 +1851,7 @@ describe('stage 8 — settlement release to `released` over real HTTP', () => {
     // Real contract (services/auth.ts): 401 = no header, 403 = unverifiable token.
     expect(bad.status).toBe(403);
 
-    // A genuine, correctly signed, ACTIVE agent token — the very agent that
+    // A genuine, correctly signed, ACTIVE agent token â€” the very agent that
     // performed the handover. Releasing escrow is NOT part of its role, so the
     // route's own role check must refuse it.
     const asAgent = await http(RELEASE(claimId), { token: agentToken(AGENT_ID), body: {} });
@@ -1768,7 +1861,7 @@ describe('stage 8 — settlement release to `released` over real HTTP', () => {
     expect(await financialSnapshot(claimId)).toEqual(before);
   });
 
-  it('8.3 refuses a REVOKED admin session (401) — token_version is re-checked live', async () => {
+  it('8.3 refuses a REVOKED admin session (401) â€” token_version is re-checked live', async () => {
     // Mint a second real session, then invalidate it through the application's
     // OWN revocation mechanism (bump the account's token_version). A token
     // that was validly signed and is nowhere near expiry must still be refused.
@@ -1795,7 +1888,7 @@ describe('stage 8 — settlement release to `released` over real HTTP', () => {
     expect((await db.getClaim(claimId))!.status).toBe('pending_settlement');
   });
 
-  it('8.4 refuses an INELIGIBLE claim (409) — no payout, no release, no audit', async () => {
+  it('8.4 refuses an INELIGIBLE claim (409) â€” no payout, no release, no audit', async () => {
     // claim-2 is at pending_verification, produced by the real lifecycle above.
     const before = await financialSnapshot(secondClaimId);
     const auditsBefore = (await auditFor('ADMIN_FORCE_RELEASE_SETTLEMENT', secondClaimId)).length;
@@ -1813,7 +1906,7 @@ describe('stage 8 — settlement release to `released` over real HTTP', () => {
 
   it('8.5 the payout amount is server-authoritative: a hostile client amount is ignored', async () => {
     // The route reads no amount from the request, so this is proven where the
-    // money actually moves — the batch the application SENT to the provider.
+    // money actually moves â€” the batch the application SENT to the provider.
     // The provider is in 'accept' mode behind a real (non-placeholder) key, so
     // triggerIntasendPayout() takes its genuine HTTP branch.
     payout.reset();
@@ -1845,7 +1938,7 @@ describe('stage 8 — settlement release to `released` over real HTTP', () => {
     expect(Number(byNarrative('AGENT')?.amount)).toBe(expectedAgent);
 
     // The two disbursements plus the retained platform fee equal exactly the
-    // fee the owner paid — the split is conserved.
+    // fee the owner paid â€” the split is conserved.
     const total = txns.reduce((n: number, t: any) => n + Number(t.amount), 0)
       + Number(item.locked_platform_share);
     expect(total).toBe(Number(item.locked_total_fee));
@@ -1863,10 +1956,10 @@ describe('stage 8 — settlement release to `released` over real HTTP', () => {
     expect(JSON.stringify(payout.calls[0].payload)).not.toContain(ADMIN_PASSWORD);
   });
 
-  it('8.6 an UNREACHABLE provider never produces `released` — the claim reverts and stays retryable', async () => {
+  it('8.6 an UNREACHABLE provider never produces `released` â€” the claim reverts and stays retryable', async () => {
     // The provider is unreachable, so the application genuinely does not know
     // whether the disbursement was accepted: this is the 'unknown' outcome,
-    // which recordPayoutAttempt() maps back to a 'pending' ledger row — the
+    // which recordPayoutAttempt() maps back to a 'pending' ledger row â€” the
     // one provider failure the application itself treats as safely retryable.
     payout.reset();
     payout.mode = 'network-error';
@@ -1899,7 +1992,7 @@ describe('stage 8 — settlement release to `released` over real HTTP', () => {
     // A provider that CONFIRMS each transfer. Under a real key the app
     // deliberately never reports 'success' for an accepted batch (that is its
     // 'pending until reconciled' model), so a confirmed payout is produced by
-    // the application's own documented non-production disbursement branch —
+    // the application's own documented non-production disbursement branch â€”
     // the same path every other test in this repository exercises. The
     // release lock, the ledger writes and the finalisation CAS all stay real.
     process.env.INTASEND_SECRET_KEY = '';
@@ -1915,7 +2008,7 @@ describe('stage 8 — settlement release to `released` over real HTTP', () => {
 
     const after = await financialSnapshot(claimId);
     expect(after.status).toBe('released');
-    // Collection evidence survives the payout untouched — a payout is a
+    // Collection evidence survives the payout untouched â€” a payout is a
     // SEPARATE financial event from the collection.
     expect(after.paid_at).toBe(before.paid_at);
     expect(after.payment_reference).toBe(before.payment_reference);
@@ -1930,7 +2023,7 @@ describe('stage 8 — settlement release to `released` over real HTTP', () => {
     // FINALIZE_SETTLEMENT is the money-moving event and must exist EXACTLY
     // once. ADMIN_FORCE_RELEASE_SETTLEMENT is written per release-LOCK
     // acquisition, so it legitimately has one row per attempt that won the
-    // CAS (the amount probe, the provider failure and the successful retry) —
+    // CAS (the amount probe, the provider failure and the successful retry) â€”
     // each is a distinct operator action, not a duplicate disbursement.
     expect((await auditFor('FINALIZE_SETTLEMENT', claimId)).length).toBe(1);
     expect((await auditFor('ADMIN_FORCE_RELEASE_SETTLEMENT', claimId)).length).toBeGreaterThanOrEqual(1);

@@ -148,13 +148,21 @@ describe('customer activation: one-time, purpose-bound, replay-safe', () => {
 
 describe('customer login: no enumeration, no account creation', () => {
   it('responds identically whether or not the phone is registered', () => {
-    expect(login).toMatch(/Kama nambari hii imesajiliwa/);
+    // E1: the single generic answer now tells every caller the same thing —
+    // "if this account has a verified email, a code went to it; otherwise verify
+    // your email first" — which is the same sentence for a registered and an
+    // unregistered number.
+    expect(login).toMatch(/Kama akaunti hii ina barua pepe iliyothibitishwa/);
     expect(login).not.toMatch(/not registered/i);
     expect(login).not.toMatch(/no such account/i);
   });
 
-  it('sends a code only for an existing active account', () => {
-    expect(login).toMatch(/if \(customer && customer\.status === 'active'\)/);
+  it('sends a code only for an existing active account with a verified email', () => {
+    // E1 narrowed the branch further: the destination must exist AND be verified,
+    // or there is nothing to send to and the route fails closed.
+    expect(login).toMatch(
+      /if \(customer && customer\.status === 'active' && customer\.email && customer\.email_verified_at\)/,
+    );
   });
 
   it('login verify uses the login purpose and can never create an account', () => {
