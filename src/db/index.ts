@@ -853,6 +853,13 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS county VARCHAR(50)`,
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS administrative_unit_id VARCHAR(50)`,
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS location_accuracy NUMERIC(10, 2)`,
+    // GEO-D+ — additive location provenance. Nullable, NO default, NO
+    // backfill: legacy rows keep NULL. `location_source` names the SERVICE
+    // geography's origin; `coordinate_source` names the operational hub
+    // coordinate's origin. Two INDEPENDENT axes — see the vocabulary + guards
+    // in services/locationProvenance.ts.
+    `ALTER TABLE agents ADD COLUMN IF NOT EXISTS location_source VARCHAR(30)`,
+    `ALTER TABLE agents ADD COLUMN IF NOT EXISTS coordinate_source VARCHAR(30)`,
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS payout_method_type VARCHAR(50) NOT NULL DEFAULT 'Till Number'`,
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ`,
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS needs_manual_geocoding BOOLEAN NOT NULL DEFAULT false`,
@@ -1193,6 +1200,11 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     // reads as "county unknown" — see the column comment in schema.ts.
     `ALTER TABLE items ADD COLUMN IF NOT EXISTS found_county VARCHAR(50)`,
     `ALTER TABLE items ADD COLUMN IF NOT EXISTS administrative_unit_id VARCHAR(50)`,
+    // GEO-D+ — how the found county/sub-county was established. Additive,
+    // nullable, NO default, NO backfill. There is deliberately NO coordinate
+    // axis on items: items.latitude/longitude are a device/routing hint, not
+    // the found-item location.
+    `ALTER TABLE items ADD COLUMN IF NOT EXISTS location_source VARCHAR(30)`,
     // Session-revocation mechanism for admin accounts — see the matching
     // comment on admin_users.token_version in schema.ts. Must exist here,
     // not just schema.ts, for an already-running database to pick it up.
@@ -1405,6 +1417,9 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     `CREATE INDEX IF NOT EXISTS idx_lost_reports_document_hash ON lost_reports(document_number_hash)`,
     `CREATE INDEX IF NOT EXISTS idx_lost_reports_county ON lost_reports(county)`,
     `ALTER TABLE lost_reports ADD COLUMN IF NOT EXISTS administrative_unit_id VARCHAR(50)`,
+    // GEO-D+ — how the required county/sub-county was established. Additive,
+    // nullable, NO default, NO backfill: legacy reports keep NULL.
+    `ALTER TABLE lost_reports ADD COLUMN IF NOT EXISTS location_source VARCHAR(30)`,
 
     // ======================================================================
     // BATCH 0 — FOUNDATIONAL SCHEMA PRIMITIVES

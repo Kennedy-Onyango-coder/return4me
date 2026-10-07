@@ -61,6 +61,11 @@ CREATE TABLE agents (
     county VARCHAR(50),
     administrative_unit_id VARCHAR(50),
     location_accuracy NUMERIC(10, 2),
+    -- GEO-D+ — how the SERVICE geography (county/unit above) was established.
+    -- Nullable, no default, no backfill: legacy rows keep NULL. Kept SEPARATE
+    -- from coordinate_source (the operational hub coordinate's origin).
+    location_source VARCHAR(30),
+    coordinate_source VARCHAR(30),
     latitude NUMERIC(9, 6),
     longitude NUMERIC(9, 6),
     mpesa_till_or_paybill VARCHAR(20) NOT NULL,
@@ -117,6 +122,11 @@ CREATE TABLE items (
     found_county VARCHAR(50),
     -- Structured supplied-baseline second-level geography; exact place remains separate.
     administrative_unit_id VARCHAR(50),
+    -- GEO-D+ — how the found county/sub-county above was established
+    -- ('user_selected' for new records). Nullable, no default, no backfill.
+    -- Items carry NO coordinate_source: items.latitude/longitude are a
+    -- device/routing hint, not the found-item location.
+    location_source VARCHAR(30),
     finder_phone VARCHAR(15) NOT NULL, -- Finder payout target (never shown to owners)
     assigned_agent_id VARCHAR(50) REFERENCES agents(id),
     -- suspected_stolen: claim flow blocked pending admin/legal review.
@@ -791,6 +801,9 @@ CREATE TABLE lost_reports (
     county VARCHAR(50) NOT NULL,
     -- Nullable for historical reports; exact place is not stored here.
     administrative_unit_id VARCHAR(50),
+    -- GEO-D+ — how the required county/sub-county above was established
+    -- ('user_selected' for new reports). Nullable, no default, no backfill.
+    location_source VARCHAR(30),
     location_area VARCHAR(120) NOT NULL,
     location_landmark VARCHAR(160),
     lost_at_from TIMESTAMP WITH TIME ZONE NOT NULL,

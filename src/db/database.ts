@@ -70,6 +70,12 @@ import {
 import { deriveDeviceLabel } from "../config/customerAccountPolicy";
 import crypto from "crypto";
 import { getSignedPhotoUrl } from "../services/storage.ts";
+import {
+  isAuthoritativeLocationSource,
+  isCoordinateSource,
+  type LocationSource,
+  type CoordinateSource,
+} from "../services/locationProvenance.ts";
 
 // Local copy of the phone-masking helper (also defined in services/auth.ts
 // as maskPhoneForLog) — duplicated rather than imported to avoid a
@@ -130,6 +136,11 @@ export interface Agent {
   county?: string | null;
   administrative_unit_id?: string | null;
   location_accuracy?: number | null;
+  // GEO-D+ — see services/locationProvenance.ts. location_source = how the
+  // SERVICE geography was established; coordinate_source = how the operational
+  // hub coordinate was established. Independent axes; null for legacy rows.
+  location_source?: LocationSource | null;
+  coordinate_source?: CoordinateSource | null;
   latitude: number | null;
   longitude: number | null;
   mpesa_till_or_paybill: string;
@@ -172,6 +183,11 @@ export interface FoundItem {
   found_county?: string | null;
   /** Supplied-baseline second-level administrative identity; null for historical rows. */
   administrative_unit_id?: string | null;
+  // GEO-D+ — how the found county/sub-county was established (see
+  // services/locationProvenance.ts). Null for legacy/unknown rows. There is
+  // deliberately NO coordinate_source on items: items.latitude/longitude are a
+  // device/routing hint, not the found-item location.
+  location_source?: LocationSource | null;
   finder_phone: string; // Securely stored, never shown
   // Nullable: an item can be awaiting MANUAL agent assignment (see
   // needs_manual_agent_reassignment) when confident automatic matching
@@ -661,6 +677,11 @@ function parseAgent(row: any): Agent {
     location_address: row.location_address,
     county: row.county ?? null,
     administrative_unit_id: row.administrative_unit_id ?? null,
+    // GEO-D+ provenance (two independent axes). Read through the vocabulary
+    // guards so a value that is not a recognized/authoritative source degrades
+    // to null rather than being surfaced as-is. Legacy rows read back NULL.
+    location_source: isAuthoritativeLocationSource(row.location_source) ? row.location_source : null,
+    coordinate_source: isCoordinateSource(row.coordinate_source) ? row.coordinate_source : null,
     location_accuracy: row.location_accuracy !== null && row.location_accuracy !== undefined ? parseFloat(row.location_accuracy) : null,
     // PHASE 9D: explicit null checks (not truthiness) so a stored coordinate of
     // exactly 0 is not reported as absent — audit finding C3, fixed on the read
@@ -707,6 +728,7 @@ function parseFoundItem(row: any): FoundItem {
     longitude: row.longitude !== null && row.longitude !== undefined ? parseFloat(row.longitude) : null,
     found_county: row.found_county ?? null,
     administrative_unit_id: row.administrative_unit_id ?? null,
+    location_source: isAuthoritativeLocationSource(row.location_source) ? row.location_source : null,
     finder_phone: row.finder_phone || "",
     assigned_agent_id: row.assigned_agent_id ?? null,
     status: row.status as any,
@@ -872,6 +894,9 @@ export interface LostReport {
   status: string;
   county: string;
   administrative_unit_id?: string | null;
+  // GEO-D+ — how the required county/sub-county was established (see
+  // services/locationProvenance.ts). Null for legacy/unknown rows.
+  location_source?: LocationSource | null;
   location_area: string;
   location_landmark: string | null;
   lost_at_from: string;
@@ -905,6 +930,7 @@ function parseLostReport(row: any): LostReport {
     status: row.status,
     county: row.county,
     administrative_unit_id: row.administrative_unit_id ?? null,
+    location_source: isAuthoritativeLocationSource(row.location_source) ? row.location_source : null,
     location_area: row.location_area,
     location_landmark: row.location_landmark ?? null,
     lost_at_from: iso(row.lost_at_from) || "",
@@ -1743,7 +1769,12 @@ class DatabaseEngine {
     try {
       const rows = await drizzleDb
         .update(agentsTable)
-        .set({ latitude: String(latitude), longitude: String(longitude), needs_manual_geocoding: false })
+        // GEO-D+ — this is the ADMIN coordinate-correction path (its only
+        // production caller is POST /api/admin/agents/:id/location). The stored
+        // pair is therefore recorded with coordinate_source = 'admin_corrected'.
+        // location_source (the SERVICE geography) is deliberately NOT touched:
+        // correcting a hub coordinate says nothing about service geography.
+        .set({ latitude: String(latitude), longitude: String(longitude), needs_manual_geocoding: false, coordinate_source: "admin_corrected" })
         .where(eq(agentsTable.id, agentId))
         .returning();
       return rows.length > 0 ? parseAgent(rows[0]) : undefined;
@@ -2071,6 +2102,10 @@ class DatabaseEngine {
           // boundary; null for legacy/unknown.
           found_county: item.found_county || null,
           administrative_unit_id: item.administrative_unit_id || null,
+          // GEO-D+ — only an AUTHORITATIVE geography source is ever persisted.
+          // The finder report route passes 'user_selected'; anything else (or a
+          // legacy/absent value) stores NULL. No coordinate axis on items.
+          location_source: isAuthoritativeLocationSource(item.location_source) ? item.location_source : null,
           finder_phone: item.finder_phone,
           assigned_agent_id: item.assigned_agent_id,
           status: item.status,
@@ -2574,6 +2609,13 @@ class DatabaseEngine {
           county: agent.county ?? null,
           administrative_unit_id: agent.administrative_unit_id ?? null,
           location_accuracy: agent.location_accuracy === null || agent.location_accuracy === undefined ? null : String(agent.location_accuracy),
+          // GEO-D+ — two independent provenance axes (see
+          // services/locationProvenance.ts). location_source = how the service
+          // geography was established; coordinate_source = how the operational
+          // hub coordinate pair was established. Guards reject anything that is
+          // not a recognized/authoritative value, storing NULL instead.
+          location_source: isAuthoritativeLocationSource(agent.location_source) ? agent.location_source : null,
+          coordinate_source: isCoordinateSource(agent.coordinate_source) ? agent.coordinate_source : null,
           // PHASE 9D (F1) — explicit null/undefined checks rather than
           // truthiness, matching createItem and both parseAgent/parseFoundItem
           // read paths. `agent.latitude ? ... : null` discarded a legitimate
@@ -7458,6 +7500,8 @@ await drizzleDb.transaction(async (tx) => {
           status: report.status,
           county: report.county,
           administrative_unit_id: report.administrative_unit_id ?? null,
+          // GEO-D+ — only an AUTHORITATIVE geography source is persisted.
+          location_source: isAuthoritativeLocationSource(report.location_source) ? report.location_source : null,
           location_area: report.location_area,
           location_landmark: report.location_landmark ?? null,
           lost_at_from: new Date(report.lost_at_from),

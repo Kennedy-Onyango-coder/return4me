@@ -4112,6 +4112,13 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                         <div className="p-2.5 bg-[var(--appearance-surface-muted)] border border-[var(--appearance-border)] rounded-xl text-caption font-mono text-[var(--appearance-text-muted)] space-y-1">
                           <p className="font-sans font-bold text-[var(--appearance-text-primary)]">Assignment Metadata:</p>
                           <p>Method: <span className="font-bold text-[var(--appearance-text-primary)]">{selectedReviewItem.agent_assignment_method}</span></p>
+                          {/* GEO-E1 — the routing-evidence confidence tier, DERIVED server-side
+                              from the assignment method and exposed only on the admin DTO.
+                              "high" = coordinate-based, "medium" = forward-geocoded,
+                              "manual" = human review. It never implies verified geography. */}
+                          {selectedReviewItem.agent_assignment_confidence && (
+                            <p>Evidence Confidence: <span className="font-bold text-[var(--appearance-text-primary)]">{selectedReviewItem.agent_assignment_confidence}</span></p>
+                          )}
                           {selectedReviewItem.agent_assignment_distance_km !== null && (
                             <p>Calculated Distance: <span className="font-bold text-[var(--appearance-text-primary)]">{parseFloat(selectedReviewItem.agent_assignment_distance_km).toFixed(2)} km</span></p>
                           )}

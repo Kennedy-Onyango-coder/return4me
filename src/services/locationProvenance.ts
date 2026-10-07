@@ -58,3 +58,48 @@ export function isLocationSource(value: unknown): value is LocationSource {
 export function isAdvisoryLocationSource(value: LocationSource): boolean {
   return (ADVISORY_LOCATION_SOURCES as readonly string[]).includes(value);
 }
+
+// ---------------------------------------------------------------------------
+// GEO-D+ — COORDINATE-SOURCE axis.
+//
+// `coordinate_source` answers a DIFFERENT question from `location_source`: not
+// "how was the county/service geography chosen?" but "how was the stored
+// latitude/longitude PAIR established?". It is deliberately a SEPARATE
+// vocabulary because the two axes are not interchangeable — an Agent's service
+// geography can be user-selected while its operational hub coordinate came from
+// the browser, a forward geocoder, or an administrator's manual correction.
+//
+// The values below are exactly the three code paths that produce a stored
+// coordinate today. There is deliberately no `reverse_geocoder` here: reverse
+// geocoding is an ADVISORY UI suggestion and never itself establishes a stored
+// coordinate pair. Do not add speculative values.
+// ---------------------------------------------------------------------------
+
+export type CoordinateSource = 'browser_gps' | 'forward_geocoder' | 'admin_corrected';
+
+export const COORDINATE_SOURCES: readonly CoordinateSource[] = [
+  'browser_gps',
+  'forward_geocoder',
+  'admin_corrected',
+] as const;
+
+/** Runtime guard for an untrusted coordinate-provenance value. */
+export function isCoordinateSource(value: unknown): value is CoordinateSource {
+  return typeof value === 'string' && (COORDINATE_SOURCES as readonly string[]).includes(value);
+}
+
+// ---------------------------------------------------------------------------
+// GEO-D+ — the GEOGRAPHY-provenance subset that may be PERSISTED as an
+// authoritative `location_source`. Today that is exactly `user_selected`: the
+// canonical county/sub-county had to be explicitly chosen and then re-validated
+// server-side. The ADVISORY sources (browser_gps, reverse_geocoder,
+// forward_geocoder) may SUGGEST a location in the UI but must never be written
+// into the authoritative geography column — a suggestion is not a decision.
+// ---------------------------------------------------------------------------
+
+export const AUTHORITATIVE_LOCATION_SOURCES: readonly LocationSource[] = ['user_selected'] as const;
+
+/** Runtime guard for a value that may be persisted as authoritative geography. */
+export function isAuthoritativeLocationSource(value: unknown): value is LocationSource {
+  return typeof value === 'string' && (AUTHORITATIVE_LOCATION_SOURCES as readonly string[]).includes(value);
+}

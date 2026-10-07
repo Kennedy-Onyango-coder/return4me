@@ -1,4 +1,5 @@
 import { INACTIVE_CLAIM_STATUSES } from '../config/claimStatuses';
+import { deriveAssignmentConfidence } from '../config/geoMatching';
 
 
 // Hand-built, whitelisted DTOs for the ADMIN console's bulk dashboard endpoint.
@@ -46,6 +47,11 @@ export function toAdminSafeAgentView(
     contact_phone: agent.contact_phone,
     contact_email: agent.contact_email ?? null,
     location_address: agent.location_address,
+    // GEO-D+ — internal location provenance, exposed ONLY on this admin DTO
+    // (never on public/owner/customer/agent surfaces). Two independent axes:
+    // how the service geography was chosen, and how the hub coordinate was set.
+    location_source: agent.location_source ?? null,
+    coordinate_source: agent.coordinate_source ?? null,
     latitude: agent.latitude,
     longitude: agent.longitude,
     mpesa_till_or_paybill: agent.mpesa_till_or_paybill,
@@ -196,6 +202,10 @@ export function toAdminSafeItemView(
     verification_status: item.verification_status ?? null,
     found_county: item.found_county ?? null,
     administrative_unit_id: item.administrative_unit_id ?? null,
+    // GEO-D+ — internal provenance, exposed ONLY on this admin DTO. There is
+    // deliberately no coordinate_source here: items.latitude/longitude are a
+    // device/routing hint, not the found-item location.
+    location_source: item.location_source ?? null,
     location_description: item.location_description,
     latitude: item.latitude,
     longitude: item.longitude,
@@ -207,6 +217,14 @@ export function toAdminSafeItemView(
     description: item.description ?? null,
     is_sensitive_document: item.is_sensitive_document !== false,
     agent_assignment_method: item.agent_assignment_method ?? null,
+    // GEO-E1 — DERIVED, not persisted. The item stores only the assignment
+    // METHOD; the routing-evidence confidence tier is derived from it on read so
+    // an administrator can understand WHY an Agent was selected ("high" =
+    // coordinate-based, "medium" = forward-geocoded, "manual" = human review)
+    // without a new database column and WITHOUT exposing any coordinate, raw
+    // GPS, accuracy, or provenance. Unrecognised/legacy methods derive to null
+    // (unknown), never a guessed tier.
+    agent_assignment_confidence: deriveAssignmentConfidence(item.agent_assignment_method),
     agent_assignment_distance_km: item.agent_assignment_distance_km ?? null,
     needs_manual_agent_reassignment: item.needs_manual_agent_reassignment ?? false,
     created_at: item.created_at,

@@ -2002,6 +2002,16 @@ async function createApp() {
           }
           
           const geoResult = suppliedCoordinates ? { latitude: suppliedCoordinates.latitude, longitude: suppliedCoordinates.longitude, needsManual: false } : await geocodeAddress(locationAddress);
+
+          // GEO-D+ coordinate provenance: it must name the code path that
+          // ACTUALLY produced the pair, never be inferred from the mere presence
+          // of coordinates. Browser GPS supplied by the request -> 'browser_gps';
+          // otherwise the server forward-geocoded the address, and only a
+          // successful lookup that returned a real pair is 'forward_geocoder'
+          // (a failed lookup establishes no coordinate, so it stays null).
+          const agentCoordinateSource = suppliedCoordinates
+            ? 'browser_gps'
+            : (geoResult.latitude !== null && geoResult.longitude !== null ? 'forward_geocoder' : null);
           
           const newId = 'agent-' + Math.random().toString(36).substr(2, 7);
           let newAgent;
@@ -2013,6 +2023,12 @@ async function createApp() {
               location_address: locationAddress,
               county: canonicalAgentCounty,
               administrative_unit_id: canonicalAgentUnit,
+              // GEO-D+ — two independent provenance axes (see
+              // services/locationProvenance.ts). location_source describes the
+              // user-chosen SERVICE geography above; coordinate_source names the
+              // origin of the operational hub coordinate.
+              location_source: 'user_selected',
+              coordinate_source: agentCoordinateSource,
               location_accuracy: safeAccuracy,
               latitude: geoResult.latitude,
               longitude: geoResult.longitude,

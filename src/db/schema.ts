@@ -99,6 +99,21 @@ export const agents = pgTable("agents", {
   county: varchar("county", { length: 50 }),
   administrative_unit_id: varchar("administrative_unit_id", { length: 50 }),
   location_accuracy: numeric("location_accuracy", { precision: 10, scale: 2 }),
+  // --- GEO-D+ LOCATION PROVENANCE (foundation only) -------------------------
+  // TWO INDEPENDENT AXES, deliberately NOT interchangeable (see
+  // services/locationProvenance.ts for the vocabulary + guards):
+  //   location_source   = HOW the SERVICE geography (county / administrative
+  //                       unit) was established. Written as 'user_selected'
+  //                       because an agent chooses a sub-county of a chosen
+  //                       county at signup and the server re-validates it.
+  //   coordinate_source = HOW the stored latitude/longitude PAIR was
+  //                       established (the operational hub coordinate): one of
+  //                       'browser_gps' | 'forward_geocoder' | 'admin_corrected'.
+  //                       It is NOT a statement about geography.
+  // Both are nullable with NO default: every pre-GEO-D+ agent row keeps NULL,
+  // which is the honest "origin unknown" value. No backfill, no inference.
+  location_source: varchar("location_source", { length: 30 }),
+  coordinate_source: varchar("coordinate_source", { length: 30 }),
   latitude: numeric("latitude", { precision: 9, scale: 6 }),
   longitude: numeric("longitude", { precision: 9, scale: 6 }),
   mpesa_till_or_paybill: varchar("mpesa_till_or_paybill", { length: 20 }).notNull(),
@@ -184,6 +199,15 @@ export const items = pgTable("items", {
   found_county: varchar("found_county", { length: 50 }),
   // Structured second-level geography, kept separate from exact-place text and nullable for history.
   administrative_unit_id: varchar("administrative_unit_id", { length: 50 }),
+  // --- GEO-D+ LOCATION PROVENANCE (foundation only) -------------------------
+  // HOW the canonical found county/sub-county above was established. New
+  // records that passed the required, server-validated county + sub-county
+  // selection are written as 'user_selected'. Deliberately NO coordinate axis
+  // here: items.latitude/longitude are an optional device/routing position,
+  // NOT the found-item location, so they must never carry a coordinate
+  // provenance. Nullable, default-less, never backfilled — every pre-GEO-D+
+  // row stays NULL ("origin unknown").
+  location_source: varchar("location_source", { length: 30 }),
   finder_phone: varchar("finder_phone", { length: 15 }).notNull(),
   assigned_agent_id: varchar("assigned_agent_id", { length: 50 }).references(() => agents.id),
   status: varchar("status", { length: 30 }).default("awaiting_dropoff").notNull(),
@@ -1553,6 +1577,11 @@ export const lost_reports = pgTable("lost_reports", {
   county: varchar("county", { length: 50 }).notNull(),
   // Structured second-level geography; nullable so historical reports remain unchanged.
   administrative_unit_id: varchar("administrative_unit_id", { length: 50 }),
+  // --- GEO-D+ LOCATION PROVENANCE (foundation only) -------------------------
+  // HOW the required county/sub-county above was established. New reports that
+  // passed validation are written as 'user_selected'. Nullable and default-less
+  // so every pre-GEO-D+ report keeps NULL ("origin unknown"); no backfill.
+  location_source: varchar("location_source", { length: 30 }),
   location_area: varchar("location_area", { length: 120 }).notNull(),
   location_landmark: varchar("location_landmark", { length: 160 }),
   lost_at_from: timestamp("lost_at_from", { withTimezone: true }).notNull(),

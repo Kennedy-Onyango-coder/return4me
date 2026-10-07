@@ -38,6 +38,7 @@ import { requireCustomerAuth } from '../services/customerAuth.ts';
 import { hashDocument } from '../services/documentHash.ts';
 import { resolveCountyName } from '../config/kenyaCounties.ts';
 import { resolveAdministrativeUnitId } from '../config/kenyaAdministrativeUnits.ts';
+import type { LocationSource } from '../services/locationProvenance.ts';
 import { DEFAULT_LOST_REPORT_STATUS } from '../config/lostReportStatuses.ts';
 import { generateLostReportReference, isLostReportReference } from '../services/lostReportReference.ts';
 import { toCustomerSafeLostReportView, toLostReportCreationResponse } from '../services/lostReportView.ts';
@@ -150,6 +151,9 @@ export interface LostReportDraft {
   category_id: string;
   county: string;
   administrative_unit_id: string;
+  // GEO-D+ — how the required county/sub-county above was established. A
+  // validated report is 'user_selected' (see services/locationProvenance.ts).
+  location_source: LocationSource;
   location_area: string;
   location_landmark: string | null;
   lost_at_from: string;
@@ -290,6 +294,10 @@ export function validateLostReportPayload(body: any, categories: Array<{ id: str
       category_id: categoryId,
       county,
       administrative_unit_id: administrativeUnitId,
+      // GEO-D+ — the county/sub-county above was explicitly chosen by the
+      // reporter and re-validated server-side, so its geography provenance is
+      // 'user_selected'.
+      location_source: 'user_selected',
       location_area: locationArea.value as string,
       location_landmark: locationLandmark.value,
       lost_at_from: from.toISOString(),

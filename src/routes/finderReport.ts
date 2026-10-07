@@ -295,6 +295,11 @@ export function registerFinderReportRoutes(
         // provider result (see §8 of the Phase 9D brief).
         found_county: canonicalFoundCounty,
         administrative_unit_id: canonicalFoundAdministrativeUnit,
+        // GEO-D+ — the county/sub-county above was explicitly chosen by the
+        // finder and re-validated server-side, so its geography provenance is
+        // 'user_selected'. The device latitude/longitude below are NOT the
+        // found-item location and therefore carry NO coordinate provenance.
+        location_source: 'user_selected',
         latitude: numericLat,
         longitude: numericLon,
         finder_phone: finderPhone,
