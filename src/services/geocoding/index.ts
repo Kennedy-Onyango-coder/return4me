@@ -30,20 +30,25 @@
 //     NEVER fails the surrounding workflow. Reporting, claiming, agent
 //     application and public browsing all continue without it.
 //   * No route or service contains a provider URL. They call
-//     `geocodeForward()` and nothing else.
+//     `geocodeForward()` or `geocodeReverse()` and nothing else.
 //   * The provider can be switched or disabled by CONFIGURATION alone.
 //   * No query text, coordinate or provider payload is ever logged at INFO
 //     level. Diagnostics are limited to provider name and a coarse reason code
 //     (see §19 of the Phase 9D brief).
 //
 // WHAT THIS MODULE DELIBERATELY DOES NOT DO
-//   * It does NOT reverse geocode. There is no coordinate->place operation
-//     here, because no Phase 9D requirement needs one and adding it would
-//     create an arbitrary-coordinate oracle (see the audit's section 12).
-//   * It does NOT decide a county. A provider result is a coordinate pair only.
-//     Canonical Kenyan county resolution remains `resolveCountyName()` in
-//     config/kenyaCounties.ts, and the found-item county is the value the
-//     FINDER explicitly chose — never anything a provider returned.
+//   * It does NOT authoritatively resolve a boundary. Reverse geocoding DOES
+//     exist here — `geocodeReverse()` (reached only through
+//     `POST /api/location/reverse`) turns a validated coordinate pair into a
+//     place suggestion — but that output is ADVISORY AND SUPPLEMENTARY ONLY.
+//     A coordinate does not, by itself, PROVE a county or sub-county boundary,
+//     and a suggestion is never asserted as one. Authoritative spatial
+//     resolution is a FUTURE GEO-E capability, not something performed here.
+//   * It does NOT decide a county. Canonical Kenyan county resolution remains
+//     `resolveCountyName()` in config/kenyaCounties.ts, and the found-item
+//     county is the value the FINDER explicitly chose — never anything a
+//     provider returned. Forward geocoding yields a coordinate pair only; the
+//     reverse path offers a county/sub-county CANDIDATE, never a decision.
 //   * It does NOT feed matching. services/lostReportMatching.ts reads no
 //     geocoding output and no coordinate.
 //   * It adds NO new provider and NO SDK. Nominatim-over-HTTP is the single
