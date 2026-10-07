@@ -3,7 +3,6 @@ import CustomerDashboard from './CustomerDashboard';
 import { Banner, Button, ICON_SIZE, Input, Spinner } from './ui';
 
 interface Props {
-  lang: 'en' | 'sw';
   onExit: () => void;
   /** Phase 7B: fired once a session has actually been established (register or
    *  sign-in verified). The app uses it to return the visitor to the public
@@ -66,9 +65,9 @@ function formatPhoneForDisplay(phone: string): string {
   return phone;
 }
 
-export default function CustomerAccountView({ lang, onExit, onAuthenticated, onOpenItem, onSessionEnded }: Props) {
-  const sw = lang === 'sw';
-  const t = (en: string, swText: string) => (sw ? swText : en);
+export default function CustomerAccountView({ onExit, onAuthenticated, onOpenItem, onSessionEnded }: Props) {
+
+
 
   const [mode, setMode] = useState<Mode>('register');
   const [step, setStep] = useState<Step>('details');
@@ -120,19 +119,19 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
     resetMessages();
     const registering = mode === 'register';
     if (registering && fullName.trim().length < 2) {
-      setError(t('Enter your full name.', 'Weka jina lako kamili.'));
+      setError('Enter your full name.');
       return;
     }
     // N3: the activation link is delivered BY EMAIL, so an address is now
     // required to register. The server validates and normalises it too; this is
     // only immediate feedback, and the server remains the source of truth.
     if (registering && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      setError(t('Enter a valid email address.', 'Weka barua pepe sahihi.'));
+      setError('Enter a valid email address.');
       return;
     }
     const normalized = normalizeKenyanPhone(phone);
     if (!normalized) {
-      setError(t('Enter a valid Kenyan M-Pesa phone number.', 'Weka nambari sahihi ya simu ya Kenya.'));
+      setError('Enter a valid Kenyan M-Pesa phone number.');
       return;
     }
     setBusy(true);
@@ -149,7 +148,7 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(data?.error || t('Something went wrong. Please try again.', 'Kuna hitilafu. Tafadhali jaribu tena.'));
+        setError(data?.error || 'Something went wrong. Please try again.');
         return;
       }
       setPhone(normalized);
@@ -162,20 +161,17 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
         setStep('pendingActivation');
         setNotice(
           data?.message ||
-          t(
-            'Account created. Check your email for a link to activate it.',
-            'Akaunti imeundwa. Angalia barua pepe yako kwa kiungo cha kuamilisha.'
-          )
+          'Account created. Check your email for a link to activate it.'
         );
         return;
       }
       setStep('otp');
       setNotice(
         data?.message ||
-        t('A verification code has been sent to the verified email address on your account.', 'Msimbo wa uthibitisho umetumwa kwenye barua pepe iliyothibitishwa ya akaunti yako.')
+        'A verification code has been sent to the verified email address on your account.'
       );
     } catch {
-      setError(t('Network error. Please try again.', 'Hitilafu ya mtandao. Tafadhali jaribu tena.'));
+      setError('Network error. Please try again.');
     } finally {
       setBusy(false);
     }
@@ -188,7 +184,7 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
     e.preventDefault();
     resetMessages();
     if (!/^\d{6}$/.test(code.trim())) {
-      setError(t('Enter the 6-digit code from the email.', 'Weka msimbo wa tarakimu 6 kutoka kwa barua pepe.'));
+      setError('Enter the 6-digit code from the email.');
       return;
     }
     setBusy(true);
@@ -201,7 +197,7 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(data?.error || t('Verification failed. Please try again.', 'Uthibitisho umeshindikana. Tafadhali jaribu tena.'));
+        setError(data?.error || 'Verification failed. Please try again.');
         return;
       }
       setCustomer(data.customer);
@@ -212,7 +208,7 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
       // intended destination (an /item/:id page they pressed "It's Mine" on).
       onAuthenticated?.();
     } catch {
-      setError(t('Network error. Please try again.', 'Hitilafu ya mtandao. Tafadhali jaribu tena.'));
+      setError('Network error. Please try again.');
     } finally {
       setBusy(false);
     }
@@ -233,10 +229,7 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
     setStep('details');
     setCode('');
     setError(null);
-    setNotice(t(
-      'Your session has ended. Please sign in again to continue.',
-      'Kipindi chako kimeisha. Tafadhali ingia tena ili kuendelea.'
-    ));
+    setNotice('Your session has ended. Please sign in again to continue.');
   };
 
   const logout = async () => {
@@ -253,7 +246,7 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
       // PHASE 11B: the cookie session is revoked — clear it from the site chrome.
       onSessionEnded?.();
     } catch {
-      setError(t('Could not sign out. Please try again.', 'Imeshindwa kutoka. Tafadhali jaribu tena.'));
+      setError('Could not sign out. Please try again.');
     } finally {
       setBusy(false);
     }
@@ -264,7 +257,7 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
       <div className="flex-grow flex items-center justify-center w-full py-24">
         <Spinner
           size={ICON_SIZE.feature}
-          label={t('Checking your session', 'Inathibitisha kipindi chako')}
+          label={'Checking your session'}
           className="text-[var(--appearance-primary)]"
         />
       </div>
@@ -276,7 +269,6 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
   if (customer) {
     return (
       <CustomerDashboard
-        lang={lang}
         customer={customer}
         onSignOut={logout}
         signingOut={busy}
@@ -325,22 +317,19 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
             presentation moved onto the shared primitives. */}
         <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-panel shadow-raised p-5 sm:p-6">
           <p className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">
-            {t('Return4me account', 'Akaunti ya Return4me')}
+            {'Return4me account'}
           </p>
           <h1 className="mt-1 text-subsection sm:text-section font-extrabold tracking-tight text-[var(--appearance-text-primary)]">
-            {t('Your Return4me account', 'Akaunti yako ya Return4me')}
+            {'Your Return4me account'}
           </h1>
           <p className="mt-1.5 text-body-large text-[var(--appearance-text-muted)] leading-relaxed">
-            {t(
-              'A Return4me account is your persistent identity. It is separate from the ownership evidence you provide for a specific claim.',
-              'Akaunti ya Return4me ni utambulisho wako wa kudumu. Ni tofauti na ushahidi wa umiliki unaotoa kwa claim mahususi.'
-            )}
+            {'A Return4me account is your persistent identity. It is separate from the ownership evidence you provide for a specific claim.'}
           </p>
 
           <div
             className="mt-5 grid grid-cols-2 gap-1 p-1 bg-[var(--appearance-surface-muted)] rounded-standard"
             role="tablist"
-            aria-label={t('Account access', 'Ufikiaji wa akaunti')}
+            aria-label={'Account access'}
           >
             <button
               type="button"
@@ -354,7 +343,7 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
               onClick={() => switchMode('register')}
               className={tabClass(mode === 'register')}
             >
-              {t('Register', 'Sajili')}
+              {'Register'}
             </button>
             <button
               type="button"
@@ -368,7 +357,7 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
               onClick={() => switchMode('login')}
               className={tabClass(mode === 'login')}
             >
-              {t('Sign in', 'Ingia')}
+              {'Sign in'}
             </button>
           </div>
 
@@ -385,13 +374,13 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
                 {mode === 'register' && (
                   <Input
                     id="customer-name"
-                    label={t('Full name', 'Jina kamili')}
+                    label={'Full name'}
                     type="text"
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
                     autoComplete="name"
                     maxLength={120}
-                    placeholder={t('e.g. Wanjiku Kamau', 'k.m. Wanjiku Kamau')}
+                    placeholder={'e.g. Wanjiku Kamau'}
                     required
                     disabled={busy}
                   />
@@ -399,7 +388,7 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
 
                 <Input
                   id="customer-phone"
-                  label={t('M-Pesa phone number', 'Nambari ya simu ya M-Pesa')}
+                  label={'M-Pesa phone number'}
                   type="tel"
                   inputMode="tel"
                   value={phone}
@@ -412,24 +401,14 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
                   hint={mode === 'register'
                     // N3: registration no longer texts this number. The honest
                     // hint is what the number is now actually FOR.
-                    ? t(
-                        'You will sign in with this number after activating your account.',
-                        'Utaingia kwa nambari hii baada ya kuiwasha akaunti yako.'
-                      )
-                    : t(
-                        // E1: sign-in no longer texts this number. The code is
-                        // delivered to the account's verified email address, and
-                        // the number is only the identity the account is looked
-                        // up by — so the hint says exactly that.
-                        "We'll email a one-time verification code to the verified email address on your account.",
-                        'Tutatuma msimbo wa uthibitisho wa mara moja kwenye barua pepe iliyothibitishwa ya akaunti yako.'
-                      )}
+                    ? 'You will sign in with this number after activating your account.'
+                    : "We'll email a one-time verification code to the verified email address on your account."}
                 />
 
                 {mode === 'register' && (
                   <Input
                     id="customer-email"
-                    label={t('Email address', 'Barua pepe')}
+                    label={'Email address'}
                     type="email"
                     inputMode="email"
                     value={email}
@@ -439,10 +418,7 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
                     placeholder="you@example.com"
                     required
                     disabled={busy}
-                    hint={t(
-                      "We'll email you a link to activate your account.",
-                      'Tutakutumia kiungo cha kuamilisha akaunti yako kwa barua pepe.'
-                    )}
+                    hint={"We'll email you a link to activate your account."}
                   />
                 )}
 
@@ -452,11 +428,11 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
                 <Button type="submit" variant="primary" size="lg" loading={busy} className="w-full">
                   {busy
                     ? (mode === 'register'
-                      ? t('Creating your account…', 'Inatengeneza akaunti yako…')
-                      : t('Sending code…', 'Inatuma msimbo…'))
+                      ? 'Creating your account…'
+                      : 'Sending code…')
                     : (mode === 'register'
-                      ? t('Create account', 'Tengeneza akaunti')
-                      : t('Send verification code', 'Tuma msimbo wa uthibitisho'))}
+                      ? 'Create account'
+                      : 'Send verification code')}
                 </Button>
               </form>
             ) : step === 'pendingActivation' ? (
@@ -474,35 +450,23 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
                     that a translator then has to retype. */}
                 <div className="space-y-2">
                   <h2 className="text-heading font-bold text-[var(--appearance-text-primary)]">
-                    {t('What happens next', 'Hatua inayofuata')}
+                    {'What happens next'}
                   </h2>
                   <ol className="list-decimal space-y-2 pl-5 text-body-large text-[var(--appearance-text-muted)] leading-relaxed marker:font-bold">
                     <li>
-                      {t(
-                        'Open the activation email we sent to your email address.',
-                        'Fungua barua pepe ya kuamilisha tuliotuma kwenye barua pepe yako.'
-                      )}
+                      {'Open the activation email we sent to your email address.'}
                     </li>
                     <li>
-                      {t(
-                        'Follow the link in that email to verify your address and activate your account.',
-                        'Fuata kiungo kilichomo ndani ya barua pepe hiyo kuthibitisha anwani yako na kuiwasha akaunti yako.'
-                      )}
+                      {'Follow the link in that email to verify your address and activate your account.'}
                     </li>
                     <li>
-                      {t(
-                        'Come back and sign in with your phone number.',
-                        'Rudi na uingie kwa kutumia nambari yako ya simu.'
-                      )}
+                      {'Come back and sign in with your phone number.'}
                     </li>
                   </ol>
                 </div>
 
                 <Banner kind="warning">
-                  {t(
-                    'You are not signed in yet. Your account stays inactive until you use the activation link, and the link can only be used once.',
-                    'Bado hujaingia. Akaunti yako itabaki isiyotumika hadi utumie kiungo cha kuamilisha, na kiungo hicho kinaweza kutumika mara moja tu.'
-                  )}
+                  {'You are not signed in yet. Your account stays inactive until you use the activation link, and the link can only be used once.'}
                 </Banner>
 
                 <Button
@@ -512,7 +476,7 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
                   onClick={() => { setMode('login'); setStep('details'); setCode(''); resetMessages(); }}
                   className="w-full"
                 >
-                  {t('I have activated my account — sign in', 'Nimeamilisha akaunti yangu — ingia')}
+                  {'I have activated my account — sign in'}
                 </Button>
               </div>
           ) : (
@@ -521,7 +485,7 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
 
                 <Input
                   id="customer-code"
-                  label={t('Verification code', 'Msimbo wa uthibitisho')}
+                  label={'Verification code'}
                   type="text"
                   inputMode="numeric"
                   value={code}
@@ -531,15 +495,15 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
                   placeholder="123456"
                   required
                   disabled={busy}
-                  hint={t('We emailed the code to the verified address on the account for', 'Tulituma msimbo kwa barua pepe iliyothibitishwa ya akaunti ya') + ' ' + formatPhoneForDisplay(phone)}
+                  hint={'We emailed the code to the verified address on the account for' + ' ' + formatPhoneForDisplay(phone)}
                 />
 
                 {error && <Banner kind="error">{error}</Banner>}
 
                 <Button type="submit" variant="primary" size="lg" loading={busy} className="w-full">
                   {busy
-                    ? t('Verifying…', 'Inathibitisha…')
-                    : t('Verify and continue', 'Thibitisha na uendelee')}
+                    ? 'Verifying…'
+                    : 'Verify and continue'}
                 </Button>
 
                 <Button
@@ -549,7 +513,7 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
                   onClick={() => { setStep('details'); setCode(''); resetMessages(); }}
                   className="w-full"
                 >
-                  {t('Use a different number', 'Tumia nambari nyingine')}
+                  {'Use a different number'}
                 </Button>
               </form>
             )}
@@ -557,7 +521,7 @@ export default function CustomerAccountView({ lang, onExit, onAuthenticated, onO
         </div>
 
         <Button type="button" variant="ghost" size="md" onClick={onExit} className="w-full sm:w-auto">
-          {t('Back to Return4me', 'Rudi Return4me')}
+          {'Back to Return4me'}
         </Button>
       </div>
     </div>

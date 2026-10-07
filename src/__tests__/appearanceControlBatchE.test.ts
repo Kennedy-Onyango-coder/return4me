@@ -47,18 +47,14 @@ describe('Batch E appearance tokens and selector', () => {
     expect(control).not.toMatch(/value="(?:auto|default|light-mode|dark-mode|system-default)"/);
   });
 
-  it('renders understandable English and Kiswahili labels from the central translations', () => {
+  it('renders understandable English labels from the central translations', () => {
     expect(translations.en).toMatchObject({
       appearanceLabel: 'Appearance', appearanceLight: 'Light', appearanceDark: 'Dark', appearanceSystem: 'System',
     });
-    expect(translations.sw).toMatchObject({
-      appearanceLabel: 'Mwonekano', appearanceLight: 'Mwanga', appearanceDark: 'Giza', appearanceSystem: 'Mfumo',
-    });
     for (const key of appearanceKeys) {
       expect(Object.keys(translations.en)).toContain(key);
-      expect(Object.keys(translations.sw)).toContain(key);
     }
-    expect(types.match(/appearanceLabel:/g)).toHaveLength(2);
+    expect(types.match(/appearanceLabel:/g)).toHaveLength(1);
   });
 
   it('uses a named native select with visible selected state and 44px focusable target', () => {
@@ -94,13 +90,13 @@ describe('Batch E appearance tokens and selector', () => {
     expect(app).toContain('setAppearance={setAppearancePreference}');
   });
 
-  it('preserves the five-item public navigation and language controls', () => {
+  it('preserves the five-item public navigation and mounts no language control', () => {
     for (const destination of ["handleNavClick('home')", 't.ownerBtn', 't.finderBtn', 't.becomeAgentBtn', 't.signInBtn']) {
       expect(navbar).toContain(destination);
     }
     expect(navbar).not.toMatch(/t\.agentBtn/);
-    expect((navbar.match(/<LanguageControl /g) || [])).toHaveLength(3);
-    expect(shell).toContain('<LanguageControl');
+    expect((navbar.match(/<LanguageControl /g) || [])).toHaveLength(0);
+    expect(shell).not.toContain('<LanguageControl');
   });
 
   it('persists the selected preference but not the resolved system appearance', () => {

@@ -13,8 +13,7 @@ const labels = new Map([
 ]);
 
 /** Private evidence for the assigned agent's physical-verification panel only. */
-export default function ClaimVerificationEvidence({ lang, answers, identifyingDetails }: {
-  lang: 'en' | 'sw';
+export default function ClaimVerificationEvidence({ answers, identifyingDetails }: {
   answers?: Record<string, unknown> | null;
   identifyingDetails?: string | null;
 }) {
@@ -26,17 +25,17 @@ export default function ClaimVerificationEvidence({ lang, answers, identifyingDe
   return (
     <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-left space-y-1.5">
       <p className="text-[9px] font-extrabold text-amber-700 uppercase tracking-widest">
-        {lang === 'en' ? 'Claimant stated (before seeing item) — verify it matches:' : 'Alichosema mdai (kabla ya kuona bidhaa) — thibitisha inalingana:'}
+        {'Claimant stated (before seeing item) — verify it matches:'}
       </p>
       {identifyingDetails?.trim() && (
         <p className="text-xs text-stone-700 font-medium break-words">
-          <span className="font-bold">{lang === 'en' ? 'Identifying detail: ' : 'Alama ya utambulisho: '}</span>
+          <span className="font-bold">{'Identifying detail: '}</span>
           {identifyingDetails}
         </p>
       )}
       {entries.map(({ key, label, value }) => (
         <p key={key} className="text-xs text-stone-700 font-medium break-words">
-          <span className="font-bold">{verificationTranslation(lang, label)}: </span>
+          <span className="font-bold">{verificationTranslation(label)}: </span>
           {value}
         </p>
       ))}

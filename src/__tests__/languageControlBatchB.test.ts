@@ -5,61 +5,28 @@ import path from 'path';
 const repoRoot = path.resolve(import.meta.dirname, '../..');
 const read = (relative: string) => fs.readFileSync(path.resolve(repoRoot, relative), 'utf8');
 const navbar = read('src/components/Navbar.tsx');
-const controlCode = read('src/components/LanguageControl.tsx');
 const app = read('src/App.tsx');
 const stripComments = (source: string) =>
   source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 const navbarCode = stripComments(navbar);
 
-describe('Batch B public language-control consolidation', () => {
-  it('renders the shared control on desktop, compact header, and mobile drawer', () => {
-    expect((navbar.match(/<LanguageControl /g) || [])).toHaveLength(3);
-    expect((navbar.match(/layout="toggle"/g) || [])).toHaveLength(2);
-    expect(navbar).toContain('layout="choices"');
+describe('Batch B — the public bar is English-only (no language control)', () => {
+  it('renders no language control on any public surface', () => {
+    expect((navbar.match(/<LanguageControl /g) || [])).toHaveLength(0);
+    expect(navbar).not.toContain('LanguageControl');
   });
 
-  it('exposes exactly the English and Kiswahili runtime values', () => {
-    expect(navbar).toContain("lang: 'en' | 'sw'");
-    expect(controlCode).toContain("(['en', 'sw'] as const)");
-    expect(controlCode).toContain("setLang('en')");
-    expect(controlCode).toContain("setLang('sw')");
-    expect(controlCode).toContain("setLang(lang === 'en' ? 'sw' : 'en')");
-    expect(controlCode).not.toMatch(/en[-_]KE|sw[-_]KE|french|arabic/i);
+  it('carries no `en | sw` language state or selection', () => {
+    expect(navbarCode).not.toMatch(/\blang === 'sw'|\blang === 'en'/);
+    expect(navbar).not.toContain("lang: 'en' | 'sw'");
+    expect(app).not.toMatch(/AppLanguage/);
   });
 
-  it('keeps App as owner and the control presentation-only', () => {
-    expect(app).toContain('const [lang, setLang] = useState<AppLanguage>');
-    expect(navbar).toContain("import LanguageControl from './LanguageControl'");
-    expect(navbar).toContain('setLang={setLang}');
-    expect(controlCode).not.toMatch(/useState|localStorage|sessionStorage|indexedDB|fetch\(|window\.location|history\./);
-    expect(navbarCode).not.toMatch(/useState[^;]*(?:lang|language)/i);
-  });
-
-  it('uses named, keyboard-accessible controls with visible focus and 44px targets', () => {
-    expect(controlCode).toContain('<fieldset>');
-    expect(controlCode).toContain('<legend');
-    expect(controlCode).toContain('aria-label=');
-    expect(controlCode).toContain('aria-pressed={active}');
-    expect((controlCode.match(/type="button"/g) || [])).toHaveLength(1);
-    expect(controlCode).toContain("import Button from './ui/Button'");
-    expect(read('src/components/ui/Button.tsx')).toContain("type = 'button'");
-    // UX-02: the control no longer carries a LOCAL ring (`focus-visible:ring-2`
-    // + `outline-none`), which duplicated the global :focus-visible indicator
-    // (PI-1/C5, focusContract.test.ts). "Visible focus" is therefore asserted as
-    // the single global rule plus the absence of any local suppression — the
-    // same contract the shared primitives already meet.
-    expect(stripComments(controlCode)).not.toMatch(/focus(-visible)?:(outline-none|ring)/);
-    expect(read('src/index.css')).toContain('outline: 2px solid var(--color-accent-orange)');
-    expect(controlCode).toContain('min-h-[44px]');
-    expect(controlCode).toContain("size=\"md\"");
-  });
-
-  it('communicates the current language semantically and without color alone', () => {
-    expect(controlCode).toContain('Current language: ${currentLanguage}');
-    expect(controlCode).toContain('{active && <Check');
-    expect(controlCode).toContain('current language');
-    expect(controlCode).toContain('lugha ya sasa');
-    expect(controlCode).toContain('<span>{currentLanguage}</span>');
+  it('renders the appearance control from the central English dictionary', () => {
+    expect(navbar).toContain("import AppearanceControl from './AppearanceControl'");
+    for (const key of ['appearanceLabel', 'appearanceLight', 'appearanceDark', 'appearanceSystem']) {
+      expect(navbar).toContain(`t.${key}`);
+    }
   });
 
   it('does not alter the five-item public information architecture', () => {
@@ -69,3 +36,4 @@ describe('Batch B public language-control consolidation', () => {
     expect(navbar).not.toMatch(/t\.agentBtn/);
   });
 });
+

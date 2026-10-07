@@ -20,7 +20,6 @@ import { verificationTranslation } from '../config/verificationTranslations';
 import { AlertCircle, Lock, ShieldCheck } from 'lucide-react';
 
 interface VerificationFormProps {
-  lang: 'en' | 'sw';
   categoryId: string;
   isSensitiveDocument: boolean;
   onSubmit: (answers: Record<string, string>, idProofBase64: string | null) => void;
@@ -34,7 +33,6 @@ interface VerificationFormProps {
 }
 
 export default function VerificationForm({
-  lang,
   categoryId,
   isSensitiveDocument,
   onSubmit,
@@ -46,7 +44,7 @@ export default function VerificationForm({
   errorMsg,
   isVerifyingClaim,
 }: VerificationFormProps) {
-  const t = translations[lang];
+  const t = translations.en;
   const fields = getVerificationFields(categoryId);
 
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -100,9 +98,9 @@ export default function VerificationForm({
 
       <form onSubmit={handleSubmit} className="space-y-4">
         {fields.map(field => {
-          const label = verificationTranslation(lang, field.labelKey);
-          const placeholder = verificationTranslation(lang, field.placeholderKey);
-          const helpText = verificationTranslation(lang, field.helpTextKey);
+          const label = verificationTranslation(field.labelKey);
+          const placeholder = verificationTranslation(field.placeholderKey);
+          const helpText = verificationTranslation(field.helpTextKey);
           const value = answers[field.key] || '';
           const inputClass = field.sensitive ? sensitiveInputClass : baseInputClass;
 
@@ -158,21 +156,19 @@ export default function VerificationForm({
         {/* Universal identifying details — kept private, only shown to Agent at handover */}
         <div className="space-y-1.5">
           <label htmlFor="owner-identifying-details" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">
-            {lang === 'sw' ? 'Maelezo ya Utambulisho (Toa 1-2)' : 'Identifying Details (Provide 1-2) *'}
+            {'Identifying Details (Provide 1-2) *'}
           </label>
           <textarea
             id="owner-identifying-details"
             value={ownerIdentifyingDetails}
             onChange={(e) => setOwnerIdentifyingDetails(e.target.value)}
-            placeholder={lang === 'sw' ? 'mfano Jina kamili, nambari ya ID, alama za kipekee' : 'E.g. Full name, ID number, or unique physical characteristics'}
+            placeholder={'E.g. Full name, ID number, or unique physical characteristics'}
             className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-xs focus:outline-none focus:border-accent-orange"
             rows={3}
             required
           />
           <p className="text-[10px] text-stone-400">
-            {lang === 'sw'
-              ? 'Maelezo haya yanabakiwa faragha na hutumiwa tu na Wakala kuthibitisha wewe.'
-              : 'These details are kept strictly private and used solely by the Hub Agent to verify you.'}
+            {'These details are kept strictly private and used solely by the Hub Agent to verify you.'}
           </p>
         </div>
 
@@ -180,7 +176,7 @@ export default function VerificationForm({
         {isSensitiveDocument && (
           <div className="space-y-1">
             <label htmlFor="owner-id-proof-upload" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">
-              {lang === 'sw' ? 'Pakia Picha ya Kitambulisho (Stadi la Tier 3)' : 'Upload ID Proof Photo (Tier 3)'}
+              {'Upload ID Proof Photo (Tier 3)'}
             </label>
             <input
               id="owner-id-proof-upload"
@@ -192,7 +188,7 @@ export default function VerificationForm({
             {idProofBase64 && (
               <div className="space-y-2">
                 <p className="text-[10px] text-emerald-600 font-semibold flex items-center space-x-1">
-                  <span>{lang === 'sw' ? 'Picha imepakiawa na Imehifadhiwa salama' : 'Photo uploaded and stored securely'}</span>
+                  <span>{'Photo uploaded and stored securely'}</span>
                 </p>
                 <div className="flex items-start space-x-2 bg-stone-50 p-2.5 rounded-lg border border-stone-200">
                   <input
@@ -204,9 +200,7 @@ export default function VerificationForm({
                     required
                   />
                   <label htmlFor="verify-id-consent" className="text-[10px] text-stone-600 leading-tight select-none cursor-pointer">
-                    {lang === 'sw'
-                      ? 'Ninayana kwa maelezo ya kitambulisho cha kitaifa au pasipoti inachapishwa na kuhifadhiwa salama kwa kuthibitisho cha mmiliki. *'
-                      : 'I explicitly consent to the processing and secure storage of my government identity card/passport for physical owner verification in accordance with ODPC standards. *'}
+                    {'I explicitly consent to the processing and secure storage of my government identity card/passport for physical owner verification in accordance with ODPC standards. *'}
                   </label>
                 </div>
               </div>
@@ -225,9 +219,7 @@ export default function VerificationForm({
             required
           />
           <label htmlFor="confidence-checkbox" className="text-xs text-stone-700 leading-tight select-none cursor-pointer">
-            {lang === 'sw'
-              ? 'Nathibitisha kwa uaminifu kuwa mimi ndiye mmiliki halali. *'
-              : 'I am reasonably confident this is my item and not a fraudulent claim. *'}
+            {'I am reasonably confident this is my item and not a fraudulent claim. *'}
           </label>
         </div>
 
@@ -235,9 +227,7 @@ export default function VerificationForm({
         <div className="flex items-start space-x-2 bg-sky-50/50 p-3 rounded-xl border border-sky-100">
           <ShieldCheck size={14} className="text-sky-600 mt-0.5 shrink-0" />
           <p className="text-[10px] text-sky-700">
-            {lang === 'sw'
-              ? 'Majibu yako ya uthibitisho ni ya faragha kamili.'
-              : 'Your verification answers are completely private.'}
+            {'Your verification answers are completely private.'}
           </p>
         </div>
 
@@ -247,7 +237,7 @@ export default function VerificationForm({
             onClick={onBack}
             className="flex-1 bg-stone-100 hover:bg-stone-200 text-stone-700 py-3 rounded-xl font-bold transition text-xs"
           >
-            {lang === 'sw' ? 'Rudi' : 'Back'}
+            {'Back'}
           </button>
           <button
             type="submit"
@@ -255,7 +245,7 @@ export default function VerificationForm({
             className="flex-1 bg-accent-strong hover:bg-accent-strong-hover text-white py-3 rounded-xl font-bold transition text-xs disabled:opacity-50 cursor-pointer flex items-center justify-center space-x-2"
           >
             {isVerifyingClaim ? (
-              <span>{lang === 'sw' ? 'Inafanywa...' : 'Submitting...'}</span>
+              <span>{'Submitting...'}</span>
             ) : (
               <span>{t.verifySubmit}</span>
             )}

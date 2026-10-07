@@ -8,7 +8,6 @@ const css = read('src/index.css');
 const app = read('src/App.tsx');
 const navbar = read('src/components/Navbar.tsx');
 const shell = read('src/components/dashboard/DashboardShell.tsx');
-const control = read('src/components/LanguageControl.tsx');
 const html = read('index.html');
 const primitives = Object.fromEntries(
   ['Button', 'Input', 'Select', 'Textarea', 'Modal', 'Badge', 'Banner', 'EmptyState', 'SectionHeading', 'StatCard', 'Stepper', 'Skeleton', 'OTPInput']
@@ -119,20 +118,18 @@ describe('Batch F incremental appearance surface migration', () => {
     }
     expect(css).toContain('--appearance-focus:');
     expect(css).toContain('outline: 2px solid var(--color-accent-orange)');
-    expect((navbar.match(/<LanguageControl /g) || [])).toHaveLength(3);
+    expect((navbar.match(/<LanguageControl /g) || [])).toHaveLength(0);
     // BATCH 1 (navbar): 3 Navbar appearance instances - desktop utility tray,
     // sub-lg compact header, drawer. The compact header previously had none, so
     // appearance was unreachable there without opening the drawer.
     expect((navbar.match(/<AppearanceControl /g) || [])).toHaveLength(3);
   });
 
-  it('migrates DashboardShell and language-choice surfaces without changing shell behavior', () => {
+  it('migrates DashboardShell surfaces without changing shell behavior', () => {
     for (const token of ['background', 'surface', 'text-primary', 'text-muted', 'border']) {
       expect(shell).toContain(`--appearance-${token}`);
     }
-    expect(control).toContain('--appearance-surface');
-    expect(control).toContain('aria-pressed={active}');
-    expect(shell).toContain('<LanguageControl');
+    expect(shell).not.toContain('LanguageControl');
     expect(shell).toContain('<AppearanceControl');
     expect(shell).toContain('onExitSite');
     expect(shell).toContain('onSignOut');

@@ -38,19 +38,19 @@ import {
 //   table never spreads a row and never renders raw JSON, so a field added to
 //   the API in future cannot appear on screen by accident.
 
-function formatDateTime(value: string | null, lang: 'en' | 'sw'): string {
+function formatDateTime(value: string | null): string {
   if (!value) return '';
   const d = new Date(value);
   if (isNaN(d.getTime())) return '';
-  return d.toLocaleString(lang === 'sw' ? 'sw-KE' : 'en-GB', {
+  return d.toLocaleString('en-GB', {
     day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
   });
 }
 
 /** "12 Feb 2026, 14:30 — 12 Feb 2026, 17:05", collapsing an identical pair. */
-function formatWindow(from: string | null, to: string | null, lang: 'en' | 'sw'): string {
-  const a = formatDateTime(from, lang);
-  const b = formatDateTime(to, lang);
+function formatWindow(from: string | null, to: string | null): string {
+  const a = formatDateTime(from);
+  const b = formatDateTime(to);
   if (!a) return '';
   return b && b !== a ? `${a} — ${b}` : a;
 }
@@ -58,9 +58,9 @@ function formatWindow(from: string | null, to: string | null, lang: 'en' | 'sw')
 /** The 47 canonical counties, grouped for display. Read once — the dataset is static. */
 const COUNTY_GROUPS = countiesByUxGroup();
 
-export default function LostReportsAdministration({ lang, token }: { lang: 'en' | 'sw'; token: string | null }) {
-  const sw = lang === 'sw';
-  const t = (en: string, swText: string) => (sw ? swText : en);
+export default function LostReportsAdministration({ token }: {  token: string | null }) {
+
+
 
   const [rows, setRows] = useState<AdminLostReportListView[]>([]);
   const [pagination, setPagination] = useState<AdminLostReportsPagination>({
@@ -109,13 +109,13 @@ export default function LostReportsAdministration({ lang, token }: { lang: 'en' 
         setError(
           e instanceof AdminLostReportsApiError
             ? e.message
-            : t('The lost-report service could not be reached.', 'Huduma ya ripoti haifikiki.'),
+            : 'The lost-report service could not be reached.',
         );
       } finally {
         if (id === requestId.current) setLoading(false);
       }
     },
-    [token, lang, county],
+    [token, county],
   );
 
   useEffect(() => {
@@ -156,7 +156,7 @@ export default function LostReportsAdministration({ lang, token }: { lang: 'en' 
   const categoryName = (categoryId: string): string => {
     const match = categories.find((c) => c && c.id === categoryId);
     if (!match) return categoryId;
-    return (sw ? match.name_sw : match.name_en) || match.name_en || categoryId;
+    return (match.name_en) || match.name_en || categoryId;
   };
 
   const thClass = 'px-3 py-2.5 text-left text-[10px] font-extrabold uppercase tracking-wider text-stone-500 whitespace-nowrap';
@@ -166,19 +166,16 @@ export default function LostReportsAdministration({ lang, token }: { lang: 'en' 
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <SectionHeading
-          eyebrow={t('Operations', 'Uendeshaji')}
-          title={t('Lost Reports', 'Ripoti za Vitu Vilivyopotea')}
-          description={t(
-            'Reports customers have filed for something they lost, newest first. Read-only: this view never changes a report, an item or a claim.',
-            'Ripoti zilizowasilishwa na wateja kwa vitu vilivyopotea, mpya kwanza. Kusoma pekee: mwonekano huu haubadilishi ripoti, kitu, wala claim.'
-          )}
+          eyebrow={'Operations'}
+          title={'Lost Reports'}
+          description={'Reports customers have filed for something they lost, newest first. Read-only: this view never changes a report, an item or a claim.'}
         />
         <Button
           variant="ghost"
           size="sm"
           onClick={() => setReloadToken((n) => n + 1)}
           loading={loading}
-          aria-label={t('Refresh lost reports', 'Onyesha upya ripoti')}
+          aria-label={'Refresh lost reports'}
         >
           <RefreshCw size={14} />
         </Button>
@@ -191,7 +188,7 @@ export default function LostReportsAdministration({ lang, token }: { lang: 'en' 
           resolveCountyName() regardless of what this control sends. */}
       <div className="flex flex-wrap items-center gap-2">
         <label htmlFor="admin-lost-county" className="text-xs font-extrabold uppercase tracking-wider text-stone-500">
-          {t('County', 'Kaunti')}
+          {'County'}
         </label>
         <select
           id="admin-lost-county"
@@ -199,7 +196,7 @@ export default function LostReportsAdministration({ lang, token }: { lang: 'en' 
           onChange={(e) => handleCountyChange(e.target.value)}
           className="border border-stone-300 rounded-xl px-3 py-2 text-xs bg-white focus:outline-none focus:border-accent-orange"
         >
-          <option value="">{t('All Counties', 'Kaunti Zote')}</option>
+          <option value="">{'All Counties'}</option>
           {COUNTY_GROUPS.map((group) => (
             <optgroup key={group.group} label={group.group}>
               {group.counties.map((c) => (
@@ -216,7 +213,7 @@ export default function LostReportsAdministration({ lang, token }: { lang: 'en' 
 
       {loading ? (
         <div className="space-y-3" aria-busy="true">
-          <span className="sr-only">{t('Loading lost reports…', 'Inapakia ripoti…')}</span>
+          <span className="sr-only">{'Loading lost reports…'}</span>
           <Skeleton shape="card" className="w-full" />
           <Skeleton shape="card" className="w-full" />
         </div>
@@ -224,20 +221,14 @@ export default function LostReportsAdministration({ lang, token }: { lang: 'en' 
         <EmptyState
           icon={SearchX}
           title={county
-            ? t('No lost reports in this county', 'Hakuna ripoti katika kaunti hii')
-            : t('No lost reports yet', 'Hakuna ripoti bado')}
+            ? 'No lost reports in this county'
+            : 'No lost reports yet'}
           description={county
-            ? t(
-                `Nothing has been reported in ${county}. Choose "All Counties" to see every report.`,
-                `Hakuna kilichoripotiwa katika ${county}. Chagua "Kaunti Zote" kuona ripoti zote.`,
-              )
-            : t(
-                'When a customer reports something lost, it appears here with its county, area and any possible matches.',
-                'Mteja anaporipoti kitu kilichopotea, kitaonekana hapa na kaunti, eneo na mechi zinazowezekana.'
-              )}
+            ? `Nothing has been reported in ${county}. Choose "All Counties" to see every report.`
+            : 'When a customer reports something lost, it appears here with its county, area and any possible matches.'}
         />
       ) : (
-        <ReportsTable lang={lang} rows={rows} categoryName={categoryName} thClass={thClass} tdClass={tdClass} />
+        <ReportsTable rows={rows} categoryName={categoryName} thClass={thClass} tdClass={tdClass} />
       )}
 
       {!loading && rows.length > 0 && (offset > 0 || pagination.hasMore) && (
@@ -248,10 +239,10 @@ export default function LostReportsAdministration({ lang, token }: { lang: 'en' 
             disabled={offset === 0 || loading}
             onClick={() => setOffset((n) => Math.max(0, n - pagination.limit))}
           >
-            {t('Previous', 'Nyuma')}
+            {'Previous'}
           </Button>
           <span className="text-xs font-bold text-stone-500">
-            {t(`Showing ${rows.length} report(s)`, `Inaonyesha ripoti ${rows.length}`)}
+            {`Showing ${rows.length} report(s)`}
           </span>
           <Button
             variant="secondary"
@@ -259,7 +250,7 @@ export default function LostReportsAdministration({ lang, token }: { lang: 'en' 
             disabled={!pagination.hasMore || loading}
             onClick={() => setOffset((n) => n + pagination.limit)}
           >
-            {t('Next', 'Mbele')}
+            {'Next'}
           </Button>
         </div>
       )}
@@ -275,33 +266,32 @@ export default function LostReportsAdministration({ lang, token }: { lang: 'en' 
  * the screen without someone deliberately adding a column for it.
  */
 function ReportsTable({
-  lang, rows, categoryName, thClass, tdClass,
+  rows, categoryName, thClass, tdClass,
 }: {
-  lang: 'en' | 'sw';
   rows: AdminLostReportListView[];
   categoryName: (id: string) => string;
   thClass: string;
   tdClass: string;
 }) {
-  const t = (en: string, swText: string) => (lang === 'sw' ? swText : en);
+
 
   return (
     <div className="bg-white border border-stone-100 rounded-2xl shadow-sm overflow-x-auto">
       <table className="min-w-full">
         <caption className="sr-only">
-          {t('Lost reports, newest first', 'Ripoti za vitu vilivyopotea, mpya kwanza')}
+          {'Lost reports, newest first'}
         </caption>
         <thead className="bg-stone-50 border-b border-stone-100">
           <tr>
-            <th scope="col" className={thClass}>{t('Lost Report', 'Ripoti')}</th>
-            <th scope="col" className={thClass}>{t('Category', 'Aina')}</th>
-            <th scope="col" className={thClass}>{t('County', 'Kaunti')}</th>
-            <th scope="col" className={thClass}>{t('Sub-county', 'Kaunti ndogo')}</th>
-            <th scope="col" className={thClass}>{t('Exact place', 'Mahali halisi')}</th>
-            <th scope="col" className={thClass}>{t('Lost Date/Time', 'Muda Uliopotea')}</th>
-            <th scope="col" className={thClass}>{t('Created', 'Iliundwa')}</th>
-            <th scope="col" className={thClass}>{t('Status', 'Hali')}</th>
-            <th scope="col" className={thClass}>{t('Possible Matches', 'Mechi Zinazowezekana')}</th>
+            <th scope="col" className={thClass}>{'Lost Report'}</th>
+            <th scope="col" className={thClass}>{'Category'}</th>
+            <th scope="col" className={thClass}>{'County'}</th>
+            <th scope="col" className={thClass}>{'Sub-county'}</th>
+            <th scope="col" className={thClass}>{'Exact place'}</th>
+            <th scope="col" className={thClass}>{'Lost Date/Time'}</th>
+            <th scope="col" className={thClass}>{'Created'}</th>
+            <th scope="col" className={thClass}>{'Status'}</th>
+            <th scope="col" className={thClass}>{'Possible Matches'}</th>
           </tr>
         </thead>
         <tbody>
@@ -309,7 +299,7 @@ function ReportsTable({
             // The EXISTING presentation map. An unknown status falls back to a
             // neutral badge showing the raw token, so an unexpected value can
             // never crash the console or render blank.
-            const status = getLostReportStatusDisplay(report.status, lang);
+            const status = getLostReportStatusDisplay(report.status);
             const place = [report.location_area, report.location_landmark]
               .filter((v): v is string => Boolean(v && String(v).trim()))
               .join(' · ');
@@ -319,7 +309,7 @@ function ReportsTable({
                   <Badge variant="code">{report.id}</Badge>
                   {report.has_document_number && (
                     <span className="mt-1.5 block text-[10px] font-bold uppercase tracking-wider text-stone-400">
-                      {t('Identifier recorded', 'Kitambulisho kimerekodiwa')}
+                      {'Identifier recorded'}
                     </span>
                   )}
                 </td>
@@ -327,12 +317,12 @@ function ReportsTable({
                 <td className={tdClass}>{report.county}</td>
                 <td className={tdClass}>{report.administrative_unit_name || <span className="text-stone-400">-</span>}</td>
                 <td className={tdClass}>{place || <span className="text-stone-400">-</span>}</td>
-                <td className={tdClass}>{formatWindow(report.lost_at_from, report.lost_at_to, lang)}</td>
-                <td className={tdClass}>{formatDateTime(report.created_at, lang)}</td>
+                <td className={tdClass}>{formatWindow(report.lost_at_from, report.lost_at_to)}</td>
+                <td className={tdClass}>{formatDateTime(report.created_at)}</td>
                 <td className={tdClass}><Badge variant={status.variant}>{status.label}</Badge></td>
                 <td className={tdClass}>
                   {report.possible_match_count === null
-                    ? <span className="text-stone-400">{t('Not applicable', 'Haitumiki')}</span>
+                    ? <span className="text-stone-400">{'Not applicable'}</span>
                     : <span className="inline-flex items-center gap-1.5 font-bold text-stone-900">
                         <FileSearch size={12} aria-hidden="true" className="text-accent-orange" />
                         {report.possible_match_count}

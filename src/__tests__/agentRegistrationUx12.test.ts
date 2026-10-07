@@ -351,7 +351,13 @@ describe('UX-12 submits the application through the existing endpoints, exactly 
     expect(REQUEST_CALL).toContain("fetch('/api/auth/request-otp'");
     expect(REQUEST_CALL).toContain("method: 'POST'");
     expect(REQUEST_CALL).toContain("'Content-Type': 'application/json'");
-    expect(REQUEST_CALL).toContain('body: JSON.stringify({ phone })');
+    // E1: the onboarding email now travels with the phone for the REGISTRATION
+    // arm, so the brand-new agent's OTP can be emailed to the address they typed.
+    // Sign-in stays phone-only (see agentSignInUx11); this is still ONE shared
+    // call with no second body and no new storage.
+    expect(REQUEST_CALL).toContain(
+      'body: JSON.stringify(isRegistering ? { phone, email: contactEmail.trim() } : { phone })',
+    );
     expect(REQUEST_CALL).not.toContain('role:');
   });
 

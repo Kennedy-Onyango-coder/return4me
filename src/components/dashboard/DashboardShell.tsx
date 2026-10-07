@@ -4,7 +4,6 @@ import { LogOut, ExternalLink, User } from 'lucide-react';
 // system. Batch C routes the language control through the neutral presentation
 // primitive while this component continues to own no session, token, persistence,
 // or network logic whatsoever.
-import LanguageControl from '../LanguageControl';
 import AppearanceControl from '../AppearanceControl';
 import type { AppearancePreference } from '../../utils/appearancePreference';
 import { translations } from '../../types';
@@ -46,8 +45,6 @@ import Button from '../ui/Button';
 export type DashboardSurface = 'account' | 'agent' | 'admin';
 
 interface DashboardShellProps {
-  lang: 'en' | 'sw';
-  setLang: (lang: 'en' | 'sw') => void;
   appearance: AppearancePreference;
   setAppearance: (appearance: AppearancePreference) => void;
   /** Which authenticated surface is being worked in. Drives the label + icon. */
@@ -77,10 +74,10 @@ interface DashboardShellProps {
   children: React.ReactNode;
 }
 
-const SURFACE_COPY: Record<DashboardSurface, { en: string; sw: string }> = {
-  account: { en: 'My Account', sw: 'Akaunti Yangu' },
-  agent: { en: 'Agent Portal', sw: 'Lango la Wakala' },
-  admin: { en: 'Admin Console', sw: 'Konsoli ya Msimamizi' },
+const SURFACE_COPY: Record<DashboardSurface, string> = {
+  account: 'My Account',
+  agent: 'Agent Portal',
+  admin: 'Admin Console',
 };
 
 // PHASE 16 — the generic per-role Lucide glyph that used to head this band
@@ -91,8 +88,6 @@ const SURFACE_COPY: Record<DashboardSurface, { en: string; sw: string }> = {
 // above still names it, and App still owns WHO is signed in.
 
 export default function DashboardShell({
-  lang,
-  setLang,
   appearance,
   setAppearance,
   surface,
@@ -102,9 +97,8 @@ export default function DashboardShell({
   onSignOut,
   children,
 }: DashboardShellProps) {
-  const copy = SURFACE_COPY[surface];
-  const label = lang === 'en' ? copy.en : copy.sw;
-  const t = translations[lang];
+  const label = SURFACE_COPY[surface];
+  const t = translations.en;
   const appearanceLabels = {
     appearance: t.appearanceLabel,
     light: t.appearanceLight,
@@ -157,16 +151,9 @@ export default function DashboardShell({
                 </span>
               )}
 
-              {/* Language — App-owned, presented through the same shared control as
-                  the public shell. `inverse` preserves this header's dark-surface
-                  treatment while naming both current and target languages. */}
-              <LanguageControl
-                lang={lang}
-                setLang={setLang}
-                layout="toggle"
-                toggleLabel={lang === 'en' ? 'Switch language' : 'Badilisha lugha'}
-                theme="inverse"
-              />
+              {/* Appearance — App-owned, presented through the shell's neutral
+                  presentation primitive. `inverse` preserves this header's
+                  dark-surface treatment. */}
               <AppearanceControl value={appearance} onChange={setAppearance} labels={appearanceLabels} />
 
               {/* Back to the public site — explicit, never an implicit bar. */}
@@ -176,7 +163,7 @@ export default function DashboardShell({
                 onClick={onExitSite}
               >
                 <ExternalLink size={14} aria-hidden="true" />
-                <span className="hidden sm:inline">{lang === 'en' ? 'View site' : 'Tovuti'}</span>
+                <span className="hidden sm:inline">{'View site'}</span>
               </Button>
 
               {/* Ends the live session. Still presentation only — the handler is
@@ -190,7 +177,7 @@ export default function DashboardShell({
                 onClick={onSignOut}
               >
                 <LogOut size={14} aria-hidden="true" />
-                <span>{lang === 'en' ? 'Sign out' : 'Toka'}</span>
+                <span>{'Sign out'}</span>
               </Button>
               )}
             </div>
@@ -211,12 +198,8 @@ export default function DashboardShell({
         <div className="w-full px-4 sm:px-6 lg:px-10 py-4">
           <p className="text-caption text-[var(--appearance-text-muted)]">
             {signedIn
-              ? (lang === 'en'
-                  ? 'You are signed in. Dashboard actions are recorded against your session.'
-                  : 'Umeingia. Vitendo vya dashibodi hurekodiwa dhidi ya kipindi chako.')
-              : (lang === 'en'
-                  ? 'You are not signed in. Nothing on this page is private, and signing in is what unlocks your account.'
-                  : 'Hujaingia. Hakuna kilicho cha faragha kwenye ukurasa huu, na kuingia ndiyo kunafungua akaunti yako.')}
+              ? ('You are signed in. Dashboard actions are recorded against your session.')
+              : ('You are not signed in. Nothing on this page is private, and signing in is what unlocks your account.')}
           </p>
         </div>
       </footer>

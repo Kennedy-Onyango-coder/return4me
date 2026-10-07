@@ -26,36 +26,36 @@ import {
 //   3. an unavailable historical snapshot is UNKNOWN, not "unpaid"
 describe('6F presentPayment — paid_at is the only truth', () => {
   it('paid_at set + has_paid true -> Paid, with the timestamp', () => {
-    const p = presentPayment(true, '2026-02-01T10:00:00.000Z', 'en');
+    const p = presentPayment(true, '2026-02-01T10:00:00.000Z');
     expect(p.paid).toBe(true);
     expect(p.label).toBe('Paid');
     expect(p.at).toBe('2026-02-01T10:00:00.000Z');
   });
 
   it('paid_at null + has_paid false -> Not paid, no timestamp', () => {
-    const p = presentPayment(false, null, 'en');
+    const p = presentPayment(false, null);
     expect(p.paid).toBe(false);
     expect(p.label).toBe('Not paid');
     expect(p.at).toBeNull();
   });
 
   it('has_paid true WITHOUT paid_at is still NOT paid — the timestamp wins', () => {
-    const p = presentPayment(true, null, 'en');
+    const p = presentPayment(true, null);
     expect(p.paid).toBe(false);
     expect(p.label).toBe('Not paid');
   });
 
   it('paid_at set is never downgraded by a stale has_paid false', () => {
-    const p = presentPayment(false, '2026-02-01T10:00:00.000Z', 'en');
+    const p = presentPayment(false, '2026-02-01T10:00:00.000Z');
     expect(p.paid).toBe(true);
     expect(p.label).toBe('Paid');
   });
 
   it('uses no word that could imply an amount', () => {
-    for (const lang of ['en', 'sw'] as const) {
+    for (const lang of ['en'] as const) {
       for (const p of [
-        presentPayment(true, '2026-02-01T10:00:00.000Z', lang),
-        presentPayment(false, null, lang),
+        presentPayment(true, '2026-02-01T10:00:00.000Z'),
+        presentPayment(false, null),
       ]) {
         expect(p.label).not.toMatch(/KES|Ksh|\d/);
       }
@@ -65,10 +65,10 @@ describe('6F presentPayment — paid_at is the only truth', () => {
 
 describe('6F presentClaimStatus — semantic meaning is preserved', () => {
   it('disputed is never rendered as Rejected, and refunding is never Refunded', () => {
-    const disputed = presentClaimStatus('disputed', 'en').label;
-    const rejected = presentClaimStatus('rejected', 'en').label;
-    const refunding = presentClaimStatus('refunding', 'en').label;
-    const refunded = presentClaimStatus('refunded', 'en').label;
+    const disputed = presentClaimStatus('disputed').label;
+    const rejected = presentClaimStatus('rejected').label;
+    const refunding = presentClaimStatus('refunding').label;
+    const refunded = presentClaimStatus('refunded').label;
 
     expect(disputed).not.toBe(rejected);
     expect(disputed.toLowerCase()).toContain('dispute');
@@ -84,7 +84,7 @@ describe('6F presentClaimStatus — semantic meaning is preserved', () => {
       'refunded', 'rejected',
     ];
     for (const s of statuses) {
-      const label = presentClaimStatus(s, 'en').label;
+      const label = presentClaimStatus(s).label;
       expect(label, s).not.toBe(s);
       expect(label, s).not.toContain('_');
       expect(label.length, s).toBeGreaterThan(2);
@@ -92,9 +92,9 @@ describe('6F presentClaimStatus — semantic meaning is preserved', () => {
   });
 
   it('carries a semantic tone so meaning is never colour-only', () => {
-    expect(presentClaimStatus('rejected', 'en').tone).toBe('danger');
-    expect(presentClaimStatus('released', 'en').tone).toBe('success');
-    expect(presentClaimStatus('disputed', 'en').tone).toBe('warning');
+    expect(presentClaimStatus('rejected').tone).toBe('danger');
+    expect(presentClaimStatus('released').tone).toBe('success');
+    expect(presentClaimStatus('disputed').tone).toBe('warning');
   });
 });
 
@@ -102,13 +102,13 @@ describe('6F presentFinancialState — lifecycle words, never money', () => {
   it('maps every financial stage to a word with no currency or digits', () => {
     const stages = ['escrow_held', 'settling', 'settled', 'refunding', 'refunded', 'rejected', 'unpaid', 'anything'];
     for (const state of stages) {
-      const { label } = presentFinancialState(state, 'en');
+      const { label } = presentFinancialState(state);
       expect(label, state).not.toMatch(/KES|Ksh|\$|\u00a3|\u20ac|\d/);
     }
   });
 
   it('keeps refunding distinct from refunded', () => {
-    expect(presentFinancialState('refunding', 'en').label).not.toBe(presentFinancialState('refunded', 'en').label);
+    expect(presentFinancialState('refunding').label).not.toBe(presentFinancialState('refunded').label);
   });
 });
 
@@ -117,7 +117,7 @@ describe('6F presentFinancialState — lifecycle words, never money', () => {
 // ---------------------------------------------------------------------------
 describe('6F presentHistoricalClaim — unknown is not unpaid', () => {
   it('snapshot_incomplete renders as Unknown, and NEVER as Not paid', () => {
-    const h = presentHistoricalClaim({ status_at_dispute: null, paid_at_dispute: null }, true, 'en');
+    const h = presentHistoricalClaim({ status_at_dispute: null, paid_at_dispute: null }, true);
     expect(h.unknown).toBe(true);
     expect(h.status).toContain('Unknown');
     expect(h.payment).toContain('Unknown');
@@ -126,7 +126,7 @@ describe('6F presentHistoricalClaim — unknown is not unpaid', () => {
   });
 
   it('a snapshot_incomplete dispute is still unknown even if stale columns are non-null', () => {
-    const h = presentHistoricalClaim({ status_at_dispute: 'pending_payment', paid_at_dispute: null }, true, 'en');
+    const h = presentHistoricalClaim({ status_at_dispute: 'pending_payment', paid_at_dispute: null }, true);
     expect(h.unknown).toBe(true);
     expect(h.payment).toContain('Unknown');
   });
@@ -135,24 +135,23 @@ describe('6F presentHistoricalClaim — unknown is not unpaid', () => {
     const paid = presentHistoricalClaim(
       { status_at_dispute: 'escrow_held', paid_at_dispute: '2026-01-01T00:00:00.000Z' },
       false,
-      'en',
     );
     expect(paid.unknown).toBe(false);
     expect(paid.payment).toBe('Paid');
-    expect(paid.status).toBe(presentClaimStatus('escrow_held', 'en').label);
+    expect(paid.status).toBe(presentClaimStatus('escrow_held').label);
 
-    const unpaid = presentHistoricalClaim({ status_at_dispute: 'pending_payment', paid_at_dispute: null }, false, 'en');
+    const unpaid = presentHistoricalClaim({ status_at_dispute: 'pending_payment', paid_at_dispute: null }, false);
     expect(unpaid.unknown).toBe(false);
     expect(unpaid.payment).toBe('Not paid');
   });
 
   it('both-sides-empty is treated as unknown even without the flag', () => {
-    const h = presentHistoricalClaim({ status_at_dispute: null, paid_at_dispute: null }, false, 'en');
+    const h = presentHistoricalClaim({ status_at_dispute: null, paid_at_dispute: null }, false);
     expect(h.unknown).toBe(true);
   });
 
   it('the Swahili wording also says unknown, not unpaid', () => {
-    const h = presentHistoricalClaim({ status_at_dispute: null, paid_at_dispute: null }, true, 'sw');
+    const h = presentHistoricalClaim({ status_at_dispute: null, paid_at_dispute: null }, true);
     expect(h.payment).toContain('Haijulikani');
     expect(h.payment).not.toContain('Haijalipwa');
   });
@@ -163,18 +162,18 @@ describe('6F presentHistoricalClaim — unknown is not unpaid', () => {
 // ---------------------------------------------------------------------------
 describe('6F formatTimestamp', () => {
   it('returns Not available for null, undefined, empty and unparseable values', () => {
-    expect(formatTimestamp(null, 'en')).toBe('Not available');
-    expect(formatTimestamp(undefined, 'en')).toBe('Not available');
-    expect(formatTimestamp('', 'en')).toBe('Not available');
-    expect(formatTimestamp('not-a-date', 'en')).toBe('Not available');
+    expect(formatTimestamp(null)).toBe('Not available');
+    expect(formatTimestamp(undefined)).toBe('Not available');
+    expect(formatTimestamp('')).toBe('Not available');
+    expect(formatTimestamp('not-a-date')).toBe('Not available');
   });
 
   it('renders a real timestamp with its year', () => {
-    expect(formatTimestamp('2026-03-04T09:30:00.000Z', 'en')).toContain('2026');
+    expect(formatTimestamp('2026-03-04T09:30:00.000Z')).toContain('2026');
   });
 
   it('a null paid_at never becomes a date', () => {
-    expect(formatTimestamp(null, 'en')).not.toMatch(/\d{4}/);
+    expect(formatTimestamp(null)).not.toMatch(/\d{4}/);
   });
 });
 
@@ -207,27 +206,27 @@ describe('6F describePageRange', () => {
 // ---------------------------------------------------------------------------
 describe('6F small presenters', () => {
   it('roles distinguish original from contesting, and default to Not available', () => {
-    expect(presentRole('original', 'en')).toContain('Original');
-    expect(presentRole('contesting', 'en')).toContain('Contesting');
-    expect(presentRole(null, 'en')).toBe('Not available');
+    expect(presentRole('original')).toContain('Original');
+    expect(presentRole('contesting')).toContain('Contesting');
+    expect(presentRole(null)).toBe('Not available');
   });
 
   it('verification tier is described, and unknown tiers stay Not available', () => {
-    expect(presentVerificationTier(2, 'en')).toContain('Tier 2');
-    expect(presentVerificationTier(null, 'en')).toBe('Not available');
+    expect(presentVerificationTier(2)).toContain('Tier 2');
+    expect(presentVerificationTier(null)).toBe('Not available');
   });
 
   it('dispute state maps the three real values only', () => {
-    expect(presentDisputeState('open', 'en').label).toBe('Open');
-    expect(presentDisputeState('resolved', 'en').label).toBe('Resolved');
-    expect(presentDisputeState('none', 'en').label).toBe('None');
-    expect(presentDisputeState('something-else', 'en').label).toBe('None');
-    expect(presentDisputeState('open', 'en').tone).toBe('warning');
+    expect(presentDisputeState('open').label).toBe('Open');
+    expect(presentDisputeState('resolved').label).toBe('Resolved');
+    expect(presentDisputeState('none').label).toBe('None');
+    expect(presentDisputeState('something-else').label).toBe('None');
+    expect(presentDisputeState('open').tone).toBe('warning');
   });
 
   it('booleans render yes/no words, never raw values', () => {
-    expect(presentBoolean(true, 'en')).toBe('Yes');
-    expect(presentBoolean(false, 'en')).toBe('No');
+    expect(presentBoolean(true)).toBe('Yes');
+    expect(presentBoolean(false)).toBe('No');
   });
 });
 

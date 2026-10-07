@@ -41,7 +41,6 @@ import { Badge, Button, ICON_SIZE, SectionHeading } from './ui';
 type LoadState = 'loading' | 'ready' | 'not_found' | 'error';
 
 interface PublicItemViewProps {
-  lang: 'en' | 'sw';
   /** Item id taken from the /item/:id URL. */
   itemId: string;
   categories: any[];
@@ -54,15 +53,14 @@ interface PublicItemViewProps {
 }
 
 export default function PublicItemView({
-  lang,
   itemId,
   categories,
   onBack,
   onContinueClaim,
   onRequireAuth,
 }: PublicItemViewProps) {
-  const sw = lang === 'sw';
-  const t = (en: string, swText: string) => (sw ? swText : en);
+
+
 
   const [state, setState] = useState<LoadState>('loading');
   const [item, setItem] = useState<any | null>(null);
@@ -121,7 +119,7 @@ export default function PublicItemView({
   // the id itself, never as a hard-coded brand label.
   const categoryName = (() => {
     const cat = categories.find((c: any) => c.id === item?.category_id);
-    return cat ? (sw ? cat.name_sw : cat.name_en) : '';
+    return cat ? (cat.name_en) : '';
   })();
 
   // The item's title. The discovery card the visitor arrived from titles the
@@ -134,14 +132,11 @@ export default function PublicItemView({
   useEffect(() => {
     const previous = document.title;
     const label = itemTitle ? ` — ${itemTitle}` : '';
-    document.title = t(
-      `Found item${label} | Return4me`,
-      `Bidhaa iliyopatikana${label} | Return4me`
-    );
+    document.title = `Found item${label} | Return4me`;
     return () => {
       document.title = previous;
     };
-  }, [itemTitle, lang]);
+  }, [itemTitle]);
 
   // ---------------------------------------------------------------------------
   // Derived display values. Every one of them reads a field the public DTO
@@ -161,7 +156,7 @@ export default function PublicItemView({
   // publishes, and it is the same value the owner-facing match card shows as
   // the approximate found date (services/lostReportMatchView.ts -> found_at).
   const foundDate = item?.created_at
-    ? new Date(item.created_at).toLocaleDateString(sw ? 'sw-KE' : 'en-US', {
+    ? new Date(item.created_at).toLocaleDateString('en-US', {
         month: 'short',
         day: 'numeric',
         year: 'numeric',
@@ -191,7 +186,7 @@ export default function PublicItemView({
   // ever serves an item that is claimable (status 'at_agent'), so anything else
   // falls back to the same word the discovery card uses for a found item.
   const statusLabel =
-    item?.status === 'at_agent' ? t('Held by an agent', 'Inashikiliwa na wakala') : t('Found', 'Imepatikana');
+    item?.status === 'at_agent' ? 'Held by an agent' : 'Found';
 
   // The view's ONE polite live region (publicExperience pins exactly one
   // aria-live in this file). It announces the state the page is in, so a
@@ -200,11 +195,11 @@ export default function PublicItemView({
   // role="alert" on its own panel.
   const stateAnnouncement =
     state === 'loading'
-      ? t('Loading this found item…', 'Inapakia bidhaa hii iliyopatikana…')
+      ? 'Loading this found item…'
       : state === 'not_found'
-        ? t('Item not found', 'Bidhaa haipatikani')
+        ? 'Item not found'
         : state === 'ready'
-          ? t('Found item loaded', 'Bidhaa imepakiwa')
+          ? 'Found item loaded'
           : '';
 
   // One label and one value treatment for every fact row, so a fact's label can
@@ -257,7 +252,7 @@ export default function PublicItemView({
           navigate('/', 'home')), and it is not being given a return-to-results
           behaviour in this batch. Only the visible label changed, so it now
           describes the destination it actually has. */}
-      {t('Back to home', 'Rudi nyumbani')}
+      {'Back to home'}
     </a>
   );
 
@@ -283,7 +278,7 @@ export default function PublicItemView({
               className="animate-spin text-[var(--appearance-primary)]"
             />
             <p className="text-body text-[var(--appearance-text-muted)]">
-              {t('Loading this found item…', 'Inapakia bidhaa hii iliyopatikana…')}
+              {'Loading this found item…'}
             </p>
           </div>
         )}
@@ -292,17 +287,14 @@ export default function PublicItemView({
           <div className="mt-6 flex flex-col items-center gap-3 rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)] px-6 py-14 text-center">
             <Package size={ICON_SIZE.feature} aria-hidden="true" className="text-[var(--appearance-text-muted)]" />
             <h1 className="text-section font-extrabold tracking-tight text-[var(--appearance-text-primary)]">
-              {t('Item not found', 'Bidhaa haipatikani')}
+              {'Item not found'}
             </h1>
             <p className="max-w-md text-body leading-relaxed text-[var(--appearance-text-muted)]">
-              {t(
-                'This item may no longer be publicly available. It may have been claimed, withdrawn, or the link may be incorrect.',
-                'Bidhaa hii huenda haipatikani kwa umma tena. Inawezekana ilidaiwa, iliondolewa, au kiungo si sahihi.'
-              )}
+              {'This item may no longer be publicly available. It may have been claimed, withdrawn, or the link may be incorrect.'}
             </p>
             <div className="mt-2">
               <Button variant="primary" size="md" onClick={onBack}>
-                {t('Browse found items', 'Angalia vitu vilivyopatikana')}
+                {'Browse found items'}
               </Button>
             </div>
           </div>
@@ -319,20 +311,17 @@ export default function PublicItemView({
               className="text-[var(--appearance-danger)]"
             />
             <h1 className="text-section font-extrabold tracking-tight text-[var(--appearance-text-primary)]">
-              {t('We could not load this item', 'Hatukuweza kupakia bidhaa hii')}
+              {'We could not load this item'}
             </h1>
             <p className="max-w-md text-body leading-relaxed text-[var(--appearance-text-muted)]">
-              {t(
-                'Something went wrong on our side. Please try again.',
-                'Kuna hitilafu upande wetu. Tafadhali jaribu tena.'
-              )}
+              {'Something went wrong on our side. Please try again.'}
             </p>
             <div className="mt-2 flex flex-wrap items-center justify-center gap-3">
               <Button variant="primary" size="md" onClick={loadItem}>
-                {t('Try again', 'Jaribu tena')}
+                {'Try again'}
               </Button>
               <Button variant="outline" size="md" onClick={onBack}>
-                {t('Browse found items', 'Angalia vitu vilivyopatikana')}
+                {'Browse found items'}
               </Button>
             </div>
           </div>
@@ -349,10 +338,7 @@ export default function PublicItemView({
                   {item.photo_url ? (
                     <img
                       src={item.photo_url}
-                      alt={t(
-                        `${itemTitle || 'Found item'} found and held by a Return4me agent`,
-                        `${itemTitle || 'Bidhaa iliyopatikana'} iliyopatikana na kushikiliwa na wakala wa Return4me`
-                      )}
+                      alt={`${itemTitle || 'Found item'} found and held by a Return4me agent`}
                       loading="lazy"
                       decoding="async"
                       className="absolute inset-0 h-full w-full object-cover"
@@ -363,26 +349,20 @@ export default function PublicItemView({
                         <>
                           <Lock size={ICON_SIZE.feature} aria-hidden="true" />
                           <p className="text-small font-bold">
-                            {t('Photo hidden for privacy', 'Picha imefichwa kwa faragha')}
+                            {'Photo hidden for privacy'}
                           </p>
                           <p className="max-w-xs text-caption leading-relaxed">
-                            {t(
-                              'This is a sensitive document, so its photograph is never published.',
-                              'Hii ni hati nyeti, kwa hivyo picha yake haichapishwi kamwe.'
-                            )}
+                            {'This is a sensitive document, so its photograph is never published.'}
                           </p>
                         </>
                       ) : (
                         <>
                           <Package size={ICON_SIZE.feature} aria-hidden="true" />
                           <p className="text-small font-bold">
-                            {t('No photo available', 'Hakuna picha')}
+                            {'No photo available'}
                           </p>
                           <p className="max-w-xs text-caption leading-relaxed">
-                            {t(
-                              'The finder reported this item without a photograph, so the details below are the only way to recognise it.',
-                              'Aliyekipata aliripoti bidhaa hii bila picha, kwa hivyo maelezo yaliyo hapa chini ni njia pekee ya kuitambua.'
-                            )}
+                            {'The finder reported this item without a photograph, so the details below are the only way to recognise it.'}
                           </p>
                         </>
                       )}
@@ -394,7 +374,7 @@ export default function PublicItemView({
                     public reference — nothing an owner would have to guess. */}
                 <div className="flex flex-col p-5 sm:p-8">
                   <p className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">
-                    {t('Found item', 'Bidhaa iliyopatikana')}
+                    {'Found item'}
                   </p>
                   <h1 className="mt-2 text-section font-extrabold tracking-tight text-[var(--appearance-text-primary)] sm:text-page">
                     {itemTitle}
@@ -406,7 +386,7 @@ export default function PublicItemView({
                     </Badge>
                     {reference ? (
                       <span className="inline-flex items-center rounded-compact border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] px-2 py-1 font-mono text-caption tracking-wide text-[var(--appearance-text-primary)]">
-                        <span className="sr-only">{t('Reference', 'Kumbukumbu')}</span>
+                        <span className="sr-only">{'Reference'}</span>
                         {reference}
                       </span>
                     ) : null}
@@ -419,28 +399,28 @@ export default function PublicItemView({
                         here, and an item with no location simply has no row. */}
                     {locationLine ? (
                       <div>
-                        <dt className={factLabelClass}>{t('Found location', 'Mahali ilipopatikana')}</dt>
+                        <dt className={factLabelClass}>{'Found location'}</dt>
                         <dd className={factValueClass}>{locationLine}</dd>
                       </div>
                     ) : null}
 
                     {foundDate ? (
                       <div>
-                        <dt className={factLabelClass}>{t('Found date', 'Tarehe ilipopatikana')}</dt>
+                        <dt className={factLabelClass}>{'Found date'}</dt>
                         <dd className={factValueClass}>{foundDate}</dd>
                       </div>
                     ) : null}
 
                     {identifyingDetails ? (
                       <div>
-                        <dt className={factLabelClass}>{t('Identifying details', 'Maelezo ya kutambua')}</dt>
+                        <dt className={factLabelClass}>{'Identifying details'}</dt>
                         <dd className={factValueClass}>{identifyingDetails}</dd>
                       </div>
                     ) : null}
 
                     {heldAtLine ? (
                       <div>
-                        <dt className={factLabelClass}>{t('Held at', 'Inashikiliwa')}</dt>
+                        <dt className={factLabelClass}>{'Held at'}</dt>
                         <dd className={factValueClass}>{heldAtLine}</dd>
                       </div>
                     ) : null}
@@ -455,16 +435,13 @@ export default function PublicItemView({
                       size="lg"
                       className="w-full"
                       loading={claimBusy}
-                      loadingLabel={t('Checking your session…', 'Inaangalia kipindi chako…')}
+                      loadingLabel={'Checking your session…'}
                       onClick={handleClaimClick}
                     >
-                      {t("It's Mine", 'Ni Yangu')}
+                      {"It's Mine"}
                     </Button>
                     <p className="mt-3 text-caption leading-relaxed text-[var(--appearance-text-muted)]">
-                      {t(
-                        'You will be asked to sign in or create an account, then continue the ownership claim. A claim still requires identity verification and a physical handover through an agent.',
-                        'Utatakiwa kuingia au kufungua akaunti, kisha uendelee kudai umiliki. Dai bado linahitaji uthibitisho wa utambulisho na kukabidhiwa ana kwa ana kupitia wakala.'
-                      )}
+                      {'You will be asked to sign in or create an account, then continue the ownership claim. A claim still requires identity verification and a physical handover through an agent.'}
                     </p>
                   </div>
                 </div>
@@ -481,11 +458,8 @@ export default function PublicItemView({
             >
               <SectionHeading
                 titleId="item-privacy-heading"
-                title={t('Why some details stay private', 'Kwa nini baadhi ya maelezo hayachapishwi')}
-                description={t(
-                  'Anyone can open this page, so it shows only what helps the rightful owner recognise the item. Full names, document numbers and a finder’s contact details are never published, and proof of ownership is collected only inside the private claim process.',
-                  'Mtu yeyote anaweza kufungua ukurasa huu, kwa hivyo unaonyesha tu yale yanayomsaidia mmiliki halisi kutambua bidhaa. Majina kamili, namba za hati na mawasiliano ya aliyekipata hayachapishwi kamwe, na uthibitisho wa umiliki hukusanywa tu ndani ya mchakato wa faragha wa kudai.'
-                )}
+                title={'Why some details stay private'}
+                description={'Anyone can open this page, so it shows only what helps the rightful owner recognise the item. Full names, document numbers and a finder’s contact details are never published, and proof of ownership is collected only inside the private claim process.'}
               />
             </section>
           </>

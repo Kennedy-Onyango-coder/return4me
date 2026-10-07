@@ -211,7 +211,9 @@ describe('B3-F2/F3: dead handover input and dead registration payload removed', 
     expect(AGENTVIEW).not.toContain('const payload: any = { phone };');
     expect(AGENTVIEW).not.toContain('payload.businessName');
     // The OTP request still sends exactly what it always didΓÇª
-    expect(AGENTVIEW).toContain("body: JSON.stringify({ phone }),");
+    expect(AGENTVIEW).toContain(
+      'body: JSON.stringify(isRegistering ? { phone, email: contactEmail.trim() } : { phone }),',
+    );
     // ΓÇªand registration data still travels with OTP verification, unchanged.
     expect(AGENTVIEW).toContain("fetch('/api/auth/verify-otp'");
     expect(AGENTVIEW).toContain('businessName,');
@@ -226,11 +228,11 @@ describe('B3-F2/F3: dead handover input and dead registration payload removed', 
 // ---------------------------------------------------------------------------
 describe('B3-F4: the agent-side claim badge is truthful for every delivered status', () => {
   it('disputed and released are NOT labelled "Awaiting Payment"', () => {
-    expect(agentClaimBadge('disputed', 'en').label).not.toBe('Awaiting Payment');
-    expect(agentClaimBadge('released', 'en').label).not.toBe('Awaiting Payment');
+    expect(agentClaimBadge('disputed').label).not.toBe('Awaiting Payment');
+    expect(agentClaimBadge('released').label).not.toBe('Awaiting Payment');
     // ΓÇªthey carry the SHARED map's own wording, not a second invented vocabulary.
-    expect(agentClaimBadge('disputed', 'en').label).toBe(getClaimStatusDisplay('disputed', 'en').label);
-    expect(agentClaimBadge('released', 'en').label).toBe(getClaimStatusDisplay('released', 'en').label);
+    expect(agentClaimBadge('disputed').label).toBe(getClaimStatusDisplay('disputed').label);
+    expect(agentClaimBadge('released').label).toBe(getClaimStatusDisplay('released').label);
   });
 
   it('every status the queue endpoint can attach is labelled, in both languages', () => {
@@ -238,20 +240,20 @@ describe('B3-F4: the agent-side claim badge is truthful for every delivered stat
     // associatedClaim for (see server.ts's filter).
     const delivered = ['awaiting_agent_confirmation', 'escrow_held', 'pending_payment', 'released', 'disputed'];
     for (const status of delivered) {
-      for (const lang of ['en', 'sw'] as const) {
-        const badge = agentClaimBadge(status, lang);
+      for (const lang of ['en'] as const) {
+        const badge = agentClaimBadge(status);
         expect(badge.label, `${status}/${lang} has no label`).toBeTruthy();
         expect(badge.className, `${status}/${lang} has no styling`).toBeTruthy();
       }
     }
     // The two actionable statuses keep agent-specific wording.
-    expect(agentClaimBadge('awaiting_agent_confirmation', 'en').label).toBe('Awaiting Verification');
-    expect(agentClaimBadge('escrow_held', 'en').label).toBe('Escrow Held (Ready)');
+    expect(agentClaimBadge('awaiting_agent_confirmation').label).toBe('Awaiting Verification');
+    expect(agentClaimBadge('escrow_held').label).toBe('Escrow Held (Ready)');
   });
 
   it('an unknown status degrades to a neutral label rather than a payment claim', () => {
-    const unknown = agentClaimBadge('some_future_status', 'en');
-    expect(unknown.label).toBe(getClaimStatusDisplay('some_future_status', 'en').label);
+    const unknown = agentClaimBadge('some_future_status');
+    expect(unknown.label).toBe(getClaimStatusDisplay('some_future_status').label);
     expect(unknown.label).not.toBe('Awaiting Payment');
     // custody with no claim at all is not "awaiting payment" either
     //
@@ -262,16 +264,16 @@ describe('B3-F4: the agent-side claim badge is truthful for every delivered stat
     // with no claim attached. "No Claim Yet" asserted that absence; the label now
     // reports only the missing information. The five delivered-status labels and
     // the neutral styling are unchanged.
-    expect(agentClaimBadge(undefined, 'en').label).toBe('No Claim Information');
-    expect(agentClaimBadge(null, 'sw').label).toBe('Hakuna Taarifa ya Dai');
-    expect(agentClaimBadge(undefined, 'en').label).not.toBe('No Claim Yet');
-    expect(agentClaimBadge(undefined, 'en').className).toBe('bg-stone-100 text-stone-800');
+    expect(agentClaimBadge(undefined).label).toBe('No Claim Information');
+    expect(agentClaimBadge(null).label).toBe('Hakuna Taarifa ya Dai');
+    expect(agentClaimBadge(undefined).label).not.toBe('No Claim Yet');
+    expect(agentClaimBadge(undefined).className).toBe('bg-stone-100 text-stone-800');
   });
 
   it('the shared status map still covers the whole lifecycle vocabulary', () => {
     for (const status of CLAIM_STATUS_VALUES) {
-      const en = getClaimStatusDisplay(status, 'en');
-      const sw = getClaimStatusDisplay(status, 'sw');
+      const en = getClaimStatusDisplay(status);
+      const sw = getClaimStatusDisplay(status);
       expect(en.label, `${status} missing EN label`).toBeTruthy();
       expect(sw.label, `${status} missing SW label`).toBeTruthy();
       // A raw snake_case token means the shared map lost an entry.

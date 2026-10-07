@@ -163,14 +163,13 @@ describe('Batch D appearance preference foundation', () => {
     expect(APPEARANCE_STORAGE_KEY).toBe('return4me.appearance');
   });
 
-  it('keeps App as the only appearance state owner and preserves the language foundation', () => {
+  it('keeps App as the only appearance state owner', () => {
     expect(app).toContain('const [appearancePreference, setAppearancePreference] = useState<AppearancePreference>');
     expect(app).toContain('const [effectiveAppearance, setEffectiveAppearance] = useState<EffectiveAppearance>');
     expect((utility.match(/useState/g) || [])).toHaveLength(0);
-    expect(app).toContain("const LANGUAGE_STORAGE_KEY = 'return4me.language'");
-    expect(app).toContain("type AppLanguage = 'en' | 'sw'");
-    expect(navbar).toContain('<LanguageControl');
-    expect(shell).toContain('<LanguageControl');
+    expect(app).not.toMatch(/AppLanguage/);
+    expect(navbar).not.toContain('LanguageControl');
+    expect(shell).not.toContain('LanguageControl');
   });
 
   it('introduces no backend/database dependency and no broad surface migration', () => {

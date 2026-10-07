@@ -2,15 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import { translations } from '../types';
 import { Globe, User, ShieldCheck, MapPin, Search, Home, Menu, X, LogOut } from 'lucide-react';
 import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
-import LanguageControl from './LanguageControl';
 import AppearanceControl from './AppearanceControl';
 import Button from './ui/Button';
 import { ICON_SIZE } from './ui/iconSize';
 import type { AppearancePreference } from '../utils/appearancePreference';
 
 interface NavbarProps {
-  lang: 'en' | 'sw';
-  setLang: (lang: 'en' | 'sw') => void;
   appearance: AppearancePreference;
   setAppearance: (appearance: AppearancePreference) => void;
   currentView: 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy' | 'help' | 'signin' | 'becomeAgent';
@@ -46,8 +43,8 @@ interface NavbarProps {
 // Sign In → Agent. The internal label still exists in translations for
 // non-navigation use, but no public surface renders it as a destination.
 
-export default function Navbar({ lang, setLang, appearance, setAppearance, currentView, setView, token, logout, isAccountView = false, accountSignedIn = false, onOpenAccount, onNavigate }: NavbarProps) {
-  const t = translations[lang];
+export default function Navbar({ appearance, setAppearance, currentView, setView, token, logout, isAccountView = false, accountSignedIn = false, onOpenAccount, onNavigate }: NavbarProps) {
+  const t = translations.en;
   const appearanceLabels = {
     appearance: t.appearanceLabel,
     light: t.appearanceLight,
@@ -131,7 +128,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
   // test and keeps this exact contiguous shape: publicNavigation.test.ts pins
   // `isAccountView ? (lang === 'en' ? 'My Account'` as the tripwire proving a
   // signed-OUT visitor is never offered "My Account" as a destination.
-  const accountControlLabel = isAccountView ? (lang === 'en' ? 'My Account' : 'Akaunti Yangu') : accountSignedIn ? (lang === 'en' ? 'My Account' : 'Akaunti Yangu') : t.signInBtn;
+  const accountControlLabel = isAccountView ? ('My Account') : accountSignedIn ? ('My Account') : t.signInBtn;
 
   // Check if admin is logged in (to conditionally show admin console link)
   useEffect(() => {
@@ -284,7 +281,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
             type="button"
             className="shrink-0 flex items-center rounded-small cursor-pointer select-none"
             onClick={() => handleNavClick('home')}
-            aria-label={lang === 'sw' ? 'Nenda Nyumbani' : 'Go to Home'}
+            aria-label={'Go to Home'}
           >
             <img 
               src="/assets/logo_wordmark_transparent.png" 
@@ -307,7 +304,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
               The group renders at `xl` and up only — see `navLinkClass` above for
               the measurement behind that breakpoint. Below it, the compact menu
               carries the same four destinations. */}
-          <nav className="hidden xl:flex min-w-0 flex-1 items-center justify-center gap-0" aria-label={lang === 'en' ? 'Main navigation' : 'Navishan kuu'}>
+          <nav className="hidden xl:flex min-w-0 flex-1 items-center justify-center gap-0" aria-label={'Main navigation'}>
             {/* BATCH 2 (navbar): the active destination was only ever expressed
                 as a colour + underline, so assistive technology had no way to
                 tell where the visitor currently was. Each public destination now
@@ -317,7 +314,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
                 to be the current page. The `view` argument is the single source
                 of truth for both the visual and the semantic state. */}
             <button onClick={() => handleNavClick('home')} className={navLinkClass('home')} aria-current={currentView === 'home' ? 'page' : undefined}>
-              {lang === 'en' ? 'Home' : 'Mwanzo'}
+              {'Home'}
               {navLinkUnderline('home')}
             </button>
             <button onClick={() => handleNavClick('owner')} className={navLinkClass('owner')} aria-current={currentView === 'owner' ? 'page' : undefined}>
@@ -362,7 +359,6 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
                   wider than it needed to be; the shared `min-w-24` floor (96px,
                   the 8-point rhythm's 24 step) keeps it from collapsing. */}
           <div className="hidden xl:flex shrink-0 items-center gap-1 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] px-1.5 py-0.5">
-            <LanguageControl lang={lang} setLang={setLang} layout="toggle" toggleLabel={t.langToggle} />
             <AppearanceControl value={appearance} onChange={setAppearance} labels={appearanceLabels} minWidth="min-w-24" />
           </div>
 
@@ -428,7 +424,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
             ) : (
               <div className="flex items-center gap-2 px-2 text-body font-medium text-[var(--appearance-text-muted)]">
                 <User size={ICON_SIZE.ui} aria-hidden="true" />
-                <span>{lang === 'en' ? 'Guest' : 'Mgeni'}</span>
+                <span>{'Guest'}</span>
               </div>
             )}
           </div>
@@ -449,7 +445,6 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
               actually left over on a narrow phone, and the language toggle keeps
               its FULL visible word and its 44px `md` size (Batch B/C pin both). */}
           <div className="flex xl:hidden items-center gap-1 md:gap-2">
-            <LanguageControl lang={lang} setLang={setLang} layout="toggle" toggleLabel={t.langToggle} />
             <AppearanceControl value={appearance} onChange={setAppearance} labels={appearanceLabels} minWidth="min-w-0 flex-1 sm:min-w-24 sm:flex-none" />
             <button
               ref={menuTriggerRef}
@@ -457,7 +452,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
               onClick={() => setIsOpen(true)}
               aria-expanded={isOpen}
               aria-controls="public-nav-menu"
-              aria-label={lang === 'sw' ? 'Fungua menyu' : 'Open menu'}
+              aria-label={'Open menu'}
               className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-small text-[var(--appearance-text-primary)] hover:text-[var(--appearance-primary)] transition-colors cursor-pointer"
             >
               <Menu size={ICON_SIZE.heading} aria-hidden="true" />
@@ -499,7 +494,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
             <motion.div
               id="public-nav-menu"
               role="group"
-              aria-label={lang === 'en' ? 'Site menu' : 'Menyu ya tovuti'}
+              aria-label={'Site menu'}
               initial={{ x: '100%' }}
               animate={{ x: 0 }}
               exit={{ x: '100%' }}
@@ -517,7 +512,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
                 <button
                   type="button"
                   onClick={() => setIsOpen(false)}
-                  aria-label={lang === 'sw' ? 'Funga menyu' : 'Close menu'}
+                  aria-label={'Close menu'}
                   className="inline-flex h-11 w-11 items-center justify-center rounded-small bg-[var(--appearance-surface)] border border-[var(--appearance-border)] text-[var(--appearance-text-muted)] hover:text-[var(--appearance-primary)] transition-colors cursor-pointer"
                 >
                   <X size={ICON_SIZE.ui} aria-hidden="true" />
@@ -528,7 +523,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
               <div className="flex-1 overflow-y-auto p-5 space-y-5">
                 <div className="space-y-2">
                   <p className="text-caption font-bold text-[var(--appearance-text-muted)] uppercase tracking-widest px-3 mb-2">
-                    {lang === 'en' ? 'Main Menu' : 'Menyu Kuu'}
+                    {'Main Menu'}
                   </p>
                   
                   {/* Home */}
@@ -542,7 +537,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
                     }`}
                   >
                     <Home size={ICON_SIZE.emphasis} aria-hidden="true" />
-                    <span>{lang === 'en' ? 'Home' : 'Ukurasa wa Kwanza'}</span>
+                    <span>{'Home'}</span>
                   </button>
 
                   {/* Owner (Lost) */}
@@ -595,7 +590,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
                 {/* System Pages */}
                 <div className="space-y-2 pt-4 border-t border-[var(--appearance-border)]/60">
                   <p className="text-caption font-bold text-[var(--appearance-text-muted)] uppercase tracking-widest px-3 mb-2">
-                    {lang === 'en' ? 'Legals & Info' : 'Sheria na Taarifa'}
+                    {'Legals & Info'}
                   </p>
                   
                   {/* Help (Batch 13) — the public FAQ, and the page the support
@@ -615,7 +610,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
                         : 'text-[var(--appearance-text-primary)] hover:bg-[var(--appearance-surface-muted)]'
                     }`}
                   >
-                    <span>{lang === 'en' ? 'Help & FAQ' : 'Msaada na Maswali'}</span>
+                    <span>{'Help & FAQ'}</span>
                   </button>
 
                   {/* Terms */}
@@ -628,7 +623,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
                         : 'text-[var(--appearance-text-primary)] hover:bg-[var(--appearance-surface-muted)]'
                     }`}
                   >
-                    <span>{lang === 'en' ? 'Terms of Service' : 'Masharti ya Matumizi'}</span>
+                    <span>{'Terms of Service'}</span>
                   </button>
 
                   {/* Privacy */}
@@ -641,15 +636,13 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
                         : 'text-[var(--appearance-text-primary)] hover:bg-[var(--appearance-surface-muted)]'
                     }`}
                   >
-                    <span>{lang === 'en' ? 'Privacy Policy' : 'Sera ya Faragha'}</span>
+                    <span>{'Privacy Policy'}</span>
                   </button>
                 </div>
               </div>
 
               {/* Drawer Footer Controls */}
               <div className="p-5 border-t border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] space-y-4">
-                {/* Localized Language Selector */}
-                <LanguageControl lang={lang} setLang={setLang} layout="choices" toggleLabel={t.langToggle} />
                 <AppearanceControl value={appearance} onChange={setAppearance} labels={appearanceLabels} fullWidth />
 
                 {/* Account (Phase 2) — opens the customer account / dashboard.
@@ -691,7 +684,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
                         <User size={ICON_SIZE.metadata} aria-hidden="true" />
                       </div>
                       <span className="text-body font-bold text-[var(--appearance-text-primary)]">
-                        {lang === 'en' ? 'Not signed in' : 'Hujaingia'}
+                        {'Not signed in'}
                       </span>
                     </div>
                     
@@ -714,7 +707,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
           }`}
         >
           <Home size={ICON_SIZE.emphasis} aria-hidden="true" />
-          <span className="text-caption font-semibold">{lang === 'sw' ? 'Mwanzo' : 'Home'}</span>
+          <span className="text-caption font-semibold">{'Home'}</span>
         </button>
         <button
           type="button"
@@ -725,7 +718,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
           }`}
         >
           <Search size={ICON_SIZE.emphasis} aria-hidden="true" />
-          <span className="text-caption font-semibold">{lang === 'sw' ? 'Tafuta' : 'Search'}</span>
+          <span className="text-caption font-semibold">{'Search'}</span>
         </button>
         <button
           type="button"
@@ -736,7 +729,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
           }`}
         >
           <MapPin size={ICON_SIZE.emphasis} aria-hidden="true" />
-          <span className="text-caption font-semibold">{lang === 'sw' ? 'Ripoti' : 'Report'}</span>
+          <span className="text-caption font-semibold">{'Report'}</span>
         </button>
         {/* PHASE 16 — a token-only (agent/admin) session is not offered the
             customer "Sign In" tab. See isTokenOnlySession above. */}
@@ -750,7 +743,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
           }`}
         >
           <User size={ICON_SIZE.emphasis} aria-hidden="true" />
-          <span className="text-caption font-semibold">{(isAccountView || accountSignedIn) ? (lang === 'sw' ? 'Akaunti' : 'Account') : t.signInBtn}</span>
+          <span className="text-caption font-semibold">{(isAccountView || accountSignedIn) ? ('Account') : t.signInBtn}</span>
         </button>
         )}
         {/* PHASE 16 — a token-only (agent/admin) session is not offered the
@@ -767,7 +760,7 @@ export default function Navbar({ lang, setLang, appearance, setAppearance, curre
           }`}
         >
           <Menu size={ICON_SIZE.emphasis} aria-hidden="true" />
-          <span className="text-caption font-semibold">{lang === 'sw' ? 'Zaidi' : 'More'}</span>
+          <span className="text-caption font-semibold">{'More'}</span>
         </button>
       </div>
     </>

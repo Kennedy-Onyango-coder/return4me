@@ -444,24 +444,24 @@ describe('B4-structure: AgentHubProps is fully wired from AgentView', () => {
 
 describe('B4-structure: Batch 3 badge contract preserved via neutral home', () => {
   it('neutral helper keeps Batch 3 wording', () => {
-    expect(agentClaimBadge('awaiting_agent_confirmation', 'en').label).toBe('Awaiting Verification');
-    expect(agentClaimBadge('escrow_held', 'en').label).toBe('Escrow Held (Ready)');
+    expect(agentClaimBadge('awaiting_agent_confirmation').label).toBe('Awaiting Verification');
+    expect(agentClaimBadge('escrow_held').label).toBe('Escrow Held (Ready)');
     // PHASE 16.1 BATCH 4B-1 (B2) - the no-claim fallback wording changed on
     // purpose: an absent associatedClaim cannot prove that no claim exists, so it
     // now reports the missing information instead of asserting an absence. The
     // two actionable labels above are untouched, and the no-claim badge keeps its
     // neutral (non-payment) styling.
-    expect(agentClaimBadge(undefined, 'en').label).toBe('No Claim Information');
-    expect(agentClaimBadge(null, 'sw').label).toBe('Hakuna Taarifa ya Dai');
-    expect(agentClaimBadge(undefined, 'sw').label).toBe('Hakuna Taarifa ya Dai');
-    expect(agentClaimBadge(undefined, 'en').className).toBe('bg-stone-100 text-stone-800');
-    expect(agentClaimBadge('disputed', 'en').label).toBe(getClaimStatusDisplay('disputed', 'en').label);
-    expect(agentClaimBadge('released', 'en').label).toBe(getClaimStatusDisplay('released', 'en').label);
+    expect(agentClaimBadge(undefined).label).toBe('No Claim Information');
+    expect(agentClaimBadge(null).label).toBe('Hakuna Taarifa ya Dai');
+    expect(agentClaimBadge(undefined).label).toBe('Hakuna Taarifa ya Dai');
+    expect(agentClaimBadge(undefined).className).toBe('bg-stone-100 text-stone-800');
+    expect(agentClaimBadge('disputed').label).toBe(getClaimStatusDisplay('disputed').label);
+    expect(agentClaimBadge('released').label).toBe(getClaimStatusDisplay('released').label);
   });
 
   it('AgentView re-export matches the neutral helper', () => {
-    expect(agentClaimBadgeViaView('disputed', 'en')).toEqual(agentClaimBadge('disputed', 'en'));
-    expect(agentClaimBadgeViaView('released', 'sw')).toEqual(agentClaimBadge('released', 'sw'));
+    expect(agentClaimBadgeViaView('disputed')).toEqual(agentClaimBadge('disputed'));
+    expect(agentClaimBadgeViaView('released')).toEqual(agentClaimBadge('released'));
   });
 
   it('Batch 3 reliability suite still targets the live contracts', () => {

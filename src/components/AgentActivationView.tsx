@@ -48,7 +48,6 @@ import { Button, Banner, Spinner } from './ui';
 //   silently does nothing.
 
 interface Props {
-  lang: 'en' | 'sw';
   /** Hands off to the EXISTING agent sign-in surface. */
   onSignIn: () => void;
   /** Returns to the public home surface. */
@@ -80,9 +79,9 @@ type ActivationState =
   | 'invalid'
   | 'unavailable';
 
-export default function AgentActivationView({ lang, onSignIn, onExit, hasToken }: Props) {
-  const sw = lang === 'sw';
-  const t = (en: string, swText: string) => (sw ? swText : en);
+export default function AgentActivationView({ onSignIn, onExit, hasToken }: Props) {
+
+
 
   const [state, setState] = useState<ActivationState>('working');
   // A ref, not state: the token is used for exactly one request and must not
@@ -156,7 +155,7 @@ export default function AgentActivationView({ lang, onSignIn, onExit, hasToken }
       <div className="flex-grow flex items-center justify-center w-full py-24">
         <Spinner
           size={26}
-          label={t('Verifying your agent email', 'Inathibitisha barua pepe yako ya wakala')}
+          label={'Verifying your agent email'}
           className="text-primary-green"
         />
       </div>
@@ -183,16 +182,16 @@ export default function AgentActivationView({ lang, onSignIn, onExit, hasToken }
           className="bg-white border border-brand-border rounded-2xl p-5 sm:p-6"
         >
           <p className="text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">
-            {t('Return4me agent', 'Wakala wa Return4me')}
+            {'Return4me agent'}
           </p>
           <h1 id="agent-activation-title" className="mt-1 text-xl sm:text-2xl font-extrabold tracking-tight text-brand-dark-text">
             {operational
-              ? t('Your agent email is verified', 'Barua pepe yako ya wakala imethibitishwa')
+              ? 'Your agent email is verified'
               : verified
-                ? t('Your email is verified', 'Barua pepe yako imethibitishwa')
+                ? 'Your email is verified'
                 : invalid
-                  ? t('This activation link cannot be used', 'Kiungo hiki cha kuamilisha hikiwezi kutumika')
-                  : t('We could not verify your email', 'Hatukuweza kuthibitisha barua pepe yako')}
+                  ? 'This activation link cannot be used'
+                  : 'We could not verify your email'}
           </h1>
 
           {/* Announced to assistive tech by the shared Banner primitives:
@@ -201,60 +200,39 @@ export default function AgentActivationView({ lang, onSignIn, onExit, hasToken }
               state carries a distinct icon and distinct wording. */}
           {operational && (
             <Banner kind="success" className="mt-4">
-              {t(
-                'Your email address is verified and your agent account is approved. You can now sign in and start work.',
-                'Barua pepe yako imethibitishwa na akaunti yako ya wakala imepitishwa. Sasa unaweza kuingia na kuanza kazi.'
-              )}
+              {'Your email address is verified and your agent account is approved. You can now sign in and start work.'}
             </Banner>
           )}
 
           {verified && !operational && (
             <Banner kind="info" className="mt-4">
-              {t(
-                'Your email address is verified. Your application is still awaiting administrator approval, and you will be able to work once that is complete. Verifying your email does not approve your application by itself.',
-                'Barua pepe yako imethibitishwa. Maombi yako bado yasubiri kupitishwa na msimamizi, na utaweza kufanya kazi baada ya hilo kumalika. Kuthibitisha barua pepe pewe hakuwezi kupitisha maombi yako chenyewe.'
-              )}
+              {'Your email address is verified. Your application is still awaiting administrator approval, and you will be able to work once that is complete. Verifying your email does not approve your application by itself.'}
             </Banner>
           )}
 
           {invalid && (
             <Banner kind="error" className="mt-4">
-              {t(
-                'This activation link is incomplete, has already been used, or has expired. For your security, an activation link can only be used once.',
-                'Kiungo hiki cha kuamilisha hakikamiliki, kimetumika tayari, au kimeisha muda. Kwa usalama wako, kiungo cha kuamilisha kinaweza kutumika mara moja tu.'
-              )}
+              {'This activation link is incomplete, has already been used, or has expired. For your security, an activation link can only be used once.'}
             </Banner>
           )}
 
           {retryable && (
             <Banner kind="warning" className="mt-4">
-              {t(
-                'We could not reach Return4me to complete the verification. Your email has not been verified yet.',
-                'Hatukuweza kufika kwenye Return4me kumalisha uthibitishaji. Barua pepe yako bado haijathibitishwa.'
-              )}
+              {'We could not reach Return4me to complete the verification. Your email has not been verified yet.'}
             </Banner>
           )}
 
           <p className="mt-4 text-sm text-brand-muted-text leading-relaxed">
             {verified
-              ? t(
-                  'You can go to agent sign in now, or continue to Return4me.',
-                  'Unaweza kwenda kwenye kuingia kwa wakala sasa, au uendelee kwenye Return4me.'
-                )
+              ? 'You can go to agent sign in now, or continue to Return4me.'
               : invalid
-                ? t(
-                    'If you have just applied to be an agent, open the activation email on this device and use the link in it.',
-                    'Ukiwa umeomba kushiriki kama wakala hivi karibuni, fungua barua pepe ya kuamilisha kwenye kifaa hiki na tumia kiungo kilichomo.'
-                  )
-                : t(
-                    'Please try again in a moment. If it keeps failing, open the activation email on this device and use the link in it again.',
-                    'Tafadhali jaribu tena baadaye mawingu. Ikiwa inashindika mara kwa mara, fungua tena barua pepe ya kuamilisha kwenye kifaa hiki na tumia kiungo kile kile.'
-                  )}
+                ? 'If you have just applied to be an agent, open the activation email on this device and use the link in it.'
+                : 'Please try again in a moment. If it keeps failing, open the activation email on this device and use the link in it again.'}
           </p>
 
           <div className="mt-5 space-y-2">
             <Button type="button" variant="primary" size="lg" className="w-full" onClick={onSignIn}>
-              {t('Go to agent sign in', 'Nenda kuingia kama wakala')}
+              {'Go to agent sign in'}
             </Button>
             {retryable && (
               <Button
@@ -264,11 +242,11 @@ export default function AgentActivationView({ lang, onSignIn, onExit, hasToken }
                 className="w-full"
                 onClick={() => window.location.reload()}
               >
-                {t('Try again', 'Jaribu tena')}
+                {'Try again'}
               </Button>
             )}
             <Button type="button" variant="ghost" size="md" className="w-full" onClick={onExit}>
-              {t('Back to Return4me', 'Rudi Return4me')}
+              {'Back to Return4me'}
             </Button>
           </div>
         </div>

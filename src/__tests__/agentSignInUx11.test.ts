@@ -231,7 +231,11 @@ describe('UX-11 leaves the agent authentication contract byte-identical', () => 
     expect(REQUEST_CALL).toContain("fetch('/api/auth/request-otp'");
     expect(REQUEST_CALL).toContain("method: 'POST'");
     expect(REQUEST_CALL).toContain("'Content-Type': 'application/json'");
-    expect(REQUEST_CALL).toContain('body: JSON.stringify({ phone })');
+    // E1: the SIGN-IN arm of this single shared call is unchanged — phone-only,
+    // exactly as UX-11 shipped it. The onboarding email is added ONLY for the
+    // registration arm (`isRegistering ? { phone, email } : { phone }`), so an
+    // existing agent still signs in with the phone and nothing else.
+    expect(REQUEST_CALL).toContain(': { phone })');
     // F-3 (Batch 3) removed a dead registration payload from this call; UX-11
     // must not reintroduce one.
     expect(REQUEST_CALL).not.toContain('role:');

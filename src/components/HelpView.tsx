@@ -42,64 +42,60 @@ import type { PublicViewName } from '../utils/publicRoutes';
 // English-only string cannot be added here unnoticed.
 
 interface HelpViewProps {
-  lang: 'en' | 'sw';
   /** The App-owned, URL-aware navigator (App.tsx `goToView`). Passing it in
    *  keeps /help in step with the screen: a cross-link leaves /help on a real
    *  public path instead of silently swapping React state behind the URL. */
   setView: (view: PublicViewName) => void;
 }
 
-export default function HelpView({ lang, setView }: HelpViewProps) {
-  const sw = lang === 'sw';
-  const t = (en: string, swText: string) => (sw ? swText : en);
+export default function HelpView({ setView }: HelpViewProps) {
+
+
 
   /** The order a visitor reads them in: identity, then money, then the item,
    *  then what to do when it does not go to plan. */
   const emailFacts: string[] = [
-    t('The code is a secret. Return4me staff will never ask you for it.', 'Msimbo ni siri. Wafanyakazi wa Return4me hawatawahi kuomba msimbo huo.'),
-    t('If the account has no verified email address we say so, instead of pretending a message was sent.', 'Kama akaunti haina barua pepe iliyothibitishwa tunakuambia hivyo, badala ya kudai ujumbe umetumwa.'),
-    t('You never need a code to report a found item.', 'Huhitaji msimbo wowote kuripoti kitu kilichopatikana.'),
+    'The code is a secret. Return4me staff will never ask you for it.',
+    'If the account has no verified email address we say so, instead of pretending a message was sent.',
+    'You never need a code to report a found item.',
   ];
 
   const phoneFacts: string[] = [
-    t('A found item is matched to you through the number or the details you gave when you reported it.', 'Kitu kilichopatikana hulinganishwa nawe kupitia nambari au maelezo uliyotoa uliporipoti.'),
-    t('Changed your number? Sign in and update it, so a match can still reach you.', 'Umebadilisha nambari? Ingia na uisasishe, ili ulinganisho uweze kukufikia.'),
+    'A found item is matched to you through the number or the details you gave when you reported it.',
+    'Changed your number? Sign in and update it, so a match can still reach you.',
   ];
 
   const feeFacts: string[] = [
-    t('Payment is made by M-Pesa from the claim screen.', 'Malipo hufanywa kwa M-Pesa kutoka kwenye skrini ya dai.'),
-    t('Return4me holds the payment until the handover is confirmed, then pays the agent their share.', 'Return4me inashikilia malipo hadi makabidhiano yathibitishwe, kisha humlipa wakala sehemu yake.'),
-    t('A dispute window runs before the agent is paid, and a disputed claim is reviewed by an administrator.', 'Kuna kipindi cha migogoro kabla ya wakala kulipwa, na dai lenye mgogoro huchunguzwa na msimamizi.'),
+    'Payment is made by M-Pesa from the claim screen.',
+    'Return4me holds the payment until the handover is confirmed, then pays the agent their share.',
+    'A dispute window runs before the agent is paid, and a disputed claim is reviewed by an administrator.',
   ];
 
   const collectFacts: string[] = [
-    t('Never hand the item, or the code, to anyone outside an approved agent location.', 'Usikabidhi kitu, au msimbo, kwa mtu yeyote nje ya eneo la wakala aliyeidhinishwa.'),
-    t('The code is checked before the item is released, and never after.', 'Msimbo hukaguliwa kabla ya kitu kutolewa, na kamwe si baada.'),
+    'Never hand the item, or the code, to anyone outside an approved agent location.',
+    'The code is checked before the item is released, and never after.',
   ];
 
   const escalationSteps: string[] = [
-    t('Contact support with the claim reference shown on your claim (the CLM- code).', 'Wasiliana na msaada ukiwa na kumbukumbu ya dai inayoonyeshwa kwenye dai lako (msimbo wa CLM-).'),
-    t('Describe what happened, and attach a photo if the item is not as described.', 'Eleza kilichotokea, na ambatanisha picha kama kitu hakiko kama kilivyoelezwa.'),
-    t('If a handover cannot be completed at the agent location, tell support before you leave it.', 'Kama makabidhiano hayawezi kukamilika mahali pa wakala, mwambie msaada kabla ya kuondoka hapo.'),
-    t('A pickup code can be requested again from the claim page, and support can explain a payment state and pass a disputed claim to the administrator who decides it.', 'Msimbo wa kuchukua unaweza kuombwa tena kutoka kwenye ukurasa wa dai, na msaada unaweza kueleza hali ya malipo na kupeleka dai lenye mgogoro kwa msimamizi anayeamua.'),
+    'Contact support with the claim reference shown on your claim (the CLM- code).',
+    'Describe what happened, and attach a photo if the item is not as described.',
+    'If a handover cannot be completed at the agent location, tell support before you leave it.',
+    'A pickup code can be requested again from the claim page, and support can explain a payment state and pass a disputed claim to the administrator who decides it.',
   ];
 
   const contacts: Array<{ address: string; purpose: string }> = [
-    { address: 'support@return4me.co.ke', purpose: t('Claims, payments and account help', 'Madai, malipo na msaada wa akaunti') },
-    { address: 'privacy@return4me.co.ke', purpose: t('Data access, correction and erasure requests', 'Maombi ya kufikia, kurekebisha au kufuta data') },
-    { address: 'security@return4me.co.ke', purpose: t('Security reports and vulnerability disclosure', 'Ripoti za usalama na ufichuzi wa udhaifu') },
+    { address: 'support@return4me.co.ke', purpose: 'Claims, payments and account help' },
+    { address: 'privacy@return4me.co.ke', purpose: 'Data access, correction and erasure requests' },
+    { address: 'security@return4me.co.ke', purpose: 'Security reports and vulnerability disclosure' },
   ];
 
   return (
     <div className="mx-auto w-full max-w-4xl space-y-8">
       <header className="space-y-3">
         <SectionHeading
-          eyebrow={t('Help & FAQ', 'Msaada na Maswali')}
-          title={t('How Return4me works, and how to get help', 'Jinsi Return4me inavyofanya kazi, na jinsi ya kupata msaada')}
-          description={t(
-            'Plain answers to the questions we are asked most: how your one-time code reaches you, what your phone number is used for, what the retrieval fee covers, and how to escalate a handover that does not go to plan.',
-            'Majibu ya wazi kwa maswali yanayoulizwa zaidi: msimbo wako wa matumizi moja unakufikiaje, nambari yako ya simu inatumika kwa nini, ada ya kurejesha inashughulikia nini, na jinsi ya kupeleka juu kesi ya makabidhiano isiyoenda sawa.',
-          )}
+          eyebrow={'Help & FAQ'}
+          title={'How Return4me works, and how to get help'}
+          description={'Plain answers to the questions we are asked most: how your one-time code reaches you, what your phone number is used for, what the retrieval fee covers, and how to escalate a handover that does not go to plan.'}
           titleId="help-page-title"
           titleClassName="text-section"
         />
@@ -113,20 +109,14 @@ export default function HelpView({ lang, setView }: HelpViewProps) {
           <Mail size={ICON_SIZE.emphasis} aria-hidden="true" />
         </div>
         <SectionHeading
-          title={t('Your one-time code arrives by email', 'Msimbo wako wa matumizi moja huja kwa barua pepe')}
+          title={'Your one-time code arrives by email'}
           titleId="help-email-title"
         />
         <p className="text-body leading-relaxed text-[var(--appearance-text-muted)]">
-          {t(
-            'Every message Return4me uses to verify you is delivered to the email address on the account: signing in, filing a claim, linking a claim to your account, and asking to change your number or delete your data. Registering is the one exception to the shape of the message, not to the address — it emails an activation link rather than a code. Nothing is sent to your phone. Check that mailbox, including the spam folder, and open the message from Return4me.',
-            'Kila ujumbe unaotumiwa na Return4me kukuthibitisha hufika kwenye barua pepe iliyo kwenye akaunti: kuingia, kufungua dai, kuunganisha dai na akaunti yako, na kuomba kubadilisha nambari au kufuta data. Usajili ni tofauti kwa aina ya ujumbe, si kwa anwani — hutuma kiungo cha kuamilisha badala ya msimbo. Hakuna kinachotumwa kwenye simu yako. Angalia barua pepe hizo, ikiwemo folda ya taka, na ufungue ujumbe kutoka Return4me.',
-          )}
+          {'Every message Return4me uses to verify you is delivered to the email address on the account: signing in, filing a claim, linking a claim to your account, and asking to change your number or delete your data. Registering is the one exception to the shape of the message, not to the address — it emails an activation link rather than a code. Nothing is sent to your phone. Check that mailbox, including the spam folder, and open the message from Return4me.'}
         </p>
         <p className="text-body leading-relaxed text-[var(--appearance-text-muted)]">
-          {t(
-            'A code is valid for five minutes and accepts five attempts. If it does not arrive, request a new one rather than waiting on the old one.',
-            'Msimbo hutumika kwa dakika tano na unakubali majaribio matano. Usipoupata, omba mwingine badala ya kusubiri wa zamani.',
-          )}
+          {'A code is valid for five minutes and accepts five attempts. If it does not arrive, request a new one rather than waiting on the old one.'}
         </p>
         <ul className="space-y-2">
           {emailFacts.map((fact) => (
@@ -146,14 +136,11 @@ export default function HelpView({ lang, setView }: HelpViewProps) {
           <Smartphone size={ICON_SIZE.emphasis} aria-hidden="true" />
         </div>
         <SectionHeading
-          title={t('Your phone number identifies the account', 'Nambari yako ya simu inatambulisha akaunti')}
+          title={'Your phone number identifies the account'}
           titleId="help-phone-title"
         />
         <p className="text-body leading-relaxed text-[var(--appearance-text-muted)]">
-          {t(
-            'The number you enter tells us which account, or which claim, you are asking about, so keep the number on your account up to date. It is an identifier, not a delivery channel: it never receives a code, and we never ask you to send one to us.',
-            'Nambari unayoingiza inatuambia akaunti, au dai, unaloulizia, kwa hivyo hakikisha nambari kwenye akaunti yako ni ya sasa. Ni kitambulisho, si njia ya kutuma ujumbe: haipokei msimbo, na hatukuombi kutuma mmoja kwetu.',
-          )}
+          {'The number you enter tells us which account, or which claim, you are asking about, so keep the number on your account up to date. It is an identifier, not a delivery channel: it never receives a code, and we never ask you to send one to us.'}
         </p>
         <ul className="space-y-2">
           {phoneFacts.map((fact) => (
@@ -173,14 +160,11 @@ export default function HelpView({ lang, setView }: HelpViewProps) {
           <HandCoins size={ICON_SIZE.emphasis} aria-hidden="true" />
         </div>
         <SectionHeading
-          title={t('What the retrieval fee covers', 'Ada ya kurejesha inashughulikia nini')}
+          title={'What the retrieval fee covers'}
           titleId="help-fee-title"
         />
         <p className="text-body leading-relaxed text-[var(--appearance-text-muted)]">
-          {t(
-            'Reporting a found item is free, and searching, viewing an item and filing a claim cost nothing. The retrieval fee is paid by the owner, and only once an agent has confirmed the item is physically at their location. The exact amount depends on the item category and is shown in the payment step before you pay anything.',
-            'Kuripoti kitu kilichopatikana ni bure, na kutafuta, kuona kitu na kufungua dai hakuna gharama. Ada ya kurejesha hulipwa na mmiliki, na tu baada ya wakala kuthibitisha kuwa kitu kiko mahali anapofanya kazi. Kiasi kamili hutegemea aina ya kitu na huonyeshwa kwenye hatua ya malipo kabla ya kulipa kitu chochote.',
-          )}
+          {'Reporting a found item is free, and searching, viewing an item and filing a claim cost nothing. The retrieval fee is paid by the owner, and only once an agent has confirmed the item is physically at their location. The exact amount depends on the item category and is shown in the payment step before you pay anything.'}
         </p>
         <ul className="space-y-2">
           {feeFacts.map((fact) => (
@@ -200,14 +184,11 @@ export default function HelpView({ lang, setView }: HelpViewProps) {
           <KeyRound size={ICON_SIZE.emphasis} aria-hidden="true" />
         </div>
         <SectionHeading
-          title={t('Collecting the item in person', 'Kuchukua kitu ana kwa ana')}
+          title={'Collecting the item in person'}
           titleId="help-collect-title"
         />
         <p className="text-body leading-relaxed text-[var(--appearance-text-muted)]">
-          {t(
-            'After payment is confirmed, Return4me emails a pickup code for that claim. Take the code to the agent at the location named on the claim. The agent checks the code against the claim, records the handover with a photo, and confirms it — and nothing is paid to the agent before that confirmation.',
-            'Baada ya malipo kuthibitishwa, Return4me hutuma msimbo wa kuchukua kwa barua pepe kwa dai hilo. Nenda kwa wakala na msimbo huo, mahali palipoandikwa kwenye dai. Wakala hukagua msimbo dhidi ya dai, hurekodi makabidhiano kwa picha, na kuyathibitisha — na hakuna kinacholipwa kwa wakala kabla ya uthibitisho huo.',
-          )}
+          {'After payment is confirmed, Return4me emails a pickup code for that claim. Take the code to the agent at the location named on the claim. The agent checks the code against the claim, records the handover with a photo, and confirms it — and nothing is paid to the agent before that confirmation.'}
         </p>
         <ul className="space-y-2">
           {collectFacts.map((fact) => (
@@ -227,14 +208,11 @@ export default function HelpView({ lang, setView }: HelpViewProps) {
           <LifeBuoy size={ICON_SIZE.emphasis} aria-hidden="true" />
         </div>
         <SectionHeading
-          title={t('When something goes wrong', 'Wakati kitu kinaenda kombo')}
+          title={'When something goes wrong'}
           titleId="help-escalate-title"
         />
         <p className="text-body leading-relaxed text-[var(--appearance-text-muted)]">
-          {t(
-            'A handover is a real meeting between two people, so it can stall. These steps are the escalation path, in order.',
-            'Makabidhiano ni mkutano wa kweli kati ya watu wawili, kwa hivyo yanaweza kukwama. Hatua hizi ni njia ya kupeleka juu, kwa mpangilio.',
-          )}
+          {'A handover is a real meeting between two people, so it can stall. These steps are the escalation path, in order.'}
         </p>
         <ol className="list-decimal space-y-2 pl-5 text-body text-[var(--appearance-text-muted)]">
           {escalationSteps.map((step) => (
@@ -248,11 +226,8 @@ export default function HelpView({ lang, setView }: HelpViewProps) {
         className="space-y-4 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface)] p-5 sm:p-6"
       >
         <SectionHeading
-          title={t('Who to contact', 'Nani wa kuwasiliana naye')}
-          description={t(
-            'One mailbox per kind of question, so a message never sits in the wrong queue.',
-            'Barua pepe moja kwa kila aina ya swali, ili ujumbe usikae kwenye foleni isiyofaa.',
-          )}
+          title={'Who to contact'}
+          description={'One mailbox per kind of question, so a message never sits in the wrong queue.'}
           titleId="help-contact-title"
         />
         <ul className="space-y-3">
@@ -270,10 +245,7 @@ export default function HelpView({ lang, setView }: HelpViewProps) {
           ))}
         </ul>
         <p className="text-caption text-[var(--appearance-text-muted)]">
-          {t(
-            'Support replies by email rather than a live line. Include the claim reference so the first reply can be an answer.',
-            'Msaada hujibu kwa barua pepe, si kwa mstari wa moja kwa moja. Jumuisha kumbukumbu ya dai ili jibu la kwanza liwe jibu kamili.',
-          )}
+          {'Support replies by email rather than a live line. Include the claim reference so the first reply can be an answer.'}
         </p>
       </section>
 
@@ -282,34 +254,28 @@ export default function HelpView({ lang, setView }: HelpViewProps) {
         className="space-y-4 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] p-5 sm:p-6"
       >
         <SectionHeading
-          title={t('Ready to carry on?', 'Uko tayari kuendelea?')}
-          description={t(
-            'Sign in to a claim you already filed, or report something you have found.',
-            'Ingia kwenye dai ulilokwisha fungua, au ripoti kitu ulichokipata.',
-          )}
+          title={'Ready to carry on?'}
+          description={'Sign in to a claim you already filed, or report something you have found.'}
           titleId="help-next-title"
         />
         <div className="flex flex-col gap-3 sm:flex-row">
           <Button variant="primary" size="lg" onClick={() => setView('signin')} className="w-full sm:w-auto">
-            {t('Sign In', 'Ingia')}
+            {'Sign In'}
             <ArrowRight size={ICON_SIZE.heading} aria-hidden="true" />
           </Button>
           <Button variant="outline" size="lg" onClick={() => setView('finder')} className="w-full sm:w-auto">
-            {t('I Found Something', 'Nimepata Kitu')}
+            {'I Found Something'}
           </Button>
         </div>
         <p className="text-caption text-[var(--appearance-text-muted)]">
-          {t(
-            'Fees and data handling are set out in the Terms of Service and the Privacy Policy.',
-            'Ada na matunzo ya data yameelezwa katika Masharti ya Huduma na Sera ya Faragha.',
-          )}
+          {'Fees and data handling are set out in the Terms of Service and the Privacy Policy.'}
         </p>
         <div className="flex flex-wrap gap-2">
           <Button variant="ghost" size="sm" onClick={() => setView('terms')}>
-            {t('Terms of Service', 'Masharti ya Huduma')}
+            {'Terms of Service'}
           </Button>
           <Button variant="ghost" size="sm" onClick={() => setView('privacy')}>
-            {t('Privacy Policy', 'Sera ya Faragha')}
+            {'Privacy Policy'}
           </Button>
         </div>
       </section>

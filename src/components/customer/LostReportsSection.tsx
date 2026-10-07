@@ -36,7 +36,6 @@ import {
 //   section performs no scoring, no comparison and no item enrichment.
 
 interface Props {
-  lang: 'en' | 'sw';
   /** Enters the existing claim journey (public /item/:id page). */
   onOpenItem: (itemId: string) => void;
   /** 401 from any read — hand back to the account surface. */
@@ -68,21 +67,21 @@ interface Props {
  */
 export const AUTO_LOAD_MATCH_LIMIT = 3;
 
-function formatDate(value: string | null, lang: 'en' | 'sw'): string {
+function formatDate(value: string | null): string {
   if (!value) return '';
   const d = new Date(value);
   if (isNaN(d.getTime())) return '';
-  return d.toLocaleDateString(lang === 'sw' ? 'sw-KE' : 'en-GB', {
+  return d.toLocaleDateString('en-GB', {
     day: '2-digit', month: 'short', year: 'numeric',
   });
 }
 
-function formatWindow(from: string | null, to: string | null, lang: 'en' | 'sw'): string {
+function formatWindow(from: string | null, to: string | null): string {
   const opts: Intl.DateTimeFormatOptions = { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' };
   const fmt = (value: string | null) => {
     if (!value) return '';
     const d = new Date(value);
-    return isNaN(d.getTime()) ? '' : d.toLocaleString(lang === 'sw' ? 'sw-KE' : 'en-GB', opts);
+    return isNaN(d.getTime()) ? '' : d.toLocaleString('en-GB', opts);
   };
   const a = fmt(from);
   const b = fmt(to);
@@ -100,9 +99,9 @@ export function lostReportSummary(report: LostReportView): string {
   return parts.join(' — ');
 }
 
-export default function LostReportsSection({ lang, onOpenItem, onSessionExpired, startInWizard = false, hideHeading = false }: Props) {
-  const sw = lang === 'sw';
-  const t = (en: string, swText: string) => (sw ? swText : en);
+export default function LostReportsSection({ onOpenItem, onSessionExpired, startInWizard = false, hideHeading = false }: Props) {
+
+
 
   const [categories, setCategories] = useState<any[]>([]);
   const [categoriesLoading, setCategoriesLoading] = useState(true);
@@ -158,8 +157,8 @@ export default function LostReportsSection({ lang, onOpenItem, onSessionExpired,
       if (result.error?.kind === 'auth') onSessionExpiredRef.current();
       setReportsError(
         result.error?.kind === 'auth'
-          ? t('Your session has ended. Please sign in again.', 'Kipindi chako kimeisha. Tafadhali ingia tena.')
-          : t('We could not load your lost reports. Please try again.', 'Imeshindwa kupata ripoti zako. Tafadhali jaribu tena.')
+          ? 'Your session has ended. Please sign in again.'
+          : 'We could not load your lost reports. Please try again.'
       );
       setReports([]);
       setReportsLoading(false);
@@ -188,7 +187,7 @@ export default function LostReportsSection({ lang, onOpenItem, onSessionExpired,
       // eslint-disable-next-line no-await-in-loop
       await loadMatches(report.id);
     }
-  }, [lang, loadMatches]);
+  }, [loadMatches]);
 
   useEffect(() => {
     let cancelled = false;
@@ -224,18 +223,14 @@ export default function LostReportsSection({ lang, onOpenItem, onSessionExpired,
       <div className="space-y-5">
         <div>
           <h2 className="text-base font-extrabold text-brand-dark-text">
-            {t('Report a lost item', 'Ripoti kitu kilichopotea')}
+            {'Report a lost item'}
           </h2>
           <p className="mt-1 text-xs text-brand-muted-text leading-relaxed max-w-xl">
-            {t(
-              'Tell us what you lost and where. We will compare it with found items that are eligible to be claimed.',
-              'Tuambie ulipoteza nini na wapi. Tutalinganisha na vitu vilivyopatikana vinavyostahili kudaiwa.'
-            )}
+            {'Tell us what you lost and where. We will compare it with found items that are eligible to be claimed.'}
           </p>
         </div>
 
         <LostReportWizard
-          lang={lang}
           categories={categories}
           categoriesLoading={categoriesLoading}
           onCancel={() => setWizardOpen(false)}
@@ -253,13 +248,10 @@ export default function LostReportsSection({ lang, onOpenItem, onSessionExpired,
           {!hideHeading && (
             <>
             <h2 className="text-base font-extrabold text-brand-dark-text">
-              {t('My lost reports', 'Ripoti zangu za vitu vilivyopotea')}
+              {'My lost reports'}
             </h2>
             <p className="mt-1 text-xs text-brand-muted-text leading-relaxed max-w-xl">
-              {t(
-                'Reports you have filed with Return4me. Anything that looks similar to a report is shown as a possible match — never as a confirmation.',
-                'Ripoti ulizowasilisha kwa Return4me. Kitu chochote kinachofanana na ripoti huonyeshwa kama mechi inayowezekana — sio uthibitisho.'
-              )}
+              {'Reports you have filed with Return4me. Anything that looks similar to a report is shown as a possible match — never as a confirmation.'}
             </p>
             </>
           )}
@@ -270,7 +262,7 @@ export default function LostReportsSection({ lang, onOpenItem, onSessionExpired,
             size="md"
             onClick={() => loadReports({ isRefresh: true })}
             loading={refreshing}
-            aria-label={t('Refresh lost reports', 'Onyesha upya ripoti')}
+            aria-label={'Refresh lost reports'}
           >
             <RefreshCw size={16} />
           </Button>
@@ -279,7 +271,7 @@ export default function LostReportsSection({ lang, onOpenItem, onSessionExpired,
             size="md"
             onClick={() => { setCreatedReference(null); setWizardOpen(true); }}
           >
-            <Plus size={16} /> {t('Report something lost', 'Ripoti kitu kilichopotea')}
+            <Plus size={16} /> {'Report something lost'}
           </Button>
         </div>
       </div>
@@ -288,15 +280,12 @@ export default function LostReportsSection({ lang, onOpenItem, onSessionExpired,
         <Banner
           kind="success"
           onDismiss={() => setCreatedReference(null)}
-          dismissLabel={t('Dismiss', 'Ondoa')}
+          dismissLabel={'Dismiss'}
         >
-          {t('Your report has been submitted.', 'Ripoti yako imetumwa.')}{' '}
+          {'Your report has been submitted.'}{' '}
           <span className="font-mono font-bold">{createdReference}</span>
           {'. '}
-          {t(
-            'We will compare it with eligible found items.',
-            'Tutalinganisha na vitu vilivyopatikana vinavyostahili.'
-          )}
+          {'We will compare it with eligible found items.'}
         </Banner>
       )}
 
@@ -304,21 +293,18 @@ export default function LostReportsSection({ lang, onOpenItem, onSessionExpired,
 
       {reportsLoading ? (
         <div className="space-y-3" aria-busy="true">
-          <span className="sr-only">{t('Loading your lost reports…', 'Inapakia ripoti zako…')}</span>
+          <span className="sr-only">{'Loading your lost reports…'}</span>
           <Skeleton shape="card" className="w-full" />
           <Skeleton shape="card" className="w-full" />
         </div>
       ) : (reports || []).length === 0 ? (
         <EmptyState
           icon={Search}
-          title={t("You haven't reported a lost item yet", 'Bado hujaripoti kitu kilichopotea')}
-          description={t(
-            'Reporting something lost lets Return4me compare it with found items that are eligible to be claimed, and show you anything that looks similar.',
-            'Kuripoti kitu kilichopotea huruhusu Return4me kulinganisha na vitu vilivyopatikana vinavyostahili kudaiwa, na kukuonyesha kinachofanana.'
-          )}
+          title={"You haven't reported a lost item yet"}
+          description={'Reporting something lost lets Return4me compare it with found items that are eligible to be claimed, and show you anything that looks similar.'}
           action={(
             <Button variant="primary" size="md" onClick={() => setWizardOpen(true)}>
-              <Plus size={14} /> {t('Report something lost', 'Ripoti kitu kilichopotea')}
+              <Plus size={14} /> {'Report something lost'}
             </Button>
           )}
         />
@@ -327,7 +313,6 @@ export default function LostReportsSection({ lang, onOpenItem, onSessionExpired,
           {(reports || []).map((report) => (
             <ReportCard
               key={report.id}
-              lang={lang}
               report={report}
               categories={categories}
               matchesState={matchesByReport[report.id] || { status: 'idle' }}
@@ -354,9 +339,8 @@ export default function LostReportsSection({ lang, onOpenItem, onSessionExpired,
  * so an empty result can never be mistaken for a fresh search.
  */
 function ReportCard({
-  lang, report, categories, matchesState, expanded, onToggle, onCheck, onOpenItem, onSessionExpired,
+  report, categories, matchesState, expanded, onToggle, onCheck, onOpenItem, onSessionExpired,
 }: {
-  lang: 'en' | 'sw';
   report: LostReportView;
   categories: any[];
   matchesState: MatchesLoadState;
@@ -366,13 +350,13 @@ function ReportCard({
   onOpenItem: (itemId: string) => void;
   onSessionExpired: () => void;
 }) {
-  const sw = lang === 'sw';
-  const t = (en: string, swText: string) => (sw ? swText : en);
 
-  const status = getLostReportStatusDisplay(report.status, lang);
+
+
+  const status = getLostReportStatusDisplay(report.status);
   const summary = lostReportSummary(report);
-  const category = categoryLabel(categories, report.category_id, lang);
-  const window = formatWindow(report.lost_at_from, report.lost_at_to, lang);
+  const category = categoryLabel(categories, report.category_id);
+  const window = formatWindow(report.lost_at_from, report.lost_at_to);
   const place = [report.administrative_unit_name, report.location_area, report.county].filter(Boolean).join(', ');
 
   // Whether candidates exist is known only after a lookup; the badge states that
@@ -380,9 +364,9 @@ function ReportCard({
   let availability: { variant: 'success' | 'neutral' | 'warning'; icon: any; label: string; spin?: boolean } | null = null;
   if (status.searching) {
     if (matchesState.status === 'loading') {
-      availability = { variant: 'neutral', icon: Loader2, label: t('Checking…', 'Inaangalia…'), spin: true };
+      availability = { variant: 'neutral', icon: Loader2, label: 'Checking…', spin: true };
     } else if (matchesState.status === 'error') {
-      availability = { variant: 'warning', icon: AlertTriangle, label: t('Could not check', 'Imeshindwa kuangalia') };
+      availability = { variant: 'warning', icon: AlertTriangle, label: 'Could not check' };
     } else if (matchesState.status === 'ready') {
       const count = (matchesState.data?.matches || []).length;
       availability = count > 0
@@ -390,10 +374,10 @@ function ReportCard({
             variant: 'success',
             icon: CheckCircle2,
             label: count === 1
-              ? t('1 possible match', 'Mechi 1 inayowezekana')
-              : t(`${count} possible matches`, `Mechi ${count} zinazowezekana`),
+              ? '1 possible match'
+              : `${count} possible matches`,
           }
-        : { variant: 'neutral', icon: Search, label: t('No matches yet', 'Hakuna mechi bado') };
+        : { variant: 'neutral', icon: Search, label: 'No matches yet' };
     }
   }
 
@@ -419,23 +403,23 @@ function ReportCard({
         <dl className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-brand-muted-text">
           {place && (
             <div className="flex items-center gap-1.5">
-              <dt className="sr-only">{t('Where it was lost', 'Ilipotea wapi')}</dt>
+              <dt className="sr-only">{'Where it was lost'}</dt>
               <MapPin size={13} aria-hidden="true" className="shrink-0 text-accent-orange" />
               <dd>{place}</dd>
             </div>
           )}
           {window && (
             <div className="flex items-center gap-1.5">
-              <dt className="sr-only">{t('When it was lost', 'Ilipotea lini')}</dt>
+              <dt className="sr-only">{'When it was lost'}</dt>
               <CalendarDays size={13} aria-hidden="true" className="shrink-0 text-accent-orange" />
-              <dd>{t('Lost', 'Ilipotea')}: {window}</dd>
+              <dd>{'Lost'}: {window}</dd>
             </div>
           )}
           {report.created_at && (
             <div className="flex items-center gap-1.5">
-              <dt className="sr-only">{t('When it was reported', 'Iliripotiwa lini')}</dt>
+              <dt className="sr-only">{'When it was reported'}</dt>
               <Clock size={13} aria-hidden="true" className="shrink-0 text-accent-orange" />
-              <dd>{t('Reported', 'Iliripotiwa')} {formatDate(report.created_at, lang)}</dd>
+              <dd>{'Reported'} {formatDate(report.created_at)}</dd>
             </div>
           )}
         </dl>
@@ -455,8 +439,8 @@ function ReportCard({
             >
               <Search size={15} />
               {expanded
-                ? t('Hide possible matches', 'Ficha mechi zinazowezekana')
-                : t('Possible matches', 'Mechi zinazowezekana')}
+                ? 'Hide possible matches'
+                : 'Possible matches'}
             </Button>
             {availability && (
               <Badge variant={availability.variant} icon={availability.icon}>
@@ -474,10 +458,9 @@ function ReportCard({
           {/* Names the region this disclosure opened, so the candidates read as
               a child of THIS report rather than as unrelated entries. */}
           <p className="text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">
-            {t('Possible matches', 'Mechi zinazowezekana')}
+            {'Possible matches'}
           </p>
           <PossibleMatches
-            lang={lang}
             categories={categories}
             state={matchesState}
             onReload={onCheck}

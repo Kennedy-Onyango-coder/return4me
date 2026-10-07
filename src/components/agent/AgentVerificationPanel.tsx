@@ -21,7 +21,6 @@ import { panelFocusRef } from './panelFocus';
 export interface AgentVerificationPanelProps {
   /** The drop-off being verified; drives the static ids and the Finder notes. */
   item: any;
-  lang: 'en' | 'sw';
   // AGENTHUB UX BATCH 4: the submit action's consequence is now stated through
   // the existing translation bundle instead of four compound English-only
   // labels. `t` is passed for that reason only; no language state is created.
@@ -53,7 +52,6 @@ export interface AgentVerificationPanelProps {
 
 export default function AgentVerificationPanel({
   item,
-  lang,
   t,
   categories,
   verifyCategoryId,
@@ -85,7 +83,7 @@ export default function AgentVerificationPanel({
 // to this item's originating action on close.
 <div ref={panelFocusRef(item.id, 'verify')} tabIndex={-1} className="bg-brand-beige/60 p-4 rounded-xl border border-stone-200 space-y-3">
   <h4 className="text-xs font-extrabold text-primary-green uppercase tracking-wide">
-    {lang === 'en' ? 'Item Verification' : 'Uthibitisho wa Bidhaa'}
+    {'Item Verification'}
   </h4>
 
   {/* PHASE 16.1 BATCH 3 (A-2) — programmatic label
@@ -104,7 +102,7 @@ export default function AgentVerificationPanel({
       className="w-full border border-stone-200 rounded-lg p-2 text-xs bg-white"
     >
       {categories.map((c: any) => (
-        <option key={c.id} value={c.id}>{lang === 'en' ? c.name_en : c.name_sw}</option>
+        <option key={c.id} value={c.id}>{c.name_en}</option>
       ))}
     </select>
     {verifyCategoryId !== (item.category_id || '') && (
@@ -226,11 +224,11 @@ export default function AgentVerificationPanel({
       checked={verifyPhysicallyChecked}
       onChange={(e) => setVerifyPhysicallyChecked(e.target.checked)}
     />
-    <span>{lang === 'en' ? 'I have physically inspected this item' : 'Nimekagua bidhaa hii kimwili'}</span>
+    <span>{'I have physically inspected this item'}</span>
   </label>
   {item.is_sensitive_document && (verifyName !== (item.ocr_extracted_name || '') || verifyDocNumber !== (item.ocr_extracted_number || '')) && !verifyPhysicallyChecked && (
     <p className="text-xs text-red-600 font-semibold">
-      {lang === 'en' ? 'Correcting name/ID number on a sensitive document requires physical inspection — check the box above.' : 'Kurekebisha jina/nambari ya hati nyeti kunahitaji ukaguzi wa kimwili — weka alama kwenye kisanduku hapo juu.'}
+      {'Correcting name/ID number on a sensitive document requires physical inspection — check the box above.'}
     </p>
   )}
 

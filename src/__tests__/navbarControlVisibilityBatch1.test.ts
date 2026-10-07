@@ -72,7 +72,7 @@ describe('NAVBAR BATCH 1 - language + appearance control visibility', () => {
     // Bound the slice to the compact header group only, so the drawer's own
     // copies cannot satisfy this assertion.
     const compact = code.slice(start, code.indexOf('</header>', start));
-    expect(compact).toContain('<LanguageControl ');
+    expect(compact).not.toContain('LanguageControl');
     expect(compact).toContain('<AppearanceControl ');
   });
 
@@ -82,7 +82,7 @@ describe('NAVBAR BATCH 1 - language + appearance control visibility', () => {
     // The `compact` / `minWidth` props added by the spacing remediation are
     // PRESENTATION ONLY; the props that prove App still owns the state are
     // asserted exactly as before.
-    expect(compact).toMatch(/<LanguageControl lang=\{lang\} setLang=\{setLang\} layout="toggle"/);
+    expect(compact).not.toContain('LanguageControl');
     expect(compact).toMatch(/<AppearanceControl value=\{appearance\} onChange=\{setAppearance\} labels=\{appearanceLabels\}/);
     // No new state, context, or second appearance component.
     expect(NAVBAR).toMatch(/import AppearanceControl from '\.\/AppearanceControl'/);
@@ -90,8 +90,8 @@ describe('NAVBAR BATCH 1 - language + appearance control visibility', () => {
   });
 
   // ------------------------------------------------------------------- drawer
-  it('keeps both drawer controls exactly as they were', () => {
-    expect(code).toMatch(/<LanguageControl[^>]*layout="choices"/);
+  it('keeps the drawer appearance control, and no language control', () => {
+    expect(code).not.toContain('LanguageControl');
     expect(code).toMatch(/<AppearanceControl[^>]*fullWidth/);
   });
 
@@ -108,7 +108,7 @@ describe('NAVBAR BATCH 1 - language + appearance control visibility', () => {
   it('preserves the session behaviour the fix must not disturb', () => {
     expect(code).toMatch(/isTokenOnlySession/);
     expect(code).toContain('onClick={logout}');
-    expect(code).toMatch(/Guest|Mgeni/);
+    expect(code).toMatch(/Guest/);
   });
 
   it('does not alter the appearance option set', () => {

@@ -98,7 +98,7 @@ describe('UX-04 the journey is still the same four-step machine', () => {
 
   it('still derives the progress rail from the shared step list, bilingually', () => {
     expect(WIZARD).toContain(
-      'const stepperSteps = LOST_REPORT_WIZARD_STEPS.map((s) => ({ label: sw ? s.sw : s.en }));',
+      'const stepperSteps = LOST_REPORT_WIZARD_STEPS.map((s) => ({ label: sw ? s.en : s.en }));',
     );
     expect(WIZARD).toContain(copy('Report a lost item progress', 'Maendeleo ya kuripoti kitu kilichopotea'));
   });
@@ -276,21 +276,18 @@ describe('UX-04 the review step is grouped, editable and honest', () => {
   });
 });
 
-describe('UX-04 every identifier class has a bilingual, non-technical label', () => {
-  it('labels each class in both languages and never shows the raw value', () => {
+describe('UX-04 every identifier class has a plain, non-technical label', () => {
+  it('labels each class and never shows the raw value', () => {
     expect(LOST_REPORT_IDENTIFIER_CLASSES.length).toBeGreaterThan(1);
     for (const entry of LOST_REPORT_IDENTIFIER_CLASSES) {
-      expect(identifierClassLabel(entry.value, false), entry.value).toBe(entry.en);
-      expect(identifierClassLabel(entry.value, true), entry.value).toBe(entry.sw);
-      // A real translation, and never the stored token.
-      expect(entry.sw, `${entry.value} is untranslated`).not.toBe(entry.en);
-      expect(identifierClassLabel(entry.value, false)).not.toBe(entry.value);
+      expect(identifierClassLabel(entry.value), entry.value).toBe(entry.en);
+      expect(identifierClassLabel(entry.value)).not.toBe(entry.value);
     }
   });
 
   it('falls back to the stored value for a class it does not know', () => {
-    expect(identifierClassLabel('not-a-real-class', false)).toBe('not-a-real-class');
-    expect(identifierClassLabel('', true)).toBe('');
+    expect(identifierClassLabel('not-a-real-class')).toBe('not-a-real-class');
+    expect(identifierClassLabel('')).toBe('');
   });
 });
 

@@ -8,7 +8,7 @@ import { presentClaimStatus } from './claimsPresentation';
  * Meaning is carried by the human label; colour is only reinforcement, which is
  * what the shared Badge variant already guarantees.
  */
-export default function ClaimStatusBadge({ status, lang }: { status: string; lang: 'en' | 'sw' }) {
-  const { label, tone } = presentClaimStatus(status, lang);
+export default function ClaimStatusBadge({ status }: { status: string;  }) {
+  const { label, tone } = presentClaimStatus(status);
   return <Badge variant={tone}>{label}</Badge>;
 }

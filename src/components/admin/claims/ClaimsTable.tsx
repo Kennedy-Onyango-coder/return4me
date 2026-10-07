@@ -25,13 +25,11 @@ const HEAD =
 
 export default function ClaimsTable({
   rows,
-  lang,
   selectedClaimId,
   onSelect,
   disabled,
 }: {
   rows: AdminClaimListView[];
-  lang: 'en' | 'sw';
   selectedClaimId: string | null;
   onSelect: (claimId: string) => void;
   disabled: boolean;
@@ -41,22 +39,20 @@ export default function ClaimsTable({
       <div className="overflow-x-auto">
         <table className="w-full text-left text-sm border-collapse min-w-[54rem]">
           <caption className="sr-only">
-            {lang === 'sw'
-              ? 'Claims zinazolingana na utafutaji na vichujio vilivyochaguliwa'
-              : 'Claims matching the current search and filters'}
+            {'Claims matching the current search and filters'}
           </caption>
           <thead>
             <tr className="bg-brand-light-gray/70 border-b border-brand-border">
-              <th scope="col" className={HEAD}>{lang === 'sw' ? 'Claim' : 'Claim ID'}</th>
-              <th scope="col" className={HEAD}>{lang === 'sw' ? 'Hali' : 'Status'}</th>
-              <th scope="col" className={HEAD}>{lang === 'sw' ? 'Kitu' : 'Item'}</th>
-              <th scope="col" className={HEAD}>{lang === 'sw' ? 'Mdai' : 'Claimant'}</th>
-              <th scope="col" className={HEAD}>{lang === 'sw' ? 'Malipo' : 'Payment'}</th>
-              <th scope="col" className={HEAD}>{lang === 'sw' ? 'Mzozo' : 'Dispute'}</th>
-              <th scope="col" className={HEAD}>{lang === 'sw' ? 'Imeundwa' : 'Created'}</th>
-              <th scope="col" className={HEAD}>{lang === 'sw' ? 'Imesasishwa' : 'Updated'}</th>
+              <th scope="col" className={HEAD}>{'Claim ID'}</th>
+              <th scope="col" className={HEAD}>{'Status'}</th>
+              <th scope="col" className={HEAD}>{'Item'}</th>
+              <th scope="col" className={HEAD}>{'Claimant'}</th>
+              <th scope="col" className={HEAD}>{'Payment'}</th>
+              <th scope="col" className={HEAD}>{'Dispute'}</th>
+              <th scope="col" className={HEAD}>{'Created'}</th>
+              <th scope="col" className={HEAD}>{'Updated'}</th>
               <th scope="col" className="w-10 px-2 py-2.5">
-                <span className="sr-only">{lang === 'sw' ? 'Fungua' : 'Open'}</span>
+                <span className="sr-only">{'Open'}</span>
               </th>
             </tr>
           </thead>
@@ -65,7 +61,6 @@ export default function ClaimsTable({
               <ClaimRow
                 key={row.id}
                 row={row}
-                lang={lang}
                 selected={row.id === selectedClaimId}
                 onSelect={onSelect}
                 disabled={disabled}
@@ -81,18 +76,16 @@ export default function ClaimsTable({
 /** One row. Props are the fields it renders — never a spread of the whole DTO. */
 function ClaimRow({
   row,
-  lang,
   selected,
   onSelect,
   disabled,
 }: {
   row: AdminClaimListView;
-  lang: 'en' | 'sw';
   selected: boolean;
   onSelect: (claimId: string) => void;
   disabled: boolean;
 }) {
-  const dispute = presentDisputeState(row.dispute.state, lang);
+  const dispute = presentDisputeState(row.dispute.state);
   return (
     <tr
       className={`border-b border-brand-border last:border-b-0 transition-colors ${
@@ -104,19 +97,19 @@ function ClaimRow({
           type="button"
           onClick={() => onSelect(row.id)}
           disabled={disabled}
-          aria-label={lang === 'sw' ? `Fungua claim ${row.id}` : `Open claim ${row.id}`}
+          aria-label={`Open claim ${row.id}`}
           className="text-left rounded-md focus-visible:outline-2 focus-visible:outline-accent-orange disabled:opacity-60"
         >
           <span className="font-mono text-xs font-bold text-brand-dark-text break-all">{row.id}</span>
           {!row.is_active && (
             <span className="mt-1 block">
-              <Badge variant="neutral">{lang === 'sw' ? 'Haifanyi kazi' : 'Inactive'}</Badge>
+              <Badge variant="neutral">{'Inactive'}</Badge>
             </span>
           )}
         </button>
       </th>
       <td className="px-4 py-3 align-top">
-        <ClaimStatusBadge status={row.status} lang={lang} />
+        <ClaimStatusBadge status={row.status} />
       </td>
       <td className="px-4 py-3 align-top">
         {row.item ? (
@@ -125,12 +118,12 @@ function ClaimRow({
             <span className="font-mono text-[11px] text-brand-muted-text break-all">{row.item.id}</span>
             {row.item.is_sensitive_document && (
               <Badge variant="warning" icon={ShieldAlert}>
-                {lang === 'sw' ? 'Hati nyeti' : 'Sensitive document'}
+                {'Sensitive document'}
               </Badge>
             )}
             {row.item.flagged_for_review && (
               <Badge variant="warning" icon={Flag}>
-                {lang === 'sw' ? 'Inahitaji ukaguzi' : 'Flagged for review'}
+                {'Flagged for review'}
               </Badge>
             )}
           </span>
@@ -141,11 +134,11 @@ function ClaimRow({
       <td className="px-4 py-3 align-top">
         <span className="font-mono text-xs text-brand-dark-text">{row.claimant_phone || 'Not available'}</span>
         <span className="mt-0.5 block text-[11px] text-brand-muted-text">
-          {lang === 'sw' ? 'Ngazi' : 'Tier'} {row.verification_tier ?? '—'}
+          {'Tier'} {row.verification_tier ?? '—'}
         </span>
       </td>
       <td className="px-4 py-3 align-top">
-        <ClaimPaymentState hasPaid={row.has_paid} paidAt={row.paid_at} lang={lang} />
+        <ClaimPaymentState hasPaid={row.has_paid} paidAt={row.paid_at} />
       </td>
       <td className="px-4 py-3 align-top">
         {row.dispute.state === 'none' ? (
@@ -155,10 +148,10 @@ function ClaimRow({
         )}
       </td>
       <td className="px-4 py-3 align-top text-xs text-brand-muted-text whitespace-nowrap">
-        {formatTimestamp(row.created_at, lang)}
+        {formatTimestamp(row.created_at)}
       </td>
       <td className="px-4 py-3 align-top text-xs text-brand-muted-text whitespace-nowrap">
-        {formatTimestamp(row.updated_at, lang)}
+        {formatTimestamp(row.updated_at)}
       </td>
       <td className="px-2 py-3 align-top">
         <ChevronRight size={16} aria-hidden="true" className="text-brand-muted-text" />

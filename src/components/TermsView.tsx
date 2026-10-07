@@ -1,20 +1,19 @@
 import React from 'react';
 
 interface TermsViewProps {
-  lang: 'en' | 'sw';
   setView: (view: any) => void;
 }
 
-export default function TermsView({ lang, setView }: TermsViewProps) {
+export default function TermsView({ setView }: TermsViewProps) {
   return (
     <div className="max-w-4xl mx-auto px-6 py-12 space-y-12 fade-in">
       {/* Header */}
       <div className="border-b border-brand-border pb-8">
         <h1 className="text-4xl font-extrabold text-primary-green tracking-tight">
-          {lang === 'en' ? 'Terms of Service' : 'Vigezo na Masharti'}
+          {'Terms of Service'}
         </h1>
         <p className="text-stone-500 text-sm mt-2 font-mono">
-          {lang === 'en' ? 'Last Updated: July 2026' : 'Imesasishwa Mwisho: Julai 2026'} | Return4me (Elligrace Technologies Limited)
+          {'Last Updated: July 2026'} | Return4me (Elligrace Technologies Limited)
         </p>
       </div>
 
@@ -23,33 +22,25 @@ export default function TermsView({ lang, setView }: TermsViewProps) {
         <p className="flex">
           <span className="w-2 h-2 rounded-full bg-accent-orange mr-3 mt-1.5 flex-shrink-0"></span>
           <span>
-            {lang === 'en'
-              ? 'All retrieval fees are processed securely through our payment provider. We never hold user balances directly.'
-              : 'Ada zote za urejeshaji huchakatwa kwa usalama kupitia mtoa huduma wetu wa malipo. Hatuwahi kushikilia salio la mtumiaji moja kwa moja.'}
+            {'All retrieval fees are processed securely through our payment provider. We never hold user balances directly.'}
           </span>
         </p>
         <p className="flex">
           <span className="w-2 h-2 rounded-full bg-accent-orange mr-3 mt-1.5 flex-shrink-0"></span>
           <span>
-            {lang === 'en'
-              ? 'Submitting fraudulent document claims is illegal. We actively coordinate with Kenyan authorities (DCI) on violations.'
-              : 'Kupakia madai ghushi ya hati ni kinyume cha sheria. Tunashirikiana kwa karibu na mamlaka za usalama (DCI) kuhusu ukiukaji wa sheria.'}
+            {'Submitting fraudulent document claims is illegal. We actively coordinate with Kenyan authorities (DCI) on violations.'}
           </span>
         </p>
         <p className="flex">
           <span className="w-2 h-2 rounded-full bg-accent-orange mr-3 mt-1.5 flex-shrink-0"></span>
           <span>
-            {lang === 'en'
-              ? 'Every fee is split transparently between finder, agent, and Return4me. No hidden charges.'
-              : 'Kila ada huugawanywa kwa uwazi kati ya mvugulu, wakala, na Return4me. Hakuna ada zilizofichwa.'}
+            {'Every fee is split transparently between finder, agent, and Return4me. No hidden charges.'}
           </span>
         </p>
         <p className="flex">
           <span className="w-2 h-2 rounded-full bg-accent-orange mr-3 mt-1.5 flex-shrink-0"></span>
           <span>
-            {lang === 'en'
-              ? 'If the physical agent is unable to produce the matched item, you are entitled to a full, instant refund.'
-              : 'Ikitokea kuwa wakala wa makabidhiano hawezi kutoa hati yako, utarejeshewa pesa zako zote mara moja.'}
+            {'If the physical agent is unable to produce the matched item, you are entitled to a full, instant refund.'}
           </span>
         </p>
       </div>
@@ -235,9 +226,6 @@ export default function TermsView({ lang, setView }: TermsViewProps) {
             <span className="text-accent-orange">13.</span> Physical Verification & 15-Minute Payment Window
           </h2>
           <div className="space-y-2">
-            <p className="font-extrabold text-xs uppercase tracking-wider text-stone-500">
-              English
-            </p>
             <p>
               To ensure absolute transaction security and eliminate wrong matching errors, the assigned Agent first confirms that the item is physically present at their station. That confirmation opens a short payment window. The owner completes payment via M-Pesa, and payment is only treated as confirmed once the payment provider confirms it. Once confirmed, a pickup code is issued to the owner, who then visits the Agent station to view and verify the item in person. The Agent records the viewing and later confirms the handover, after which settlement follows the applicable dispute window.
             </p>
@@ -246,20 +234,6 @@ export default function TermsView({ lang, setView }: TermsViewProps) {
             </p>
             <p>
               <strong>Payment Strikes Policy:</strong> If a claimant triggers an agent verification but fails to make payment within the 15-minute window, a "Payment Strike" is recorded against their phone number. Receiving three (3) active payment strikes will result in an automatic restriction on that phone number, preventing the holder from submitting any further claims until the strikes are cleared by an Administrator.
-            </p>
-          </div>
-          <div className="space-y-2 border-t border-stone-100 pt-3">
-            <p className="font-extrabold text-xs uppercase tracking-wider text-stone-500">
-              Kiswahili
-            </p>
-            <p>
-              Ili kuhakikisha usalama kamili na kuzuia makosa ya ulinganishaji, Wakala aliyepangiwa huthibitisha kwanza kuwa hati hiyo ipo kituoni kwake. Uthibitisho huo hufungua dirisha fupi la malipo. Mwenye mali hukamilisha malipo kwa M-Pesa, na malipo hutambuliwa kama yamethibitishwa tu baada ya mtoa huduma wa malipo kuthibitisha. Baada ya uthibitisho, msimbo wa kuchukua hutolewa kwa mwenye mali, ambaye hufika kwa Wakala ili kuona na kuthibitisha hati hiyo kwa macho. Wakala hurekodi ukaguzi huo, kisha huthibitisha makabidhiano, na malipo hufuata dirisha la migogoro linalotumika.
-            </p>
-            <p>
-              <strong>Kikomo cha Dakika 15 za Malipo:</strong> Baada ya uthibitisho wa Wakala, saa ya dakika 15 itaanza kuhesabu. Mwenye mali lazima akamilishe malipo ya eskrow ndani ya dakika hizi 15. Ikiwa malipo hayatapokelewa ndani ya muda huo, zuio litaondolewa, dai litaharibika, na hati itarudishwa kwenye mfumo wa utafutaji ili washindani wengine wasizuiwe.
-            </p>
-            <p>
-              <strong>Sera ya Onyo la Kughairi Malipo (Payment Strikes):</strong> Ikiwa mdai ataanzisha uthibitisho wa wakala lakini akashindwa kulipa ndani ya dakika 15, "Onyo la Kughairi" (Payment Strike) litarekodiwa kwenye nambari yake ya simu. Kupokea maonyo matatu (3) kutaanzisha zuio la moja kwa moja la akaunti, na kumzuia mtumiaji kuwasilisha madai yoyote zaidi hadi hapo yatakaposafishwa na Msimamizi (Admin).
             </p>
           </div>
         </section>
@@ -272,7 +246,7 @@ export default function TermsView({ lang, setView }: TermsViewProps) {
           onClick={() => setView('home')}
           className="bg-primary-green hover:bg-primary-hover text-white px-6 py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition cursor-pointer"
         >
-          {lang === 'en' ? 'Back to Home' : 'Rudi Nyumbani'}
+          {'Back to Home'}
         </button>
       </div>
     </div>

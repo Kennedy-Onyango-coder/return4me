@@ -30,7 +30,7 @@ describe('Phase 16.1 Batch 4B-3 Agent Hub modernization', () => {
     expect(count(hub, '<ItemMetadata item={item} />')).toBe(2);
     expect(hub).toContain('t.agentDropoffQueueRole');
     expect(hub).toContain('t.agentHandoverQueueRole');
-    for (const lang of ['en', 'sw'] as const) {
+    for (const lang of ['en'] as const) {
       expect(translations[lang].agentDropoffQueueRole).toBeTruthy();
       expect(translations[lang].agentHandoverQueueRole).toBeTruthy();
       expect(translations[lang].agentDropoffsEmpty).toBeTruthy();
@@ -50,7 +50,7 @@ describe('Phase 16.1 Batch 4B-3 Agent Hub modernization', () => {
   it('preserves canonical, informational, and actionable workflow semantics', () => {
     expect(hub).toContain('agentClaimBadge(item.associatedClaim?.status,');
     expect(hub).toContain('getClaimStatusDisplay(item.associatedClaim.status');
-    expect(agentClaimBadge(undefined, 'en').label).toBe('No Claim Information');
+    expect(agentClaimBadge(undefined).label).toBe('No Claim Information');
     expect(hub).toContain('t.agentPendingPaymentNote');
     const payment = hub.slice(hub.indexOf("associatedClaim?.status === 'pending_payment'"), hub.indexOf('{!item.associatedClaim &&'));
     expect(payment).not.toMatch(/<Button|<button|handleConfirm|handleReject|handleConfirmHandover/);

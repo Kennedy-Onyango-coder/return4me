@@ -24,8 +24,6 @@ const stripComments = (source: string) =>
 
 const navbarTsx = read('src/components/Navbar.tsx');
 const navbar = stripComments(navbarTsx);
-const languageControlTsx = read('src/components/LanguageControl.tsx');
-const languageControl = stripComments(languageControlTsx);
 const appearanceControl = stripComments(read('src/components/AppearanceControl.tsx'));
 const appTsx = read('src/App.tsx');
 const appCode = stripComments(appTsx);
@@ -94,19 +92,14 @@ describe('UX-02 public navigation (locked information architecture)', () => {
     expect(compactHeader).toContain('setIsOpen(true)');
   });
 
-  it('keeps language and appearance reachable in the tray, the compact header and the drawer', () => {
-    // The shared controls, three instances each, on the App-owned props.
-    expect((navbar.match(/<LanguageControl /g) || [])).toHaveLength(3);
+  it('keeps the appearance control reachable in the tray, the compact header and the drawer', () => {
+    // The shared appearance control, three instances, on the App-owned props.
+    expect((navbar.match(/<LanguageControl /g) || [])).toHaveLength(0);
     expect((navbar.match(/<AppearanceControl /g) || [])).toHaveLength(3);
-    expect(drawer).toContain('layout="choices"');
     expect(drawer).toContain('fullWidth');
-    for (const props of ['lang={lang}', 'setLang={setLang}']) {
-      expect(navbar).toContain(props);
-    }
     expect((navbar.match(/value=\{appearance\} onChange=\{setAppearance\}/g) || [])).toHaveLength(3);
-    // No local state, no second source of truth for either preference.
+    // No local state, no second source of truth for the preference.
     expect(navbar).not.toMatch(/useState[^;]*(?:lang|language|appearance|theme)/i);
-    expect(languageControl).not.toMatch(/useState|localStorage|sessionStorage|fetch\(|matchMedia/);
     expect(appearanceControl).not.toMatch(/useState|localStorage|matchMedia/);
     // The option set is untouched by this batch.
     for (const value of ['light', 'dark', 'system']) {
@@ -116,7 +109,7 @@ describe('UX-02 public navigation (locked information architecture)', () => {
 
   it('orders the header exactly like the locked IA: destinations, utilities, Sign In', () => {
     const destinationsEnd = header.indexOf('</nav>');
-    const trayIndex = header.indexOf('<LanguageControl');
+    const trayIndex = header.indexOf('<AppearanceControl');
     const signInIndex = header.indexOf("handleNavClick('signin')");
     expect(destinationsEnd).toBeGreaterThan(-1);
     expect(trayIndex).toBeGreaterThan(destinationsEnd);
@@ -136,7 +129,7 @@ describe('UX-02 Sign In treatment (shared Button, not a second button system)', 
     expect(navbar).not.toContain('signIn:hover:border');
     // Its label still comes from the one App-owned source, so a signed-in
     // customer reads "My Account" and never "Sign In".
-    expect(navbar).toMatch(/isAccountView \? \(lang === 'en' \? 'My Account'/);
+    expect(navbar).toMatch(/isAccountView \? \('My Account'\)/);
   });
 
   it('keeps the account state a quiet link, not a button (a destination is not an action)', () => {
@@ -195,8 +188,6 @@ describe('UX-02 active route (never colour alone, never stale)', () => {
     expect(navbar).toContain('bg-[var(--appearance-primary)]');
     // The selected language in the drawer uses the matching foreground token, so
     // the pill inverts correctly in the dark theme too.
-    expect(languageControl).toContain('text-[var(--appearance-primary-foreground)]');
-    expect(languageControlTsx).toContain('bg-[var(--appearance-primary)]');
     expect(indexCss).toMatch(/--appearance-primary:/);
     expect(indexCss).toMatch(/--appearance-primary-foreground:/);
   });
@@ -221,7 +212,7 @@ describe('UX-02 responsive navigation (measured breakpoint, paired gates)', () =
 
   it('hides the full link row and exposes a menu trigger below the breakpoint', () => {
     expect(compactHeader).toContain('setIsOpen(true)');
-    expect(compactHeader).toMatch(/<LanguageControl /);
+    expect(compactHeader).not.toMatch(/<LanguageControl /);
     expect(compactHeader).toMatch(/<AppearanceControl /);
     // The logo stays visible at every width (it is outside both gates).
     expect(navbar).toContain('h-10 md:h-12 xl:h-[50px]');
@@ -262,10 +253,10 @@ describe('UX-02 compact menu: behaviour, state and keyboard', () => {
 
   it('gives the trigger an accessible name and a 44px touch target', () => {
     expect(compactHeader).toContain('aria-label=');
-    expect(compactHeader).toMatch(/aria-label=\{lang === 'sw' \? 'Fungua menyu' : 'Open menu'\}/);
+    expect(compactHeader).toContain("aria-label={'Open menu'}");
     expect(compactHeader).toContain('h-11 w-11');
     // The drawer's own close control is a named 44px target as well.
-    expect(drawer).toContain("aria-label={lang === 'sw' ? 'Funga menyu' : 'Close menu'}");
+    expect(drawer).toContain("aria-label={'Close menu'}");
     expect(drawer).toContain('h-11 w-11');
     expect(drawer).toContain('type="button"');
   });
@@ -295,10 +286,10 @@ describe('UX-02 compact menu: behaviour, state and keyboard', () => {
     expect(drawer).toContain('t.ownerBtn');
     expect(drawer).toContain('t.finderBtn');
     expect(drawer).toContain('t.becomeAgentBtn');
-    expect(drawer).toMatch(/<LanguageControl [^>]*layout="choices"/);
+    expect(drawer).not.toMatch(/<LanguageControl/);
     expect(drawer).toContain('fullWidth');
     expect(drawer).toContain('role="group"');
-    expect(drawer).toContain("aria-label={lang === 'en' ? 'Site menu'");
+    expect(drawer).toContain("aria-label={'Site menu'}");
   });
 });
 
@@ -309,7 +300,6 @@ describe('UX-02 focus, touch and motion', () => {
     // on top of the global indicator.
     for (const [name, source] of [
       ['Navbar', navbar],
-      ['LanguageControl', languageControl],
     ] as const) {
       expect(source, `${name} must not suppress or duplicate the global focus ring`)
         .not.toMatch(/focus(-visible)?:(outline-none|ring)/);

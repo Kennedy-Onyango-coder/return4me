@@ -46,7 +46,6 @@ import { ICON_SIZE } from './ui';
 // registration flow, makes no network call, and grants nothing.
 
 interface BecomeAgentViewProps {
-  lang: 'en' | 'sw';
   /** Opens the existing agent surface (/agent_portal), where sign-in AND
    *  application already live. No second registration flow is created. */
   onContinueToAgentPortal: () => void;
@@ -54,36 +53,27 @@ interface BecomeAgentViewProps {
   onSignIn: () => void;
 }
 
-export default function BecomeAgentView({ lang, onContinueToAgentPortal, onSignIn }: BecomeAgentViewProps) {
-  const sw = lang === 'sw';
-  const t = (en: string, swText: string) => (sw ? swText : en);
+export default function BecomeAgentView({ onContinueToAgentPortal, onSignIn }: BecomeAgentViewProps) {
+
+
 
   /** The ONE action this page exists to produce. The hero and the closing band
    *  both render this exact string, so the wording cannot drift between them. */
-  const applyLabel = t('Continue to agent registration', 'Endelea kusajiliwa kama wakala');
+  const applyLabel = 'Continue to agent registration';
 
   // Why a physical holder is the whole product, in three honest statements.
   const whyPoints: Array<{ title: string; body: string }> = [
     {
-      title: t('You are the trusted third party', 'Wewe ndiye mtu wa kati anayeaminika'),
-      body: t(
-        'Neither side has to trust a stranger: the finder leaves the item with you and the owner collects it from you. One vetted person in the middle is what makes the exchange safe.',
-        'Hakuna upande unaolazimika kumwamini mgeni: aliyepata huacha kitu kwako na mmiliki huchukua kwako. Mtu mmoja aliyethibitishwa katikati ndiye hufanya mabadilishano kuwa salama.',
-      ),
+      title: 'You are the trusted third party',
+      body: 'Neither side has to trust a stranger: the finder leaves the item with you and the owner collects it from you. One vetted person in the middle is what makes the exchange safe.',
     },
     {
-      title: t('Nothing moves on an unconfirmed identity', 'Hakuna kitu hutoka bila utambulisho kuthibitishwa'),
-      body: t(
-        'Before an item leaves your premises you confirm the owner’s identity and their collection code. The handover is a guarded moment between two people in one place — never an arrangement between strangers.',
-        'Kabla kitu kutoka kwenye eneo lako, unathibitisha utambulisho wa mmiliki na msimbo wake wa kuchukua. Ukabidhaji ni wakati unaolindwa kati ya watu wawili mahali pamoja — sio mpango wa kati ya wageni wawili.',
-      ),
+      title: 'Nothing moves on an unconfirmed identity',
+      body: 'Before an item leaves your premises you confirm the owner’s identity and their collection code. The handover is a guarded moment between two people in one place — never an arrangement between strangers.',
     },
     {
-      title: t('Your premises become a recovery point', 'Eneo lako huwa kituo cha urejeshaji'),
-      body: t(
-        'Offices, shops, campuses, matatu SACCOs and places of worship are where lost property actually accumulates. Registering one address gives those items a real place to be held — and a person answerable for them.',
-        'Ofisi, maduka, vyuo, SACCO za matatu na nyumba za ibada ndiko mali zilizopotea hukusanyika. Kusajili anwani moja huwapa vitu hivyo mahali halisi pa kuhifadhiwa — na mtu anayewajibika navyo.',
-      ),
+      title: 'Your premises become a recovery point',
+      body: 'Offices, shops, campuses, matatu SACCOs and places of worship are where lost property actually accumulates. Registering one address gives those items a real place to be held — and a person answerable for them.',
     },
   ];
 
@@ -92,27 +82,18 @@ export default function BecomeAgentView({ lang, onContinueToAgentPortal, onSignI
   const responsibilities: Array<{ icon: LucideIcon; title: string; body: string }> = [
     {
       icon: Package,
-      title: t('Receive and store items', 'Pokea na uhifadhi vitu'),
-      body: t(
-        'Finders drop items off at your premises using a drop-off code. You check the item in and hold it securely until its owner collects it.',
-        'Waliopata huleta vitu kwenye eneo lako kwa kutumia msimbo wa kuwasilisha. Unapokea kitu na kukihifadhi salama hadi mmiliki wake kije kuchukua.',
-      ),
+      title: 'Receive and store items',
+      body: 'Finders drop items off at your premises using a drop-off code. You check the item in and hold it securely until its owner collects it.',
     },
     {
       icon: ShieldCheck,
-      title: t('Verify owners in person', 'Thibitisha wamiliki ana kwa ana'),
-      body: t(
-        'Before releasing anything you confirm the owner’s identity and their collection code. Every handover happens face to face, at your premises.',
-        'Kabla ya kutoa kitu chochote, unathibitisha utambulisho wa mmiliki na msimbo wake wa kuchukua. Kila ukabidhaji hufanyika ana kwa ana, kwenye eneo lako.',
-      ),
+      title: 'Verify owners in person',
+      body: 'Before releasing anything you confirm the owner’s identity and their collection code. Every handover happens face to face, at your premises.',
     },
     {
       icon: Wallet,
-      title: t('Earn on completed handovers', 'Pata mapato kwa ukabidhaji uliokamilika'),
-      body: t(
-        'When an item is collected, the agent receives a share of the recovery fee for that handover.',
-        'Kitu kinapochukuliwa, wakala hupata mgao wa ada ya urejeshaji kwa ukabidhaji huo.',
-      ),
+      title: 'Earn on completed handovers',
+      body: 'When an item is collected, the agent receives a share of the recovery fee for that handover.',
     },
   ];
 
@@ -121,31 +102,19 @@ export default function BecomeAgentView({ lang, onContinueToAgentPortal, onSignI
   const requirements: Array<{ icon: LucideIcon; text: string }> = [
     {
       icon: Store,
-      text: t(
-        'A business or shop name and a fixed location open to the public',
-        'Jina la biashara au duka na eneo maalum linalofikiwa na umma',
-      ),
+      text: 'A business or shop name and a fixed location open to the public',
     },
     {
       icon: Smartphone,
-      text: t(
-        'An M-Pesa payout number — Till, Paybill, Pochi la Biashara or personal M-Pesa',
-        'Nambari ya M-Pesa ya malipo — Till, Paybill, Pochi la Biashara au M-Pesa ya mtu binafsi',
-      ),
+      text: 'An M-Pesa payout number — Till, Paybill, Pochi la Biashara or personal M-Pesa',
     },
     {
       icon: IdCard,
-      text: t(
-        'A national ID for vetting, plus a photo of the ID document itself',
-        'Kitambulisho cha kitaifa kwa uthibitishaji, pamoja na picha ya hati ya kitambulisho',
-      ),
+      text: 'A national ID for vetting, plus a photo of the ID document itself',
     },
     {
       icon: Mail,
-      text: t(
-        'A business email address — your activation notice is sent there',
-        'Barua pepe ya biashara — taarifa ya kuwashwa hutumwa huko',
-      ),
+      text: 'A business email address — your activation notice is sent there',
     },
   ];
 
@@ -155,30 +124,24 @@ export default function BecomeAgentView({ lang, onContinueToAgentPortal, onSignI
   // application starts rather than pretending to report live progress.
   const approvalSteps = [
     {
-      label: t('Details & location', 'Maelezo na eneo'),
-      description: t('Your business details and location are checked.', 'Maelezo ya biashara na eneo lako hukaguliwa.'),
+      label: 'Details & location',
+      description: 'Your business details and location are checked.',
     },
     {
-      label: t('Identity review', 'Uhakiki wa utambulisho'),
-      description: t('Your national ID and documents are reviewed securely.', 'Kitambulisho chako cha kitaifa na hati hukaguliwa kwa usalama.'),
+      label: 'Identity review',
+      description: 'Your national ID and documents are reviewed securely.',
     },
     {
-      label: t('Activation notice', 'Taarifa ya kuwashwa'),
-      description: t('You are notified by email once you are activated.', 'Unaarifiwa kwa barua pepe mara unapowashwa.'),
+      label: 'Activation notice',
+      description: 'You are notified by email once you are activated.',
     },
   ];
 
   // Two things AgentView already tells an applicant, repeated here so nobody
   // applies expecting an instant account. Both are stated by the product today.
   const approvalNotes: string[] = [
-    t(
-      'An administrator approves your application before you can receive any item.',
-      'Msimamizi hukubali maombi yako kabla uweze kupokea kitu chochote.',
-    ),
-    t(
-      'You also verify your email address using the link we send you. Approval and email verification are two separate steps, and both must be complete.',
-      'Pia huthibitisha barua pepe yako kwa kutumia kiungo tunachokutumia. Uidhinishaji na uthibitishaji wa barua pepe ni hatua mbili tofauti, na zote mbili hukamilika.',
-    ),
+    'An administrator approves your application before you can receive any item.',
+    'You also verify your email address using the link we send you. Approval and email verification are two separate steps, and both must be complete.',
   ];
 
   return (
@@ -188,19 +151,16 @@ export default function BecomeAgentView({ lang, onContinueToAgentPortal, onSignI
           the button are the only two things competing for attention here. */}
       <section aria-labelledby="agent-hero-heading">
         <p className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">
-          {t('Agent network', 'Mtandao wa mawakala')}
+          {'Agent network'}
         </p>
         <h1
           id="agent-hero-heading"
           className="mt-3 max-w-3xl text-page font-extrabold tracking-tight text-[var(--appearance-text-primary)] sm:text-display"
         >
-          {t('Become a Return4me agent', 'Kuwa wakala wa Return4me')}
+          {'Become a Return4me agent'}
         </h1>
         <p className="mt-4 max-w-2xl text-body-large leading-relaxed text-[var(--appearance-text-muted)]">
-          {t(
-            'Agents are the physical half of Return4me. You receive the items finders bring in, keep them safe, and hand them back to owners whose identity you have confirmed in person.',
-            'Mawakala ni sehemu ya kimwili ya Return4me. Unapokea vitu vinavyoletwa na waliopata, unavihifadhi salama, na kuvikabidhi kwa wamiliki ambao umethibitisha utambulisho wao ana kwa ana.',
-          )}
+          {'Agents are the physical half of Return4me. You receive the items finders bring in, keep them safe, and hand them back to owners whose identity you have confirmed in person.'}
         </p>
         <div className="mt-6 flex flex-col items-start gap-4 sm:flex-row sm:items-center">
           <Button variant="accent" size="lg" onClick={onContinueToAgentPortal}>
@@ -208,10 +168,7 @@ export default function BecomeAgentView({ lang, onContinueToAgentPortal, onSignI
             {applyLabel}
           </Button>
           <p className="text-body text-[var(--appearance-text-muted)]">
-            {t(
-              'Registration and agent sign-in happen on the same secure page.',
-              'Usajili na kuingia kwa wakala hufanyika kwenye ukurasa mmoja salama.',
-            )}
+            {'Registration and agent sign-in happen on the same secure page.'}
           </p>
         </div>
       </section>
@@ -227,15 +184,9 @@ export default function BecomeAgentView({ lang, onContinueToAgentPortal, onSignI
           <SectionHeading
             titleId="agent-why-heading"
             titleClassName="text-section"
-            eyebrow={t('Why it matters', 'Kwa nini ni muhimu')}
-            title={t(
-              'A found item has nowhere to go without someone holding it',
-              'Kitu kilichopatikana hakina mahali pa kwenda bila mtu kukihifadhi',
-            )}
-            description={t(
-              'A finder will not hand a phone to a stranger, and an owner cannot collect what nobody is keeping. The record stores the report; an agent is what turns it back into a return.',
-              'Aliyepata hatamkabidhi mgeni simu, na mmiliki hawezi kuchukua kitu ambacho hakuna anayekihifadhi. Rekodi huhifadhi ripoti; wakala ndiye anayeigeuza kuwa urejeshaji.',
-            )}
+            eyebrow={'Why it matters'}
+            title={'A found item has nowhere to go without someone holding it'}
+            description={'A finder will not hand a phone to a stranger, and an owner cannot collect what nobody is keeping. The record stores the report; an agent is what turns it back into a return.'}
           />
           <ul className="space-y-6">
             {whyPoints.map((point) => (
@@ -262,12 +213,9 @@ export default function BecomeAgentView({ lang, onContinueToAgentPortal, onSignI
         <SectionHeading
           titleId="agent-responsibilities-heading"
           titleClassName="text-section"
-          eyebrow={t('What you do', 'Unachofanya')}
-          title={t('Three responsibilities', 'Majukumu matatu')}
-          description={t(
-            'The role is short to describe and impossible to do casually: hold the item, confirm the owner, complete the handover.',
-            'Jukumu hili ni fupi kueleza na haliwezi kufanywa kizembe: hifadhi kitu, thibitisha mmiliki, kamilisha ukabidhaji.',
-          )}
+          eyebrow={'What you do'}
+          title={'Three responsibilities'}
+          description={'The role is short to describe and impossible to do casually: hold the item, confirm the owner, complete the handover.'}
         />
         <div className="mt-8 grid grid-cols-1 gap-5 md:grid-cols-3">
           {responsibilities.map((item) => {
@@ -295,12 +243,9 @@ export default function BecomeAgentView({ lang, onContinueToAgentPortal, onSignI
         <SectionHeading
           titleId="agent-requirements-heading"
           titleClassName="text-section"
-          eyebrow={t('Before you apply', 'Kabla kuomba')}
-          title={t('What you will need', 'Utakachohitaji')}
-          description={t(
-            'These are exactly the details the agent application asks for — nothing more is required.',
-            'Haya ni maelezo ambayo maombi ya wakala huuliza — hakuna kingine kinachohitajika.',
-          )}
+          eyebrow={'Before you apply'}
+          title={'What you will need'}
+          description={'These are exactly the details the agent application asks for — nothing more is required.'}
         />
         <div className="mt-8 rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] p-6 sm:p-8">
           <ul className="grid grid-cols-1 gap-5 sm:grid-cols-2">
@@ -319,10 +264,7 @@ export default function BecomeAgentView({ lang, onContinueToAgentPortal, onSignI
             })}
           </ul>
           <p className="mt-6 border-t border-[var(--appearance-border)] pt-5 text-body leading-relaxed text-[var(--appearance-text-muted)]">
-            {t(
-              'Applications are reviewed by our team before an agent account is activated. Vetting protects both owners and agents.',
-              'Maombi hukaguliwa na timu yetu kabla akaunti ya wakala kuwashwa. Uthibitishaji hulinda wamiliki na mawakala.',
-            )}
+            {'Applications are reviewed by our team before an agent account is activated. Vetting protects both owners and agents.'}
           </p>
         </div>
       </section>
@@ -338,18 +280,15 @@ export default function BecomeAgentView({ lang, onContinueToAgentPortal, onSignI
         <SectionHeading
           titleId="agent-approval-heading"
           titleClassName="text-section"
-          eyebrow={t('Approval', 'Uidhinishaji')}
-          title={t('How your application is approved', 'Maombi yako hukaguliwa vipi')}
-          description={t(
-            'Every application follows the same three stages, in this order. Each stage is carried out by Return4me — there is nothing for you to do between them.',
-            'Kila maombi hupitia hatua tatu sawa, kwa mpangilio huu. Kila hatua hufanywa na Return4me — hakuna unachohitaji kufanya kati yao.',
-          )}
+          eyebrow={'Approval'}
+          title={'How your application is approved'}
+          description={'Every application follows the same three stages, in this order. Each stage is carried out by Return4me — there is nothing for you to do between them.'}
         />
         <div className="mt-8 rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)] p-6 sm:p-8">
           <Stepper
             steps={approvalSteps}
             currentStep={0}
-            label={t('Agent application approval stages', 'Hatua za kuidhinisha maombi ya wakala')}
+            label={'Agent application approval stages'}
           />
           <ul className="mt-8 space-y-3 border-t border-[var(--appearance-border)] pt-6">
             {approvalNotes.map((note) => (
@@ -376,13 +315,10 @@ export default function BecomeAgentView({ lang, onContinueToAgentPortal, onSignI
         className="mt-12 rounded-panel bg-primary-green px-6 py-10 text-center sm:mt-16 sm:px-10 sm:py-14"
       >
         <h2 id="agent-cta-heading" className="text-section font-bold tracking-tight text-white">
-          {t('Ready to apply?', 'Uko tayari kuomba?')}
+          {'Ready to apply?'}
         </h2>
         <p className="mx-auto mt-3 max-w-xl text-body sm:text-body-large text-white/80">
-          {t(
-            'Registration and agent sign-in are handled on the same secure page. Your application is reviewed before an account is activated.',
-            'Usajili na kuingia kwa wakala hushughulikiwa kwenye ukurasa mmoja salama. Maombi yako hukaguliwa kabla akaunti kuwashwa.',
-          )}
+          {'Registration and agent sign-in are handled on the same secure page. Your application is reviewed before an account is activated.'}
         </p>
         <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
           <Button
@@ -395,7 +331,7 @@ export default function BecomeAgentView({ lang, onContinueToAgentPortal, onSignI
             {applyLabel}
           </Button>
           <Button variant="inverse" size="lg" onClick={onSignIn}>
-            {t('Back to Sign In', 'Rudi kwenye kuingia')}
+            {'Back to Sign In'}
           </Button>
         </div>
       </section>

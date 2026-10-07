@@ -65,7 +65,6 @@ import {
 // the summary shows that an identifier was added and its class, never the value.
 
 interface Props {
-  lang: 'en' | 'sw';
   categories: any[];
   categoriesLoading: boolean;
   onCancel: () => void;
@@ -153,10 +152,10 @@ const MIN_LOST_AT = (() => {
  * being dumped into one form-level box. The rules, their order and their
  * wording are unchanged from the original per-step check.
  */
-function validateStep(step: number, form: FormState, t: (en: string, sw: string) => string): StepError | null {
+function validateStep(step: number, form: FormState): StepError | null {
   if (step === 0) {
     if (!form.categoryId) {
-      return { field: 'categoryId', message: t('Please choose what was lost.', 'Tafadhali chagua kilichopotea.') };
+      return { field: 'categoryId', message: 'Please choose what was lost.' };
     }
     return null;
   }
@@ -169,80 +168,71 @@ function validateStep(step: number, form: FormState, t: (en: string, sw: string)
     if (!form.county) {
       return {
         field: 'county',
-        message: t('Please choose the county where you lost it.', 'Tafadhali chagua kaunti ulipopoteza.'),
+        message: 'Please choose the county where you lost it.',
       };
     }
     if (!form.administrativeUnitId) {
       return {
         field: 'administrativeUnitId',
-        message: t('Please choose the sub-county where you lost it.', 'Tafadhali chagua kaunti ndogo ulipopoteza.'),
+        message: 'Please choose the sub-county where you lost it.',
       };
     }
     const area = form.locationArea.trim();
     if (area.length < LOST_REPORT_FIELD_MINIMUMS.locationArea) {
       return {
         field: 'locationArea',
-        message: t('Please enter the exact place where you lost it.', 'Tafadhali weka mahali halisi ulipopoteza.'),
+        message: 'Please enter the exact place where you lost it.',
       };
     }
     if (area.length > LOST_REPORT_FIELD_LIMITS.locationArea) {
       return {
         field: 'locationArea',
-        message: t(
-          `Please shorten the exact place to ${LOST_REPORT_FIELD_LIMITS.locationArea} characters or fewer.`,
-          `Tafadhali fupisha mahali halisi hadi herufi ${LOST_REPORT_FIELD_LIMITS.locationArea} au chini.`
-        ),
+        message: `Please shorten the exact place to ${LOST_REPORT_FIELD_LIMITS.locationArea} characters or fewer.`,
       };
     }
 
     if (!form.lostAtFrom) {
       return {
         field: 'lostAtFrom',
-        message: t('Please tell us roughly when you lost it.', 'Tafadhali tuambie takriban ulipoteza lini.'),
+        message: 'Please tell us roughly when you lost it.',
       };
     }
     const fromIso = localInputToIso(form.lostAtFrom);
     if (!fromIso) {
-      return { field: 'lostAtFrom', message: t('That date and time is not valid.', 'Tarehe na saa hiyo si sahihi.') };
+      return { field: 'lostAtFrom', message: 'That date and time is not valid.' };
     }
     const now = Date.now();
     const from = new Date(fromIso).getTime();
     if (from > now) {
       return {
         field: 'lostAtFrom',
-        message: t('The time you lost it cannot be in the future.', 'Muda uliopoteza hauwezi kuwa baadaye.'),
+        message: 'The time you lost it cannot be in the future.',
       };
     }
 
     if (form.lostAtTo) {
       const toIso = localInputToIso(form.lostAtTo);
       if (!toIso) {
-        return { field: 'lostAtTo', message: t('That end time is not valid.', 'Muda wa mwisho si sahihi.') };
+        return { field: 'lostAtTo', message: 'That end time is not valid.' };
       }
       const to = new Date(toIso).getTime();
       if (to < from) {
         return {
           field: 'lostAtTo',
-          message: t(
-            'The end of the window has to come after the start.',
-            'Mwisho wa kipindi lazima uwe baada ya mwanzo.'
-          ),
+          message: 'The end of the window has to come after the start.',
         };
       }
       if (to > now) {
         return {
           field: 'lostAtTo',
-          message: t('The end of the window cannot be in the future.', 'Mwisho wa kipindi hauwezi kuwa baadaye.'),
+          message: 'The end of the window cannot be in the future.',
         };
       }
       if (to - from > LOST_REPORT_MAX_WINDOW_DAYS * 24 * 60 * 60 * 1000) {
         // Plain, non-technical: no engine tolerance is disclosed.
         return {
           field: 'lostAtTo',
-          message: t(
-            'Please choose a window of about a month or less — for example, between 2pm and 5pm on the same day.',
-            'Tafadhali chagua kipindi cha takriban mwezi mmoja au chini — kwa mfano, kati ya saa 8 na saa 11 jioni siku hiyo hiyo.'
-          ),
+          message: 'Please choose a window of about a month or less — for example, between 2pm and 5pm on the same day.',
         };
       }
     }
@@ -256,36 +246,20 @@ function validateStep(step: number, form: FormState, t: (en: string, sw: string)
 function submitErrorCopy(
   kind: LostReportsApiErrorKind | undefined,
   serverMessage: string | undefined,
-  t: (en: string, sw: string) => string,
 ): string {
   switch (kind) {
     case 'auth':
-      return t(
-        'Your session has ended. Please sign in again, then submit your report.',
-        'Kipindi chako kimeisha. Tafadhali ingia tena, kisha tuma ripoti yako.'
-      );
+      return 'Your session has ended. Please sign in again, then submit your report.';
     case 'forbidden':
-      return t(
-        'This account cannot submit a report right now. Please contact support.',
-        'Akaunti hii haiwezi kutuma ripoti kwa sasa. Tafadhali wasiliana na usaidizi.'
-      );
+      return 'This account cannot submit a report right now. Please contact support.';
     case 'rate_limited':
-      return t(
-        'You have submitted several reports recently. Please wait a few minutes and try again.',
-        'Umetuma ripoti kadhaa hivi karibuni. Tafadhali subiri dakika chache kisha ujaribu tena.'
-      );
+      return 'You have submitted several reports recently. Please wait a few minutes and try again.';
     case 'validation':
       // The server's own bilingual explanation is already customer-safe
       // (routes/lostReports.ts never returns an internal error).
-      return serverMessage || t(
-        'Some details were not accepted. Please check them and try again.',
-        'Baadhi ya maelezo hayakukubaliwa. Tafadhali yahakiki kisha ujaribu tena.'
-      );
+      return serverMessage || 'Some details were not accepted. Please check them and try again.';
     default:
-      return t(
-        'We could not submit your report. Please try again.',
-        'Imeshindwa kutuma ripoti yako. Tafadhali jaribu tena.'
-      );
+      return 'We could not submit your report. Please try again.';
   }
 }
 
@@ -298,10 +272,10 @@ function submitErrorCopy(
 const STEP_HEADING_ID = 'lost-report-step-heading';
 
 export default function LostReportWizard({
-  lang, categories, categoriesLoading, onCancel, onCreated,
+  categories, categoriesLoading, onCancel, onCreated,
 }: Props) {
-  const sw = lang === 'sw';
-  const t = (en: string, swText: string) => (sw ? swText : en);
+
+
 
   const [step, setStep] = useState(0);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
@@ -356,7 +330,7 @@ export default function LostReportWizard({
     stepError && stepError.field === field ? stepError.message : undefined;
 
   const goNext = () => {
-    const error = validateStep(step, form, t);
+    const error = validateStep(step, form);
     if (error) { setStepError(error); return; }
     setStepError(null);
     setStep((s) => Math.min(s + 1, LOST_REPORT_WIZARD_STEPS.length - 1));
@@ -380,7 +354,7 @@ export default function LostReportWizard({
     setSubmitError(null);
     // Re-validate every step before sending: the customer may have gone back.
     for (let s = 0; s <= 2; s++) {
-      const error = validateStep(s, form, t);
+      const error = validateStep(s, form);
       if (error) { setStep(s); setStepError(error); return; }
     }
 
@@ -412,10 +386,10 @@ export default function LostReportWizard({
       onCreated(result.data.reference);
       return;
     }
-    setSubmitError(submitErrorCopy(result.error?.kind, result.error?.message, t));
+    setSubmitError(submitErrorCopy(result.error?.kind, result.error?.message));
   };
 
-  const stepperSteps = LOST_REPORT_WIZARD_STEPS.map((s) => ({ label: sw ? s.sw : s.en }));
+  const stepperSteps = LOST_REPORT_WIZARD_STEPS.map((s) => ({ label: s.en }));
   const nowLocal = toLocalInputValue(new Date());
   const minLocal = toLocalInputValue(MIN_LOST_AT);
   const administrativeUnits = administrativeUnitsForCounty(form.county);
@@ -427,13 +401,13 @@ export default function LostReportWizard({
       <Stepper
         steps={stepperSteps}
         currentStep={step}
-        label={t('Report a lost item progress', 'Maendeleo ya kuripoti kitu kilichopotea')}
+        label={'Report a lost item progress'}
       />
 
       {/* One polite announcement per step change, for screen readers that do not
           track the progress rail's aria-current. */}
       <p className="sr-only" role="status" aria-live="polite">
-        {t('Step', 'Hatua')} {step + 1} {t('of', 'kati ya')} {LOST_REPORT_WIZARD_STEPS.length}: {currentStepLabel}
+        {'Step'} {step + 1} {'of'} {LOST_REPORT_WIZARD_STEPS.length}: {currentStepLabel}
       </p>
 
       {submitError && <Banner kind="error">{submitError}</Banner>}
@@ -443,15 +417,12 @@ export default function LostReportWizard({
         <section aria-labelledby={STEP_HEADING_ID} className="space-y-5">
           <StepIntro
             headingRef={stepHeadingRef}
-            title={t('What did you lose?', 'Ulipoteza nini?')}
-            description={t(
-              'Choose the closest match. It is how we compare your report with found items of the same kind.',
-              'Chagua kinachokaribiana zaidi. Ni jinsi tunavyolinganisha ripoti yako na vitu vilivyopatikana vya aina hiyo.'
-            )}
+            title={'What did you lose?'}
+            description={'Choose the closest match. It is how we compare your report with found items of the same kind.'}
           />
 
           <Select
-            label={t('Item category', 'Aina ya kitu')}
+            label={'Item category'}
             required
             value={form.categoryId}
             onChange={(e) => handleCategoryChange(e.target.value)}
@@ -461,12 +432,12 @@ export default function LostReportWizard({
           >
             <option value="">
               {categoriesLoading
-                ? t('Loading categories…', 'Inapakia aina…')
-                : t('Select a category', 'Chagua aina')}
+                ? 'Loading categories…'
+                : 'Select a category'}
             </option>
             {(categories || []).map((c: any) => (
               <option key={c.id} value={c.id}>
-                {(sw ? c.name_sw : c.name_en) || c.name_en || c.id}
+                {(c.name_en) || c.name_en || c.id}
               </option>
             ))}
           </Select>
@@ -477,31 +448,28 @@ export default function LostReportWizard({
           {form.categoryId && (
             <fieldset className="space-y-4 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] p-4 sm:p-5">
               <legend className="px-1 text-body-large font-semibold text-[var(--appearance-text-primary)]">
-                {t('Identifying number (optional)', 'Namba ya utambulisho (si lazima)')}
+                {'Identifying number (optional)'}
               </legend>
               <p className="text-small text-[var(--appearance-text-muted)] leading-relaxed">
-                {t(
-                  'If the item has a document, card or serial number, adding it makes an exact match far more likely.',
-                  'Kama kitu kina namba ya hati, kadi au serial, kuiweka huongeza sana uwezekano wa mechi kamili.'
-                )}
+                {'If the item has a document, card or serial number, adding it makes an exact match far more likely.'}
               </p>
 
               <Select
-                label={t('What kind of number is it?', 'Ni namba ya aina gani?')}
+                label={'What kind of number is it?'}
                 value={form.documentType}
                 onChange={(e) => set('documentType', e.target.value)}
                 disabled={submitting}
               >
-                <option value="">{t('Not sure / prefer not to say', 'Sijui / sipendi kusema')}</option>
+                <option value="">{'Not sure / prefer not to say'}</option>
                 {LOST_REPORT_IDENTIFIER_CLASSES.map((entry) => (
                   <option key={entry.value} value={entry.value}>
-                    {sw ? entry.sw : entry.en}
+                    {entry.en}
                   </option>
                 ))}
               </Select>
 
               <Input
-                label={t('The number', 'Namba yenyewe')}
+                label={'The number'}
                 type="text"
                 inputMode="text"
                 autoComplete="off"
@@ -509,11 +477,8 @@ export default function LostReportWizard({
                 value={form.documentNumber}
                 onChange={(e) => set('documentNumber', e.target.value)}
                 disabled={submitting}
-                placeholder={t('e.g. 12345678', 'mfano 12345678')}
-                hint={t(
-                  'Stored only as a one-way fingerprint. It is never shown back to you, to a finder, or to an agent.',
-                  'Huhifadhiwa kama alama ya njia moja pekee. Haionyeshwi kwako, kwa aliyekipata, wala kwa wakala.'
-                )}
+                placeholder={'e.g. 12345678'}
+                hint={'Stored only as a one-way fingerprint. It is never shown back to you, to a finder, or to an agent.'}
               />
             </fieldset>
           )}
@@ -525,86 +490,74 @@ export default function LostReportWizard({
         <section aria-labelledby={STEP_HEADING_ID} className="space-y-5">
           <StepIntro
             headingRef={stepHeadingRef}
-            title={t('Describe the item', 'Eleza kitu')}
-            description={t(
-              'Everything here is optional. The more detail you give, the easier it is to tell your item apart from similar ones.',
-              'Kila kitu hapa si lazima. Ukitoa maelezo zaidi, ni rahisi kutofautisha kitu chako na vingine vinavyofanana.'
-            )}
+            title={'Describe the item'}
+            description={'Everything here is optional. The more detail you give, the easier it is to tell your item apart from similar ones.'}
           />
 
           {/* Named clusters so the step reads as groups of related questions.
               The fields, their order, their labels and their validation are
               unchanged — only the grouping labels are new. */}
           <h4 className="text-body-large font-semibold text-[var(--appearance-text-primary)]">
-            {t('Item details', 'Maelezo ya kitu')}
+            {'Item details'}
           </h4>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input
-              label={t('Brand (optional)', 'Chapa (si lazima)')}
+              label={'Brand (optional)'}
               value={form.brand}
               onChange={(e) => set('brand', e.target.value)}
               maxLength={LOST_REPORT_FIELD_LIMITS.brand}
               disabled={submitting}
-              placeholder={t('e.g. Samsung', 'mfano Samsung')}
+              placeholder={'e.g. Samsung'}
             />
             <Input
-              label={t('Model (optional)', 'Modeli (si lazima)')}
+              label={'Model (optional)'}
               value={form.model}
               onChange={(e) => set('model', e.target.value)}
               maxLength={LOST_REPORT_FIELD_LIMITS.model}
               disabled={submitting}
-              placeholder={t('e.g. Galaxy A54', 'mfano Galaxy A54')}
+              placeholder={'e.g. Galaxy A54'}
             />
             <Input
-              label={t('Colour (optional)', 'Rangi (si lazima)')}
+              label={'Colour (optional)'}
               value={form.colour}
               onChange={(e) => set('colour', e.target.value)}
               maxLength={LOST_REPORT_FIELD_LIMITS.colour}
               disabled={submitting}
-              placeholder={t('e.g. Black', 'mfano Nyeusi')}
+              placeholder={'e.g. Black'}
             />
             <Input
-              label={t('Material (optional)', 'Nyenzo (si lazima)')}
+              label={'Material (optional)'}
               value={form.material}
               onChange={(e) => set('material', e.target.value)}
               maxLength={LOST_REPORT_FIELD_LIMITS.material}
               disabled={submitting}
-              placeholder={t('e.g. Leather', 'mfano Ngozi')}
+              placeholder={'e.g. Leather'}
             />
           </div>
 
           <h4 className="text-body-large font-semibold text-[var(--appearance-text-primary)]">
-            {t('Notes', 'Maelezo ya ziada')}
+            {'Notes'}
           </h4>
 
           <Textarea
-            label={t('Description (optional)', 'Maelezo (si lazima)')}
+            label={'Description (optional)'}
             value={form.description}
             onChange={(e) => set('description', e.target.value)}
             maxLength={LOST_REPORT_FIELD_LIMITS.description}
             disabled={submitting}
-            placeholder={t(
-              'e.g. Brown leather wallet, worn on one corner, contains a bank card',
-              'mfano Pochi ya ngozi ya kahawia, imechakaa kona moja, ina kadi ya benki'
-            )}
-            hint={t(
-              'You do not need to include passwords, PINs or account numbers.',
-              'Hakuna haja ya kuweka nywila, PIN au namba za akaunti.'
-            )}
+            placeholder={'e.g. Brown leather wallet, worn on one corner, contains a bank card'}
+            hint={'You do not need to include passwords, PINs or account numbers.'}
           />
 
           <Textarea
-            label={t('Distinctive marks (optional)', 'Alama za kipekee (si lazima)')}
+            label={'Distinctive marks (optional)'}
             value={form.distinctiveMarks}
             onChange={(e) => set('distinctiveMarks', e.target.value)}
             maxLength={LOST_REPORT_FIELD_LIMITS.distinctiveMarks}
             disabled={submitting}
-            placeholder={t('e.g. A lion sticker on the front pocket', 'mfano Stika ya simba mbele ya mfuko')}
-            hint={t(
-              'Details most people would not notice help us avoid incorrect matches.',
-              'Maelezo ambayo watu wengi hawangetambua husaidia kuepuka mechi zisizo sahihi.'
-            )}
+            placeholder={'e.g. A lion sticker on the front pocket'}
+            hint={'Details most people would not notice help us avoid incorrect matches.'}
           />
         </section>
       )}
@@ -614,22 +567,19 @@ export default function LostReportWizard({
         <section aria-labelledby={STEP_HEADING_ID} className="space-y-5">
           <StepIntro
             headingRef={stepHeadingRef}
-            title={t('Where and when did you lose it?', 'Ulipopoteza na lini?')}
-            description={t(
-              'A rough answer is fine. This is used to compare your report with items found in the same area and around the same time.',
-              'Jibu la kukisia linatosha. Hili hutumika kulinganisha ripoti yako na vitu vilivyopatikana eneo moja na wakati huo huo.'
-            )}
+            title={'Where and when did you lose it?'}
+            description={'A rough answer is fine. This is used to compare your report with items found in the same area and around the same time.'}
           />
 
           {/* The two halves of this step are named as two groups, so the customer
               reads them as "where" and "when" rather than as one long form. */}
           <h4 className="text-body-large font-semibold text-[var(--appearance-text-primary)]">
-            {t('Where you lost it', 'Palipopotea')}
+            {'Where you lost it'}
           </h4>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Select
-              label={t('County', 'Kaunti')}
+              label={'County'}
               required
               value={form.county}
               onChange={(e) => {
@@ -640,7 +590,7 @@ export default function LostReportWizard({
               error={fieldError('county')}
               ref={setFieldRef<HTMLSelectElement>('county')}
             >
-              <option value="">{t('Select a county', 'Chagua kaunti')}</option>
+              <option value="">{'Select a county'}</option>
               {countyGroups.map((group) => (
                 <optgroup key={group.group} label={group.group}>
                   {group.counties.map((county) => (
@@ -653,16 +603,16 @@ export default function LostReportWizard({
             </Select>
 
             <Select
-              label={t('Sub-county', 'Kaunti ndogo')}
+              label={'Sub-county'}
               required
               value={form.administrativeUnitId}
               onChange={(e) => set('administrativeUnitId', e.target.value)}
               disabled={submitting || !form.county}
-              hint={t('Select county first, then choose its sub-county.', 'Chagua kaunti kwanza, kisha chagua kaunti ndogo yake.')}
+              hint={'Select county first, then choose its sub-county.'}
               error={fieldError('administrativeUnitId')}
               ref={setFieldRef<HTMLSelectElement>('administrativeUnitId')}
             >
-              <option value="">{form.county ? t('Select a sub-county', 'Chagua kaunti ndogo') : t('Select county first', 'Chagua kaunti kwanza')}</option>
+              <option value="">{form.county ? 'Select a sub-county' : 'Select county first'}</option>
               {administrativeUnits.map((unit) => (
                 <option key={unit.id} value={unit.id}>{unit.name}</option>
               ))}
@@ -677,7 +627,7 @@ export default function LostReportWizard({
               directly below already covers that, and repeating it invited the
               same words to be typed twice. */}
           <Input
-            label={t('Exact place', 'Mahali halisi')}
+            label={'Exact place'}
             required
             value={form.locationArea}
             onChange={(e) => set('locationArea', e.target.value)}
@@ -685,29 +635,26 @@ export default function LostReportWizard({
             disabled={submitting}
             error={fieldError('locationArea')}
             ref={setFieldRef<HTMLInputElement>('locationArea')}
-            placeholder={t('e.g. Near Sarit Centre, Westlands', 'mfano Karibu na Sarit Centre, Westlands')}
-            hint={t(
-              'Enter the street, estate, building or nearby place you know.',
-              'Weka barabara, mtaa, jengo au mahali pengine unapojua.'
-            )}
+            placeholder={'e.g. Near Sarit Centre, Westlands'}
+            hint={'Enter the street, estate, building or nearby place you know.'}
           />
 
           <Input
-            label={t('Landmark (optional)', 'Alama ya eneo (si lazima)')}
+            label={'Landmark (optional)'}
             value={form.locationLandmark}
             onChange={(e) => set('locationLandmark', e.target.value)}
             maxLength={LOST_REPORT_FIELD_LIMITS.locationLandmark}
             disabled={submitting}
-            placeholder={t('e.g. near Sarit Centre', 'mfano karibu na Sarit Centre')}
+            placeholder={'e.g. near Sarit Centre'}
           />
 
           <h4 className="pt-1 text-body-large font-semibold text-[var(--appearance-text-primary)]">
-            {t('When you lost it', 'Ilipotea lini')}
+            {'When you lost it'}
           </h4>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input
-              label={t('Lost from', 'Ilipotea kuanzia')}
+              label={'Lost from'}
               required
               type="datetime-local"
               value={form.lostAtFrom}
@@ -717,13 +664,10 @@ export default function LostReportWizard({
               disabled={submitting}
               error={fieldError('lostAtFrom')}
               ref={setFieldRef<HTMLInputElement>('lostAtFrom')}
-              hint={t(
-                'Roughly when you last had it.',
-                'Takriban wakati wa mwisho ulipokuwa nayo.'
-              )}
+              hint={'Roughly when you last had it.'}
             />
             <Input
-              label={t('Lost until (optional)', 'Ilipotea hadi (si lazima)')}
+              label={'Lost until (optional)'}
               type="datetime-local"
               value={form.lostAtTo}
               min={form.lostAtFrom || minLocal}
@@ -732,18 +676,12 @@ export default function LostReportWizard({
               disabled={submitting}
               error={fieldError('lostAtTo')}
               ref={setFieldRef<HTMLInputElement>('lostAtTo')}
-              hint={t(
-                'Leave blank if you are not sure.',
-                'Acha wazi kama huna uhakika.'
-              )}
+              hint={'Leave blank if you are not sure.'}
             />
           </div>
 
           <p className="text-small text-[var(--appearance-text-muted)] leading-relaxed">
-            {t(
-              'Example: if you lost it sometime between 2pm and 5pm, put 2pm as "Lost from" and 5pm as "Lost until".',
-              'Mfano: kama ulipoteza wakati fulani kati ya saa 8 na saa 11 jioni, weka saa 8 kwenye "Ilipotea kuanzia" na saa 11 kwenye "Ilipotea hadi".'
-            )}
+            {'Example: if you lost it sometime between 2pm and 5pm, put 2pm as "Lost from" and 5pm as "Lost until".'}
           </p>
         </section>
       )}
@@ -753,33 +691,30 @@ export default function LostReportWizard({
         <section aria-labelledby={STEP_HEADING_ID} className="space-y-5">
           <StepIntro
             headingRef={stepHeadingRef}
-            title={t('Check your report', 'Hakiki ripoti yako')}
-            description={t(
-              'You can go back and change anything before submitting.',
-              'Unaweza kurudi nyuma na kubadilisha chochote kabla ya kutuma.'
-            )}
+            title={'Check your report'}
+            description={'You can go back and change anything before submitting.'}
           />
 
           {/* Grouped, not one flat list: each group names the part of the journey
               it came from and offers an edit affordance that jumps straight back
               to that step, so nothing requires restarting the report. */}
           <ReviewGroup
-            title={t('What you lost', 'Ulipoteza nini')}
-            editLabel={t('Edit', 'Badilisha')}
+            title={'What you lost'}
+            editLabel={'Edit'}
             onEdit={() => goToStep(0)}
           >
             <SummaryRow
               icon={Package}
-              label={t('Item', 'Kitu')}
-              value={categoryName(categories, form.categoryId, sw) || form.categoryId}
+              label={'Item'}
+              value={categoryName(categories, form.categoryId) || form.categoryId}
             />
             {form.documentType && (
               <SummaryRow
-                label={t('Identifying number', 'Namba ya utambulisho')}
+                label={'Identifying number'}
                 // The CLASS is shown; the number itself is never echoed back —
                 // not even here — so it cannot end up in a screenshot.
-                value={`${identifierClassLabel(form.documentType, sw)}${
-                  form.documentNumber.trim() ? ` · ${t('recorded', 'imewekwa')}` : ''
+                value={`${identifierClassLabel(form.documentType)}${
+                  form.documentNumber.trim() ? ` · ${'recorded'}` : ''
                 }`}
               />
             )}
@@ -787,13 +722,13 @@ export default function LostReportWizard({
 
           {[form.brand, form.model, form.colour, form.material, form.description, form.distinctiveMarks].some((v) => v.trim()) && (
             <ReviewGroup
-              title={t('Identifying details', 'Maelezo ya kutambua')}
-              editLabel={t('Edit', 'Badilisha')}
+              title={'Identifying details'}
+              editLabel={'Edit'}
               onEdit={() => goToStep(1)}
             >
               {[form.brand, form.model, form.colour, form.material].some((v) => v.trim()) && (
                 <SummaryRow
-                  label={t('Brand, model, colour, material', 'Chapa, modeli, rangi, nyenzo')}
+                  label={'Brand, model, colour, material'}
                   value={[form.brand, form.model, form.colour, form.material]
                     .map((v) => v.trim())
                     .filter(Boolean)
@@ -801,11 +736,11 @@ export default function LostReportWizard({
                 />
               )}
               {form.description.trim() && (
-                <SummaryRow label={t('Description', 'Maelezo')} value={form.description.trim()} />
+                <SummaryRow label={'Description'} value={form.description.trim()} />
               )}
               {form.distinctiveMarks.trim() && (
                 <SummaryRow
-                  label={t('Distinctive marks', 'Alama za kipekee')}
+                  label={'Distinctive marks'}
                   value={form.distinctiveMarks.trim()}
                 />
               )}
@@ -813,13 +748,13 @@ export default function LostReportWizard({
           )}
 
           <ReviewGroup
-            title={t('Where you lost it', 'Palipopotea')}
-            editLabel={t('Edit', 'Badilisha')}
+            title={'Where you lost it'}
+            editLabel={'Edit'}
             onEdit={() => goToStep(2)}
           >
             <SummaryRow
               icon={MapPin}
-              label={t('Place', 'Mahali')}
+              label={'Place'}
               value={[form.locationArea.trim(), form.locationLandmark.trim(), administrativeUnits.find((unit) => unit.id === form.administrativeUnitId)?.name, form.county]
                 .filter(Boolean)
                 .join(', ')}
@@ -827,34 +762,25 @@ export default function LostReportWizard({
           </ReviewGroup>
 
           <ReviewGroup
-            title={t('When you lost it', 'Ilipotea lini')}
-            editLabel={t('Edit', 'Badilisha')}
+            title={'When you lost it'}
+            editLabel={'Edit'}
             onEdit={() => goToStep(2)}
           >
             <SummaryRow
-              label={t('Time window', 'Kipindi cha muda')}
-              value={formatWindow(form.lostAtFrom, form.lostAtTo, sw)}
+              label={'Time window'}
+              value={formatWindow(form.lostAtFrom, form.lostAtTo)}
             />
           </ReviewGroup>
 
           <div className="rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] p-4 sm:p-5 space-y-2">
             <h4 className="text-body-large font-semibold text-[var(--appearance-text-primary)]">
-              {t('What happens next', 'Kinachofuata')}
+              {'What happens next'}
             </h4>
             <ul className="space-y-1.5 text-small text-[var(--appearance-text-muted)] leading-relaxed">
               {[
-                t(
-                  'We will use these details to look for found items that may correspond to what you described.',
-                  'Tutatumia maelezo haya kutafuta vitu vilivyopatikana vinavyoweza kufanana na uliyoeleza.'
-                ),
-                t(
-                  'Submitting a report does not guarantee that your item will be recovered.',
-                  'Kutuma ripoti hakuhakikishi kuwa kitu chako kitapatikana.'
-                ),
-                t(
-                  'Your details stay private. A finder is never given your contact information, and you are never given theirs.',
-                  'Maelezo yako hubaki faragha. Aliyekipata hapewi mawasiliano yako, na wewe hupewi yake.'
-                ),
+                'We will use these details to look for found items that may correspond to what you described.',
+                'Submitting a report does not guarantee that your item will be recovered.',
+                'Your details stay private. A finder is never given your contact information, and you are never given theirs.',
               ].map((line) => (
                 <li key={line} className="flex items-start gap-2">
                   <Check size={ICON_SIZE.metadata} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--appearance-success)]" />
@@ -864,10 +790,7 @@ export default function LostReportWizard({
               <li className="flex items-start gap-2">
                 <AlertCircle size={ICON_SIZE.metadata} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--appearance-warning)]" />
                 <span>
-                  {t(
-                    'A possible match is not proof of ownership. Claiming something still requires the normal verification.',
-                    'Mechi inayowezekana si uthibitisho wa umiliki. Kudai kitu bado kunahitaji uthibitisho wa kawaida.'
-                  )}
+                  {'A possible match is not proof of ownership. Claiming something still requires the normal verification.'}
                 </span>
               </li>
             </ul>
@@ -878,7 +801,7 @@ export default function LostReportWizard({
       {/* ---------------- NAVIGATION ---------------- */}
       <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 border-t border-[var(--appearance-border)] pt-5">
         <Button type="button" variant="ghost" size="md" onClick={goBack} disabled={submitting}>
-          {step === 0 ? t('Cancel', 'Ghairi') : t('Back', 'Rudi')}
+          {step === 0 ? 'Cancel' : 'Back'}
         </Button>
 
         {isLastStep ? (
@@ -890,8 +813,8 @@ export default function LostReportWizard({
             className="w-full sm:w-auto"
           >
             {submitting
-              ? t('Submitting…', 'Inatuma…')
-              : t('Submit lost report', 'Tuma ripoti ya kitu kilichopotea')}
+              ? 'Submitting…'
+              : 'Submit lost report'}
           </Button>
         ) : (
           <Button
@@ -902,7 +825,7 @@ export default function LostReportWizard({
             disabled={submitting}
             className="w-full sm:w-auto"
           >
-            {t('Continue', 'Endelea')}
+            {'Continue'}
           </Button>
         )}
       </div>
@@ -995,25 +918,25 @@ function SummaryRow({ icon: Icon, label, value }: { icon?: LucideIcon; label: st
 }
 
 /** Category name from the live list (bilingual), or '' when it is not loaded. */
-export function categoryName(categories: any[], categoryId: string, sw: boolean): string {
+export function categoryName(categories: any[], categoryId: string): string {
   const match = (categories || []).find((c: any) => c && c.id === categoryId);
   if (!match) return '';
-  return (sw ? match.name_sw : match.name_en) || match.name_en || '';
+  return (match.name_en) || match.name_en || '';
 }
 
 /** Bilingual label for one identifier class. */
-export function identifierClassLabel(value: string, sw: boolean): string {
+export function identifierClassLabel(value: string): string {
   const entry = LOST_REPORT_IDENTIFIER_CLASSES.find((candidate) => candidate.value === value);
   if (!entry) return value;
-  return sw ? entry.sw : entry.en;
+  return entry.en;
 }
 
 /** Human-readable window for the review step, e.g. "16 Sep, 14:00 — 16 Sep, 17:00". */
-function formatWindow(fromLocal: string, toLocal: string, sw: boolean): string {
+function formatWindow(fromLocal: string, toLocal: string): string {
   const fmt = (value: string) => {
     const d = new Date(value);
     if (isNaN(d.getTime())) return '';
-    return d.toLocaleString(sw ? 'sw-KE' : 'en-GB', {
+    return d.toLocaleString('en-GB', {
       day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
     });
   };

@@ -74,7 +74,6 @@ const TWO_FA_QR_SIZE = 192;
 const TWO_FA_QR_MARGIN = 4;
 
 interface AdminViewProps {
-  lang: 'en' | 'sw';
   token: string | null;
   setToken: (token: string | null) => void;
   /**
@@ -105,21 +104,19 @@ interface AdminViewProps {
 //
 // Evidence is matched to the claimant by claim_id (never by array position).
 function DisputeClaimantPanel({
-  lang,
   claimant,
   evidenceState,
   roleLabel,
   isWinner,
   onViewPhoto,
 }: {
-  lang: 'en' | 'sw';
   claimant: { role: string; claim_id: string; owner_phone: string | null; claim_status: string | null; has_paid_escrow: boolean };
   evidenceState?: { loading: boolean; error: string | null; items: any[] | null };
   roleLabel: string;
   isWinner: boolean;
   onViewPhoto: (url: string) => void;
 }) {
-  const en = lang === 'en';
+
   const ownEvidence = Array.isArray(evidenceState?.items)
     ? evidenceState!.items.filter((ev: any) => ev?.claim_id === claimant.claim_id)
     : [];
@@ -130,44 +127,44 @@ function DisputeClaimantPanel({
         <span className="text-caption font-extrabold text-[var(--appearance-text-muted)] uppercase tracking-widest">{roleLabel}</span>
         {isWinner && (
           <Badge variant="success">
-            {en ? 'Awarded' : 'Ilipewa ushindi'}
+            {'Awarded'}
           </Badge>
         )}
       </div>
 
       <div className="text-caption text-[var(--appearance-text-muted)] space-y-0.5">
         <p>
-          <span className="text-[var(--appearance-text-muted)]">{en ? 'Phone' : 'Simu'}:</span>{' '}
-          <b className="text-[var(--appearance-text-primary)]">{claimant.owner_phone || (en ? 'not recorded' : 'haijarekodiwa')}</b>
+          <span className="text-[var(--appearance-text-muted)]">{'Phone'}:</span>{' '}
+          <b className="text-[var(--appearance-text-primary)]">{claimant.owner_phone || ('not recorded')}</b>
         </p>
         <p>
           <span className="text-[var(--appearance-text-muted)]">Claim:</span>{' '}
-          <span className="font-mono font-bold text-[var(--appearance-text-primary)]">{claimant.claim_id || (en ? 'not recorded' : 'haijarekodiwa')}</span>
+          <span className="font-mono font-bold text-[var(--appearance-text-primary)]">{claimant.claim_id || ('not recorded')}</span>
         </p>
         <p>
-          <span className="text-[var(--appearance-text-muted)]">{en ? 'Claim status' : 'Hali ya claim'}:</span>{' '}
-          <b className="text-[var(--appearance-text-primary)]">{claimant.claim_status || (en ? 'unknown' : 'haijulikani')}</b>
+          <span className="text-[var(--appearance-text-muted)]">{'Claim status'}:</span>{' '}
+          <b className="text-[var(--appearance-text-primary)]">{claimant.claim_status || ('unknown')}</b>
         </p>
         <p>
-          <span className="text-[var(--appearance-text-muted)]">{en ? 'Escrow paid' : 'Amana imelipwa'}:</span>{' '}
-          <b className="text-[var(--appearance-text-primary)]">{claimant.has_paid_escrow ? (en ? 'Yes' : 'Ndiyo') : (en ? 'No' : 'Hapana')}</b>
+          <span className="text-[var(--appearance-text-muted)]">{'Escrow paid'}:</span>{' '}
+          <b className="text-[var(--appearance-text-primary)]">{claimant.has_paid_escrow ? ('Yes') : ('No')}</b>
         </p>
       </div>
 
       <div className="border-t border-[var(--appearance-border)] pt-2 space-y-1">
         <span className="text-caption font-extrabold text-[var(--appearance-text-muted)] uppercase tracking-widest block">
-          {en ? 'Submitted evidence' : 'Ushahidi uliowasilishwa'}
+          {'Submitted evidence'}
         </span>
         {!evidenceState ? (
-          <p className="text-caption text-[var(--appearance-text-muted)]">{en ? 'Not loaded yet.' : 'Haijapakiwa bado.'}</p>
+          <p className="text-caption text-[var(--appearance-text-muted)]">{'Not loaded yet.'}</p>
         ) : evidenceState.loading ? (
-          <p className="text-caption text-[var(--appearance-text-muted)]" aria-busy="true">{en ? 'Loading evidence…' : 'Inapakia ushahidi…'}</p>
+          <p className="text-caption text-[var(--appearance-text-muted)]" aria-busy="true">{'Loading evidence…'}</p>
         ) : evidenceState.error ? (
           <p className="text-caption text-status-danger">
-            {en ? 'Evidence could not be loaded: ' : 'Ushahidi haukupakiwa: '}{evidenceState.error}
+            {'Evidence could not be loaded: '}{evidenceState.error}
           </p>
         ) : ownEvidence.length === 0 ? (
-          <p className="text-caption text-[var(--appearance-text-muted)]">{en ? 'No evidence available.' : 'Hakuna ushahidi unaopatikana.'}</p>
+          <p className="text-caption text-[var(--appearance-text-muted)]">{'No evidence available.'}</p>
         ) : (
           <ul className="space-y-2">
             {ownEvidence.map((ev: any) => (
@@ -191,7 +188,7 @@ function DisputeClaimantPanel({
                     className="cursor-zoom-in"
                     role="button"
                     tabIndex={0}
-                    aria-label={en ? 'View evidence photograph full-size' : 'Tazama picha ya ushahidi kwa ukubwa kamili'}
+                    aria-label={'View evidence photograph full-size'}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault();
@@ -201,7 +198,7 @@ function DisputeClaimantPanel({
                   >
                     <img
                       src={ev.evidence_photo_url}
-                      alt={en ? 'Evidence photograph submitted with this claim' : 'Picha ya ushahidi iliyowasilishwa'}
+                      alt={'Evidence photograph submitted with this claim'}
                       referrerPolicy="no-referrer"
                       className="w-full max-h-40 object-contain rounded-lg border border-[var(--appearance-border)]"
                     />
@@ -226,55 +223,25 @@ type ConsoleSectionKey =
   | 'stats' | 'agents' | 'found_items' | 'disputes' | 'claims'
   | 'lost_reports' | 'ledger' | 'review' | 'categories' | 'strikes';
 interface ConsoleSectionCopy { title: string; description: string }
-const CONSOLE_SECTIONS: Record<ConsoleSectionKey, { en: ConsoleSectionCopy; sw: ConsoleSectionCopy }> = {
-  stats: {
-    en: { title: 'Overview', description: 'Monitor platform activity, recovery performance, and operational health.' },
-    sw: { title: 'Muhtasari', description: 'Fuatilia shughuli za jukwaa, utendaji wa uokoaji, na afya ya uendeshaji.' },
-  },
-  agents: {
-    en: { title: 'Agents Hub', description: 'Review agent activity, verification, and operational status.' },
-    sw: { title: 'Mawakala', description: 'Kagua shughuli za mawakala, uthibitishaji, na hali ya uendeshaji.' },
-  },
-  found_items: {
-    en: { title: 'Found Items', description: 'Review recovered items and their current recovery state.' },
-    sw: { title: 'Vitu Vilivyopatikana', description: 'Kagua vitu vilivyookolewa na hali yao ya sasa ya uokoaji.' },
-  },
-  disputes: {
-    en: { title: 'Disputes', description: 'Investigate claims requiring administrative resolution.' },
-    sw: { title: 'Migogoro', description: 'Chunguza madai yanayohitaji usuluhishi wa kiutawala.' },
-  },
-  claims: {
-    en: { title: 'Claims', description: 'Monitor and administer active and completed recovery claims.' },
-    sw: { title: 'Madai', description: 'Fuatilia na simamia madai ya uokoaji yanayoendelea na yaliyokamilika.' },
-  },
-  lost_reports: {
-    en: { title: 'Lost Reports', description: 'Review submitted lost-item reports and their discovery status.' },
-    sw: { title: 'Ripoti za Vitu', description: 'Kagua ripoti za vitu vilivyopotea na hali ya ugunduzi.' },
-  },
-  ledger: {
-    en: { title: 'Ledger', description: 'Review settlement and financial ledger activity.' },
-    sw: { title: 'Leja', description: 'Kagua shughuli za malipo na leja ya kifedha.' },
-  },
-  review: {
-    en: { title: 'Manual Review', description: 'Review operational items requiring administrative attention.' },
-    sw: { title: 'Ukaguzi wa Mkono', description: 'Kagua vitu vinavyohitaji uangalizi wa kiutawala.' },
-  },
-  categories: {
-    en: { title: 'Categories & Fees', description: 'Configure recovery categories, fees, and finder/agent/platform allocation.' },
-    sw: { title: 'Aina na Ada', description: 'Sanidi aina za uokoaji, ada, na mgawanyo wa aliyepata/wakala/jukwaa.' },
-  },
-  strikes: {
-    en: { title: 'Payment Strikes', description: 'Review agent strikes and enforcement history.' },
-    sw: { title: 'Adhabu za Malipo', description: 'Kagua adhabu za mawakala na historia ya utekelezaji.' },
-  },
+const CONSOLE_SECTIONS: Record<ConsoleSectionKey, ConsoleSectionCopy> = {
+  stats: { title: 'Overview', description: 'Monitor platform activity, recovery performance, and operational health.' },
+  agents: { title: 'Agents Hub', description: 'Review agent activity, verification, and operational status.' },
+  found_items: { title: 'Found Items', description: 'Review recovered items and their current recovery state.' },
+  disputes: { title: 'Disputes', description: 'Investigate claims requiring administrative resolution.' },
+  claims: { title: 'Claims', description: 'Monitor and administer active and completed recovery claims.' },
+  lost_reports: { title: 'Lost Reports', description: 'Review submitted lost-item reports and their discovery status.' },
+  ledger: { title: 'Ledger', description: 'Review settlement and financial ledger activity.' },
+  review: { title: 'Manual Review', description: 'Review operational items requiring administrative attention.' },
+  categories: { title: 'Categories & Fees', description: 'Configure recovery categories, fees, and finder/agent/platform allocation.' },
+  strikes: { title: 'Payment Strikes', description: 'Review agent strikes and enforcement history.' },
 };
 
-export default function AdminView({ lang, token, setToken, onCategoriesChanged }: AdminViewProps) {
-  const t = translations[lang];
+export default function AdminView({ token, setToken, onCategoriesChanged }: AdminViewProps) {
+  const t = translations.en;
   // BATCH 2 — the file's own bilingual shorthand (see DisputeClaimantPanel),
   // used by the 2FA enrollment UX below so its long English/Swahili strings stay
   // readable in JSX.
-  const en = lang === 'en';
+
 
   // §10 — the active administrator, derived from the session on every render so
   // it follows a login, a refresh and a sign-out. Display-only: it makes no
@@ -633,18 +600,14 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
 
       if (response.status === 401 || response.status === 403) {
         setToken(null);
-        setAuthError(lang === 'en' 
-          ? 'Your administrator session has expired or is invalid. Please log in again.' 
-          : 'Muda wako wa kuingia kama msimamizi umeisha au si sahihi. Tafadhali ingia tena.'
+        setAuthError('Your administrator session has expired or is invalid. Please log in again.'
         );
         return;
       }
 
       const contentType = response.headers.get('content-type');
       if (!contentType || !contentType.includes('application/json')) {
-        throw new Error(lang === 'en'
-          ? 'The system returned an invalid response. Please try again shortly.'
-          : 'Mfumo ulirudisha jibu lisilo sahihi. Tafadhali jaribu tena baada ya muda mfupi.'
+        throw new Error('The system returned an invalid response. Please try again shortly.'
         );
       }
 
@@ -717,18 +680,14 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
 
       if (response.status === 401 || response.status === 403) {
         setToken(null);
-        setAuthError(lang === 'en' 
-          ? 'Your administrator session has expired or is invalid. Please log in again.' 
-          : 'Muda wako wa kuingia kama msimamizi umeisha au si sahihi. Tafadhali ingia tena.'
+        setAuthError('Your administrator session has expired or is invalid. Please log in again.'
         );
         return;
       }
 
       const contentType = response.headers.get('content-type');
       if (!contentType || !contentType.includes('application/json')) {
-        throw new Error(lang === 'en'
-          ? 'The system returned an invalid response. Please try again shortly.'
-          : 'Mfumo ulirudisha jibu lisilo sahihi. Tafadhali jaribu tena baada ya muda mfupi.'
+        throw new Error('The system returned an invalid response. Please try again shortly.'
         );
       }
 
@@ -841,10 +800,8 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
     setDataError('');
 
     setConfirmModal({
-      title: lang === 'en' ? 'Delete Category' : 'Futa Kitengo',
-      message: lang === 'en' 
-        ? `Are you sure you want to delete the category "${nameEn}"? This action cannot be undone.` 
-        : `Je, una uhakika unataka kufuta kitengo cha "${nameEn}"? Kitendo hiki hakiwezi kubatilishwa.`,
+      title: 'Delete Category',
+      message: `Are you sure you want to delete the category "${nameEn}"? This action cannot be undone.`,
       onConfirm: async () => {
         try {
           const res = await fetch(`/api/admin/categories/${id}`, {
@@ -910,10 +867,8 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
       }
 
       setActionSuccess(nextActive
-        ? (lang === 'en' ? `"${nameEn}" is now active.` : `"${nameEn}" sasa inatumika.`)
-        : (lang === 'en'
-            ? `"${nameEn}" is now inactive — it can no longer be chosen for new reports. Existing records are unaffected.`
-            : `"${nameEn}" haitumiki tena — haiwezi kuchaguliwa kwa ripoti mpya. Rekodi zilizopo hazibadiliki.`));
+        ? (`"${nameEn}" is now active.`)
+        : (`"${nameEn}" is now inactive — it can no longer be chosen for new reports. Existing records are unaffected.`));
 
       fetchAdminCategories();
       // Keep the (active-only) public list in step.
@@ -997,18 +952,14 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
 
       if (response.status === 401 || response.status === 403) {
         setToken(null);
-        setAuthError(lang === 'en' 
-          ? 'Your administrator session has expired or is invalid. Please log in again.' 
-          : 'Muda wako wa kuingia kama msimamizi umeisha au si sahihi. Tafadhali ingia tena.'
+        setAuthError('Your administrator session has expired or is invalid. Please log in again.'
         );
         return;
       }
 
       const contentType = response.headers.get('content-type');
       if (!contentType || !contentType.includes('application/json')) {
-        throw new Error(lang === 'en'
-          ? 'The system returned an invalid response. Please try again shortly.'
-          : 'Mfumo ulirudisha jibu lisilo sahihi. Tafadhali jaribu tena baada ya muda mfupi.'
+        throw new Error('The system returned an invalid response. Please try again shortly.'
         );
       }
 
@@ -1036,10 +987,8 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
     setDataError('');
 
     setConfirmModal({
-      title: lang === 'en' ? 'Clear Payment Strikes' : 'Ondoa Vikwazo vya Malipo',
-      message: lang === 'en'
-        ? `Are you sure you want to clear all payment strikes for ${phone}?`
-        : `Je, una uhakika unataka kuondoa vikwazo vyote vya malipo vya ${phone}?`,
+      title: 'Clear Payment Strikes',
+      message: `Are you sure you want to clear all payment strikes for ${phone}?`,
       onConfirm: async () => {
         setAdminActionProcessing(true);
         try {
@@ -1143,22 +1092,16 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
   // trace is never shown.
   const twoFaFailureMessage = (response: Response, fallback: string) => {
     if (response.status === 429) {
-      return en
-        ? 'Too many attempts. Please wait a few minutes and try again.'
-        : 'Majaribio mengi mno. Tafadhali subiri dakika chache kisha ujaribu tena.';
+      return 'Too many attempts. Please wait a few minutes and try again.';
     }
     if (response.status === 401) {
-      return en ? 'That password is not correct.' : 'Nenosiri hilo si sahihi.';
+      return 'That password is not correct.';
     }
     if (response.status === 403) {
-      return en
-        ? 'Your administrator session is no longer valid. Please sign in again.'
-        : 'Kipindi chako cha msimamizi hakifai tena. Tafadhali ingia tena.';
+      return 'Your administrator session is no longer valid. Please sign in again.';
     }
     if (response.status >= 500) {
-      return en
-        ? 'The server could not complete that request. Please try again shortly.'
-        : 'Seva haikuweza kukamilisha ombi hilo. Tafadhali jaribu tena baadaye.';
+      return 'The server could not complete that request. Please try again shortly.';
     }
     return fallback;
   };
@@ -1222,7 +1165,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
         throw new Error(
           twoFaFailureMessage(
             response,
-            serverMessage || (en ? 'Could not start 2FA setup.' : 'Imeshindwa kuanza usanidi wa 2FA.')
+            serverMessage || ('Could not start 2FA setup.')
           )
         );
       }
@@ -1262,13 +1205,11 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
         if (isStaleTwoFaEnrollment(response.status, serverMessage)) {
           discardTwoFaProvisioning();
           setTwoFaError(
-            en
-              ? 'This setup is no longer valid. Please start 2FA setup again.'
-              : 'Usanidi huu haufai tena. Tafadhali anza usanidi wa 2FA upya.'
+            'This setup is no longer valid. Please start 2FA setup again.'
           );
         } else {
           setTwoFaError(
-            twoFaFailureMessage(response, serverMessage || (en ? 'Incorrect code.' : 'Msimbo si sahihi.'))
+            twoFaFailureMessage(response, serverMessage || ('Incorrect code.'))
           );
         }
         return;
@@ -1321,9 +1262,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
       setTwoFaCopied(what);
     } catch {
       setTwoFaCopyError(
-        en
-          ? 'Copying is not available in this browser. Please select the text and copy it manually.'
-          : 'Kunakili hakupatikani kwenye kivinjari hiki. Tafadhali chagua maandishi na uyanakili kwa mkono.'
+        'Copying is not available in this browser. Please select the text and copy it manually.'
       );
     }
   };
@@ -1355,7 +1294,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
       if (!response.ok) {
         const serverMessage = typeof data?.error === 'string' ? data.error : '';
         throw new Error(
-          twoFaFailureMessage(response, serverMessage || (en ? 'Incorrect password.' : 'Nenosiri si sahihi.'))
+          twoFaFailureMessage(response, serverMessage || ('Incorrect password.'))
         );
       }
       setTwoFaMessage(typeof data?.message === 'string' ? data.message : '');
@@ -1443,7 +1382,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
     setActionWarning('');
     setDataError('');
     if (!locationFormLat || !locationFormLon) {
-      setDataError(lang === 'en' ? 'Enter both latitude and longitude.' : 'Weka latitude na longitude.');
+      setDataError('Enter both latitude and longitude.');
       return;
     }
     setAdminActionProcessing(true);
@@ -1475,10 +1414,8 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
     setDataError('');
 
     setConfirmModal({
-      title: lang === 'en' ? 'Approve Agent' : 'Muidhinishe Wakala',
-      message: lang === 'en'
-        ? "Are you sure you want to approve this agent? They will gain access to handle sensitive documents and receive payouts."
-        : "Je, una uhakika unataka kumuidhinisha wakala huyu? Atapata uwezo wa kushughulikia nyaraka nyeti na kupokea malipo.",
+      title: 'Approve Agent',
+      message: "Are you sure you want to approve this agent? They will gain access to handle sensitive documents and receive payouts.",
       onConfirm: async () => {
         setAdminActionProcessing(true);
         try {
@@ -1508,10 +1445,8 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
     setDataError('');
 
     setConfirmModal({
-      title: lang === 'en' ? 'Suspend Agent' : 'Msimamishe Wakala',
-      message: lang === 'en'
-        ? "Are you sure you want to suspend this agent? They will no longer be able to accept drop-offs or process handovers."
-        : "Je, una uhakika unataka kumsimamisha wakala huyu? Hataweza tena kupokea bidhaa au kushughulikia makabidhiano.",
+      title: 'Suspend Agent',
+      message: "Are you sure you want to suspend this agent? They will no longer be able to accept drop-offs or process handovers.",
       onConfirm: async () => {
         setAdminActionProcessing(true);
         try {
@@ -1616,7 +1551,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
     const { agentId } = agentWarnPrompt;
     const reason = agentWarnReason;
     if (!reason || reason.trim() === '') {
-      setAgentWarnReasonError(lang === 'en' ? 'A reason is required.' : 'Sababu inahitajika.');
+      setAgentWarnReasonError('A reason is required.');
       return;
     }
     closeAgentWarnDialog();
@@ -1756,24 +1691,20 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
     // succeed.
     if (!winningClaimId) {
       setDataError(
-        lang === 'en'
-          ? 'This dispute has no usable claim ID for that claimant, so it cannot be resolved from the console. Reload the dashboard; if it persists, the dispute record is incomplete.'
-          : 'Mzozo huu hauna kitambulisho cha claim kinachoweza kutumika kwa mdai huyu. Pakia upya dashibodi.'
+        'This dispute has no usable claim ID for that claimant, so it cannot be resolved from the console. Reload the dashboard; if it persists, the dispute record is incomplete.'
       );
       return;
     }
     if (!participatingClaimIds.includes(winningClaimId)) {
       setDataError(
-        lang === 'en'
-          ? 'That claim is not one of the two claimants in this dispute. Nothing was submitted.'
-          : 'Claim hiyo si mojawapo ya wadai wawili wa mzozo huu. Hakuna kilichotumwa.'
+        'That claim is not one of the two claimants in this dispute. Nothing was submitted.'
       );
       return;
     }
 
     const roleLabel = claimant.role === 'original'
-      ? (lang === 'en' ? 'Claimant A — original claim' : 'Mdai A — claim ya awali')
-      : (lang === 'en' ? 'Claimant B — contesting claim' : 'Mdai B — claim inayopinga');
+      ? ('Claimant A — original claim')
+      : ('Claimant B — contesting claim');
 
     // D-B1 FIX — the consequence must describe the LOSER's actual outcome.
     // The previous version keyed the sentence off `claimant.has_paid_escrow`,
@@ -1790,32 +1721,24 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
     const loserPaid = !!opponent?.has_paid_escrow;
 
     const winnerOutcome = winnerPaid
-      ? (lang === 'en'
-        ? 'Winning claim stays paid — the money is held while the item is handed over, then released.'
-        : 'Claim ya mshindi inabaki imelipwa — itawekwa kwenye AMANA na kuendelea hadi makabidhiano.')
-      : (lang === 'en'
-        ? 'Winning claim is NOT paid — it goes back to PENDING VERIFICATION and must complete verification and payment normally.'
-        : 'Claim ya mshindi HAIJALIPWA — inarudi kwenye UTHIBITISHO na lazima ikamilishe uthibitisho na malipo kama kawaida.');
+      ? ('Winning claim stays paid — the money is held while the item is handed over, then released.')
+      : ('Winning claim is NOT paid — it goes back to PENDING VERIFICATION and must complete verification and payment normally.');
     const loserOutcome = loserPaid
-      ? (lang === 'en'
-        ? 'Losing claim HAS paid — it will be locked to REFUNDING and a real M-Pesa refund will be attempted.'
-        : 'Claim iliyoshindwa IMELIPWA — itafungwa kwenye UREJESHAJI na urejeshaji halisi wa M-Pesa utajaribiwa.')
-      : (lang === 'en'
-        ? 'Losing claim has NOT paid — no refund is owed and it will simply be REJECTED.'
-        : 'Claim iliyoshindwa HAIJALIPWA — hakuna urejeshaji unaodaiwa na itakataliwa tu.');
+      ? ('Losing claim HAS paid — it will be locked to REFUNDING and a real M-Pesa refund will be attempted.')
+      : ('Losing claim has NOT paid — no refund is owed and it will simply be REJECTED.');
     const opponentLabel = opponent
-      ? `${opponent.role === 'original' ? (lang === 'en' ? 'Claimant A' : 'Mdai A') : (lang === 'en' ? 'Claimant B' : 'Mdai B')} (${opponent.owner_phone || (lang === 'en' ? 'no phone recorded' : 'simu haijarekodiwa')}, ${lang === 'en' ? 'claim' : 'claim'} ${opponent.claim_id})`
-      : (lang === 'en' ? 'the opposing claimant' : 'mdai mwingine');
+      ? `${opponent.role === 'original' ? ('Claimant A') : ('Claimant B')} (${opponent.owner_phone || ('no phone recorded')}, ${'claim'} ${opponent.claim_id})`
+      : ('the opposing claimant');
 
     setConfirmModal({
-      title: lang === 'en' ? 'Resolve Dispute' : 'Suluhisha Mzozo',
+      title: 'Resolve Dispute',
       message:
-        `${lang === 'en' ? 'Award' : 'Mpa ushindi'} ${dispute.id} (${lang === 'en' ? 'item' : 'bidhaa'} ${dispute.item_id}) ` +
-        `${lang === 'en' ? 'to' : 'kwa'} ${roleLabel} — ${lang === 'en' ? 'phone' : 'simu'} ${claimant.owner_phone || (lang === 'en' ? 'no phone recorded' : 'simu haijarekodiwa')}, ` +
-        `${lang === 'en' ? 'claim' : 'claim'} ${winningClaimId}.\n\n` +
-        `${lang === 'en' ? 'Outcome for the winning claim' : 'Matokeo kwa claim ya mshindi'}: ${winnerOutcome}\n` +
-        `${lang === 'en' ? 'Outcome for' : 'Matokeo kwa'} ${opponentLabel}: ${loserOutcome}\n\n` +
-        (lang === 'en' ? 'This decision is final and cannot be undone.' : 'Uamuzi huu ni wa mwisho.'),
+        `${'Award'} ${dispute.id} (${'item'} ${dispute.item_id}) ` +
+        `${'to'} ${roleLabel} — ${'phone'} ${claimant.owner_phone || ('no phone recorded')}, ` +
+        `${'claim'} ${winningClaimId}.\n\n` +
+        `${'Outcome for the winning claim'}: ${winnerOutcome}\n` +
+        `${'Outcome for'} ${opponentLabel}: ${loserOutcome}\n\n` +
+        ('This decision is final and cannot be undone.'),
       onConfirm: async () => {
         setAdminActionProcessing(true);
         try {
@@ -2050,10 +1973,8 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
     setDataError('');
 
     setConfirmModal({
-      title: lang === 'en' ? 'Clear Reputation Flag' : 'Ondoa Bendera ya Sifa',
-      message: lang === 'en'
-        ? "Are you sure you want to clear this phone number's reputation flag?"
-        : "Je, una uhakika unataka kuondoa bendera ya sifa mbaya kwenye nambari hii ya simu?",
+      title: 'Clear Reputation Flag',
+      message: "Are you sure you want to clear this phone number's reputation flag?",
       onConfirm: async () => {
         setAdminActionProcessing(true);
         try {
@@ -2146,7 +2067,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
     (Number(catFormBaseFee) || 0) + (Number(catFormComplexityFee) || 0) + (Number(catFormDelayFee) || 0) > 0;
 
   // The single page-level heading + description for whichever section is open.
-  const sectionCopy = CONSOLE_SECTIONS[activeTab][lang];
+  const sectionCopy = CONSOLE_SECTIONS[activeTab];
 
   // UX-14 — the admin authentication gate's single "a request is in flight"
   // flag. The credential step and the 2FA step are mutually exclusive, so the
@@ -2200,15 +2121,13 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               referrerPolicy="no-referrer"
             />
             <p className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">
-              {lang === 'en' ? 'Return4me administration' : 'Utawala wa Return4me'}
+              {'Return4me administration'}
             </p>
             <h1 className="text-section font-extrabold tracking-tight text-[var(--appearance-text-primary)]">
-              {lang === 'en' ? 'Admin Authentication' : 'Uthibitishaji wa Msimamizi'}
+              {'Admin Authentication'}
             </h1>
             <p className="mx-auto max-w-sm text-body leading-relaxed text-[var(--appearance-text-muted)]">
-              {lang === 'en'
-                ? 'Access restricted strictly to platform executives and vetted managers.'
-                : 'Ufikiaji umezuiwa kwa watendaji wakuu wa jukwaa na mameneja waliothibitishwa pekee.'}
+              {'Access restricted strictly to platform executives and vetted managers.'}
             </p>
           </div>
 
@@ -2240,7 +2159,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               <>
                 <Input
                   id="admin-username"
-                  label={lang === 'en' ? 'Admin Username' : 'Jina la Mtumiaji wa Msimamizi'}
+                  label={'Admin Username'}
                   type="text"
                   autoComplete="username"
                   value={username}
@@ -2253,7 +2172,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
 
                 <Input
                   id="admin-passcode"
-                  label={lang === 'en' ? 'Access Password' : 'Nenosiri la Ufikiaji'}
+                  label={'Access Password'}
                   type="password"
                   autoComplete="current-password"
                   value={passcode}
@@ -2268,7 +2187,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                 <Input
                   id="admin-2fa-code"
                   label={
-                    lang === 'en' ? '6-Digit Authenticator Code' : 'Msimbo wa Kithibitishaji wa Tarakimu 6'
+                    '6-Digit Authenticator Code'
                   }
                   type="text"
                   inputMode="numeric"
@@ -2291,7 +2210,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                   className="w-full"
                   onClick={() => { setPendingTwoFactorToken(null); setTwoFactorCode(''); setAuthError(''); }}
                 >
-                  {lang === 'en' ? 'Back to password' : 'Rudi kwenye nenosiri'}
+                  {'Back to password'}
                 </Button>
               </div>
             )}
@@ -2310,11 +2229,11 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
             >
               {pendingTwoFactorToken
                 ? (twoFactorLoading
-                    ? (lang === 'en' ? 'Verifying…' : 'Inathibitisha…')
-                    : (lang === 'en' ? 'Verify Code' : 'Thibitisha Msimbo'))
+                    ? ('Verifying…')
+                    : ('Verify Code'))
                 : (authLoading
-                    ? (lang === 'en' ? 'Signing in…' : 'Inaingia…')
-                    : (lang === 'en' ? 'Unlock System Console' : 'Fungua Konsoli ya Mfumo'))}
+                    ? ('Signing in…')
+                    : ('Unlock System Console'))}
             </Button>
           </form>
         </div>
@@ -2408,7 +2327,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               onClick={() => setToken(null)}
               className="self-start sm:self-auto shrink-0"
             >
-              {lang === 'en' ? 'Sign out' : 'Toka'}
+              {'Sign out'}
             </Button>
           </div>
 
@@ -2493,7 +2412,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
           <div className="lg:grid lg:grid-cols-[236px_minmax(0,1fr)] lg:gap-8 lg:items-start">
           <nav
             className="r4m-admin-nav flex border-b border-[var(--appearance-border)] overflow-x-auto scrollbar-none"
-            aria-label={lang === 'en' ? 'Admin sections' : 'Sehemu za msimamizi'}
+            aria-label={'Admin sections'}
           >
             <button
               onClick={() => setActiveTab('stats')}
@@ -2513,7 +2432,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               }`}
             >
               <Users size={ICON_SIZE.metadata} aria-hidden="true" />
-              <span>{lang === 'en' ? 'Agents Hub' : 'Mawakala'}</span>
+              <span>{'Agents Hub'}</span>
             </button>
             <button
               onClick={() => setActiveTab('found_items')}
@@ -2523,7 +2442,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               }`}
             >
               <Package size={ICON_SIZE.metadata} aria-hidden="true" />
-              <span>{lang === 'en' ? 'Found Items' : 'Vitu Vilivyopatikana'}</span>
+              <span>{'Found Items'}</span>
             </button>
             <button
               onClick={() => setActiveTab('disputes')}
@@ -2545,7 +2464,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               }`}
             >
               <ClipboardList size={ICON_SIZE.metadata} aria-hidden="true" />
-              <span>{lang === 'en' ? 'Claims' : 'Claims'}</span>
+              <span>{'Claims'}</span>
             </button>
             <button
               onClick={() => setActiveTab('lost_reports')}
@@ -2555,7 +2474,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               }`}
             >
               <FileSearch size={ICON_SIZE.metadata} aria-hidden="true" />
-              <span>{lang === 'en' ? 'Lost Reports' : 'Ripoti za Vitu'}</span>
+              <span>{'Lost Reports'}</span>
             </button>
             <button
               onClick={() => setActiveTab('ledger')}
@@ -2627,7 +2546,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               className="shrink-0 self-start"
             >
               <RefreshCw size={ICON_SIZE.metadata} aria-hidden="true" />
-              <span>{lang === 'en' ? 'Refresh' : 'Huisha'}</span>
+              <span>{'Refresh'}</span>
             </Button>
           </div>
 
@@ -2667,12 +2586,12 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4">
                 <StatCard
                   icon={Package}
-                  label={lang === 'en' ? 'Active Holding Items' : 'Vitu Vinavyoshikiliwa'}
+                  label={'Active Holding Items'}
                   value={dashboardData.stats.itemsAtAgentCount}
                 />
                 <StatCard
                   icon={Users}
-                  label={lang === 'en' ? 'Pending Agents' : 'Mawakala Wanaosubiri'}
+                  label={'Pending Agents'}
                   value={dashboardData.stats.pendingAgentsCount}
                 />
                 {/* PHASE 10 (F-2): this card previously rendered
@@ -2709,10 +2628,10 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="font-extrabold text-caption text-[var(--appearance-text-muted)] uppercase tracking-widest flex items-center gap-2">
                     <ShieldCheck size={ICON_SIZE.ui} aria-hidden="true" />
-                    {en ? 'Two-factor authentication (2FA)' : 'Uthibitishaji wa hatua mbili (2FA)'}
+                    {'Two-factor authentication (2FA)'}
                   </h3>
                   <Badge variant={adminTotpEnabled ? 'success' : 'neutral'}>
-                    {adminTotpEnabled ? (en ? 'Enabled' : 'Imewashwa') : (en ? 'Not enabled' : 'Haijawashwa')}
+                    {adminTotpEnabled ? ('Enabled') : ('Not enabled')}
                   </Badge>
                 </div>
 
@@ -2726,12 +2645,8 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                   <div className="space-y-3">
                     <p className="text-body text-[var(--appearance-text-muted)]">
                       {adminTotpEnabled
-                        ? (en
-                            ? 'Your administrator account is protected by an authenticator app. You can configure a replacement authenticator at any time — the current one keeps working until the new one is confirmed.'
-                            : 'Akaunti yako ya msimamizi inalindwa na programu ya uthibitishaji. Unaweza kusanidi kifaa kipya cha uthibitishaji wakati wowote — kifaa cha sasa kinaendelea kufanya kazi hadi kipya kithibitishwe.')
-                        : (en
-                            ? 'This admin account does not have 2FA enabled. Given this account controls dispute resolution, agent approval, and the full financial ledger, we strongly recommend enabling it.'
-                            : 'Akaunti hii ya msimamizi haina 2FA. Kwa kuwa akaunti hii inasimamia usuluhishi wa migogoro, uidhinishaji wa mawakala, na leja kamili ya fedha, tunapendekeza sana kuiwasha.')}
+                        ? ('Your administrator account is protected by an authenticator app. You can configure a replacement authenticator at any time — the current one keeps working until the new one is confirmed.')
+                        : ('This admin account does not have 2FA enabled. Given this account controls dispute resolution, agent approval, and the full financial ledger, we strongly recommend enabling it.')}
                     </p>
 
                     {!twoFaShowDisableForm && (
@@ -2739,7 +2654,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                         {adminTotpEnabled ? (
                           <>
                             <Button type="button" variant="secondary" onClick={openTwoFaEnrollForm}>
-                              {en ? 'Re-enroll authenticator' : 'Weka kifaa kipya cha uthibitishaji'}
+                              {'Re-enroll authenticator'}
                             </Button>
                             <button
                               type="button"
@@ -2750,12 +2665,12 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                               }}
                               className="self-start text-caption font-bold text-status-danger underline hover:no-underline cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange/40 rounded"
                             >
-                              {en ? 'Disable 2FA' : 'Zima 2FA'}
+                              {'Disable 2FA'}
                             </button>
                           </>
                         ) : (
                           <Button type="button" variant="primary" onClick={openTwoFaEnrollForm} className="self-start">
-                            {en ? 'Enable 2FA' : 'Washa 2FA'}
+                            {'Enable 2FA'}
                           </Button>
                         )}
                       </div>
@@ -2771,19 +2686,17 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                   <div className="space-y-4 bg-[var(--appearance-surface-muted)] border border-[var(--appearance-border)] rounded-2xl p-4">
                     <h4 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
                       {adminTotpEnabled
-                        ? (en ? 'Set up your replacement authenticator' : 'Sanidi kifaa chako kipya cha uthibitishaji')
-                        : (en ? 'Set up two-factor authentication' : 'Sanidi uthibitishaji wa hatua mbili')}
+                        ? ('Set up your replacement authenticator')
+                        : ('Set up two-factor authentication')}
                     </h4>
                     {adminTotpEnabled && (
                       <Banner kind="info">
-                        {en
-                          ? 'Your current authenticator stays active until you confirm a code from the new one — nothing is switched off while you set this up.'
-                          : 'Kifaa chako cha sasa kinaendelea kufanya kazi hadi uthibitishe msimbo kutoka kifaa kipya — hakuna kinachozimwa wakati wa usanidi huu.'}
+                        {'Your current authenticator stays active until you confirm a code from the new one — nothing is switched off while you set this up.'}
                       </Banner>
                     )}
                     <div className="space-y-2">
                       <p className="text-body font-bold text-[var(--appearance-text-primary)]">
-                        {en ? '1. Scan this QR code with your authenticator app' : '1. Skani msimbo huu wa QR kwa programu yako ya uthibitishaji'}
+                        {'1. Scan this QR code with your authenticator app'}
                       </p>
                       <div className="inline-block rounded-2xl border border-[var(--appearance-border)] bg-[var(--appearance-surface)] p-3">
                         <QRCodeSVG
@@ -2792,18 +2705,14 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                           marginSize={TWO_FA_QR_MARGIN}
                           level="M"
                           role="img"
-                          aria-label={en
-                            ? 'QR code that adds this Return4me administrator account to an authenticator app'
-                            : 'Msimbo wa QR unaoongeza akaunti hii ya msimamizi wa Return4me kwenye programu ya uthibitishaji'}
-                          title={en
-                            ? 'Two-factor authentication setup QR code'
-                            : 'Msimbo wa QR wa kusanidi uthibitishaji wa hatua mbili'}
+                          aria-label={'QR code that adds this Return4me administrator account to an authenticator app'}
+                          title={'Two-factor authentication setup QR code'}
                         />
                       </div>
                     </div>
                     <div className="space-y-2">
                       <p className="text-body font-bold text-[var(--appearance-text-primary)]">
-                        {en ? '2. Or enter this setup key manually' : '2. Au weka kitufe hiki cha kusanidi kwa mkono'}
+                        {'2. Or enter this setup key manually'}
                       </p>
                       <div className="flex flex-wrap items-center gap-2">
                         <code className="font-mono text-caption bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-lg px-3 py-2 break-all select-all text-[var(--appearance-text-primary)]">
@@ -2811,12 +2720,12 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                         </code>
                         <Button type="button" variant="secondary" size="sm" onClick={copyTwoFaSecret}>
                           <Copy size={ICON_SIZE.metadata} aria-hidden="true" />
-                          {en ? 'Copy setup key' : 'Nakili kitufe'}
+                          {'Copy setup key'}
                         </Button>
                       </div>
                       {twoFaCopied === 'secret' && (
                         <p role="status" className="text-caption font-bold text-status-success">
-                          {en ? 'Setup key copied.' : 'Kitufe cha kusanidi kimekopiwa.'}
+                          {'Setup key copied.'}
                         </p>
                       )}
                       {twoFaCopyError && (
@@ -2825,12 +2734,12 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                     </div>
                     <form onSubmit={handleTwoFaConfirm} className="space-y-2">
                       <p className="text-body font-bold text-[var(--appearance-text-primary)]">
-                        {en ? '3. Enter the 6-digit code your app shows' : '3. Weka msimbo wa tarakimu 6 unaoonyeshwa na programu yako'}
+                        {'3. Enter the 6-digit code your app shows'}
                       </p>
                       <div className="flex flex-wrap gap-2 items-end">
                         <div className="space-y-1">
                           <label htmlFor="twofa-confirm-code" className="block text-caption font-bold text-[var(--appearance-text-primary)]">
-                            {en ? 'Verification code' : 'Msimbo wa uthibitishaji'}
+                            {'Verification code'}
                           </label>
                           <input
                             id="twofa-confirm-code"
@@ -2847,8 +2756,8 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                         </div>
                         <Button type="submit" variant="primary" loading={twoFaProcessing} disabled={twoFaConfirmCode.length !== 6}>
                           {adminTotpEnabled
-                            ? (en ? 'Confirm and replace' : 'Thibitisha na ubadilishe')
-                            : (en ? 'Confirm and enable' : 'Thibitisha na uwashe')}
+                            ? ('Confirm and replace')
+                            : ('Confirm and enable')}
                         </Button>
                       </div>
                     </form>
@@ -2857,7 +2766,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                       onClick={cancelTwoFaEnrollForm}
                       className="text-caption font-bold text-[var(--appearance-text-muted)] underline hover:no-underline cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange/40 rounded"
                     >
-                      {en ? 'Cancel setup' : 'Ghairi usanidi'}
+                      {'Cancel setup'}
                     </button>
                   </div>
                 )}
@@ -2875,16 +2784,12 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                   >
                     <p className="text-body text-[var(--appearance-text-muted)]">
                       {adminTotpEnabled
-                        ? (en
-                            ? 'Confirm your password to stage a replacement authenticator. Your current authenticator stays active until you confirm a code from the new one.'
-                            : 'Thibitisha nenosiri lako ili kuanza kusanidi kifaa kipya. Kifaa chako cha sasa kinaendelea kufanya kazi hadi uthibitishe msimbo kutoka kifaa kipya.')
-                        : (en
-                            ? 'Confirm your password to begin. A stolen session on its own can never turn 2FA on or replace it.'
-                            : 'Thibitisha nenosiri lako ili kuanza. Kipindi kilichoibiwa hakiwezi kuwasha wala kubadilisha 2FA peke yake.')}
+                        ? ('Confirm your password to stage a replacement authenticator. Your current authenticator stays active until you confirm a code from the new one.')
+                        : ('Confirm your password to begin. A stolen session on its own can never turn 2FA on or replace it.')}
                     </p>
                     <div className="space-y-1">
                       <label htmlFor="twofa-start-password" className="block text-caption font-bold text-[var(--appearance-text-primary)]">
-                        {en ? 'Confirm your password' : 'Thibitisha nenosiri lako'}
+                        {'Confirm your password'}
                       </label>
                       <input
                         id="twofa-start-password"
@@ -2899,11 +2804,11 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                     <div className="flex flex-wrap items-center gap-2">
                       <Button type="submit" variant="primary" loading={twoFaProcessing} disabled={!twoFaStartPassword}>
                         {adminTotpEnabled
-                          ? (en ? 'Generate new QR code' : 'Tengeneza msimbo mpya wa QR')
-                          : (en ? 'Continue' : 'Endelea')}
+                          ? ('Generate new QR code')
+                          : ('Continue')}
                       </Button>
                       <Button type="button" variant="ghost" onClick={cancelTwoFaEnrollForm}>
-                        {en ? 'Cancel' : 'Ghairi'}
+                        {'Cancel'}
                       </Button>
                     </div>
                   </form>
@@ -2916,12 +2821,10 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                   <div className="space-y-4 bg-[var(--appearance-surface-muted)] border border-[var(--appearance-border)] rounded-2xl p-4">
                     <h4 className="text-heading font-extrabold text-[var(--appearance-text-primary)] flex items-center gap-2">
                       <ShieldAlert size={ICON_SIZE.ui} aria-hidden="true" />
-                      {en ? 'Save your recovery codes' : 'Hifadhi misimbo yako ya urejeshaji'}
+                      {'Save your recovery codes'}
                     </h4>
                     <Banner kind="warning">
-                      {en
-                        ? 'These codes are your backup way in. Each one works a single time, and none of them will be shown again. Save them somewhere safe before you leave this screen.'
-                        : 'Misimbo hii ni njia yako mbadala ya kuingia. Kila mmoja hutumika mara moja tu, na hakuna utakaoonyeshwa tena. Hifadhi mahali salama kabla ya kuondoka kwenye skrini hii.'}
+                      {'These codes are your backup way in. Each one works a single time, and none of them will be shown again. Save them somewhere safe before you leave this screen.'}
                     </Banner>
                     <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       {twoFaRecoveryCodes.map((code) => (
@@ -2936,15 +2839,15 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                     <div className="flex flex-wrap items-center gap-2">
                       <Button type="button" variant="secondary" size="sm" onClick={copyTwoFaRecoveryCodes}>
                         <Copy size={ICON_SIZE.metadata} aria-hidden="true" />
-                        {en ? 'Copy all codes' : 'Nakili misimbo yote'}
+                        {'Copy all codes'}
                       </Button>
                       <Button type="button" variant="primary" onClick={finishTwoFaEnrollment}>
-                        {en ? 'Done, I have saved them' : 'Nimemaliza, nimezihifadhi'}
+                        {'Done, I have saved them'}
                       </Button>
                     </div>
                     {twoFaCopied === 'codes' && (
                       <p role="status" className="text-caption font-bold text-status-success">
-                        {en ? 'Recovery codes copied.' : 'Misimbo ya urejeshaji imekopiwa.'}
+                        {'Recovery codes copied.'}
                       </p>
                     )}
                     {twoFaCopyError && (
@@ -2960,7 +2863,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                   >
                     <div className="flex-1 space-y-1">
                       <label htmlFor="twofa-disable-password" className="block text-caption font-bold text-status-danger">
-                        {en ? 'Confirm password to disable 2FA' : 'Thibitisha nenosiri ili kuzima 2FA'}
+                        {'Confirm password to disable 2FA'}
                       </label>
                       <input
                         id="twofa-disable-password"
@@ -2974,7 +2877,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
                       <Button type="submit" variant="danger" loading={twoFaProcessing}>
-                        {en ? 'Disable' : 'Zima'}
+                        {'Disable'}
                       </Button>
                       <Button
                         type="button"
@@ -2985,7 +2888,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                           setTwoFaError('');
                         }}
                       >
-                        {en ? 'Cancel' : 'Ghairi'}
+                        {'Cancel'}
                       </Button>
                     </div>
                   </form>
@@ -2998,10 +2901,8 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                 {dashboardData.auditLogs.length === 0 ? (
                   <EmptyState
                     icon={ClipboardList}
-                    title={lang === 'en' ? 'No audit activity yet' : 'Hakuna shughuli bado'}
-                    description={lang === 'en'
-                      ? 'Platform actions appear here as they are recorded.'
-                      : 'Vitendo vya jukwaa vinaonekana hapa vinaporekodiwa.'}
+                    title={'No audit activity yet'}
+                    description={'Platform actions appear here as they are recorded.'}
                   />
                 ) : (
                   <div className="h-60 overflow-y-auto border border-[var(--appearance-border)] rounded-xl font-mono text-caption p-4 bg-[var(--appearance-surface-muted)] space-y-2 leading-relaxed">
@@ -3026,25 +2927,25 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               {/* Search & Filters */}
               <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row gap-3 sm:items-end">
                 <Input
-                  label={lang === 'en' ? 'Search agents' : 'Tafuta mawakala'}
+                  label={'Search agents'}
                   hideLabel
                   type="text"
                   value={agentSearch}
                   onChange={(e) => setAgentSearch(e.target.value)}
-                  placeholder={lang === 'en' ? 'Search by business name, phone, email, till...' : 'Tafuta kwa jina la biashara, simu, barua pepe...'}
+                  placeholder={'Search by business name, phone, email, till...'}
                   className="flex-1"
                 />
                 <Select
-                  label={lang === 'en' ? 'Filter by agent status' : 'Chuja kwa hali ya wakala'}
+                  label={'Filter by agent status'}
                   hideLabel
                   value={agentStatusFilter}
                   onChange={(e) => setAgentStatusFilter(e.target.value)}
                   className="sm:w-60"
                 >
-                  <option value="all">{lang === 'en' ? 'All Statuses' : 'Hali Zote'}</option>
-                  <option value="pending">{lang === 'en' ? 'Pending Approval' : 'Wanasubiri Uhakiki'}</option>
-                  <option value="active">{lang === 'en' ? 'Active Hubs' : 'Mawakala Wanaofanya Kazi'}</option>
-                  <option value="suspended">{lang === 'en' ? 'Suspended Hubs' : 'Waliosimamishwa Kazi'}</option>
+                  <option value="all">{'All Statuses'}</option>
+                  <option value="pending">{'Pending Approval'}</option>
+                  <option value="active">{'Active Hubs'}</option>
+                  <option value="suspended">{'Suspended Hubs'}</option>
                 </Select>
               </div>
 
@@ -3068,10 +2969,8 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                   return (
                     <EmptyState
                       icon={Users}
-                      title={lang === 'en' ? 'No agents found' : 'Hakuna mawakala'}
-                      description={lang === 'en'
-                        ? 'No registered agents match the current search or status filter.'
-                        : 'Hakuna mawakala walioandikishwa wanaolingana na utafutaji au kichujio cha hali.'}
+                      title={'No agents found'}
+                      description={'No registered agents match the current search or status filter.'}
                     />
                   );
                 }
@@ -3116,7 +3015,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
 
                             <div className="flex items-center gap-3 self-stretch md:self-auto justify-between md:justify-end">
                               <div className="text-right hidden md:block">
-                                <div className="text-caption font-bold text-status-success">KES {(agent.total_earned || 0).toLocaleString()} {lang === 'en' ? 'earned' : 'iliyopatikana'}</div>
+                                <div className="text-caption font-bold text-status-success">KES {(agent.total_earned || 0).toLocaleString()} {'earned'}</div>
                                 <div className="text-caption text-[var(--appearance-text-muted)] font-mono">{agent.contact_phone} · Till: {agent.mpesa_till_or_paybill}</div>
                               </div>
                               <div className="flex items-center gap-2">
@@ -3128,7 +3027,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                                     setExpandedAgentId(isExpanded ? null : agent.id);
                                   }}
                                 >
-                                  {isExpanded ? (lang === 'en' ? 'Hide Details' : 'Ficha') : (lang === 'en' ? 'View Details' : 'Angalia')}
+                                  {isExpanded ? ('Hide Details') : ('View Details')}
                                 </Button>
                               </div>
                             </div>
@@ -3433,7 +3332,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                           : 'bg-[var(--appearance-surface)] text-[var(--appearance-text-primary)] border-[var(--appearance-border)] hover:border-[var(--appearance-primary)]'
                       }`}
                     >
-                      {lang === 'en' ? cat.name_en : cat.name_sw}
+                      {cat.name_en}
                     </button>
                   ))}
                 </div>
@@ -3466,10 +3365,8 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                   return (
                     <EmptyState
                       icon={Package}
-                      title={lang === 'en' ? 'No found items match your filters' : 'Hakuna vitu vinavyolingana'}
-                      description={lang === 'en'
-                        ? 'Adjust the search, status, category or review-flag filters to see recovered items.'
-                        : 'Badilisha vichujio vya utafutaji, hali, aina au ukaguzi ili kuona vitu.'}
+                      title={'No found items match your filters'}
+                      description={'Adjust the search, status, category or review-flag filters to see recovered items.'}
                     />
                   );
                 }
@@ -3701,7 +3598,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               tab gets from its activeTab effect) and leaving it aborts any
               in-flight request. */}
           {activeTab === 'claims' && (
-            <ClaimsAdministration lang={lang} token={token} />
+            <ClaimsAdministration token={token} />
           )}
 
           {/* TAB CONTENT: LOST REPORTS (PHASE 11A) */}
@@ -3710,7 +3607,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               it aborts any in-flight request. There is no admin action here:
               reports are visible, not editable. */}
           {activeTab === 'lost_reports' && (
-            <LostReportsAdministration lang={lang} token={token} />
+            <LostReportsAdministration token={token} />
           )}
 
           {/* TAB CONTENT 3: OPEN DISPUTES CHECKOUT */}
@@ -3779,10 +3676,8 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               {dashboardData.disputes.length === 0 ? (
                 <EmptyState
                   icon={AlertTriangle}
-                  title={lang === 'en' ? 'No disputes to adjudicate' : 'Hakuna mizozo ya kusuluhisha'}
-                  description={lang === 'en'
-                    ? 'No ownership disputes have been raised.'
-                    : 'Hakuna mizozo ya umiliki iliyoanzishwa.'}
+                  title={'No disputes to adjudicate'}
+                  description={'No ownership disputes have been raised.'}
                 />
               ) : (
                 <div className="space-y-4">
@@ -3791,43 +3686,40 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                     const isResolved = !!dispute.resolved_at || !!dispute.resolved_by;
                     const evidenceState = disputeEvidence[dispute.id];
                     const roleLabel = (role: string) => role === 'original'
-                      ? (lang === 'en' ? 'Claimant A — original claim' : 'Mdai A — claim ya awali')
-                      : (lang === 'en' ? 'Claimant B — contesting claim' : 'Mdai B — claim inayopinga');
+                      ? ('Claimant A — original claim')
+                      : ('Claimant B — contesting claim');
                     const roleShort = (role: string) => role === 'original'
-                      ? (lang === 'en' ? 'Claimant A' : 'Mdai A')
-                      : (lang === 'en' ? 'Claimant B' : 'Mdai B');
+                      ? ('Claimant A')
+                      : ('Claimant B');
                     return (
                     <div key={dispute.id} className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-5 shadow-sm space-y-4">
                       <div className="flex flex-wrap justify-between items-center gap-2 pb-3 border-b border-[var(--appearance-border)]">
                         <div>
                           <span className="text-caption font-mono font-bold text-status-danger">DISPUTE: {dispute.id}</span>
                           <p className="text-caption text-[var(--appearance-text-muted)]">
-                            {lang === 'en' ? 'Raised on' : 'Ilianzishwa'}{' '}
+                            {'Raised on'}{' '}
                             {dispute.created_at ? new Date(dispute.created_at).toLocaleString() : '—'}
                           </p>
                         </div>
                         <div className="flex items-center gap-2">
                           <span className="text-caption font-bold text-[var(--appearance-text-muted)]">
-                            {lang === 'en' ? 'Item' : 'Bidhaa'}: {dispute.item_id || '—'}
+                            {'Item'}: {dispute.item_id || '—'}
                           </span>
                           <Badge variant={isResolved ? 'neutral' : 'warning'}>
-                            {isResolved ? (lang === 'en' ? 'Resolved' : 'Imetatuliwa') : (lang === 'en' ? 'Open' : 'Wazi')}
+                            {isResolved ? ('Resolved') : ('Open')}
                           </Badge>
                         </div>
                       </div>
 
                       {claimants.length === 0 ? (
                         <p className="text-caption text-status-danger">
-                          {lang === 'en'
-                            ? 'No claimant details were returned for this dispute, so it cannot be adjudicated from here.'
-                            : 'Hakuna taarifa za wadai zilizorejeshwa kwa mzozo huu, hivyo hauwezi kusuluhishwa hapa.'}
+                          {'No claimant details were returned for this dispute, so it cannot be adjudicated from here.'}
                         </p>
                       ) : (
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           {claimants.map((claimant: any) => (
                             <DisputeClaimantPanel
                               key={claimant.role + ':' + claimant.claim_id}
-                              lang={lang}
                               claimant={claimant}
                               evidenceState={evidenceState}
                               roleLabel={roleLabel(claimant.role)}
@@ -3847,7 +3739,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                           loading={!!evidenceState?.loading}
                           onClick={() => fetchDisputeEvidence(dispute.id)}
                         >
-                          {lang === 'en' ? 'Load evidence' : 'Pakia ushahidi'}
+                          {'Load evidence'}
                         </Button>
                       </div>
 
@@ -3857,18 +3749,16 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                           offering buttons that can only fail. */}
                       {isResolved ? (
                         <p className="text-caption text-[var(--appearance-text-muted)] border-t border-[var(--appearance-border)] pt-3">
-                          {lang === 'en' ? 'Resolved' : 'Imemetatuliwa'}
+                          {'Resolved'}
                           {dispute.resolved_at ? ` ${new Date(dispute.resolved_at).toLocaleString()}` : ''}
                           {dispute.resolved_claim_id
-                            ? ` — ${lang === 'en' ? 'awarded to claim' : 'ilipatiwa claim'} ${dispute.resolved_claim_id}`
+                            ? ` — ${'awarded to claim'} ${dispute.resolved_claim_id}`
                             : ''}
                           {dispute.resolved_by ? ` (${dispute.resolved_by})` : ''}
                         </p>
                       ) : claimants.length === 0 ? (
                         <p className="text-caption text-status-danger border-t border-[var(--appearance-border)] pt-3">
-                          {lang === 'en'
-                            ? 'Resolution is unavailable: the two claimant claim IDs were not returned for this dispute.'
-                            : 'Kusuluhisha hakuwezekani: vitambulisho vya claim havijarejeshwa.'}
+                          {'Resolution is unavailable: the two claimant claim IDs were not returned for this dispute.'}
                         </p>
                       ) : (
                         <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-[var(--appearance-border)]">
@@ -3879,15 +3769,11 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                               size="sm"
                               disabled={adminActionProcessing || !claimant.claim_id}
                               title={!claimant.claim_id
-                                ? (lang === 'en'
-                                  ? 'No claim ID is available for this claimant'
-                                  : 'Hakuna kitambulisho cha claim kwa mdai huyu')
+                                ? ('No claim ID is available for this claimant')
                                 : undefined}
                               onClick={() => handleResolveDispute(dispute, claimant)}
                             >
-                              {lang === 'en'
-                                ? `Award ${roleShort(claimant.role)}`
-                                : `Mpa ushindi ${roleShort(claimant.role)}`}
+                              {`Award ${roleShort(claimant.role)}`}
                             </Button>
                           ))}
                         </div>
@@ -4827,7 +4713,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
                                   {/* CAT-04 — an administrator must be able to IDENTIFY a
                                       deactivated category at a glance. */}
                                   {!cat.is_active && (
-                                    <Badge variant="neutral">{lang === 'en' ? 'Inactive' : 'Haitumiki'}</Badge>
+                                    <Badge variant="neutral">{'Inactive'}</Badge>
                                   )}
                                 </div>
                                 <p className="text-[var(--appearance-text-muted)] text-caption">{cat.name_sw}</p>
@@ -5003,25 +4889,25 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
         }}
         title={
           refundConfirm?.kind === 'revert'
-            ? lang === 'en' ? 'Confirm refund NOT executed' : 'Thibitisha kwamba urejeshaji haukuuatikwa'
-            : lang === 'en' ? 'Confirm refund executed' : 'Thibitisha kwamba urejeshaji uliuatikwa'
+            ? 'Confirm refund NOT executed'
+            : 'Confirm refund executed'
         }
-        closeLabel={lang === 'en' ? 'Close' : 'Funga'}
+        closeLabel={'Close'}
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="secondary" size="sm" onClick={() => setRefundConfirm(null)} disabled={refundConfirmBusy}>
-              {lang === 'en' ? 'Cancel' : 'Ghairi'}
+              {'Cancel'}
             </Button>
             <Button
               variant={refundConfirm?.kind === 'revert' ? 'danger' : 'primary'}
               size="sm"
               loading={refundConfirmBusy}
-              loadingLabel={lang === 'en' ? 'Saving…' : 'Inahifadhi…'}
+              loadingLabel={'Saving…'}
               onClick={confirmRefundOutcome}
             >
               {refundConfirm?.kind === 'revert'
-                ? lang === 'en' ? 'Confirm not executed' : 'Thibitisha haukuuatikwa'
-                : lang === 'en' ? 'Confirm executed' : 'Thibitisha imeuatikwa'}
+                ? 'Confirm not executed'
+                : 'Confirm executed'}
             </Button>
           </div>
         }
@@ -5029,15 +4915,11 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
         <div className="space-y-3">
           <p className="text-[var(--appearance-text-secondary)]">
             {refundConfirm?.kind === 'revert'
-              ? lang === 'en'
-                ? 'Have you verified directly with the payment provider (IntaSend) that this refund was NOT sent? Confirming rejects the losing claim and flags the money it was holding for a manual refund. It will NOT send any money.'
-                : 'Je, ume$thibitisha mwenyewe kwa mwenyeji wa malipo (IntaSend) kwamba urejeshaji huu HAKUUATIKWA? Kubatilisha kuthibitisha mdai aliyoshindwa na kuweka pesa aliyokuwa akishikilia kwa urejeshaji wa mwongozi. Hakutuma pesa yoyote.'
-              : lang === 'en'
-                ? 'Have you verified directly with the payment provider (IntaSend) that this refund actually reached the claimant? Confirming records the claim as refunded and closes it. It will NOT send any money.'
-                : 'Je, ume$thibitisha mwenyewe kwa mwenyeji wa malipo (IntaSend) kwamba urejeshaji huu kwa kweli umefika kwa mdai? Kubatilisha kunarekodi kuwa mdai amepata pesa na kumaliza. Hakutuma pesa yoyote.'}
+              ? 'Have you verified directly with the payment provider (IntaSend) that this refund was NOT sent? Confirming rejects the losing claim and flags the money it was holding for a manual refund. It will NOT send any money.'
+              : 'Have you verified directly with the payment provider (IntaSend) that this refund actually reached the claimant? Confirming records the claim as refunded and closes it. It will NOT send any money.'}
           </p>
           <p className="font-mono text-caption text-[var(--appearance-text-muted)]">
-            {lang === 'en' ? 'Claim: ' : 'Claim: '}{refundConfirm?.claimId}
+            {'Claim: '}{refundConfirm?.claimId}
           </p>
           {/* Authoritative server failure stays inside the dialog, so a rejected
               action is never mistaken for a completed one. */}
@@ -5060,11 +4942,11 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
         open={itemReviewPrompt !== null}
         onClose={closeItemReviewPrompt}
         title={itemReviewPrompt?.promptLabel ?? ''}
-        closeLabel={lang === 'en' ? 'Close' : 'Funga'}
+        closeLabel={'Close'}
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="secondary" size="sm" onClick={closeItemReviewPrompt}>
-              {lang === 'en' ? 'Cancel' : 'Ghairi'}
+              {'Cancel'}
             </Button>
             <Button
               variant={itemReviewPrompt?.action === 'legal-hold' ? 'danger' : 'primary'}
@@ -5072,10 +4954,10 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               onClick={confirmItemReviewStatusChange}
             >
               {itemReviewPrompt?.action === 'clear-hold'
-                ? (lang === 'en' ? 'Clear hold' : 'Ondoa kizuizi')
+                ? ('Clear hold')
                 : itemReviewPrompt?.action === 'legal-hold'
-                  ? (lang === 'en' ? 'Place Legal Hold' : 'Weka Kizuizi cha Kisheria')
-                  : (lang === 'en' ? 'Flag Suspected Stolen' : 'Weka Alama ya Wizi')}
+                  ? ('Place Legal Hold')
+                  : ('Flag Suspected Stolen')}
             </Button>
           </div>
         }
@@ -5083,7 +4965,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
         <div className="space-y-3">
           {itemReviewReasonError && <Banner kind="error">{itemReviewReasonError}</Banner>}
           <Textarea
-            label={lang === 'en' ? 'Reason (recorded in the audit log)' : 'Sababu (inarekodiwa kwenye kumbukumbu)'}
+            label={'Reason (recorded in the audit log)'}
             id="item-review-reason"
             rows={3}
             value={itemReviewReason}
@@ -5093,12 +4975,8 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
             }}
             required={itemReviewPrompt?.action !== 'clear-hold'}
             hint={itemReviewPrompt?.action === 'clear-hold'
-              ? (lang === 'en'
-                ? 'Optional — clearing a hold only restores claimability.'
-                : 'Si lazima — kuondoa kizuizi kunarejesha uwezekano wa madai.')
-              : (lang === 'en'
-                ? 'Required — recorded against your administrator session.'
-                : 'Inahitajika — inarekodiwa kwa kikao chako cha msimamizi.')}
+              ? ('Optional — clearing a hold only restores claimability.')
+              : ('Required — recorded against your administrator session.')}
           />
         </div>
       </Modal>
@@ -5114,15 +4992,15 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
       <Modal
         open={agentWarnPrompt !== null}
         onClose={closeAgentWarnDialog}
-        title={lang === 'en' ? 'Issue agent warning' : 'Toa onyo kwa wakala'}
-        closeLabel={lang === 'en' ? 'Close' : 'Funga'}
+        title={'Issue agent warning'}
+        closeLabel={'Close'}
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="secondary" size="sm" onClick={closeAgentWarnDialog}>
-              {lang === 'en' ? 'Cancel' : 'Ghairi'}
+              {'Cancel'}
             </Button>
             <Button variant="danger" size="sm" onClick={confirmAgentWarn}>
-              {lang === 'en' ? 'Issue Warning' : 'Toa Onyo'}
+              {'Issue Warning'}
             </Button>
           </div>
         }
@@ -5130,12 +5008,10 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
         <div className="space-y-3">
           {agentWarnReasonError && <Banner kind="error">{agentWarnReasonError}</Banner>}
           <p className="text-[var(--appearance-text-secondary)]">
-            {lang === 'en'
-              ? 'This issues an official warning against this agent. The reason you give is recorded in the platform audit log against your administrator session.'
-              : 'Hii inatoa onyo rasmi kwa wakala huyu. Sababu unayotoa inarekodiwa kwenye kumbukumbu ya ukaguzi wa jukwaa kwa kikao chako cha msimamizi.'}
+            {'This issues an official warning against this agent. The reason you give is recorded in the platform audit log against your administrator session.'}
           </p>
           <Textarea
-            label={lang === 'en' ? 'Reason (recorded in the audit log)' : 'Sababu (inarekodiwa kwenye kumbukumbu)'}
+            label={'Reason (recorded in the audit log)'}
             id="agent-warn-reason"
             rows={3}
             value={agentWarnReason}
@@ -5144,9 +5020,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
               if (agentWarnReasonError) setAgentWarnReasonError('');
             }}
             required
-            hint={lang === 'en'
-              ? 'Required — a warning is never recorded without one.'
-              : 'Inahitajika — onyo halirekodiwi bila sababu.'}
+            hint={'Required — a warning is never recorded without one.'}
           />
         </div>
       </Modal>
@@ -5166,14 +5040,14 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
         open={confirmModal !== null}
         onClose={closeConfirmModal}
         title={confirmModal?.title ?? ''}
-        closeLabel={lang === 'en' ? 'Close' : 'Funga'}
+        closeLabel={'Close'}
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="secondary" size="sm" onClick={closeConfirmModal}>
-              {lang === 'en' ? 'Cancel' : 'Ghairi'}
+              {'Cancel'}
             </Button>
             <Button variant="primary" size="sm" onClick={confirmPendingAction}>
-              {lang === 'en' ? 'Confirm' : 'Thibitisha'}
+              {'Confirm'}
             </Button>
           </div>
         }
@@ -5270,7 +5144,7 @@ export default function AdminView({ lang, token, setToken, onCategoriesChanged }
             <button
               type="button"
               onClick={() => setLightboxImage(null)}
-              aria-label={lang === 'en' ? 'Close full screen view' : 'Funga mwonekano wa skrini nzima'}
+              aria-label={'Close full screen view'}
               className="absolute top-4 right-4 z-10 h-11 w-11 rounded-full bg-black/30 hover:bg-black/50 text-white flex items-center justify-center cursor-pointer transition-colors motion-reduce:transition-none"
             >
               <X size={ICON_SIZE.emphasis} aria-hidden="true" />

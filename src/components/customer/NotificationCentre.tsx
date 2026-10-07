@@ -50,7 +50,6 @@ import {
 //
 
 interface Props {
-  lang: 'en' | 'sw';
 }
 
 const STATE_TONE: Record<CustomerNotificationState, 'success' | 'warning' | 'danger' | 'info' | 'neutral'> = {
@@ -63,7 +62,7 @@ const STATE_TONE: Record<CustomerNotificationState, 'success' | 'warning' | 'dan
 
 type Tab = 'active' | 'history';
 
-export default function NotificationCentre({ lang }: Props) {
+export default function NotificationCentre({  }: Props) {
   const [tab, setTab] = useState<Tab>('active');
   const [items, setItems] = useState<CustomerNotification[]>([]);
   const [unread, setUnread] = useState(0);
@@ -92,14 +91,12 @@ export default function NotificationCentre({ lang }: Props) {
       // Neutral wording: the customer is told what happened in service terms and
       // never what failed underneath.
       setError(
-        lang === 'sw'
-          ? 'Hatumeweza kupata taarifa zako. Tafadhali jaribu tena baadaye.'
-          : "We couldn't load your notifications. Please try again shortly.",
+        "We couldn't load your notifications. Please try again shortly.",
       );
     } finally {
       setLoading(false);
     }
-  }, [tab, lang]);
+  }, [tab]);
 
   useEffect(() => {
     void load();
@@ -144,21 +141,17 @@ export default function NotificationCentre({ lang }: Props) {
         // the server decided this from the category, and the customer is told.
         setNotice(
           result.applied
-            ? lang === 'sw'
-              ? 'Mabadiliko yamehifadhiwa.'
-              : 'Your preference has been saved.'
+            ? 'Your preference has been saved.'
             : result.reason ||
-              (lang === 'sw'
-                ? 'Huwezi kubadilisha taarifa hii.'
-                : 'This notification cannot be changed.'),
+              ('This notification cannot be changed.'),
         );
       } catch {
         setNotice(
-          lang === 'sw' ? 'Mabadiliko hayakuweza kuhifadhiwa.' : 'Your preference could not be saved.',
+          'Your preference could not be saved.',
         );
       }
     },
-    [lang],
+    [],
   );
 
   // Grouping is a PRESENTATION transform only. Every notification still renders,
@@ -174,7 +167,7 @@ export default function NotificationCentre({ lang }: Props) {
           <div className="flex items-center gap-2">
             {!n.read && (
               <span
-                aria-label={lang === 'sw' ? 'Haisomwi' : 'Unread'}
+                aria-label={'Unread'}
                 className="inline-block h-2 w-2 rounded-full bg-amber-500 shrink-0"
               />
             )}
@@ -184,22 +177,22 @@ export default function NotificationCentre({ lang }: Props) {
           </div>
           {n.body && <p className="text-sm text-slate-600 mt-1">{n.body}</p>}
           <p className="text-xs text-slate-500 mt-1">
-            {categoryLabel(n.category, lang)} | {new Date(n.createdAt).toLocaleString(lang)}
+            {categoryLabel(n.category)} | {new Date(n.createdAt).toLocaleString()}
             {n.reference ? ' | ' + n.reference : ''}
           </p>
         </div>
         <div className="flex flex-col items-end gap-2 shrink-0">
-          <Badge variant={STATE_TONE[n.state]}>{stateLabel(n.state, lang)}</Badge>
+          <Badge variant={STATE_TONE[n.state]}>{stateLabel(n.state)}</Badge>
           {/* The action renders ONLY when the server says it is still valid, and
               is absent entirely for expired and completed notifications. */}
           {n.actionAvailable && n.actionPath ? (
             <Button size="sm" onClick={() => void open(n)}>
-              {lang === 'sw' ? 'Fanya hatua' : 'Take action'}
+              {'Take action'}
             </Button>
           ) : null}
           {!n.read && !n.actionAvailable ? (
             <Button size="sm" variant="ghost" onClick={() => void open(n)}>
-              {lang === 'sw' ? 'Fungua' : 'Open'}
+              {'Open'}
             </Button>
           ) : null}
         </div>
@@ -208,14 +201,12 @@ export default function NotificationCentre({ lang }: Props) {
   );
 
   return (
-    <section aria-label={lang === 'sw' ? 'Taarifa' : 'Notifications'} className="space-y-4">
+    <section aria-label={'Notifications'} className="space-y-4">
       <SectionHeading
-        title={lang === 'sw' ? 'Taarifa' : 'Notifications'}
+        title={'Notifications'}
         description={
           unread > 0
-            ? lang === 'sw'
-              ? 'Una taarifa hazijasomwa: ' + unread
-              : 'You have ' + unread + ' unread notification' + (unread === 1 ? '' : 's') + '.'
+            ? 'You have ' + unread + ' unread notification' + (unread === 1 ? '' : 's') + '.'
             : undefined
         }
       />
@@ -228,12 +219,8 @@ export default function NotificationCentre({ lang }: Props) {
           aria-expanded={showPreferences}
           aria-label={
             unread > 0
-              ? lang === 'sw'
-                ? 'Mipangilio ya taarifa, hazijasomwa ' + unread
-                : 'Notification preferences, ' + unread + ' unread'
-              : lang === 'sw'
-                ? 'Mipangilio ya taarifa'
-                : 'Notification preferences'
+              ? 'Notification preferences, ' + unread + ' unread'
+              : 'Notification preferences'
           }
         >
           <Bell aria-hidden="true" />
@@ -251,16 +238,16 @@ export default function NotificationCentre({ lang }: Props) {
       {showPreferences ? (
         <div className="rounded-lg border border-slate-200 p-4 space-y-3">
           <h3 className="font-medium text-slate-900">
-            {lang === 'sw' ? 'Mipangilio ya taarifa' : 'Notification preferences'}
+            {'Notification preferences'}
           </h3>
           <ul className="space-y-2">
             {prefs.map((p) => (
               <li key={p.category} className="flex items-center justify-between gap-3">
                 <div>
-                  <span className="text-sm text-slate-800">{categoryLabel(p.category, lang)}</span>
+                  <span className="text-sm text-slate-800">{categoryLabel(p.category)}</span>
                   {p.essential ? (
                     <span className="ml-2 text-xs text-slate-500">
-                      {lang === 'sw' ? 'Inahitajika' : 'Required'}
+                      {'Required'}
                     </span>
                   ) : null}
                 </div>
@@ -274,13 +261,11 @@ export default function NotificationCentre({ lang }: Props) {
                       // hidden: the customer can see the setting exists and why
                       // it cannot move. Disabling is re-enforced server-side too.
                       disabled={!c.configurable}
-                      aria-label={categoryLabel(p.category, lang) + ' - ' + c.channel}
+                      aria-label={categoryLabel(p.category) + ' - ' + c.channel}
                       onClick={() => void changePref(p.category, c.channel, !c.enabled)}
                     >
                       {c.channel === 'in_app'
-                        ? lang === 'sw'
-                          ? 'Ndani ya programu'
-                          : 'In app'
+                        ? 'In app'
                         : c.channel.toUpperCase()}
                     </Button>
                   ))}
@@ -291,7 +276,7 @@ export default function NotificationCentre({ lang }: Props) {
         </div>
       ) : null}
 
-      <div role="tablist" aria-label={lang === 'sw' ? 'Mwonekano' : 'View'} className="flex gap-2">
+      <div role="tablist" aria-label={'View'} className="flex gap-2">
         <Button
           size="sm"
           variant={tab === 'active' ? 'primary' : 'secondary'}
@@ -300,7 +285,7 @@ export default function NotificationCentre({ lang }: Props) {
           onClick={() => setTab('active')}
         >
           <Bell aria-hidden="true" />
-          {lang === 'sw' ? 'Za sasa' : 'Active'}
+          {'Active'}
         </Button>
         <Button
           size="sm"
@@ -310,35 +295,27 @@ export default function NotificationCentre({ lang }: Props) {
           onClick={() => setTab('history')}
         >
           <History aria-hidden="true" />
-          {lang === 'sw' ? 'Historia' : 'History'}
+          {'History'}
         </Button>
       </div>
 
       {loading ? (
         <div className="flex items-center gap-2 text-slate-500" role="status" aria-live="polite">
           <Loader2 aria-hidden="true" />
-          {lang === 'sw' ? 'Inapakia...' : 'Loading...'}
+          {'Loading...'}
         </div>
       ) : entries.length === 0 ? (
         <EmptyState
           icon={tab === 'active' ? Bell : History}
           title={
             tab === 'active'
-              ? lang === 'sw'
-                ? 'Hakuna taarifa mpya'
-                : 'No new notifications'
-              : lang === 'sw'
-                ? 'Hakuna historia bado'
-                : 'No history yet'
+              ? 'No new notifications'
+              : 'No history yet'
           }
           description={
             tab === 'active'
-              ? lang === 'sw'
-                ? 'Tutakuonyesha hapa pale kuna jambo unayohitaji kujua.'
-                : "We'll let you know here when there's something you need to know about."
-              : lang === 'sw'
-                ? 'Taarifa zako zilizopita zitaonekana hapa.'
-                : 'Your past notifications will appear here.'
+              ? "We'll let you know here when there's something you need to know about."
+              : 'Your past notifications will appear here.'
           }
         />
       ) : (
@@ -351,7 +328,7 @@ export default function NotificationCentre({ lang }: Props) {
                   <details>
                     <summary className="cursor-pointer text-sm text-slate-700 flex items-center gap-2">
                       <ChevronDown aria-hidden="true" />
-                      {categoryLabel(bucket.notifications[0].category, lang)} | {bucket.reference} (
+                      {categoryLabel(bucket.notifications[0].category)} | {bucket.reference} (
                       {bucket.notifications.length})
                     </summary>
                     <ul>{bucket.notifications.map((n: CustomerNotification) => renderItem(n, n.id))}</ul>

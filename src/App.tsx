@@ -6,7 +6,6 @@ import DashboardShell, { type DashboardSurface } from './components/dashboard/Da
 import { readAdminSessionIdentity, adminIdentityLabel } from './services/adminSession';
 import HomeView from './components/HomeView';
 import ErrorBoundary from './components/ErrorBoundary';
-import { translations } from './types';
 import { Loader2 } from 'lucide-react';
 import {
   applyAppearanceMarker,
@@ -93,38 +92,14 @@ function ViewLoadingFallback() {
   );
 }
 
-const LANGUAGE_STORAGE_KEY = 'return4me.language';
-type AppLanguage = 'en' | 'sw';
-
-const isAppLanguage = (value: unknown): value is AppLanguage =>
-  value === 'en' || value === 'sw';
-
-/** Read one trusted language preference, failing closed to English. */
-function browserStorage(): Storage | null {
-  if (typeof window === 'undefined') return null;
-  try { return window.localStorage; } catch { return null; }
-}
-
-export function readStoredLanguage(storage: Pick<Storage, 'getItem' | 'removeItem'> | null | undefined): AppLanguage {
-  if (!storage) return 'en';
-  try {
-    const stored = storage.getItem(LANGUAGE_STORAGE_KEY);
-    if (isAppLanguage(stored)) return stored;
-    if (stored !== null) {
-      try { storage.removeItem(LANGUAGE_STORAGE_KEY); } catch { /* storage cleanup is best-effort */ }
-    }
-  } catch { /* unavailable/restricted storage must never prevent startup */ }
-  return 'en';
-}
-
-/** Persist only the canonical runtime values; failure never affects live switching. */
-export function persistLanguage(storage: Pick<Storage, 'setItem'> | null | undefined, lang: AppLanguage): void {
-  if (!storage || !isAppLanguage(lang)) return;
-  try { storage.setItem(LANGUAGE_STORAGE_KEY, lang); } catch { /* preference persistence is optional */ }
-}
+// Return4me was formerly an `en | sw` product. The runtime language axis is
+// gone: there is no language state, no setter and no persistence. The only
+// remaining trace is the legacy `return4me.language` key an old session may
+// still hold, which the mount effect below clears so a stale value can never
+// resurface as UI. English is the only language the product ships.
+const LEGACY_LANGUAGE_STORAGE_KEY = 'return4me.language';
 
 export default function App() {
-  const [lang, setLang] = useState<AppLanguage>(() => readStoredLanguage(browserStorage()));
   const [appearancePreference, setAppearancePreference] = useState<AppearancePreference>(
     () => readStoredAppearance(browserAppearanceStorage()),
   );
@@ -133,13 +108,13 @@ export default function App() {
   );
   const [currentView, setView] = useState<'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'privacy' | 'terms' | 'help' | 'signin' | 'becomeAgent'>('home');
 
-  // Language remains one App-owned state. Existing child controls continue to
-  // call this same setter; persistence and document metadata are side effects
-  // at the application boundary, never additional language state.
+  // English-only. document.documentElement.lang is pinned here (not merely in
+  // index.html) so <html lang="en"> is guaranteed, and the stale
+  // `return4me.language` preference is removed so it cannot resurface as UI.
   useEffect(() => {
-    if (typeof document !== 'undefined') document.documentElement.lang = lang;
-    persistLanguage(browserStorage(), lang);
-  }, [lang]);
+    if (typeof document !== 'undefined') document.documentElement.lang = 'en';
+    try { window.localStorage.removeItem(LEGACY_LANGUAGE_STORAGE_KEY); } catch { /* best-effort */ }
+  }, []);
   const [categories, setCategories] = useState<any[]>([]);
   const [categoriesLoading, setCategoriesLoading] = useState<boolean>(true);
   const [categoriesError, setCategoriesError] = useState<boolean>(false);
@@ -386,9 +361,7 @@ export default function App() {
     // it needs its own title branch — otherwise the reported page would
     // announce whichever screen the visitor happened to arrive from.
     if (route.kind === 'reportLost') {
-      document.title = lang === 'sw'
-        ? 'Ripoti Kitu Kilichopotea | Return4me'
-        : 'Report a Lost Item | Return4me';
+      document.title = 'Report a Lost Item | Return4me';
       return;
     }
     // N3: /activate-email likewise renders from `route`. The title must never
@@ -396,35 +369,31 @@ export default function App() {
     // the kind of place a credential ends up in history, screenshots and
     // shoulder-surfing.
     if (route.kind === 'activateEmail') {
-      document.title = lang === 'sw'
-        ? 'Ushiriki wa Barua Pepe | Return4me'
-        : 'Email Activation | Return4me';
+      document.title = 'Email Activation | Return4me';
       return;
     }
     // N4: /activate-agent-email is the same contract for the agent link. A
     // generic title, and never the token — a document title is exactly the kind
     // of place a credential ends up in history, screenshots and shoulder-surfing.
     if (route.kind === 'activateAgentEmail') {
-      document.title = lang === 'sw'
-        ? 'Uthibitishaji wa Barua Pepe ya Wakala | Return4me'
-        : 'Agent Email Verification | Return4me';
+      document.title = 'Agent Email Verification | Return4me';
       return;
     }
-    const titles: Record<typeof currentView, { en: string; sw: string }> = {
-      home: { en: "Return4me | Kenya's Trusted Lost & Found Platform", sw: 'Return4me | Jukwaa la Kuaminika la Vitu Vilivyopotea Kenya' },
-      finder: { en: 'Report a Found Item | Return4me', sw: 'Ripoti Ulichokipata | Return4me' },
-      owner: { en: 'Find & Claim Your Lost Item | Return4me', sw: 'Tafuta na Dai Kilichopotea | Return4me' },
-      agent: { en: 'Agent Dashboard | Return4me', sw: 'Dashibodi ya Wakala | Return4me' },
-      admin: { en: 'Admin Panel | Return4me', sw: 'Paneli ya Msimamizi | Return4me' },
-      privacy: { en: 'Privacy Policy | Return4me', sw: 'Sera ya Faragha | Return4me' },
-      terms: { en: 'Terms of Service | Return4me', sw: 'Vigezo vya Huduma | Return4me' },
-      help: { en: 'Help & FAQ | Return4me', sw: 'Msaada na Maswali | Return4me' },
+    const titles: Record<typeof currentView, string> = {
+      home: "Return4me | Kenya's Trusted Lost & Found Platform",
+      finder: 'Report a Found Item | Return4me',
+      owner: 'Find & Claim Your Lost Item | Return4me',
+      agent: 'Agent Dashboard | Return4me',
+      admin: 'Admin Panel | Return4me',
+      privacy: 'Privacy Policy | Return4me',
+      terms: 'Terms of Service | Return4me',
+      help: 'Help & FAQ | Return4me',
       // Phase 8.1 public navigation screens.
-      signin: { en: 'Sign In | Return4me', sw: 'Ingia | Return4me' },
-      becomeAgent: { en: 'Become an Agent | Return4me', sw: 'Kuwa Wakala | Return4me' },
+      signin: 'Sign In | Return4me',
+      becomeAgent: 'Become an Agent | Return4me',
     };
-    document.title = titles[currentView][lang];
-  }, [currentView, lang, route.kind]);
+    document.title = titles[currentView];
+  }, [currentView, route.kind]);
 
   // Token management for Agents & Admins
   const [agentToken, setAgentToken] = useState<string | null>(() => localStorage.getItem('agent_token'));
@@ -648,8 +617,6 @@ export default function App() {
     return () => clearInterval(intervalId);
   }, [currentView, fetchRecentItems]);
 
-  const t = translations[lang];
-
   // ---------------------------------------------------------------------------
   // PART B — THE SHELL BOUNDARY (public site shell vs authenticated dashboard)
   //
@@ -704,7 +671,7 @@ export default function App() {
          identity to display, and the shell renders none. */
       ? customerSession?.full_name
       : dashboardSurface === 'agent'
-        ? (lang === 'en' ? 'Agent' : 'Wakala')
+        ? ('Agent')
         : undefined;
 
   // The ONE customer-account surface, extracted so it renders in the dashboard
@@ -712,7 +679,6 @@ export default function App() {
   const accountSurface = (
     <ErrorBoundary fallbackTitle="Account Page Crash">
       <CustomerAccountView
-        lang={lang}
         onExit={() => {
           navigate('/', 'home');
         }}
@@ -758,8 +724,6 @@ export default function App() {
   if (dashboardSurface) {
     return (
       <DashboardShell
-        lang={lang}
-        setLang={setLang}
         appearance={appearancePreference}
         setAppearance={setAppearancePreference}
         surface={dashboardSurface}
@@ -780,7 +744,6 @@ export default function App() {
                its existing refresh callback, so AgentView no longer keeps a
                second, unrefreshed copy of /api/categories. */
             <AgentView
-              lang={lang}
               token={agentToken}
               setToken={handleSetAgentToken}
               categories={categories}
@@ -790,7 +753,7 @@ export default function App() {
 
           {dashboardSurface === 'admin' && (
             <ErrorBoundary fallbackTitle="Admin Panel Crash">
-              <AdminView lang={lang} token={adminToken} setToken={handleSetAdminToken} onCategoriesChanged={fetchCategories} />
+              <AdminView token={adminToken} setToken={handleSetAdminToken} onCategoriesChanged={fetchCategories} />
             </ErrorBoundary>
           )}
         </Suspense>
@@ -802,8 +765,6 @@ export default function App() {
     <div className="min-h-screen bg-[var(--appearance-background)] text-[var(--appearance-text-primary)] flex flex-col antialiased">
       {/* Global Brand Navbar */}
       <Navbar
-        lang={lang}
-        setLang={setLang}
         appearance={appearancePreference}
         setAppearance={setAppearancePreference}
         currentView={currentView}
@@ -843,7 +804,6 @@ export default function App() {
           <ErrorBoundary fallbackTitle="Item Page Crash">
             <Suspense fallback={<ViewLoadingFallback />}>
               <PublicItemView
-                lang={lang}
                 itemId={route.itemId}
                 categories={categories}
                 onBack={() => navigate('/', 'home')}
@@ -873,7 +833,6 @@ export default function App() {
             <Suspense fallback={<ViewLoadingFallback />}>
               <div className="w-full p-4 sm:p-8">
                 <ReportLostView
-                  lang={lang}
                   onSignIn={() => navigate(reportLostSignInPath(), 'owner')}
                   onOpenItem={(itemId) => navigate(itemPath(itemId), 'owner')}
                   onBrowseFound={() => navigate('/lost', 'owner')}
@@ -892,7 +851,6 @@ export default function App() {
           <ErrorBoundary fallbackTitle="Activation Page Crash">
             <Suspense fallback={<ViewLoadingFallback />}>
               <CustomerActivationView
-                lang={lang}
                 hasToken={route.hasToken}
                 onSignIn={() => navigate(accountPath(), 'home')}
                 onExit={() => navigate('/', 'home')}
@@ -912,7 +870,6 @@ export default function App() {
           <ErrorBoundary fallbackTitle="Agent Activation Page Crash">
             <Suspense fallback={<ViewLoadingFallback />}>
               <AgentActivationView
-                lang={lang}
                 hasToken={route.hasToken}
                 onSignIn={() => navigate(pathForView('agent'), 'agent')}
                 onExit={() => navigate('/', 'home')}
@@ -923,11 +880,6 @@ export default function App() {
         <Suspense fallback={<ViewLoadingFallback />}>
           {currentView === 'home' && (
             <HomeView
-              lang={lang}
-              setLang={setLang}
-              /* REQUEST 08: the homepage CTA prop is the URL-aware navigator, so
-                 every hero/category button leaves the browser on the matching
-                 public path (/lost, /found, /become-an-agent). */
               setView={goToView}
               categories={categories}
               /* App still owns the live category request state, but the homepage
@@ -950,7 +902,6 @@ export default function App() {
           {currentView === 'finder' && (
             <div className="w-full p-4 sm:p-8">
               <FinderView
-                lang={lang}
                 categories={categories}
                 categoriesLoading={categoriesLoading}
                 categoriesError={categoriesError}
@@ -961,7 +912,6 @@ export default function App() {
           {currentView === 'owner' && (
             <div className="w-full p-4 sm:p-8">
               <OwnerView
-                lang={lang}
                 categories={categories}
                 categoriesLoading={categoriesLoading}
                 categoriesError={categoriesError}
@@ -992,7 +942,6 @@ export default function App() {
               {/* PHASE 16.1 BATCH 3 (H-1 / M-6) — same App-level category source
                   as the dashboard render site above (both sites must agree). */}
               <AgentView
-                lang={lang}
                 token={agentToken}
                 setToken={handleSetAgentToken}
                 categories={categories}
@@ -1004,7 +953,7 @@ export default function App() {
           {currentView === 'admin' && (
             <div className="w-full p-4 sm:p-8">
               <ErrorBoundary fallbackTitle="Admin Panel Crash">
-                <AdminView lang={lang} token={adminToken} setToken={handleSetAdminToken} onCategoriesChanged={fetchCategories} />
+                <AdminView token={adminToken} setToken={handleSetAdminToken} onCategoriesChanged={fetchCategories} />
               </ErrorBoundary>
             </div>
           )}
@@ -1016,7 +965,6 @@ export default function App() {
           {currentView === 'signin' && (
             <div className="w-full p-4 sm:p-8">
               <SignInView
-                lang={lang}
                 onOwnerSignIn={() => navigate('/account', 'home')}
                 onAgentSignIn={() => navigate('/agent_portal', 'agent')}
                 onBecomeAgent={() => goToView('becomeAgent')}
@@ -1030,7 +978,6 @@ export default function App() {
           {currentView === 'becomeAgent' && (
             <div className="w-full p-4 sm:p-8">
               <BecomeAgentView
-                lang={lang}
                 onContinueToAgentPortal={() => navigate('/agent_portal', 'agent')}
                 onSignIn={() => goToView('signin')}
               />
@@ -1039,13 +986,13 @@ export default function App() {
 
           {currentView === 'privacy' && (
             <div className="w-full p-4 sm:p-8">
-              <PrivacyView lang={lang} setView={setView} />
+              <PrivacyView setView={setView} />
             </div>
           )}
 
           {currentView === 'terms' && (
             <div className="w-full p-4 sm:p-8">
-              <TermsView lang={lang} setView={setView} />
+              <TermsView setView={setView} />
             </div>
           )}
 
@@ -1054,7 +1001,7 @@ export default function App() {
               and it is routed through goToView so the URL stays on /help. */}
           {currentView === 'help' && (
             <div className="w-full p-4 sm:p-8">
-              <HelpView lang={lang} setView={goToView} />
+              <HelpView setView={goToView} />
             </div>
           )}
         </Suspense>

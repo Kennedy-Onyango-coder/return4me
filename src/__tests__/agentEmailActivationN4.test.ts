@@ -236,7 +236,14 @@ async function makeAgent(id: string, opts: { status?: string; email?: string | n
 
 /** Runs the REAL registration flow: request-otp -> verify-otp. */
 async function registerAgent(overrides: Record<string, any> = {}, phone = nextPhone()) {
-  await http('/api/auth/request-otp', { body: { phone, role: 'agent' } });
+  // E1: a brand-new agent's onboarding request carries the business email
+  // (mirroring AgentView), so the server resolves the OTP recipient from it.
+  // This harness mocks AuthService.requestOTP() and never invokes the injected
+  // dispatch, so this call's response is not asserted here — the real
+  // request->dispatch boundary is proved by agentOnboardingOtpEmailE1.test.ts.
+  await http('/api/auth/request-otp', {
+    body: { phone, email: `agent-${phone.replace(/\D/g, '')}@example.com`, role: 'agent' },
+  });
   const code = [...sms.sent].reverse().find((m) => m.phone === phone)?.code;
   if (!code) throw new Error('no OTP captured for ' + phone);
   return {

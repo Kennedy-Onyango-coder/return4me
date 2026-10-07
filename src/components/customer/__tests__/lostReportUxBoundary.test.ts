@@ -68,12 +68,12 @@ describe('every backend report status has honest customer copy', () => {
   it('maps all five canonical statuses', () => {
     expect(LOST_REPORT_STATUS_VALUES).toHaveLength(5);
     for (const status of LOST_REPORT_STATUS_VALUES) {
-      const display = getLostReportStatusDisplay(status, 'en');
+      const display = getLostReportStatusDisplay(status);
       expect(display.label, `no label for ${status}`).toBeTruthy();
       // A raw snake_case token must never reach the customer.
       expect(display.label).not.toBe(status);
       expect(display.label).not.toContain('_');
-      expect(getLostReportStatusDisplay(status, 'sw').label).toBeTruthy();
+      expect(getLostReportStatusDisplay(status).label).toBeTruthy();
       expect(display.description).toBeTruthy();
     }
   });
@@ -86,7 +86,7 @@ describe('every backend report status has honest customer copy', () => {
   });
 
   it('treats an unexpected status as inert, never as searching', () => {
-    const unknown = getLostReportStatusDisplay('something_new', 'en');
+    const unknown = getLostReportStatusDisplay('something_new');
     expect(unknown.searching).toBe(false);
     expect(unknown.variant).toBe('neutral');
   });
@@ -94,7 +94,7 @@ describe('every backend report status has honest customer copy', () => {
   it('covers the closed statuses the API reports via lost_report_not_active', () => {
     for (const closed of ['resolved', 'cancelled', 'lapsed']) {
       expect(isSearchingStatus(closed)).toBe(false);
-      expect(getLostReportStatusDisplay(closed, 'en').description).toBeTruthy();
+      expect(getLostReportStatusDisplay(closed).description).toBeTruthy();
     }
   });
 });
@@ -110,8 +110,8 @@ describe('match-reason copy matches the engine exactly', () => {
 
   it('explains every reason without exposing a value', () => {
     for (const reason of LOST_REPORT_MATCH_REASON_KEYS) {
-      for (const lang of ['en', 'sw'] as const) {
-        const text = getMatchReasonText(reason, lang);
+      for (const lang of ['en'] as const) {
+        const text = getMatchReasonText(reason);
         expect(text, `${reason} (${lang})`).toBeTruthy();
         expect(text.toLowerCase()).not.toContain('hash');
         expect(text).not.toMatch(/\d{3,}/); // never a number
@@ -120,14 +120,14 @@ describe('match-reason copy matches the engine exactly', () => {
   });
 
   it('does not reproduce the identifier for matching_identifier', () => {
-    const text = getMatchReasonText('matching_identifier', 'en').toLowerCase();
+    const text = getMatchReasonText('matching_identifier').toLowerCase();
     expect(text).toContain('identifying detail');
     expect(text).not.toContain('document number');
     expect(text).not.toContain('imei');
   });
 
   it('returns nothing for an unknown reason rather than a raw token', () => {
-    expect(getMatchReasonText('a_reason_that_does_not_exist', 'en')).toBe('');
+    expect(getMatchReasonText('a_reason_that_does_not_exist')).toBe('');
   });
 });
 

@@ -2,11 +2,10 @@ import React, { useState } from 'react';
 import { ShieldCheck, Lock, Eye, Mail, Award, Globe, HelpCircle, FileText, HelpCircle as InfoIcon, Trash2, ShieldAlert } from 'lucide-react';
 
 interface PrivacyViewProps {
-  lang: 'en' | 'sw';
   setView: (view: any) => void;
 }
 
-export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
+export default function PrivacyView({ setView }: PrivacyViewProps) {
   const [showErasureForm, setShowErasureForm] = useState(false);
   const [phone, setPhone] = useState('');
   const [otpSent, setOtpSent] = useState(false);
@@ -32,7 +31,7 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
   const handleRequestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!phone) {
-      setError(lang === 'en' ? 'Please enter your phone number' : 'Tafadhali ingiza nambari yako ya simu');
+      setError('Please enter your phone number');
       return;
     }
     setLoading(true);
@@ -47,7 +46,7 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
       });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || (lang === 'en' ? 'Failed to send OTP code' : 'Imeshindwa kutuma msimbo wa OTP'));
+        throw new Error(data.error || ('Failed to send OTP code'));
       }
       setOtpSent(true);
     } catch (err: any) {
@@ -60,11 +59,11 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
   const handleVerifyAndDelete = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!otpCode) {
-      setError(lang === 'en' ? 'Please enter the OTP verification code' : 'Tafadhali ingiza msimbo wa uhakiki wa OTP');
+      setError('Please enter the OTP verification code');
       return;
     }
     if (!consentChecked) {
-      setError(lang === 'en' ? 'You must check the consent box to proceed' : 'Ni lazima ukubali idhini ili kuendelea');
+      setError('You must check the consent box to proceed');
       return;
     }
     setLoading(true);
@@ -83,9 +82,9 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
       });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || (lang === 'en' ? 'Verification or deletion failed' : 'Uhakiki au ufutaji umeshindwa'));
+        throw new Error(data.error || ('Verification or deletion failed'));
       }
-      setSuccessMessage(data.message || (lang === 'en' ? 'Data successfully erased.' : 'Data imefutwa kikamilifu.'));
+      setSuccessMessage(data.message || ('Data successfully erased.'));
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -109,13 +108,13 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
       <div className="border-b border-brand-border pb-8 text-center sm:text-left">
         <span className="inline-flex items-center space-x-1 bg-emerald-50 text-primary-green border border-emerald-100 font-extrabold px-3 py-1 rounded-full text-xs uppercase mb-4">
           <ShieldCheck size={12} />
-          <span>{lang === 'en' ? 'Kenya Data Protection Act, 2019' : 'Sheria ya Ulinzi wa Data ya Kenya, 2019'}</span>
+          <span>{'Kenya Data Protection Act, 2019'}</span>
         </span>
         <h1 className="text-4xl font-extrabold text-primary-green tracking-tight">
-          {lang === 'en' ? 'Privacy Policy' : 'Sera ya Faragha'}
+          {'Privacy Policy'}
         </h1>
         <p className="text-stone-500 text-sm mt-2 font-mono">
-          {lang === 'en' ? 'Last Updated: July 2026' : 'Imesasishwa Mwisho: Julai 2026'} | Elligrace Technologies Limited
+          {'Last Updated: July 2026'} | Elligrace Technologies Limited
         </p>
       </div>
 
@@ -126,12 +125,10 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
             <Lock size={20} />
           </div>
           <h3 className="font-extrabold text-brand-dark-text text-sm">
-            {lang === 'en' ? 'Cryptographic Protection' : 'Ulinzi wa Kimkakati'}
+            {'Cryptographic Protection'}
           </h3>
           <p className="text-xs text-stone-500 leading-relaxed">
-            {lang === 'en'
-              ? 'Sensitive IDs are stored as a one-way keyed hash (HMAC-SHA256) so the original value cannot be read back from the database.'
-              : 'Nambari za vitambulisho husimbwa kwa njia salama isiyoweza kurejeshwa ili kuzuia wizi wa utambulisho.'}
+            {'Sensitive IDs are stored as a one-way keyed hash (HMAC-SHA256) so the original value cannot be read back from the database.'}
           </p>
         </div>
 
@@ -140,12 +137,10 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
             <Eye size={20} />
           </div>
           <h3 className="font-extrabold text-brand-dark-text text-sm">
-            {lang === 'en' ? 'Explicit Consent' : 'Idhini ya Wazi'}
+            {'Explicit Consent'}
           </h3>
           <p className="text-xs text-stone-500 leading-relaxed">
-            {lang === 'en'
-              ? 'We never process physical ID cards for dispute verification without your explicit, opt-in consent.'
-              : 'Hatuchakati picha za vitambulisho vyako vya kitaifa bila kupokea idhini yako ya wazi kwanza.'}
+            {'We never process physical ID cards for dispute verification without your explicit, opt-in consent.'}
           </p>
         </div>
 
@@ -154,12 +149,10 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
             <Award size={20} />
           </div>
           <h3 className="font-extrabold text-brand-dark-text text-sm">
-            {lang === 'en' ? 'Payment Handling' : 'Ushughulikiaji wa Malipo'}
+            {'Payment Handling'}
           </h3>
           <p className="text-xs text-stone-500 leading-relaxed">
-            {lang === 'en'
-              ? 'Payments run through our payment provider, which processes the M-Pesa transaction for us.'
-              : 'Malipo hupitia kwa mtoa huduma wetu wa malipo, ambaye huchakata malipo ya M-Pesa kwa niaba yetu.'}
+            {'Payments run through our payment provider, which processes the M-Pesa transaction for us.'}
           </p>
         </div>
       </div>
@@ -450,12 +443,10 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
               </div>
               <div className="space-y-1">
                 <h3 className="font-extrabold text-stone-900 text-xs uppercase tracking-wider">
-                  {lang === 'en' ? 'Section 40 Data Erasure Portal (Self-Service)' : 'Mlango wa Kujihudumia wa Kufuta Data (Kifungu cha 40)'}
+                  {'Section 40 Data Erasure Portal (Self-Service)'}
                 </h3>
                 <p className="text-xs text-stone-500 leading-relaxed">
-                  {lang === 'en'
-                    ? 'Request the immediate permanent deletion or anonymization of your personal record. We use your registered phone number to find your account, and we send the verification code to the verified email address on that account.'
-                    : 'Omba ufutaji wa kudumu au ufichaji wa utambulisho wa kumbukumbu zako za kibinafsi mara moja. Tunatumia nambari yako ya simu iliyosajiliwa kupata akaunti yako, na msimbo wa uthibitisho tunautuma kwenye barua pepe iliyothibitishwa ya akaunti hiyo.'}
+                  {'Request the immediate permanent deletion or anonymization of your personal record. We use your registered phone number to find your account, and we send the verification code to the verified email address on that account.'}
                 </p>
               </div>
             </div>
@@ -469,7 +460,7 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
                   onClick={handleReset}
                   className="bg-primary-green hover:bg-primary-hover text-white text-xs font-bold px-4 py-2 rounded-xl transition cursor-pointer"
                 >
-                  {lang === 'en' ? 'Done' : 'Imekamilika'}
+                  {'Done'}
                 </button>
               </div>
             ) : showErasureForm ? (
@@ -478,20 +469,18 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
                   <form onSubmit={handleRequestOtp} className="space-y-3">
                     <div className="space-y-1">
                       <label className="text-xs font-bold text-stone-700 block">
-                        {lang === 'en' ? 'Registered Phone Number' : 'Nambari ya Simu Iliyosajiliwa'}
+                        {'Registered Phone Number'}
                       </label>
                       <input
                         type="tel"
                         required
                         value={phone}
                         onChange={(e) => setPhone(e.target.value)}
-                        placeholder={lang === 'en' ? 'e.g. 0712345678' : 'mfano 0712345678'}
+                        placeholder={'e.g. 0712345678'}
                         className="w-full max-w-sm bg-white border border-stone-200 rounded-xl px-3 py-2 text-xs focus:ring-1 focus:ring-primary-green outline-none"
                       />
                       <p className="text-xs text-stone-500 leading-relaxed max-w-xl">
-                        {lang === 'en'
-                          ? 'We use this number only to find your account. The code is emailed to the verified email address on that account — it is never sent to this number, and getting it is not a check that the number is yours.'
-                          : 'Tunatumia nambari hii kupata akaunti yako pekee. Msimbo unatumwa kwa barua pepe iliyothibitishwa ya akaunti hiyo — hautumwi kwa nambari hii, na kusoma msimbo si uthibitisho kwamba nambari hii ni yako.'}
+                        {'We use this number only to find your account. The code is emailed to the verified email address on that account — it is never sent to this number, and getting it is not a check that the number is yours.'}
                       </p>
                     </div>
 
@@ -503,14 +492,14 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
                         disabled={loading}
                         className="bg-primary-green hover:bg-primary-hover disabled:bg-stone-300 text-white text-xs font-bold px-4 py-2 rounded-xl transition cursor-pointer"
                       >
-                        {loading ? (lang === 'en' ? 'Sending...' : 'Inatuma...') : (lang === 'en' ? 'Email Me the Code' : 'Nitumie Msimbo kwa Barua Pepe')}
+                        {loading ? ('Sending...') : ('Email Me the Code')}
                       </button>
                       <button
                         type="button"
                         onClick={handleReset}
                         className="bg-stone-100 hover:bg-stone-200 text-stone-600 text-xs font-bold px-4 py-2 rounded-xl transition cursor-pointer"
                       >
-                        {lang === 'en' ? 'Cancel' : 'Ghairi'}
+                        {'Cancel'}
                       </button>
                     </div>
                   </form>
@@ -518,22 +507,20 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
                   <form onSubmit={handleVerifyAndDelete} className="space-y-4">
                     <div className="p-3 bg-stone-100 rounded-xl flex items-center justify-between">
                       <span className="text-xs text-stone-600 font-medium">
-                        {lang === 'en'
-                          ? `Code emailed to the verified address on the account for ${phone}`
-                          : `Msimbo umetumwa kwa barua pepe iliyothibitishwa ya akaunti ya ${phone}`}
+                        {`Code emailed to the verified address on the account for ${phone}`}
                       </span>
                       <button
                         type="button"
                         onClick={() => { setOtpSent(false); setError(''); }}
                         className="text-primary-green hover:underline text-xs font-bold cursor-pointer"
                       >
-                        {lang === 'en' ? 'Change Phone' : 'Badilisha Simu'}
+                        {'Change Phone'}
                       </button>
                     </div>
 
                     <div className="space-y-1">
                       <label className="text-xs font-bold text-stone-700 block">
-                        {lang === 'en' ? 'Enter the Verification Code We Emailed' : 'Ingiza Msimbo wa Uthibitisho Uliotumwa kwa Barua Pepe'}
+                        {'Enter the Verification Code We Emailed'}
                       </label>
                       <input
                         type="text"
@@ -545,9 +532,7 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
                         className="w-full max-w-sm bg-white border border-stone-200 rounded-xl px-3 py-2 text-xs font-mono focus:ring-1 focus:ring-primary-green outline-none"
                       />
                       <p className="text-xs text-stone-500 leading-relaxed max-w-xl">
-                        {lang === 'en'
-                          ? 'The code confirms that this deletion request is really from you. It does not prove ownership of the phone number.'
-                          : 'Msimbo unathibitisha kwamba ombi hili la ufutaji linatoka kwako kweli. Hauthibitishi umiliki wa nambari ya simu.'}
+                        {'The code confirms that this deletion request is really from you. It does not prove ownership of the phone number.'}
                       </p>
                     </div>
 
@@ -560,9 +545,7 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
                         className="mt-0.5 border-stone-300 rounded focus:ring-red-500 text-red-600 cursor-pointer"
                       />
                       <label htmlFor="consentCheck" className="text-xs text-stone-700 font-semibold leading-relaxed cursor-pointer select-none">
-                        {lang === 'en'
-                          ? 'I understand that this will permanently delete or anonymize all my personal data from Return4me systems. This action is irreversible under Section 40 of the Kenya Data Protection Act 2019.'
-                          : 'Naelewa kuwa kitendo hiki kitafuta kabisa au kuficha utambulisho wa data yangu yote ya kibinafsi kwenye mifumo ya Return4me. Kitendo hiki hakiwezi kubatilishwa chini ya Kifungu cha 40 cha Sheria ya Ulinzi wa Data ya Kenya 2019.'}
+                        {'I understand that this will permanently delete or anonymize all my personal data from Return4me systems. This action is irreversible under Section 40 of the Kenya Data Protection Act 2019.'}
                       </label>
                     </div>
 
@@ -574,14 +557,14 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
                         disabled={loading}
                         className="bg-red-600 hover:bg-red-700 disabled:bg-stone-300 text-white text-xs font-bold px-4 py-2 rounded-xl transition cursor-pointer"
                       >
-                        {loading ? (lang === 'en' ? 'Processing...' : 'Inachakata...') : (lang === 'en' ? 'Permanently Erase My Data' : 'Futa Data Yangu Kabisa')}
+                        {loading ? ('Processing...') : ('Permanently Erase My Data')}
                       </button>
                       <button
                         type="button"
                         onClick={handleReset}
                         className="bg-stone-100 hover:bg-stone-200 text-stone-600 text-xs font-bold px-4 py-2 rounded-xl transition cursor-pointer"
                       >
-                        {lang === 'en' ? 'Cancel' : 'Ghairi'}
+                        {'Cancel'}
                       </button>
                     </div>
                   </form>
@@ -594,7 +577,7 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
                   className="bg-red-50 hover:bg-red-100 text-red-600 border border-red-100 text-xs font-extrabold px-4 py-2.5 rounded-xl transition flex items-center space-x-2 cursor-pointer"
                 >
                   <Trash2 size={14} />
-                  <span>{lang === 'en' ? 'Start Data Erasure Request' : 'Anza Ombi la Kufuta Data'}</span>
+                  <span>{'Start Data Erasure Request'}</span>
                 </button>
               </div>
             )}
@@ -641,7 +624,7 @@ export default function PrivacyView({ lang, setView }: PrivacyViewProps) {
           onClick={() => setView('home')}
           className="bg-primary-green hover:bg-primary-hover text-white px-6 py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition cursor-pointer"
         >
-          {lang === 'en' ? 'Back to Home' : 'Rudi Nyumbani'}
+          {'Back to Home'}
         </button>
       </div>
     </div>

@@ -343,34 +343,33 @@ function isBucket<T>(
 // provider, retry and AI-model wording out of the UI; a test asserts every
 // string this module can emit passes it.
 // -----------------------------------------------------------------------------
-export type CustomerNotificationLang = 'en' | 'sw';
 
-const CATEGORY_LABEL: Record<CustomerNotificationCategory, Record<CustomerNotificationLang, string>> = {
-  claim_status: { en: 'Claim update', sw: 'Taarifa ya dai' },
-  payment_status: { en: 'Payment update', sw: 'Taarifa ya malipo' },
-  document_verification: { en: 'Document verification', sw: 'Uthibitisho wa nyaraka' },
-  lost_report: { en: 'Lost item report', sw: 'Ripoti ya kitu kilichopotea' },
-  found_item_report: { en: 'Found item report', sw: 'Ripoti ya kitu kilichopatikana' },
-  account_security: { en: 'Account security', sw: 'Usalama wa akaunti' },
-  terms_service: { en: 'Terms and service', sw: 'Sheria na huduma' },
+const CATEGORY_LABEL: Record<CustomerNotificationCategory, string> = {
+  claim_status: 'Claim update',
+  payment_status: 'Payment update',
+  document_verification: 'Document verification',
+  lost_report: 'Lost item report',
+  found_item_report: 'Found item report',
+  account_security: 'Account security',
+  terms_service: 'Terms and service',
 };
 
-export function categoryLabel(category: string, lang: CustomerNotificationLang): string {
+export function categoryLabel(category: string): string {
   const entry = CATEGORY_LABEL[category as CustomerNotificationCategory];
-  return entry ? entry[lang] : '';
+  return entry ?? '';
 }
 
-const STATE_LABEL: Record<CustomerNotificationState, Record<CustomerNotificationLang, string>> = {
-  informational: { en: 'Update', sw: 'Taarifa' },
-  action_required: { en: 'Action required', sw: 'Hatua inahitajika' },
-  pending: { en: 'In progress', sw: 'Inaendelea' },
-  completed: { en: 'Completed', sw: 'Imekamilika' },
-  expired: { en: 'Expired', sw: 'Muda wake umeisha' },
+const STATE_LABEL: Record<CustomerNotificationState, string> = {
+  informational: 'Update',
+  action_required: 'Action required',
+  pending: 'In progress',
+  completed: 'Completed',
+  expired: 'Expired',
 };
 
-export function stateLabel(state: CustomerNotificationState, lang: CustomerNotificationLang): string {
+export function stateLabel(state: CustomerNotificationState): string {
   const entry = STATE_LABEL[state];
-  return entry ? entry[lang] : '';
+  return entry ?? '';
 }
 
 /**
@@ -381,10 +380,7 @@ export function stateLabel(state: CustomerNotificationState, lang: CustomerNotif
  * double payment. It states what is true (confirmation not yet received) and
  * what not to do.
  */
-export const PAYMENT_AWAITING_CONFIRMATION_MESSAGE: Record<CustomerNotificationLang, string> = {
-  en: "Payment confirmation is pending. We haven't received confirmation yet. Please don't pay again.",
-  sw: 'Uthibitisho wa malipo bado haujapatikana. Hatujapokea uthibitisho bado. Tafadhali usilie malipo tena.',
-};
+export const PAYMENT_AWAITING_CONFIRMATION_MESSAGE = "Payment confirmation is pending. We haven't received confirmation yet. Please don't pay again.";
 
 /**
  * Neutral fallback used when a delivery attempt failed but the business outcome
@@ -392,10 +388,7 @@ export const PAYMENT_AWAITING_CONFIRMATION_MESSAGE: Record<CustomerNotificationL
  * customer, without naming any provider, and without implying the payment or
  * claim itself failed.
  */
-export const DELIVERY_FALLBACK_MESSAGE: Record<CustomerNotificationLang, string> = {
-  en: "We're waiting to confirm an update. You can always see its current status here.",
-  sw: 'Tunatarbia kuthibitisha taarifa. Unaweza kuona hali yake hapa wakati wowote.',
-};
+export const DELIVERY_FALLBACK_MESSAGE = "We're waiting to confirm an update. You can always see its current status here.";
 
 /**
  * Requirement 10's forbidden-term guard.

@@ -1838,6 +1838,15 @@ async function createApp() {
         list.find((a) => toE164Kenyan(String(a?.contact_phone || '').replace(/\s+/g, '')) === canonicalPhone);
 
       let destination: string | null = null;
+      // NEW-AGENT ONBOARDING is the ONE journey whose recipient the request
+      // supplies (the address typed on the onboarding step). It is recognised
+      // ONLY when the client declares onboarding intent by sending a SAFE email
+      // AND no agent row holds this phone. Gating on a SAFE address — rather
+      // than on the mere presence of the `email` field — is what keeps this
+      // route an anti-enumeration dead end: a caller that supplies no address,
+      // or a malformed one, is answered exactly like any other request, so the
+      // response still cannot reveal whether the phone is registered.
+      let isOnboarding = false;
       if (isDeletionPurpose) {
         // Erasure is destructive: the code must reach an address the account
         // has ALREADY proven. Customer first (the common case), agent second.
@@ -1860,10 +1869,15 @@ async function createApp() {
             destination = existingAgent.contact_email;
           }
         } else {
-          // Onboarding: no agent row exists for this phone yet.
+          // Onboarding: no agent row exists for this phone yet. The address is
+          // used ONLY here (it can never reach an EXISTING account, which is
+          // always resolved above), and only after it passes the same
+          // emailOtpRecipientIsSafe boundary every other OTP destination must
+          // pass — an unvalidated string never becomes a dispatch recipient.
           const rawEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
           if (emailOtpRecipientIsSafe(rawEmail)) {
             destination = rawEmail;
+            isOnboarding = true;
           }
         }
       }
@@ -1871,6 +1885,10 @@ async function createApp() {
       // the canonical E.164 store key and the persist-then-send ordering — only
       // the injected transport is the email seam. The phone remains the OTP
       // store key, so verify-otp and the erasure endpoint below are untouched.
+      // The transport records below whether a code actually went out, so the
+      // onboarding journey can surface a genuine delivery failure (see below).
+      // Every other journey keeps the generic response and never branches on it.
+      let dispatchAccepted = false;
       await AuthService.requestOTP(
         phone,
         async (_cleanPhone, code) => {
@@ -1887,22 +1905,41 @@ async function createApp() {
               code,
               purpose: isDeletionPurpose ? 'account_deletion' : 'agent_login',
             });
+            dispatchAccepted = outcome.accepted;
             return {
               success: outcome.accepted,
               message: outcome.accepted ? 'sent' : EMAIL_OTP_UNAVAILABLE_MESSAGE,
             };
           } catch (e) {
             console.error('[AUTH_OTP_EMAIL_ERROR]', e);
+            dispatchAccepted = false;
             return { success: false, message: EMAIL_OTP_UNAVAILABLE_MESSAGE };
           }
         },
       );
 
-      // ANTI-ENUMERATION: the dispatch outcome above is deliberately NOT
-      // branched on. Whether the phone is unknown, the account is legacy, the
-      // provider refused or a code is on its way — every valid phone gets this
-      // exact response, so the endpoint cannot confirm that any number is
-      // registered.
+      // NEW-AGENT ONBOARDING — HONEST FAILURE. The onboarding recipient came
+      // from the request itself, so a failure here is a real "we could not email
+      // YOUR code to the address YOU typed" and discloses nothing about an
+      // existing account. It must therefore NOT be papered over as success: the
+      // applicant would be shown the OTP-entry step for a code that was never
+      // sent. Return the shared, channel-neutral message (never provider
+      // internals).
+      //
+      // This is not an enumeration oracle: it is reached only with a SAFE
+      // supplied address, and a caller who supplies one gets the SAME generic
+      // response below whether the phone is registered (the existing-account arm
+      // ignores the address) or not (this arm, and the provider accepts a valid
+      // address) — so the two cannot be told apart.
+      if (isOnboarding && !dispatchAccepted) {
+        return res.status(503).json({ error: EMAIL_OTP_UNAVAILABLE_MESSAGE });
+      }
+
+      // ANTI-ENUMERATION: for every other case the dispatch outcome above is
+      // deliberately NOT branched on. Whether the phone is unknown, the account
+      // is legacy, the provider refused or a code is on its way — every such
+      // valid phone gets this exact response, so the endpoint cannot confirm
+      // that any number is registered.
       res.json({
         success: true,
         message: 'Kama akaunti hii ina barua pepe iliyothibitishwa, msimbo wa uthibitisho umetumwa kwake. Vinginevyo, thibitisha barua pepe yako kwanza. / If this account has a verified email address, a verification code has been sent to it. Otherwise, verify your email address first.',

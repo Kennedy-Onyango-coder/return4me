@@ -132,23 +132,18 @@ export function deriveDeviceLabel(userAgent: string | null | undefined): DeviceL
 export const CUSTOMER_ACCOUNT_STRINGS = {
   sessionIdle: {
     en: 'You have been signed out because you have not used your account for a while. Please sign in again.',
-    sw: 'Umeondolewa kwa sababu hukuutumii akaunti yako kwa muda mrefu. Tafadhali ingia tena.',
   },
   revokeOthersDone: {
     en: 'You have been signed out on all your other devices.',
-    sw: 'Umeondolewa kwenye vifaa vyako vyote vingine.',
   },
   erasureStarted: {
     en: 'Your request has been received. Your personal details have been removed while the records we must keep for legal and financial reasons have been kept.',
-    sw: 'Ombi lako limepokelewa. Taarifa zako za binafsi zimeondolewa huku rekodi tunazopaswa kuhifadhi kwa sababu za kisheria na fedha zimebaki.',
   },
   nameUpdated: {
     en: 'Your name has been updated.',
-    sw: 'Jina lako limebadilishwa.',
   },
   identityVerificationSent: {
     en: 'We have sent a verification message. Your current details stay unchanged until you complete it.',
-    sw: 'Tumetumia ujumbe wa uthibitisho. Taarifa zako za sasa zinabaki hazibadilishwi hadi uukamilishe.',
   },
 } as const;
 

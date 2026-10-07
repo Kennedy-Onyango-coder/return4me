@@ -14,7 +14,6 @@ import LostReportsSection from './customer/LostReportsSection';
 import NotificationCentre from './customer/NotificationCentre';
 
 interface Props {
-  lang: 'en' | 'sw';
   customer: { id: string; full_name: string; phone: string; status: string };
   onSignOut: () => void;
   signingOut?: boolean;
@@ -42,20 +41,20 @@ function maskPhone(phone: string): string {
   return '0' + d.slice(0, 3) + ' *** ' + d.slice(6);
 }
 
-function formatDate(value: string | null | undefined, lang: 'en' | 'sw'): string {
+function formatDate(value: string | null | undefined): string {
   if (!value) return '';
   const d = new Date(value);
   if (isNaN(d.getTime())) return '';
-  return d.toLocaleDateString(lang === 'sw' ? 'sw-KE' : 'en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
 // The payment window is only 15 minutes, so a date alone would be useless for
 // it — show the actual deadline time.
-function formatDateTime(value: string | null | undefined, lang: 'en' | 'sw'): string {
+function formatDateTime(value: string | null | undefined): string {
   if (!value) return '';
   const d = new Date(value);
   if (isNaN(d.getTime())) return '';
-  return d.toLocaleString(lang === 'sw' ? 'sw-KE' : 'en-GB', {
+  return d.toLocaleString('en-GB', {
     day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
   });
 }
@@ -85,73 +84,42 @@ type AccountSectionKey = 'overview' | 'lost' | 'claims' | 'notifications';
 // others carry work in progress.
 const ACCOUNT_SECTION_ORDER: AccountSectionKey[] = ['overview', 'lost', 'claims', 'notifications'];
 
-const ACCOUNT_SECTIONS: Record<AccountSectionKey, { icon: LucideIcon; en: AccountSectionCopy; sw: AccountSectionCopy }> = {
+const ACCOUNT_SECTIONS: Record<AccountSectionKey, AccountSectionCopy & { icon: LucideIcon }> = {
   // BATCH 1 - the customer notification user layer. The wording stays in plain
   // service language and names no transport, provider or internal concept.
   notifications: {
     icon: Bell,
-    en: {
-      label: 'Notifications',
-      title: 'Notifications',
-      description: 'Updates about your claims, payments and reports, and a record of everything we have told you before.',
-      hint: 'See updates and your notification history.',
-    },
-    sw: {
-      label: 'Taarifa',
-      title: 'Taarifa',
-      description: 'Taarifa kuhusu claims, malipo na ripoti zako, pamoja na kumbukumbu ya taarifa zote ulizopokea awali.',
-      hint: 'Tazama taarifa na historia yako.',
-    },
+    label: 'Notifications',
+    title: 'Notifications',
+    description: 'Updates about your claims, payments and reports, and a record of everything we have told you before.',
+    hint: 'See updates and your notification history.',
   },
   overview: {
     icon: LayoutDashboard,
-    en: {
-      label: 'Overview',
-      title: 'Overview',
-      description: 'Where your lost reports and claims stand, and the one next step to take.',
-    },
-    sw: {
-      label: 'Muhtasari',
-      title: 'Muhtasari',
-      description: 'Hali ya ripoti zako na claims zako, na hatua moja inayofuata ya kuchukua.',
-    },
+    label: 'Overview',
+    title: 'Overview',
+    description: 'Where your lost reports and claims stand, and the one next step to take.',
   },
   lost: {
     icon: FileSearch,
-    en: {
-      label: 'My Lost Reports',
-      title: 'My Lost Reports',
-      description: 'Reports you have filed with Return4me. Anything that looks similar is shown as a possible match, never as a confirmation.',
-      hint: 'File a report and check for possible matches.',
-    },
-    sw: {
-      label: 'Ripoti Zangu',
-      title: 'Ripoti zangu za vitu vilivyopotea',
-      description: 'Ripoti ulizowasilisha kwa Return4me. Kitu chochote kinachofanana huonyeshwa kama mechi inayowezekana, sio uthibitisho.',
-      hint: 'Wasilisha ripoti na uangalie mechi zinazowezekana.',
-    },
+    label: 'My Lost Reports',
+    title: 'My Lost Reports',
+    description: 'Reports you have filed with Return4me. Anything that looks similar is shown as a possible match, never as a confirmation.',
+    hint: 'File a report and check for possible matches.',
   },
   claims: {
     icon: Link2,
-    en: {
-      label: 'My Claims',
-      title: 'My Claims',
-      description: 'Claims linked to this account, and the verification you must pass before a claim is added.',
-      hint: 'See the claims linked to this account.',
-    },
-    sw: {
-      label: 'Claims Zangu',
-      title: 'Claims Zangu',
-      description: 'Claims zilizounganishwa na akaunti hii, na uthibitisho unaohitajika kabla ya claim kuongezwa.',
-      hint: 'Ona claims zilizounganishwa na akaunti hii.',
-    },
+    label: 'My Claims',
+    title: 'My Claims',
+    description: 'Claims linked to this account, and the verification you must pass before a claim is added.',
+    hint: 'See the claims linked to this account.',
   },
 };
 
 export default function CustomerDashboard({
-  lang, customer, onSignOut, signingOut = false, onOpenItem, onSessionExpired,
+  customer, onSignOut, signingOut = false, onOpenItem, onSessionExpired,
 }: Props) {
-  const t = (en: string, sw: string) => (lang === 'sw' ? sw : en);
+
 
   // Which dashboard section is open. 'overview' is the default because it is
   // the first section of the dashboard's information architecture and the only
@@ -186,11 +154,11 @@ export default function CustomerDashboard({
       setClaims(Array.isArray(data.claims) ? data.claims : []);
       setLoadError(null);
     } catch {
-      setLoadError(t('Could not load your claims. Please try again.', 'Imeshindwa kupata claims zako. Tafadhali jaribu tena.'));
+      setLoadError('Could not load your claims. Please try again.');
     } finally {
       setLoading(false);
     }
-  }, [lang]);
+  }, []);
 
   useEffect(() => { loadClaims(); }, [loadClaims]);
 
@@ -210,7 +178,7 @@ export default function CustomerDashboard({
     setLinkNotice(null);
     const claimId = linkClaimId.trim().toUpperCase();
     if (!claimId) {
-      setLinkError(t('Enter the claim ID.', 'Weka msimbo wa claim.'));
+      setLinkError('Enter the claim ID.');
       return;
     }
     setLinkBusy(true);
@@ -223,11 +191,11 @@ export default function CustomerDashboard({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setLinkError(data?.error || t('Could not start linking. Please try again.', 'Imeshindwa kuanza kuunganisha. Tafadhali jaribu tena.'));
+        setLinkError(data?.error || 'Could not start linking. Please try again.');
         return;
       }
       if (data.alreadyLinked) {
-        setLinkNotice(t('This claim is already linked to your account.', 'Claim hii tayari imeunganishwa na akaunti yako.'));
+        setLinkNotice('This claim is already linked to your account.');
         setLinkStep('claimId');
         return;
       }
@@ -238,10 +206,10 @@ export default function CustomerDashboard({
       setLinkStep('code');
       setLinkNotice(
         data.message ||
-        t('A verification code has been sent to your verified email address.', 'Msimbo wa uthibitisho umetumwa kwenye barua pepe yako iliyothibitishwa.')
+        'A verification code has been sent to your verified email address.'
       );
     } catch {
-      setLinkError(t('Network error. Please try again.', 'Hitilafu ya mtandao. Tafadhali jaribu tena.'));
+      setLinkError('Network error. Please try again.');
     } finally {
       setLinkBusy(false);
     }
@@ -251,13 +219,13 @@ export default function CustomerDashboard({
     e.preventDefault();
     setLinkError(null);
     if (!/^\d{4}$/.test(linkCode)) {
-      setLinkError(t('Enter the 4-digit code from the email.', 'Weka msimbo wa tarakimu 4 kutoka kwa barua pepe.'));
+      setLinkError('Enter the 4-digit code from the email.');
       return;
     }
     const fields = getVerificationFields(linkCategory);
     for (const field of fields) {
       if (field.required && !(linkAnswers[field.key] || '').trim()) {
-        setLinkError(t('Please answer every required question.', 'Tafadhali jibu maswali yote yanayohitajika.'));
+        setLinkError('Please answer every required question.');
         return;
       }
     }
@@ -271,14 +239,14 @@ export default function CustomerDashboard({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setLinkError(data?.error || t('Could not link this claim. Please try again.', 'Imeshindwa kuunganisha claim hii. Tafadhali jaribu tena.'));
+        setLinkError(data?.error || 'Could not link this claim. Please try again.');
         return;
       }
       resetLink();
       setLinkOpen(false);
       await loadClaims();
     } catch {
-      setLinkError(t('Network error. Please try again.', 'Hitilafu ya mtandao. Tafadhali jaribu tena.'));
+      setLinkError('Network error. Please try again.');
     } finally {
       setLinkBusy(false);
     }
@@ -294,12 +262,12 @@ export default function CustomerDashboard({
       });
       if (!res.ok && res.status !== 404) {
         const data = await res.json().catch(() => ({}));
-        setLoadError(data?.error || t('Could not remove this claim. Please try again.', 'Imeshindwa kuondoa claim hii. Tafadhali jaribu tena.'));
+        setLoadError(data?.error || 'Could not remove this claim. Please try again.');
         return;
       }
       await loadClaims();
     } catch {
-      setLoadError(t('Network error. Please try again.', 'Hitilafu ya mtandao. Tafadhali jaribu tena.'));
+      setLoadError('Network error. Please try again.');
     } finally {
       setRowBusy(null);
     }
@@ -312,7 +280,7 @@ export default function CustomerDashboard({
   // Copy for the active section (navigation label, page title, description).
   // Presentation only: it drives the navigation and the page heading, never
   // any request or handler.
-  const sectionCopy = ACCOUNT_SECTIONS[tab][lang];
+  const sectionCopy = ACCOUNT_SECTIONS[tab];
 
   // UX-08: the Overview's single next step. It is DERIVED from the claims this
   // component has already loaded - nothing is fetched to decide it - and all it
@@ -322,18 +290,18 @@ export default function CustomerDashboard({
   // steps.
   const hasWorkInProgress = activeClaims.length > 0;
   const nextSection: AccountSectionKey = hasWorkInProgress ? 'claims' : 'lost';
-  const nextCopy = ACCOUNT_SECTIONS[nextSection][lang];
+  const nextCopy = ACCOUNT_SECTIONS[nextSection];
   const NextSectionIcon = ACCOUNT_SECTIONS[nextSection].icon;
 
   // Current state of an item that is already in progress, read through the
   // shared claim-status vocabulary so the Overview can never describe a status
   // differently from the claims list below it.
   const leadClaimStatus = activeClaims.length > 0
-    ? getClaimStatusDisplay(activeClaims[0].status, lang)
+    ? getClaimStatusDisplay(activeClaims[0].status)
     : null;
 
   const renderClaimCard = (claim: any) => {
-    const disp = getClaimStatusDisplay(claim.status, lang);
+    const disp = getClaimStatusDisplay(claim.status);
     return (
       <li key={claim.id} className="rounded-standard border border-[var(--appearance-border)] p-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -354,14 +322,14 @@ export default function CustomerDashboard({
             <dl className="space-y-1.5 text-small text-[var(--appearance-text-muted)]">
               {claim.item && claim.item.location_description && (
                 <div className="flex items-start gap-2">
-                  <dt className="sr-only">{t('Where it was recorded', 'Ilipowekwa kumbukumbu')}</dt>
+                  <dt className="sr-only">{'Where it was recorded'}</dt>
                   <MapPin size={ICON_SIZE.metadata} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--appearance-accent)]" />
                   <dd className="leading-relaxed break-words">{claim.item.location_description}</dd>
                 </div>
               )}
               {claim.agent && (
                 <div className="flex items-start gap-2">
-                  <dt className="sr-only">{t('Holding agent', 'Wakala anayeshikilia')}</dt>
+                  <dt className="sr-only">{'Holding agent'}</dt>
                   <Store size={ICON_SIZE.metadata} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--appearance-accent)]" />
                   <dd className="leading-relaxed break-words">
                     {claim.agent.business_name}
@@ -370,18 +338,18 @@ export default function CustomerDashboard({
                 </div>
               )}
               <div className="flex items-start gap-2">
-                <dt className="sr-only">{t('When it was claimed', 'Iliyoundwa lini')}</dt>
+                <dt className="sr-only">{'When it was claimed'}</dt>
                 <CalendarDays size={ICON_SIZE.metadata} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--appearance-accent)]" />
                 <dd className="leading-relaxed">
-                  {t('Claimed', 'Iliyoundwa')} {formatDate(claim.created_at, lang)}
+                  {'Claimed'} {formatDate(claim.created_at)}
                 </dd>
               </div>
               {claim.expires_at && (
                 <div className="flex items-start gap-2">
-                  <dt className="sr-only">{t('Payment deadline', 'Tarehe ya mwisho ya kulipa')}</dt>
+                  <dt className="sr-only">{'Payment deadline'}</dt>
                   <Clock size={ICON_SIZE.metadata} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--appearance-warning)]" />
                   <dd className="leading-relaxed font-semibold text-[var(--appearance-warning)]">
-                    {t('Pay before', 'Lipa kabla ya')} {formatDateTime(claim.expires_at, lang)}
+                    {'Pay before'} {formatDateTime(claim.expires_at)}
                   </dd>
                 </div>
               )}
@@ -393,7 +361,7 @@ export default function CustomerDashboard({
             size="md"
             onClick={() => unlink(claim.id)}
             loading={rowBusy === claim.id}
-            aria-label={t('Remove from my account', 'Ondoa kwenye akaunti yangu')}
+            aria-label={'Remove from my account'}
           >
             <Unlink size={ICON_SIZE.ui} aria-hidden="true" />
           </Button>
@@ -430,10 +398,10 @@ export default function CustomerDashboard({
       <div className="lg:grid lg:grid-cols-[236px_minmax(0,1fr)] lg:gap-8 lg:items-start">
         <nav
           className="flex items-stretch overflow-x-auto border-b border-[var(--appearance-border)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden lg:sticky lg:top-6 lg:flex-col lg:items-stretch lg:gap-0.5 lg:overflow-visible lg:border-b-0 lg:border-r lg:border-[var(--appearance-border)] lg:pb-1 lg:pr-3"
-          aria-label={t('Account sections', 'Sehemu za akaunti')}
+          aria-label={'Account sections'}
         >
           {ACCOUNT_SECTION_ORDER.map((key) => {
-            const copy = ACCOUNT_SECTIONS[key][lang];
+            const copy = ACCOUNT_SECTIONS[key];
             const Icon = ACCOUNT_SECTIONS[key].icon;
             const active = tab === key;
             return (
@@ -482,7 +450,7 @@ export default function CustomerDashboard({
                   role, so a rendered section never carries two of them. */}
               <div className="rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)] p-5 sm:p-6">
                 <p className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">
-                  {t('Signed in as', 'Umeingia kama')}
+                  {'Signed in as'}
                 </p>
                 <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
@@ -490,7 +458,7 @@ export default function CustomerDashboard({
                     <p className="mt-1 text-small text-[var(--appearance-text-muted)] tabular-nums">{maskPhone(customer.phone)}</p>
                     <div className="mt-2.5">
                       <Badge variant={customer.status === 'active' ? 'success' : 'danger'}>
-                        {customer.status === 'active' ? t('Active', 'Hai') : customer.status}
+                        {customer.status === 'active' ? 'Active' : customer.status}
                       </Badge>
                     </div>
                   </div>
@@ -501,7 +469,7 @@ export default function CustomerDashboard({
                     loading={signingOut}
                     className="self-start sm:self-auto shrink-0"
                   >
-                    {t('Sign out', 'Toka')}
+                    {'Sign out'}
                   </Button>
                 </div>
               </div>
@@ -513,28 +481,22 @@ export default function CustomerDashboard({
                   opened, so the Overview reports no count it does not have, and
                   never fetches one twice. */}
               <div className="space-y-3">
-                <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">{t('Where your items stand', 'Hali ya vitu vyako')}</h2>
+                <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">{'Where your items stand'}</h2>
                 <div className="grid gap-3 sm:gap-4 sm:grid-cols-2">
                   {claims === null ? (
                     loading ? (
                       <Skeleton shape="card" />
                     ) : (
                       <p className="text-small text-[var(--appearance-text-muted)] leading-relaxed max-w-xl">
-                        {t(
-                          'Your claims summary is unavailable right now. Open My Claims to try again.',
-                          'Muhtasari wa claims zako haupatikani kwa sasa. Fungua Claims Zangu ili kujaribu tena.'
-                        )}
+                        {'Your claims summary is unavailable right now. Open My Claims to try again.'}
                       </p>
                     )
                   ) : (
                     <StatCard
                       icon={Link2}
-                      label={t('Claims linked', 'Claims zilizounganishwa')}
+                      label={'Claims linked'}
                       value={claims.length}
-                      description={t(
-                        `${activeClaims.length} active, ${historyClaims.length} past`,
-                        `${activeClaims.length} zinazoendelea, ${historyClaims.length} za nyuma`
-                      )}
+                      description={`${activeClaims.length} active, ${historyClaims.length} past`}
                     />
                   )}
                 </div>
@@ -544,7 +506,7 @@ export default function CustomerDashboard({
                     is such an item - it asserts nothing for an empty account. */}
                 {leadClaimStatus && (
                   <p className="flex flex-wrap items-center gap-2 text-small text-[var(--appearance-text-secondary)]">
-                    <span>{t('In progress now', 'Kinachoendelea sasa')}</span>
+                    <span>{'In progress now'}</span>
                     <Badge variant={leadClaimStatus.variant}>{leadClaimStatus.label}</Badge>
                   </p>
                 )}
@@ -560,24 +522,18 @@ export default function CustomerDashboard({
                   destinations stay one labelled click away in the navigation
                   beside this workspace. */}
               <div className="space-y-3">
-                <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">{t('What to do next', 'Cha kufanya baadaye')}</h2>
+                <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">{'What to do next'}</h2>
                 <div className="space-y-3 rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)] p-4 sm:p-5">
                   <p className="max-w-2xl text-small leading-relaxed text-[var(--appearance-text-secondary)]">
                     {hasWorkInProgress
-                      ? t(
-                          'Something of yours is already with us. Open your claims to see where it stands and what we need from you.',
-                          'Kitu chako kipo kwetu tayari. Fungua claims zako kuona hali yake kamili na kile tunachohitaji kutoka kwako.'
-                        )
-                      : t(
-                          'Nothing of yours is in progress yet. File a lost report and we will watch the found-item records for anything that looks like it.',
-                          'Hakuna kitu chako kinachoendelea bado. Wasilisha ripoti ya kitu kilichopotea na tutafuatilia kumbukumbu za vitu vilivyopatikana kwa chochote kinachofanana.'
-                        )}
+                      ? 'Something of yours is already with us. Open your claims to see where it stands and what we need from you.'
+                      : 'Nothing of yours is in progress yet. File a lost report and we will watch the found-item records for anything that looks like it.'}
                   </p>
                   <Button variant="primary" size="md" onClick={() => setTab(nextSection)}>
                     <NextSectionIcon size={ICON_SIZE.ui} aria-hidden="true" />
                     {hasWorkInProgress
-                      ? t('View my claims', 'Ona claims zangu')
-                      : t('Report a lost item', 'Ripoti kitu kilichopotea')}
+                      ? 'View my claims'
+                      : 'Report a lost item'}
                   </Button>
                   {nextCopy.hint && (
                     <p className="text-caption leading-snug text-[var(--appearance-text-muted)]">{nextCopy.hint}</p>
@@ -598,7 +554,6 @@ export default function CustomerDashboard({
               aria-labelledby="account-section-heading"
             >
               <LostReportsSection
-                lang={lang}
                 onOpenItem={onOpenItem}
                 onSessionExpired={onSessionExpired}
                 hideHeading
@@ -614,7 +569,7 @@ export default function CustomerDashboard({
               className="rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)] p-4 sm:p-6"
               aria-labelledby="account-section-heading"
             >
-              <NotificationCentre lang={lang} />
+              <NotificationCentre  />
             </section>
           )}
 
@@ -623,7 +578,7 @@ export default function CustomerDashboard({
       {tab === 'claims' && (
       <section className="rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)] p-4 sm:p-6" aria-labelledby="account-section-heading">
         <div className="flex flex-wrap items-center justify-end gap-2">
-          <Button variant="ghost" size="md" onClick={loadClaims} aria-label={t('Refresh', 'Onyesha upya')}>
+          <Button variant="ghost" size="md" onClick={loadClaims} aria-label={'Refresh'}>
             <RefreshCw size={ICON_SIZE.ui} aria-hidden="true" />
           </Button>
           <Button
@@ -631,7 +586,7 @@ export default function CustomerDashboard({
             size="md"
             onClick={() => { if (linkOpen) resetLink(); setLinkOpen(o => !o); }}
           >
-            <Link2 size={ICON_SIZE.ui} aria-hidden="true" /> {t('Link a claim', 'Unganisha claim')}
+            <Link2 size={ICON_SIZE.ui} aria-hidden="true" /> {'Link a claim'}
           </Button>
         </div>
 
@@ -641,13 +596,10 @@ export default function CustomerDashboard({
         {linkOpen && (
           <div className="mt-4 max-w-2xl border border-[var(--appearance-border)] rounded-panel p-4 sm:p-5 bg-[var(--appearance-surface-muted)]">
             <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
-              {t('Link an existing claim', 'Unganisha claim iliyopo')}
+              {'Link an existing claim'}
             </h2>
             <p className="mt-1 text-small text-[var(--appearance-text-muted)] leading-relaxed">
-              {t(
-                'Enter an existing claim ID. To link it we will text a code to the phone number registered on that claim, and ask the ownership questions that were set when the claim was made.',
-                'Weka msimbo wa claim uliyo nayo. Ili kuunganisha, tutatuma msimbo kwa nambari ya simu iliyosajiliwa kwenye claim hiyo, na kukuuliza maswali ya umiliki yaliyowekwa wakati claim iliundwa.'
-              )}
+              {'Enter an existing claim ID. To link it we will text a code to the phone number registered on that claim, and ask the ownership questions that were set when the claim was made.'}
             </p>
 
             {linkNotice && <div className="mt-3"><Banner kind="info">{linkNotice}</Banner></div>}
@@ -656,7 +608,7 @@ export default function CustomerDashboard({
             {linkStep === 'claimId' ? (
               <form onSubmit={requestLinkCode} className="mt-3 space-y-3" noValidate>
                 <Input
-                  label={t('Claim ID', 'Msimbo wa claim')}
+                  label={'Claim ID'}
                   placeholder="CLM-123456"
                   value={linkClaimId}
                   onChange={(e) => setLinkClaimId(e.target.value)}
@@ -666,10 +618,10 @@ export default function CustomerDashboard({
                 />
                 <div className="flex flex-wrap items-center gap-2">
                   <Button type="submit" variant="primary" size="md" loading={linkBusy}>
-                    {t('Send code', 'Tuma msimbo')}
+                    {'Send code'}
                   </Button>
                   <Button type="button" variant="ghost" size="md" onClick={() => { resetLink(); setLinkOpen(false); }}>
-                    {t('Cancel', 'Ghairi')}
+                    {'Cancel'}
                   </Button>
                 </div>
               </form>
@@ -682,13 +634,13 @@ export default function CustomerDashboard({
                   value={linkCode}
                   onChange={setLinkCode}
                   disabled={linkBusy}
-                  label={t('Verification code', 'Msimbo wa uthibitisho')}
+                  label={'Verification code'}
                 />
 
                 {linkFields.map((field) => {
-                  const label = verificationTranslation(lang, field.labelKey);
-                  const placeholder = verificationTranslation(lang, field.placeholderKey);
-                  const helpText = verificationTranslation(lang, field.helpTextKey);
+                  const label = verificationTranslation(field.labelKey);
+                  const placeholder = verificationTranslation(field.placeholderKey);
+                  const helpText = verificationTranslation(field.helpTextKey);
                   return (
                     <Input
                       key={field.key}
@@ -706,10 +658,10 @@ export default function CustomerDashboard({
 
                 <div className="flex flex-wrap items-center gap-2">
                   <Button type="submit" variant="primary" size="md" loading={linkBusy}>
-                    {t('Verify and link', 'Thibitisha na unganisha')}
+                    {'Verify and link'}
                   </Button>
                   <Button type="button" variant="ghost" size="md" onClick={resetLink} disabled={linkBusy}>
-                    {t('Back', 'Rudi')}
+                    {'Back'}
                   </Button>
                 </div>
               </form>
@@ -720,7 +672,7 @@ export default function CustomerDashboard({
         {/* Claims list */}
         {loading ? (
           <div className="mt-4 space-y-3" aria-busy="true">
-            <span className="sr-only">{t('Loading your claims', 'Inapakia claims zako')}</span>
+            <span className="sr-only">{'Loading your claims'}</span>
             <Skeleton shape="card" className="w-full" />
             <Skeleton shape="card" className="w-full" />
           </div>
@@ -728,18 +680,15 @@ export default function CustomerDashboard({
           <div className="mt-4">
             <EmptyState
               icon={Link2}
-              title={t('No claims linked yet', 'Hakuna claim iliyounganishwa bado')}
-              description={t(
-                'Claims are linked one at a time, and only after you prove they are yours. Nothing is added automatically.',
-                'Claims huunganishwa moja moja, na tu baada ya kuthibitisha kuwa ni zako. Hakuna kinachoongezwa kiotomatiki.'
-              )}
+              title={'No claims linked yet'}
+              description={'Claims are linked one at a time, and only after you prove they are yours. Nothing is added automatically.'}
               action={(
                 <Button
                   variant="primary"
                   size="md"
                   onClick={() => { if (linkOpen) resetLink(); setLinkOpen(o => !o); }}
                 >
-                  <Link2 size={ICON_SIZE.ui} aria-hidden="true" /> {t('Link a claim', 'Unganisha claim')}
+                  <Link2 size={ICON_SIZE.ui} aria-hidden="true" /> {'Link a claim'}
                 </Button>
               )}
             />
@@ -749,13 +698,13 @@ export default function CustomerDashboard({
             <div className="space-y-3">
               <div className="flex flex-wrap items-center gap-2 border-b border-[var(--appearance-border)] pb-2">
                 <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
-                  {t('Active claims', 'Claims zinazoendelea')}
+                  {'Active claims'}
                 </h2>
                 <Badge variant="neutral">{activeClaims.length}</Badge>
               </div>
               {activeClaims.length === 0 ? (
                 <p className="rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] px-4 py-3 text-small text-[var(--appearance-text-muted)]">
-                  {t('No active claims.', 'Hakuna claim inayoendelea.')}
+                  {'No active claims.'}
                 </p>
               ) : (
                 <ul className="space-y-3">{activeClaims.map(renderClaimCard)}</ul>
@@ -764,13 +713,13 @@ export default function CustomerDashboard({
             <div className="space-y-3">
               <div className="flex flex-wrap items-center gap-2 border-b border-[var(--appearance-border)] pb-2">
                 <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
-                  {t('Claim history', 'Historia ya claims')}
+                  {'Claim history'}
                 </h2>
                 <Badge variant="neutral">{historyClaims.length}</Badge>
               </div>
               {historyClaims.length === 0 ? (
                 <p className="rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] px-4 py-3 text-small text-[var(--appearance-text-muted)]">
-                  {t('No past claims yet.', 'Hakuna claim za nyuma bado.')}
+                  {'No past claims yet.'}
                 </p>
               ) : (
                 <ul className="space-y-3">{historyClaims.map(renderClaimCard)}</ul>

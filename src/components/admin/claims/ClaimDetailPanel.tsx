@@ -40,7 +40,6 @@ export default function ClaimDetailPanel({
   claim,
   loading,
   error,
-  lang,
   onClose,
   onRetry,
   onOpenClaim,
@@ -49,7 +48,6 @@ export default function ClaimDetailPanel({
   claim: AdminClaimDetailView | null;
   loading: boolean;
   error: string | null;
-  lang: 'en' | 'sw';
   onClose: () => void;
   onRetry: () => void;
   onOpenClaim: (claimId: string) => void;
@@ -72,15 +70,15 @@ export default function ClaimDetailPanel({
         <header className="sticky top-0 z-10 bg-white border-b border-brand-border px-5 py-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">
-              {lang === 'sw' ? 'Maelezo ya claim' : 'Claim details'}
+              {'Claim details'}
             </p>
             <h2 id="r4m-claim-detail-title" className="font-mono text-sm font-extrabold text-brand-dark-text break-all">
               {claimId}
             </h2>
           </div>
-          <Button variant="ghost" size="sm" onClick={onClose} aria-label={lang === 'sw' ? 'Funga' : 'Close claim details'}>
+          <Button variant="ghost" size="sm" onClick={onClose} aria-label={'Close claim details'}>
             <ExternalLink size={14} aria-hidden="true" />
-            {lang === 'sw' ? 'Funga' : 'Close'}
+            {'Close'}
           </Button>
         </header>
 
@@ -92,13 +90,13 @@ export default function ClaimDetailPanel({
               <Banner kind="error">{error}</Banner>
               <Button variant="outline" size="sm" onClick={onRetry}>
                 <RefreshCw size={14} aria-hidden="true" />
-                {lang === 'sw' ? 'Jaribu tena' : 'Retry'}
+                {'Retry'}
               </Button>
             </div>
           )}
 
           {!loading && !error && claim && (
-            <ClaimDetailBody claim={claim} lang={lang} onOpenClaim={onOpenClaim} />
+            <ClaimDetailBody claim={claim} onOpenClaim={onOpenClaim} />
           )}
         </div>
       </aside>
@@ -138,75 +136,70 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 function ClaimDetailBody({
   claim,
-  lang,
   onOpenClaim,
 }: {
   claim: AdminClaimDetailView;
-  lang: 'en' | 'sw';
   onOpenClaim: (claimId: string) => void;
 }) {
-  const settlement = presentFinancialState(claim.settlement.state, lang);
+  const settlement = presentFinancialState(claim.settlement.state);
   const siblingClaims = Array.isArray(claim.sibling_claims) ? claim.sibling_claims : [];
 
   return (
     <>
-      <Panel title={lang === 'sw' ? 'Utambulisho wa claim' : 'Claim identity'}>
-        <Field label={lang === 'sw' ? 'Hali ya sasa' : 'Current status'}>
-          <ClaimStatusBadge status={claim.status} lang={lang} />
+      <Panel title={'Claim identity'}>
+        <Field label={'Current status'}>
+          <ClaimStatusBadge status={claim.status} />
         </Field>
-        <Field label={lang === 'sw' ? 'Inafanya kazi' : 'Active'}>
-          {claim.is_active ? 'Yes' : lang === 'sw' ? 'Hapana (imefungwa)' : 'No (closed)'}
+        <Field label={'Active'}>
+          {claim.is_active ? 'Yes' : 'No (closed)'}
         </Field>
-        <Field label={lang === 'sw' ? 'Imeundwa' : 'Created'}>{formatTimestamp(claim.created_at, lang)}</Field>
-        <Field label={lang === 'sw' ? 'Imesasishwa' : 'Updated'}>{formatTimestamp(claim.updated_at, lang)}</Field>
-        <Field label={lang === 'sw' ? 'Wakala alithibitisha' : 'Agent confirmed'}>
-          {formatTimestamp(claim.agent_confirmed_at, lang)}
+        <Field label={'Created'}>{formatTimestamp(claim.created_at)}</Field>
+        <Field label={'Updated'}>{formatTimestamp(claim.updated_at)}</Field>
+        <Field label={'Agent confirmed'}>
+          {formatTimestamp(claim.agent_confirmed_at)}
         </Field>
       </Panel>
 
-      <Panel title={lang === 'sw' ? 'Mdai' : 'Claimant'}>
-        <Field label={lang === 'sw' ? 'Simu (imefichwa)' : 'Phone (masked)'}>
+      <Panel title={'Claimant'}>
+        <Field label={'Phone (masked)'}>
           <span className="font-mono">{claim.claimant_phone || 'Not available'}</span>
         </Field>
-        <Field label={lang === 'sw' ? 'Kiwango cha uthibitisho' : 'Verification tier'}>
-          {presentVerificationTier(claim.verification.tier, lang)}
+        <Field label={'Verification tier'}>
+          {presentVerificationTier(claim.verification.tier)}
         </Field>
         <PresenceField
-          label={lang === 'sw' ? 'Kitambulisho' : 'ID proof'}
+          label={'ID proof'}
           present={claim.verification.id_proof_present}
-          lang={lang}
         />
         <PresenceField
-          label={lang === 'sw' ? 'Maelezo binafsi' : 'Identifying detail'}
+          label={'Identifying detail'}
           present={claim.verification.identifying_detail_present}
-          lang={lang}
         />
         <PresenceField
-          label={lang === 'sw' ? 'Picha ya makabidhiano' : 'Handover photo'}
+          label={'Handover photo'}
           present={claim.verification.handover_photo_present}
-          lang={lang}
         />
       </Panel>
 
-      <Panel title={lang === 'sw' ? 'Kitu' : 'Item'}>
+      <Panel title={'Item'}>
         {claim.item ? (
           <>
-            <Field label={lang === 'sw' ? 'Kitambulisho' : 'Item ID'}>
+            <Field label={'Item ID'}>
               <span className="font-mono">{claim.item.id}</span>
             </Field>
-            <Field label={lang === 'sw' ? 'Kundi' : 'Category'}>
+            <Field label={'Category'}>
               {claim.item.category_name_en || claim.item.category_id}
             </Field>
-            <Field label={lang === 'sw' ? 'Hali ya kitu' : 'Item status'}>{claim.item.status}</Field>
-            <Field label={lang === 'sw' ? 'Maelezo' : 'Description'}>{claim.item.description || 'Not available'}</Field>
-            <Field label={lang === 'sw' ? 'Mahali' : 'Location'}>
+            <Field label={'Item status'}>{claim.item.status}</Field>
+            <Field label={'Description'}>{claim.item.description || 'Not available'}</Field>
+            <Field label={'Location'}>
               {claim.item.location_description || 'Not available'}
             </Field>
-            <Field label={lang === 'sw' ? 'Hati nyeti' : 'Sensitive document'}>
-              {presentBoolean(claim.item.is_sensitive_document, lang)}
+            <Field label={'Sensitive document'}>
+              {presentBoolean(claim.item.is_sensitive_document)}
             </Field>
-            <Field label={lang === 'sw' ? 'Inahitaji ukaguzi' : 'Flagged for review'}>
-              {presentBoolean(claim.item.flagged_for_review, lang)}
+            <Field label={'Flagged for review'}>
+              {presentBoolean(claim.item.flagged_for_review)}
             </Field>
           </>
         ) : (
@@ -214,48 +207,46 @@ function ClaimDetailBody({
         )}
       </Panel>
 
-      <Panel title={lang === 'sw' ? 'Wakala' : 'Agent'}>
+      <Panel title={'Agent'}>
         {claim.agent ? (
           <>
-            <Field label={lang === 'sw' ? 'Jina' : 'Business'}>{claim.agent.business_name}</Field>
-            <Field label={lang === 'sw' ? 'Simu' : 'Contact phone'}>
+            <Field label={'Business'}>{claim.agent.business_name}</Field>
+            <Field label={'Contact phone'}>
               <span className="font-mono">{claim.agent.contact_phone || 'Not available'}</span>
             </Field>
           </>
         ) : (
           <p className="text-xs text-brand-muted-text">
-            {lang === 'sw' ? 'Hakuna wakala aliyepangiwa.' : 'No agent assigned.'}
+            {'No agent assigned.'}
           </p>
         )}
       </Panel>
 
-      <Panel title={lang === 'sw' ? 'Malipo' : 'Payment'}>
-        <Field label={lang === 'sw' ? 'Hali ya malipo' : 'Payment'}>
-          <ClaimPaymentState hasPaid={claim.has_paid} paidAt={claim.paid_at} lang={lang} showTimestamp={false} />
+      <Panel title={'Payment'}>
+        <Field label={'Payment'}>
+          <ClaimPaymentState hasPaid={claim.has_paid} paidAt={claim.paid_at} showTimestamp={false} />
         </Field>
-        <Field label={lang === 'sw' ? 'Muda wa malipo' : 'Paid at'}>{formatTimestamp(claim.paid_at, lang)}</Field>
-        <Field label={lang === 'sw' ? 'Awamu ya kifedha' : 'Financial stage'}>
+        <Field label={'Paid at'}>{formatTimestamp(claim.paid_at)}</Field>
+        <Field label={'Financial stage'}>
           <Badge variant={settlement.tone}>{settlement.label}</Badge>
         </Field>
-        <Field label={lang === 'sw' ? 'Malipo yanatolewa' : 'Settlement release'}>
-          {formatTimestamp(claim.settlement.settle_at, lang)}
+        <Field label={'Settlement release'}>
+          {formatTimestamp(claim.settlement.settle_at)}
         </Field>
         <p className="text-[11px] text-brand-muted-text pt-1">
-          {lang === 'sw'
-            ? 'Mfumo hauhifadhi salio la kifedha, kwa hivyo hakuna kiasi kinachoonyeshwa.'
-            : 'This system keeps no monetary balance record, so no amount is shown.'}
+          {'This system keeps no monetary balance record, so no amount is shown.'}
         </p>
       </Panel>
 
-      <DisputePanels claim={claim} lang={lang} />
+      <DisputePanels claim={claim} />
 
-      <RelatedClaimsPanel claim={claim} lang={lang} onOpenClaim={onOpenClaim} siblings={siblingClaims} />
+      <RelatedClaimsPanel claim={claim} onOpenClaim={onOpenClaim} siblings={siblingClaims} />
     </>
   );
 }
 
-function PresenceField({ label, present, lang }: { label: string; present: boolean; lang: 'en' | 'sw' }) {
-  const p = presentPresence(present, lang);
+function PresenceField({ label, present }: { label: string; present: boolean;  }) {
+  const p = presentPresence(present);
   return (
     <Field label={label}>
       <Badge variant={p.tone}>{p.label}</Badge>
@@ -270,51 +261,49 @@ function PresenceField({ label, present, lang }: { label: string; present: boole
  * review now" and "this claimant was [x] when the dispute was filed" are
  * different facts and conflating them would be misleading.
  */
-function DisputePanels({ claim, lang }: { claim: AdminClaimDetailView; lang: 'en' | 'sw' }) {
+function DisputePanels({ claim }: { claim: AdminClaimDetailView;  }) {
   const dispute = claim.dispute;
   if (!dispute) {
     return (
-      <Panel title={lang === 'sw' ? 'Mzozo' : 'Dispute'}>
+      <Panel title={'Dispute'}>
         <p className="text-xs text-brand-muted-text">
-          {lang === 'sw' ? 'Claim hii haihusiani na mzozo.' : 'This claim is not part of a dispute.'}
+          {'This claim is not part of a dispute.'}
         </p>
       </Panel>
     );
   }
 
-  const state = presentDisputeState(dispute.state, lang);
+  const state = presentDisputeState(dispute.state);
   const thisHistorical = presentHistoricalClaim(
     { status_at_dispute: dispute.this_claim.status_at_dispute, paid_at_dispute: dispute.this_claim.paid_at_dispute },
     dispute.snapshot_incomplete,
-    lang,
   );
   const otherHistorical = presentHistoricalClaim(
     { status_at_dispute: dispute.other_claim.status_at_dispute, paid_at_dispute: dispute.other_claim.paid_at_dispute },
     dispute.snapshot_incomplete,
-    lang,
   );
 
   return (
     <>
-      <Panel title={lang === 'sw' ? 'Mzozo — hali ya sasa' : 'Dispute — current state'}>
-        <Field label={lang === 'sw' ? 'Hali' : 'State'}>
+      <Panel title={'Dispute — current state'}>
+        <Field label={'State'}>
           <Badge variant={state.tone} icon={Scale}>
             {state.label}
           </Badge>
         </Field>
-        <Field label={lang === 'sw' ? 'Nafasi ya claim hii' : 'This claim role'}>
-          {presentRole(dispute.role, lang)}
+        <Field label={'This claim role'}>
+          {presentRole(dispute.role)}
         </Field>
-        <Field label={lang === 'sw' ? 'Nafasi ya claim nyingine' : 'Other claim role'}>
-          {presentRole(dispute.other_claim.role, lang)}
+        <Field label={'Other claim role'}>
+          {presentRole(dispute.other_claim.role)}
         </Field>
-        <Field label={lang === 'sw' ? 'Imetatuliwa' : 'Resolved'}>
-          {formatTimestamp(dispute.resolved_at, lang)}
+        <Field label={'Resolved'}>
+          {formatTimestamp(dispute.resolved_at)}
         </Field>
-        <Field label={lang === 'sw' ? 'Iliamuliwa na' : 'Resolved by'}>
+        <Field label={'Resolved by'}>
           {dispute.resolved_by || 'Not available'}
         </Field>
-        <Field label={lang === 'sw' ? 'Claim iliyoshinda' : 'Winning claim'}>
+        <Field label={'Winning claim'}>
           {dispute.resolved_claim_id ? (
             <span className="font-mono">{dispute.resolved_claim_id}</span>
           ) : (
@@ -323,25 +312,23 @@ function DisputePanels({ claim, lang }: { claim: AdminClaimDetailView; lang: 'en
         </Field>
       </Panel>
 
-      <Panel title={lang === 'sw' ? 'Mzozo — hali wakati ulipoanzishwa' : 'Dispute — state when filed'}>
+      <Panel title={'Dispute — state when filed'}>
         {thisHistorical.unknown && (
           <p className="flex items-start gap-1.5 text-[11px] text-brand-muted-text pb-1">
             <AlertCircle size={13} aria-hidden="true" className="mt-0.5 shrink-0" />
-            {lang === 'sw'
-              ? 'Mzozo huu ulianzishwa kabla ya rekodi za kihistoria, kwa hivyo hali halisi haijulikani — haimaanishi kuwa haikulipwa.'
-              : 'This dispute predates the historical snapshot, so the state at filing is genuinely unknown — it does not mean unpaid.'}
+            {'This dispute predates the historical snapshot, so the state at filing is genuinely unknown — it does not mean unpaid.'}
           </p>
         )}
         <p className="text-[11px] font-bold text-brand-dark-text pt-1">
-          {lang === 'sw' ? 'Claim hii' : 'This claim'}
+          {'This claim'}
         </p>
-        <Field label={lang === 'sw' ? 'Hali wakati huo' : 'Status at dispute'}>{thisHistorical.status}</Field>
-        <Field label={lang === 'sw' ? 'Malipo wakati huo' : 'Payment at dispute'}>{thisHistorical.payment}</Field>
+        <Field label={'Status at dispute'}>{thisHistorical.status}</Field>
+        <Field label={'Payment at dispute'}>{thisHistorical.payment}</Field>
         <p className="text-[11px] font-bold text-brand-dark-text pt-2">
-          {lang === 'sw' ? 'Claim ya upande wa pili' : 'Other claim'}
+          {'Other claim'}
         </p>
-        <Field label={lang === 'sw' ? 'Hali wakati huo' : 'Status at dispute'}>{otherHistorical.status}</Field>
-        <Field label={lang === 'sw' ? 'Malipo wakati huo' : 'Payment at dispute'}>{otherHistorical.payment}</Field>
+        <Field label={'Status at dispute'}>{otherHistorical.status}</Field>
+        <Field label={'Payment at dispute'}>{otherHistorical.payment}</Field>
       </Panel>
     </>
   );
@@ -356,12 +343,10 @@ function DisputePanels({ claim, lang }: { claim: AdminClaimDetailView; lang: 'en
  */
 function RelatedClaimsPanel({
   claim,
-  lang,
   onOpenClaim,
   siblings,
 }: {
   claim: AdminClaimDetailView;
-  lang: 'en' | 'sw';
   onOpenClaim: (claimId: string) => void;
   siblings: AdminClaimDetailView['sibling_claims'];
 }) {
@@ -369,36 +354,34 @@ function RelatedClaimsPanel({
   if (siblings.length === 0 && !disputeOther?.claim_id) return null;
 
   return (
-    <Panel title={lang === 'sw' ? 'Claims zinazohusiana' : 'Related claims'}>
+    <Panel title={'Related claims'}>
       {disputeOther?.claim_id && (
         <div className="pb-2">
           <p className="text-[11px] text-brand-muted-text mb-1">
-            {lang === 'sw' ? 'Upande wa pili wa mzozo' : 'Other side of the dispute'}
+            {'Other side of the dispute'}
           </p>
-          <SiblingRow id={disputeOther.claim_id} onOpenClaim={onOpenClaim} lang={lang} />
+          <SiblingRow id={disputeOther.claim_id} onOpenClaim={onOpenClaim} />
         </div>
       )}
       {siblings.length > 0 && (
         <ul className="divide-y divide-brand-border">
           {siblings.map((sib) => (
             <li key={sib.id} className="py-2">
-              <SiblingRow id={sib.id} onOpenClaim={onOpenClaim} lang={lang} />
+              <SiblingRow id={sib.id} onOpenClaim={onOpenClaim} />
               <span className="flex flex-wrap items-center gap-2 mt-1 pl-0.5">
-                <ClaimStatusBadge status={sib.status} lang={lang} />
-                <ClaimPaymentState hasPaid={sib.has_paid} paidAt={sib.paid_at} lang={lang} showTimestamp={false} />
+                <ClaimStatusBadge status={sib.status} />
+                <ClaimPaymentState hasPaid={sib.has_paid} paidAt={sib.paid_at} showTimestamp={false} />
                 <span className="font-mono text-[11px] text-brand-muted-text">
                   {sib.claimant_phone || 'Not available'}
                 </span>
-                <span className="text-[11px] text-brand-muted-text">{formatTimestamp(sib.created_at, lang)}</span>
+                <span className="text-[11px] text-brand-muted-text">{formatTimestamp(sib.created_at)}</span>
               </span>
             </li>
           ))}
         </ul>
       )}
       <p className="text-[11px] text-brand-muted-text pt-1">
-        {lang === 'sw'
-          ? 'Hakuna claim inayochukuliwa kama mshindi au mlaghai hapa — data inaonyeshwa kama ilivyo.'
-          : 'No claim is assumed to be a winner or fraudulent here — only server state is shown.'}
+        {'No claim is assumed to be a winner or fraudulent here — only server state is shown.'}
       </p>
     </Panel>
   );
@@ -407,18 +390,16 @@ function RelatedClaimsPanel({
 function SiblingRow({
   id,
   onOpenClaim,
-  lang,
 }: {
   id: string | null;
   onOpenClaim: (claimId: string) => void;
-  lang: 'en' | 'sw';
 }) {
   if (!id) return <span className="text-xs text-brand-muted-text">Not available</span>;
   return (
     <button
       type="button"
       onClick={() => onOpenClaim(id)}
-      aria-label={lang === 'sw' ? `Fungua claim ${id}` : `Open claim ${id}`}
+      aria-label={`Open claim ${id}`}
       className="font-mono text-xs font-bold text-primary-green underline decoration-dotted underline-offset-4 rounded-md focus-visible:outline-2 focus-visible:outline-accent-orange"
     >
       {id}

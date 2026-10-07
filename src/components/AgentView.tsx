@@ -17,7 +17,6 @@ import Select from './ui/Select';
 import Stepper from './ui/Stepper';
 
 interface AgentViewProps {
-  lang: 'en' | 'sw';
   token: string | null;
   setToken: (token: string | null) => void;
   /**
@@ -71,22 +70,22 @@ export { agentClaimBadge } from './claimStatus';
  * same request still carries them.
  */
 const AGENT_REGISTRATION_STEPS = [
-  { en: 'Account', sw: 'Akaunti' },
-  { en: 'Location', sw: 'Eneo' },
-  { en: 'Verification', sw: 'Uthibitisho' },
-  { en: 'Payout', sw: 'Malipo' },
-  { en: 'Review', sw: 'Kagua' },
+  { en: 'Account' },
+  { en: 'Location' },
+  { en: 'Verification' },
+  { en: 'Payout' },
+  { en: 'Review' },
 ] as const;
 
-export default function AgentView({ lang, token, setToken, categories, refreshCategories }: AgentViewProps) {
-  const t = translations[lang];
+export default function AgentView({ token, setToken, categories, refreshCategories }: AgentViewProps) {
+  const t = translations.en;
 
   /**
    * UX-11 — the agent sign-in copy, in both languages. The same `t(en, sw)`
    * shape the Sign In chooser (UX-07) and the public agent page (UX-10) use, so
    * a string introduced by the sign-in refinement can never ship English-only.
    */
-  const tr = (en: string, swText: string) => (lang === 'sw' ? swText : en);
+
 
   // Auth States
   const [phone, setPhone] = useState('');
@@ -147,7 +146,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
     openVerificationPanel, hasCorrections, handleSubmitVerification, handleLookupDropoff,
     handleRejectDropoff, handleConfirmHandover, handleHandoverPhotoCapture, startHandoverCamera,
     stopHandoverCamera, captureHandoverFrame, submitConfirmHandover, handleConfirmViewing,
-  } = useAgentOperations({ token, lang, refreshCategories });
+  } = useAgentOperations({ token, refreshCategories });
 
   // PHASE 16.1 BATCH 3 (H-1 / M-6) — the private category list and its
   // mount-only fetch were REMOVED here.
@@ -209,9 +208,19 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
       //
       // It used to be built as `{ phone, role: 'agent', businessName,
       // locationAddress, tillNumber, nationalId }` for the registration case and
-      // then never referenced: this call hard-codes `body: { phone }` below (the
-      // OTP request only needs the number). Its presence implied registration
-      // data was submitted at request time when it was not.
+      // then never referenced: this call sent only `{ phone }` (the OTP request
+      // only needs the number). Its presence implied registration data was
+      // submitted at request time when it was not.
+      //
+      // E1 — NEW-AGENT ONBOARDING EMAIL. A BRAND-NEW agent's one-time code is
+      // emailed to the business address typed on the onboarding step, so the
+      // request must carry that address: the server resolves the OTP recipient
+      // for onboarding from `req.body.email` (an existing agent's recipient is
+      // always resolved server-side from the verified contact_email and a
+      // request-supplied address can never override it). Sign-in therefore stays
+      // phone-only, and the onboarding email is added ONLY for the registration
+      // arm of this single, shared call — no second request path and no new
+      // storage are introduced.
       //
       // The registration data's REAL submission point is unchanged and still
       // POST /api/auth/verify-otp (handleOtpVerify below), which sends
@@ -219,11 +228,11 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
       // nationalId / termsAccepted / contactEmail / the two base64 images
       // alongside the OTP. The registration API contract, OTP sequencing, rate
       // limiting, validation, pending-agent creation, terms handling and image
-      // limits are ALL untouched by this removal.
+      // limits are ALL untouched by this change.
       const response = await fetch('/api/auth/request-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone }),
+        body: JSON.stringify(isRegistering ? { phone, email: contactEmail.trim() } : { phone }),
       });
 
       const data = await response.json();
@@ -244,20 +253,14 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
   const agentUnits = administrativeUnitsForCounty(agentCounty);
 
   const detectAgentLocation = async () => {
-    setAgentLocationMessage(tr('Detecting your location…', 'Inatambua eneo lako…'));
+    setAgentLocationMessage('Detecting your location…');
     const result = await detectBrowserLocation();
     if (result.status === 'error') { setAgentLocationMessage(result.message); return; }
     setAgentDetectedLocation(result.location);
     setAgentLocationMessage(
       result.location.county
-        ? tr(
-            'Location detected. Confirm or edit the fields below.',
-            'Eneo limepatikana. Thibitisha au hariri sehemu zilizo hapa chini.'
-          )
-        : tr(
-            'Coordinates captured, but the county could not be determined. Enter it manually.',
-            'Kuratibu za eneo zimepatikana, lakini kaunti haikutambuliwa. Iandike mwenyewe.'
-          )
+        ? 'Location detected. Confirm or edit the fields below.'
+        : 'Coordinates captured, but the county could not be determined. Enter it manually.'
     );
   };
 
@@ -330,7 +333,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
     }
   };
 
-  const registrationSteps = AGENT_REGISTRATION_STEPS.map((s) => ({ label: lang === 'sw' ? s.sw : s.en }));
+  const registrationSteps = AGENT_REGISTRATION_STEPS.map((s) => ({ label: s.en }));
   const isRegistrationReview = registrationStep === AGENT_REGISTRATION_STEPS.length - 1;
   /** The sub-county NAME for the review; the id the select holds is not shown. */
   const agentAdministrativeUnitName =
@@ -358,7 +361,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-body-large font-extrabold text-[var(--appearance-text-primary)]">{title}</h3>
         <Button type="button" variant="ghost" size="sm" onClick={() => setRegistrationStep(step)}>
-          {tr('Change', 'Badilisha')}
+          {'Change'}
         </Button>
       </div>
       <dl className="mt-3 space-y-2">{rows}</dl>
@@ -385,13 +388,13 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
       <Stepper
         steps={registrationSteps}
         currentStep={registrationStep}
-        label={tr('Agent application progress', 'Maendeleo ya maombi ya wakala')}
+        label={'Agent application progress'}
       />
 
       {/* One polite announcement per step, for assistive tech that does not
           track the rail's aria-current. */}
       <p className="sr-only" role="status" aria-live="polite">
-        {tr('Step', 'Hatua')} {registrationStep + 1} {tr('of', 'kati ya')}{' '}
+        {'Step'} {registrationStep + 1} {'of'}{' '}
         {AGENT_REGISTRATION_STEPS.length}: {registrationSteps[registrationStep].label}
       </p>
 
@@ -399,20 +402,17 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
       {registrationStep === 0 && (
         <section className="space-y-4">
           <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
-            {tr('Your account and your business', 'Akaunti yako na biashara yako')}
+            {'Your account and your business'}
           </h2>
           <p className="text-body leading-relaxed text-[var(--appearance-text-muted)]">
-            {tr(
-              'The account is opened in your business name. We email a verification link to the address you give below, and you must open that link before you can use the Agent Hub. The phone number is what identifies your account; no code is sent by text message.',
-              'Akaunti hufunguliwa kwa jina la biashara yako. Tunatuma kiungo cha uthibitishaji kwa barua pepe utakayotoa hapa chini, na lazima ukifungue kiungo hicho kabla ya kutumia Kituo cha Mawakala. Nambari ya simu ni kitambulisho cha akaunti yako; hakuna msimbo unaotumwa kwa ujumbe mfupi.'
-            )}
+            {'The account is opened in your business name. We email a verification link to the address you give below, and you must open that link before you can use the Agent Hub. The phone number is what identifies your account; no code is sent by text message.'}
           </p>
           <Input
             id="agent-business-name"
             label={t.businessName}
             value={businessName}
             onChange={(e) => setBusinessName(e.target.value)}
-            placeholder={tr('Enter your business or shop name', 'Weka jina la biashara au duka lako')}
+            placeholder={'Enter your business or shop name'}
             required
           />
           <Input
@@ -431,17 +431,14 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
       {registrationStep === 1 && (
         <section className="space-y-4">
           <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
-            {tr('Where you will work', 'Utakapofanya kazi')}
+            {'Where you will work'}
           </h2>
           <p className="text-body leading-relaxed text-[var(--appearance-text-muted)]">
-            {tr(
-              'Owners pick a county and sub-county when they hand an item in, so this is how your collection point is shown to the people nearest it.',
-              'Wamiliki huchagua kaunti na kaunti ndogo wanapokabidhi kitu, kwa hivyo hii ni jinsi kituo chako kinavyoonyeshwa kwa watu walio karibu nacho.'
-            )}
+            {'Owners pick a county and sub-county when they hand an item in, so this is how your collection point is shown to the people nearest it.'}
           </p>
           <Select
             id="agent-county"
-            label={tr('Service county', 'Kaunti ya huduma')}
+            label={'Service county'}
             required
             value={agentCounty}
             onChange={(e) => {
@@ -449,7 +446,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
               setAgentAdministrativeUnitId('');
             }}
           >
-            <option value="">{tr('Select county', 'Chagua kaunti')}</option>
+            <option value="">{'Select county'}</option>
             {countyGroups.map((group) => (
               <optgroup key={group.group} label={group.group}>
                 {group.counties.map((county) => (
@@ -460,17 +457,17 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
           </Select>
           <Select
             id="agent-sub-county"
-            label={tr('Service sub-county', 'Kaunti ndogo ya huduma')}
+            label={'Service sub-county'}
             required
             value={agentAdministrativeUnitId}
             onChange={(e) => setAgentAdministrativeUnitId(e.target.value)}
             disabled={!agentCounty}
-            hint={tr('Choose the county first.', 'Chagua kaunti kwanza.')}
+            hint={'Choose the county first.'}
           >
             <option value="">
               {agentCounty
-                ? tr('Select sub-county', 'Chagua kaunti ndogo')
-                : tr('Select county first', 'Chagua kaunti kwanza')}
+                ? 'Select sub-county'
+                : 'Select county first'}
             </option>
             {agentUnits.map((unit) => (
               <option key={unit.id} value={unit.id}>{unit.name}</option>
@@ -480,7 +477,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
           <div className="space-y-2">
             <Button type="button" variant="outline" size="md" className="w-full" onClick={detectAgentLocation}>
               <MapPin size={ICON_SIZE.ui} aria-hidden="true" />
-              {tr('Use my current location', 'Tumia eneo nilipo sasa')}
+              {'Use my current location'}
             </Button>
             {agentLocationMessage && (
               <p role="status" className="text-caption text-[var(--appearance-text-muted)]">{agentLocationMessage}</p>
@@ -488,38 +485,38 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
             {agentDetectedLocation && (
               <div className="space-y-2 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] p-3">
                 <p className="text-body font-bold text-[var(--appearance-text-primary)]">
-                  {tr('Location detected', 'Eneo limepatikana')}
+                  {'Location detected'}
                 </p>
                 {agentDetectedLocation.county && (
                   <p className="text-caption text-[var(--appearance-text-secondary)]">
-                    {tr('County', 'Kaunti')}: {agentDetectedLocation.county}
+                    {'County'}: {agentDetectedLocation.county}
                   </p>
                 )}
                 {agentDetectedLocation.place && (
                   <p className="text-caption text-[var(--appearance-text-secondary)]">
-                    {tr('Nearest place', 'Mahali palipo karibu')}: {agentDetectedLocation.place}
+                    {'Nearest place'}: {agentDetectedLocation.place}
                   </p>
                 )}
                 {agentDetectedLocation.accuracy !== null && (
                   <p className="text-caption text-[var(--appearance-text-secondary)]">
-                    {tr('GPS accuracy', 'Usahihi wa GPS')}: ±{Math.round(agentDetectedLocation.accuracy)} {tr('metres', 'mita')}
+                    {'GPS accuracy'}: ±{Math.round(agentDetectedLocation.accuracy)} {'metres'}
                   </p>
                 )}
                 {agentDetectedLocation.accuracyTier !== 'strong' && (
                   <p className="text-caption text-[var(--appearance-text-secondary)]">
                     {agentDetectedLocation.accuracyTier === 'unknown'
-                      ? tr('Location accuracy is not available. Treat this as an approximate suggestion.', 'Usahihi wa eneo haupatikani. Chukulia hii kama pendekezo la kukisia.')
-                      : tr('Location accuracy is low. Treat this as an approximate suggestion.', 'Usahihi wa eneo ni mdogo. Chukulia hii kama pendekezo la kukisia.')}
+                      ? 'Location accuracy is not available. Treat this as an approximate suggestion.'
+                      : 'Location accuracy is low. Treat this as an approximate suggestion.'}
                   </p>
                 )}
                 {hasGeographyConflict(agentCounty, agentDetectedLocation.county) && (
                   <p className="text-caption text-[var(--appearance-text-secondary)]">
-                    {tr('Your selected service area differs from the detected area. Using this location will replace your selection.', 'Eneo lako la huduma lililochaguliwa linatofautiana na eneo lililogunduliwa. Kutumia eneo hili kutabadilisha chaguo lako.')}{' '}
+                    {'Your selected service area differs from the detected area. Using this location will replace your selection.'}{' '}
                     <strong>{agentCounty} → {agentDetectedLocation.county}</strong>
                   </p>
                 )}
                 <Button type="button" variant="secondary" size="md" className="w-full" onClick={applyDetectedAgentLocation}>
-                  {tr('Use this location', 'Tumia eneo hili')}
+                  {'Use this location'}
                 </Button>
               </div>
             )}
@@ -527,12 +524,12 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
 
           <Input
             id="agent-location"
-            label={tr('Exact operational area', 'Eneo halisi la kazi')}
+            label={'Exact operational area'}
             value={locationAddress}
             onChange={(e) => setLocationAddress(e.target.value)}
-            placeholder={tr('e.g. Near the main shopping centre', 'k.m. Karibu na soko kuu')}
+            placeholder={'e.g. Near the main shopping centre'}
             required
-            hint={tr('The spot an owner walks to. A landmark helps more than a street name.', 'Mahali mmiliki anapofika. Alama ya eneo husaidia zaidi ya jina la barabara.')}
+            hint={'The spot an owner walks to. A landmark helps more than a street name.'}
           />
         </section>
       )}
@@ -540,26 +537,23 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
       {registrationStep === 2 && (
         <section className="space-y-4">
           <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
-            {tr('Prove who you are', 'Thibitisha wewe ni nani')}
+            {'Prove who you are'}
           </h2>
           <p className="text-body leading-relaxed text-[var(--appearance-text-muted)]">
-            {tr(
-              'An administrator checks these details before your application can be approved. Nothing you enter here is shown to owners or customers.',
-              'Msimamizi hukagua taarifa hizi kabla maombi yako kuidhinishwa. Hakuna unachoandika hapa kinachoonyeshwa kwa wamiliki au wateja.'
-            )}
+            {'An administrator checks these details before your application can be approved. Nothing you enter here is shown to owners or customers.'}
           </p>
           <Input
             id="agent-national-id"
             label={t.nationalId}
             value={nationalId}
             onChange={(e) => setNationalId(e.target.value)}
-            placeholder={tr('e.g. Enter your national ID number', 'k.m. Weka namba yako ya kitambulisho')}
+            placeholder={'e.g. Enter your national ID number'}
             required
           />
 
           <div className="space-y-2">
             <label htmlFor="agent-shop-photo" className="block text-caption font-bold text-[var(--appearance-text-primary)]">
-              {tr('Business or shop front photo', 'Picha ya mbele ya biashara au duka')}
+              {'Business or shop front photo'}
             </label>
             <input
               id="agent-shop-photo"
@@ -581,17 +575,17 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
             />
             {shopPhotoBase64 && (
               <p role="status" className="text-caption font-bold text-[var(--appearance-success)]">
-                {tr('Shop photo selected', 'Picha ya duka imechaguliwa')}
+                {'Shop photo selected'}
               </p>
             )}
             <p className="text-caption text-[var(--appearance-text-muted)]">
-              {tr('Optional. Up to 5MB.', 'Hiari. Hadi 5MB.')}
+              {'Optional. Up to 5MB.'}
             </p>
           </div>
 
           <div className="space-y-2">
             <label htmlFor="agent-id-document-photo" className="block text-caption font-bold text-[var(--appearance-text-primary)]">
-              {tr('Agent ID document photo', 'Picha ya kitambulisho cha wakala')}
+              {'Agent ID document photo'}
             </label>
             <input
               id="agent-id-document-photo"
@@ -613,11 +607,11 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
             />
             {idDocumentPhotoBase64 && (
               <p role="status" className="text-caption font-bold text-[var(--appearance-success)]">
-                {tr('ID photo selected', 'Picha ya kitambulisho imechaguliwa')}
+                {'ID photo selected'}
               </p>
             )}
             <p className="text-caption text-[var(--appearance-text-muted)]">
-              {tr('Optional. Up to 5MB. Kept private.', 'Hiari. Hadi 5MB. Huhifadhiwa kwa faragha.')}
+              {'Optional. Up to 5MB. Kept private.'}
             </p>
           </div>
         </section>
@@ -626,17 +620,14 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
       {registrationStep === 3 && (
         <section className="space-y-4">
           <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
-            {tr('Where your share is sent', 'Sehemu yako inatumwa wapi')}
+            {'Where your share is sent'}
           </h2>
           <p className="text-body leading-relaxed text-[var(--appearance-text-muted)]">
-            {tr(
-              'Your share of the service fee is paid to this M-Pesa account. Enter the details exactly as they appear in M-Pesa so the payment reaches you.',
-              'Sehemu yako ya ada ya huduma hulipwa kwenye akaunti hii ya M-Pesa. Weka taarifa kama zinavyoonekana kwenye M-Pesa ili malipo yakukanufaishe.'
-            )}
+            {'Your share of the service fee is paid to this M-Pesa account. Enter the details exactly as they appear in M-Pesa so the payment reaches you.'}
           </p>
           <Select
             id="agent-payout-method"
-            label={tr('Payout method', 'Njia ya malipo')}
+            label={'Payout method'}
             required
             value={payoutMethodType}
             onChange={(e) => setPayoutMethodType(e.target.value)}
@@ -648,12 +639,12 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
           </Select>
           <Input
             id="agent-till-number"
-            label={tr('Payout code or number', 'Namba au msimbo wa malipo')}
+            label={'Payout code or number'}
             value={tillNumber}
             onChange={(e) => setTillNumber(e.target.value)}
             placeholder="Till / Paybill / Phone"
             required
-            hint={tr('The number the money is sent to. Please check it twice.', 'Namba ambayo pesa inatumwa kwake. Tafadhali iangalie mara mbili.')}
+            hint={'The number the money is sent to. Please check it twice.'}
           />
         </section>
       )}
@@ -661,51 +652,48 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
       {registrationStep === 4 && (
         <section className="space-y-4">
           <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
-            {tr('Check your application', 'Angalia maombi yako')}
+            {'Check your application'}
           </h2>
           <p className="text-body leading-relaxed text-[var(--appearance-text-muted)]">
-            {tr(
-              'This is what we received. Open any group to change it, then submit your application.',
-              'Haya ni tuliyopokea. Fungua kundi lolote ili kulibadilisha, kisha tuma maombi yako.'
-            )}
+            {'This is what we received. Open any group to change it, then submit your application.'}
           </p>
 
-          {reviewGroup(tr('Account', 'Akaunti'), 0, (
+          {reviewGroup('Account', 0, (
             <>
               {reviewRow(t.businessName, businessName)}
-              {reviewRow(tr('Phone number', 'Namba ya simu'), phone)}
-              {reviewRow(tr('Email address', 'Barua pepe'), contactEmail)}
+              {reviewRow('Phone number', phone)}
+              {reviewRow('Email address', contactEmail)}
             </>
           ))}
 
-          {reviewGroup(tr('Location', 'Eneo'), 1, (
+          {reviewGroup('Location', 1, (
             <>
-              {reviewRow(tr('Service county', 'Kaunti ya huduma'), agentCounty)}
-              {reviewRow(tr('Service sub-county', 'Kaunti ndogo ya huduma'), agentAdministrativeUnitName)}
-              {reviewRow(tr('Exact operational area', 'Eneo halisi la kazi'), locationAddress)}
+              {reviewRow('Service county', agentCounty)}
+              {reviewRow('Service sub-county', agentAdministrativeUnitName)}
+              {reviewRow('Exact operational area', locationAddress)}
             </>
           ))}
 
-          {reviewGroup(tr('Verification', 'Uthibitisho'), 2, (
+          {reviewGroup('Verification', 2, (
             <>
-              {reviewRow(t.nationalId, nationalId ? tr('Provided', 'Imetolewa') : tr('Not provided', 'Haitolewa'))}
+              {reviewRow(t.nationalId, nationalId ? 'Provided' : 'Not provided')}
               {reviewRow(
-                tr('Business or shop front photo', 'Picha ya mbele ya biashara au duka'),
-                shopPhotoBase64 ? tr('Provided', 'Imetolewa') : tr('Not provided', 'Haitolewa')
+                'Business or shop front photo',
+                shopPhotoBase64 ? 'Provided' : 'Not provided'
               )}
               {reviewRow(
-                tr('Agent ID document photo', 'Picha ya kitambulisho cha wakala'),
-                idDocumentPhotoBase64 ? tr('Provided', 'Imetolewa') : tr('Not provided', 'Haitolewa')
+                'Agent ID document photo',
+                idDocumentPhotoBase64 ? 'Provided' : 'Not provided'
               )}
             </>
           ))}
 
-          {reviewGroup(tr('Payout', 'Malipo'), 3, (
+          {reviewGroup('Payout', 3, (
             <>
-              {reviewRow(tr('Payout method', 'Njia ya malipo'), payoutMethodType)}
+              {reviewRow('Payout method', payoutMethodType)}
               {reviewRow(
-                tr('Payout code or number', 'Namba au msimbo wa malipo'),
-                tillNumber ? tr('Provided', 'Imetolewa') : tr('Not provided', 'Haitolewa')
+                'Payout code or number',
+                tillNumber ? 'Provided' : 'Not provided'
               )}
             </>
           ))}
@@ -722,7 +710,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
           className="w-full"
           onClick={() => setRegistrationStep((step) => Math.max(0, step - 1))}
         >
-          {tr('Back', 'Rudi')}
+          {'Back'}
         </Button>
       )}
     </div>
@@ -746,23 +734,17 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
             </span>
             <h1 className="text-section font-extrabold tracking-tight text-[var(--appearance-text-primary)] sm:text-page">
               {showOtp
-                ? tr('Confirm your code', 'Thibitisha msimbo wako')
+                ? 'Confirm your code'
                 : isRegistering
                   ? t.agentTitle
-                  : tr('Agent sign in', 'Kuingia kwa wakala')}
+                  : 'Agent sign in'}
             </h1>
             <p className="mx-auto max-w-sm text-body leading-relaxed text-[var(--appearance-text-muted)]">
               {showOtp
-                ? tr(
-                    'Enter the one-time code we sent to your verified email address.',
-                    'Weka msimbo wa mara moja tulioutuma kwenye barua pepe yako iliyothibitishwa.'
-                  )
+                ? 'Enter the one-time code we sent to your verified email address.'
                 : isRegistering
                   ? t.agentSubtitle
-                  : tr(
-                      'This page is for approved Return4me Agents. Sign in with the phone number you registered with us.',
-                      'Ukurasa huu ni wa mawakala wa Return4me walioidhinishwa. Ingia kwa namba ya simu uliyojisajili nayo.'
-                    )}
+                  : 'This page is for approved Return4me Agents. Sign in with the phone number you registered with us.'}
             </p>
           </div>
 
@@ -781,7 +763,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
 
               <Input
                 id="agent-otp"
-                label={tr('Verification code', 'Msimbo wa uthibitisho')}
+                label={'Verification code'}
                 type="text"
                 inputMode="numeric"
                 autoComplete="one-time-code"
@@ -791,12 +773,12 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                 placeholder="••••"
                 required
                 disabled={authLoading}
-                hint={tr('The code is emailed to the verified email address on your account, not to this number.', 'Msimbo hutumwa kwa barua pepe iliyothibitishwa ya akaunti yako, na si kwa nambari hii.')}
+                hint={'The code is emailed to the verified email address on your account, not to this number.'}
               />
               <Button type="submit" variant="primary" size="lg" loading={authLoading} className="w-full">
                 {authLoading
-                  ? tr('Verifying…', 'Inathibitisha…')
-                  : tr('Verify and continue', 'Thibitisha na uendelee')}
+                  ? 'Verifying…'
+                  : 'Verify and continue'}
               </Button>
               <Button
                 type="button"
@@ -805,7 +787,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                 className="w-full"
                 onClick={() => { setShowOtp(false); setOtp(''); setAuthError(''); }}
               >
-                {tr('Use a different number', 'Tumia nambari nyingine')}
+                {'Use a different number'}
               </Button>
             </form>
           ) : (
@@ -818,7 +800,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                   target is now 44px. */}
               <div
                 role="group"
-                aria-label={tr('Agent access', 'Ufikiaji wa wakala')}
+                aria-label={'Agent access'}
                 className="grid grid-cols-2 gap-1 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] p-1"
               >
                 <button
@@ -827,7 +809,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                   onClick={() => setIsRegistering(false)}
                   className={`min-h-11 rounded-small px-3 text-body font-bold transition-colors ${!isRegistering ? 'bg-[var(--appearance-surface)] text-[var(--appearance-primary)] shadow-raised' : 'text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'}`}
                 >
-                  {tr('Agent Login', 'Kuingia kwa Wakala')}
+                  {'Agent Login'}
                 </button>
                 <button
                   type="button"
@@ -835,7 +817,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                   onClick={() => setIsRegistering(true)}
                   className={`min-h-11 rounded-small px-3 text-body font-bold transition-colors ${isRegistering ? 'bg-[var(--appearance-surface)] text-[var(--appearance-primary)] shadow-raised' : 'text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'}`}
                 >
-                  {tr('Apply to be Agent', 'Omba kuwa Wakala')}
+                  {'Apply to be Agent'}
                 </button>
               </div>
 
@@ -855,7 +837,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
               {(!isRegistering || registrationStep === 0) && (
                 <Input
                   id="agent-phone"
-                  label={tr('Phone number', 'Namba ya simu')}
+                  label={'Phone number'}
                   type="tel"
                   inputMode="tel"
                   autoComplete="tel"
@@ -865,14 +847,8 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                   required
                   disabled={authLoading}
                   hint={isRegistering
-                    ? tr(
-                        'This number identifies your account. The verification link is emailed to the address above.',
-                        'Nambari hii ni kitambulisho cha akaunti yako. Kiungo cha uthibitishaji hutumwa kwa barua pepe iliyo juu.'
-                      )
-                    : tr(
-                        'Use the number you registered with us.',
-                        'Tumia nambari uliyojisajili nayo.'
-                      )}
+                    ? 'This number identifies your account. The verification link is emailed to the address above.'
+                    : 'Use the number you registered with us.'}
                 />
               )}
 
@@ -891,21 +867,21 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                       required
                     />
                     <label htmlFor="agreed-terms" className="cursor-pointer select-none text-body leading-relaxed text-[var(--appearance-text-secondary)]">
-                      {tr('I have read and agree to the Return4me ', 'Nimesoma na nakubaliana na ')}
+                      {'I have read and agree to the Return4me '}
                       <button
                         type="button"
                         onClick={() => (window as any).setView?.('terms')}
                         className="inline font-bold text-[var(--appearance-primary)] hover:underline"
                       >
-                        {tr('Terms of Service', 'Masharti ya Huduma')}
+                        {'Terms of Service'}
                       </button>{' '}
-                      {tr('and the ', 'na ')}
+                      {'and the '}
                       <button
                         type="button"
                         onClick={() => (window as any).setView?.('privacy')}
                         className="inline font-bold text-[var(--appearance-primary)] hover:underline"
                       >
-                        {tr('Privacy Policy', 'Sera ya Faragha')}
+                        {'Privacy Policy'}
                       </button>
                     </label>
                   </div>
@@ -920,9 +896,9 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
               <Button type="submit" variant="primary" size="lg" loading={authLoading} className="w-full">
                 {isRegistering
                   ? (isRegistrationReview
-                      ? tr('Submit application', 'Tuma maombi')
-                      : tr('Continue', 'Endelea'))
-                  : tr('Sign in', 'Ingia')}
+                      ? 'Submit application'
+                      : 'Continue')
+                  : 'Sign in'}
               </Button>
             </form>
           )}
@@ -936,7 +912,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
           {!showOtp && !isRegistering && (
             <div className="space-y-3 border-t border-[var(--appearance-border)] pt-5 text-center">
               <p className="text-caption font-bold uppercase tracking-widest text-[var(--appearance-text-muted)]">
-                {tr('Need to become an Agent?', 'Unahitaji kuwa Wakala?')}
+                {'Need to become an Agent?'}
               </p>
               <Button
                 type="button"
@@ -945,7 +921,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                 className="w-full"
                 onClick={() => (window as any).setView?.('becomeAgent')}
               >
-                {tr('Become an Agent', 'Kuwa Wakala')}
+                {'Become an Agent'}
               </Button>
             </div>
           )}
@@ -958,7 +934,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
       {token && queueLoading && !agentProfile && !queueError && (
         <div className="bg-[var(--appearance-surface)] rounded-panel border border-[var(--appearance-border)] p-6 shadow-raised max-w-2xl mx-auto space-y-4 fade-in" aria-busy="true">
           <p className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]" role="status" aria-live="polite">
-            {lang === 'en' ? 'Loading your agent hub…' : 'Inapakia ukurasa wako wa wakala…'}
+            {'Loading your agent hub…'}
           </p>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <Skeleton shape="card" />
@@ -990,7 +966,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
           </div>
           <div className="space-y-2">
             <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
-              {lang === 'en' ? 'Agent Hub unavailable' : 'Ukurasa wa Wakala Haupatikani'}
+              {'Agent Hub unavailable'}
             </h2>
             <p className="text-body text-[var(--appearance-text-secondary)] font-semibold" role="alert" aria-live="assertive">
               {queueError}
@@ -1007,7 +983,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
           >
             {queueLoading
               ? <Loader2 className="animate-spin" size={ICON_SIZE.emphasis} aria-hidden={true} />
-              : <span>{lang === 'en' ? 'Try again' : 'Jaribu tena'}</span>}
+              : <span>{'Try again'}</span>}
           </Button>
         </div>
       )}
@@ -1031,26 +1007,17 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
           </div>
           <div>
             <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
-              {lang === 'sw' ? 'Thibitisha Barua Pepe Yako' : 'Verify Your Email'}
+              {'Verify Your Email'}
             </h2>
             <p className="text-body text-[var(--appearance-text-secondary)] mt-2 font-semibold leading-relaxed">
-              {lang === 'sw'
-                ? 'Tumetumia kiungo cha uthibitishaji kwenye barua pepe uliyoandika. Fungua barua pepe hiyo kwenye kifaa hiki na bonyeza kiungo kilichomo.'
-                : 'We sent a verification link to the business email you provided. Open that email on this device and click the link in it.'}
+              {'We sent a verification link to the business email you provided. Open that email on this device and click the link in it.'}
             </p>
           </div>
           {/* role="status" announces the change of screen to assistive tech. The
               outcome is never signalled by the blue icon alone — the heading and
               the body text both change. */}
           <div role="status" className="bg-[var(--appearance-surface-muted)] border border-[var(--appearance-border)] p-4 rounded-standard text-left text-small text-[var(--appearance-text-secondary)] space-y-1.5 leading-tight">
-            {lang === 'sw' ? (
-              <>
-                <span className="font-bold block mb-1">Kuna hatua mbili:</span>
-                <span>1. Thibitisha barua pepe yako kwa kiungo tuliotuma</span>
-                <span>2. Msimamizi akapitisha maombi yako kabla ya kuanza kazi</span>
-                <span className="block pt-1">Hutapewa taarifa kupitia barua pepe.</span>
-              </>
-            ) : (
+            {(
               <>
                 <span className="font-bold block mb-1">There are two separate steps:</span>
                 <span>1. Verify your email using the link we sent you</span>
@@ -1074,20 +1041,11 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
           <div>
             <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">Vetting Pending</h2>
             <p className="text-body text-[var(--appearance-text-secondary)] mt-1 font-semibold">
-              {lang === 'sw'
-                ? 'Taarifa zako zitakaguliwa na utaarifiwa kuhusu maombi yako.'
-                : 'Their details will be checked and they\'ll be notified of their application.'}
+              {'Their details will be checked and they\'ll be notified of their application.'}
             </p>
           </div>
           <div className="bg-[var(--appearance-surface-muted)] border border-[var(--appearance-border)] p-4 rounded-standard text-left text-small text-[var(--appearance-text-secondary)] space-y-1.5 leading-tight">
-            {lang === 'sw' ? (
-              <>
-                <span className="font-bold block mb-1">Mchakato wa Kuidhinisha:</span>
-                <span>1. Uhakiki wa maelezo ya biashara na mahali ilipo</span>
-                <span>2. Uhakiki salama wa Kitambulisho cha Kitaifa (KYC)</span>
-                <span>3. Utapokea barua pepe maombi yako yakishaidhinishwa!</span>
-              </>
-            ) : (
+            {(
               <>
                 <span className="font-bold block mb-1">Onboarding Process:</span>
                 <span>1. Verification of Business Details & Location</span>
@@ -1104,7 +1062,6 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
           in components/agent/AgentHub.tsx (single authoritative copy). */}
       {token && agentStatus === 'active' && agentProfile && (
         <AgentHub
-          lang={lang}
           t={t}
           agentProfile={agentProfile}
           agentEarnings={agentEarnings}
@@ -1191,7 +1148,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                 disabled={modalBusy}
                 className="min-h-11 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] hover:opacity-90 px-4 text-body font-bold text-[var(--appearance-text-primary)] transition disabled:opacity-50"
               >
-                {lang === 'en' ? 'Cancel' : 'Ghairi'}
+                {'Cancel'}
               </button>
               <button
                 disabled={modalBusy}
@@ -1216,7 +1173,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                 className="min-h-11 rounded-standard bg-primary-green hover:bg-primary-hover px-4 text-body font-bold text-white transition flex items-center space-x-1.5 disabled:opacity-50"
               >
                 {modalBusy ? <Loader2 className="animate-spin" size={12} aria-hidden={true} /> : null}
-                <span>{lang === 'en' ? 'Confirm' : 'Thibitisha'}</span>
+                <span>{'Confirm'}</span>
               </button>
             </div>
           </div>
@@ -1240,12 +1197,10 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
               <CheckCircle className="w-6 h-6 shrink-0 mt-0.5" aria-hidden={true} />
               <div className="space-y-1">
                 <h3 id="agent-handover-modal-title" className="text-caption font-extrabold text-[var(--appearance-text-primary)] uppercase tracking-wider">
-                  {lang === 'en' ? 'Confirm Handover' : 'Thibitisha Kukabidhi'}
+                  {'Confirm Handover'}
                 </h3>
                 <p className="text-small text-[var(--appearance-text-muted)] leading-relaxed font-semibold">
-                  {lang === 'en'
-                    ? 'Ask the owner to read out their secret pickup code (emailed to them when they paid). Enter it below to release payment. This cannot be undone.'
-                    : 'Muulize mmiliki asome msimbo wake wa siri wa kuchukua (uliotumwa kwake kwa barua pepe alipolipa). Weka hapa chini kutoa malipo. Kitendo hiki hakiwezi kubatilishwa.'}
+                  {'Ask the owner to read out their secret pickup code (emailed to them when they paid). Enter it below to release payment. This cannot be undone.'}
                 </p>
               </div>
             </div>
@@ -1255,21 +1210,21 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
               autoFocus
               value={pickupCodeModal.code}
               onChange={(e) => setPickupCodeModal({ ...pickupCodeModal, code: e.target.value })}
-              placeholder={lang === 'en' ? 'Enter owner\'s secret pickup code' : 'Weka msimbo wa siri wa mmiliki'}
-              aria-label={lang === 'en' ? 'Owner\'s secret pickup code' : 'Msimbo wa siri wa mmiliki'}
+              placeholder={'Enter owner\'s secret pickup code'}
+              aria-label={'Owner\'s secret pickup code'}
               className="w-full min-h-11 rounded-standard border border-[var(--appearance-border-strong)] bg-[var(--appearance-surface)] px-4 py-3 text-center text-heading font-mono tracking-widest text-[var(--appearance-text-primary)] focus:outline-none focus:border-[var(--appearance-focus)]"
             />
 
             <div className="space-y-2">
               <p className="text-caption font-bold text-[var(--appearance-text-secondary)]">
-                {lang === 'en' ? 'Photo of claimant with the item (required)' : 'Picha ya mdai akiwa na bidhaa (inahitajika)'}
+                {'Photo of claimant with the item (required)'}
               </p>
               <input
                 ref={handoverPhotoInputRef}
                 type="file"
                 accept="image/*"
                 onChange={handleHandoverPhotoCapture}
-                aria-label={lang === 'en' ? 'Photo of claimant with the item' : 'Picha ya mdai akiwa na bidhaa'}
+                aria-label={'Photo of claimant with the item'}
                 className="hidden"
               />
 
@@ -1281,9 +1236,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                       the name was added. */}
                   <video
                     ref={handoverVideoRef}
-                    aria-label={lang === 'en'
-                      ? 'Live camera preview of the claimant with the item'
-                      : 'Kamera ya moja kwa moja ya mdai akiwa na bidhaa'}
+                    aria-label={'Live camera preview of the claimant with the item'}
                     className="w-full h-full object-cover"
                   />
                   <div className="absolute bottom-3 left-0 right-0 flex justify-center space-x-3">
@@ -1292,14 +1245,14 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                       onClick={captureHandoverFrame}
                       className="rounded-standard bg-accent-orange px-4 py-2 text-caption font-bold text-white shadow-raised transition hover:bg-accent-hover"
                     >
-                      {lang === 'en' ? 'Capture' : 'Piga'}
+                      {'Capture'}
                     </button>
                     <button
                       type="button"
                       onClick={stopHandoverCamera}
                       className="rounded-standard bg-stone-800 px-4 py-2 text-caption font-bold text-white transition hover:bg-stone-700"
                     >
-                      {lang === 'en' ? 'Cancel' : 'Ghairi'}
+                      {'Cancel'}
                     </button>
                   </div>
                 </div>
@@ -1315,8 +1268,8 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                       type="button"
                       onClick={startHandoverCamera}
                       className="rounded-full bg-[var(--appearance-surface)] p-2.5 text-[var(--appearance-primary)] hover:opacity-90 shadow-raised transition"
-                      title={lang === 'en' ? 'Retake with camera' : 'Piga tena kwa kamera'}
-                      aria-label={lang === 'en' ? 'Retake with camera' : 'Piga tena kwa kamera'}
+                      title={'Retake with camera'}
+                      aria-label={'Retake with camera'}
                     >
                       <Camera size={ICON_SIZE.ui} aria-hidden={true} />
                     </button>
@@ -1324,8 +1277,8 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                       type="button"
                       onClick={() => handoverPhotoInputRef.current?.click()}
                       className="rounded-full bg-[var(--appearance-surface)] p-2.5 text-[var(--appearance-primary)] hover:opacity-90 shadow-raised transition"
-                      title={lang === 'en' ? 'Upload a different photo' : 'Pakia picha nyingine'}
-                      aria-label={lang === 'en' ? 'Upload a different photo' : 'Pakia picha nyingine'}
+                      title={'Upload a different photo'}
+                      aria-label={'Upload a different photo'}
                     >
                       <Upload size={ICON_SIZE.ui} aria-hidden={true} />
                     </button>
@@ -1334,7 +1287,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
               ) : (
                 <div className="rounded-standard border-2 border-dashed border-[var(--appearance-border-strong)] bg-[var(--appearance-surface-muted)] py-5 text-center space-y-3">
                   <p className="text-caption text-[var(--appearance-text-muted)]">
-                    {lang === 'en' ? 'Take a photo now, or upload one from this device' : 'Piga picha sasa, au pakia moja kutoka kwa kifaa hiki'}
+                    {'Take a photo now, or upload one from this device'}
                   </p>
                   <div className="flex items-center justify-center gap-2.5">
                     <button
@@ -1343,7 +1296,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                       className="min-h-11 rounded-standard bg-primary-green hover:bg-primary-hover px-3.5 text-caption font-bold text-white transition flex items-center gap-1.5"
                     >
                       <Camera size={ICON_SIZE.metadata} aria-hidden={true} />
-                      <span>{lang === 'en' ? 'Take Photo' : 'Piga Picha'}</span>
+                      <span>{'Take Photo'}</span>
                     </button>
                     <button
                       type="button"
@@ -1351,7 +1304,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                       className="min-h-11 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface)] hover:opacity-90 px-3.5 text-caption font-bold text-[var(--appearance-text-primary)] transition flex items-center gap-1.5"
                     >
                       <Upload size={ICON_SIZE.metadata} aria-hidden={true} />
-                      <span>{lang === 'en' ? 'Upload File' : 'Pakia Faili'}</span>
+                      <span>{'Upload File'}</span>
                     </button>
                   </div>
                 </div>
@@ -1377,7 +1330,7 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                 disabled={actionProcessing}
                 className="min-h-11 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] hover:opacity-90 px-4 text-body font-bold text-[var(--appearance-text-primary)] transition disabled:opacity-50"
               >
-                {lang === 'en' ? 'Cancel' : 'Ghairi'}
+                {'Cancel'}
               </button>
               <button
                 onClick={submitConfirmHandover}
@@ -1386,8 +1339,8 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                 className="min-h-11 rounded-standard bg-primary-green hover:bg-primary-hover px-4 text-body font-bold text-white transition disabled:opacity-50"
               >
                 {actionProcessing
-                  ? (lang === 'en' ? 'Confirming…' : 'Inathibitisha…')
-                  : (lang === 'en' ? 'Confirm & Release Payment' : 'Thibitisha na Toa Malipo')}
+                  ? ('Confirming…')
+                  : ('Confirm & Release Payment')}
               </button>
             </div>
           </div>

@@ -17,8 +17,6 @@ import { motion, AnimatePresence } from 'motion/react';
 type ViewName = 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy' | 'signin' | 'becomeAgent';
 
 interface HomeViewProps {
-  lang: 'en' | 'sw';
-  setLang: (lang: 'en' | 'sw') => void;
   setView: (view: ViewName) => void;
   categories: any[];
   activeAgentsCount: number | null;
@@ -40,11 +38,11 @@ interface HomeViewProps {
 
 export default function HomeView(props: HomeViewProps) {
   const {
-    lang, setView, categories,
+    setView, categories,
     activeAgentsCount, recentItems, recentItemsLoading, recentItemsError,
     onRetryRecentItems, onOpenItem,
   } = props;
-  const t = translations[lang];
+  const t = translations.en;
 
   // P14A (P14-09) — the ONLY source of a category's human-readable name is the
   // live category list. This used to fall back to a hard-coded label map for
@@ -53,7 +51,7 @@ export default function HomeView(props: HomeViewProps) {
   // neutral, honest label that never contradicts the live data.
   const getCategoryName = (categoryId: string) => {
     const cat = categories.find((c: any) => c.id === categoryId);
-    if (cat) return lang === 'en' ? cat.name_en : cat.name_sw;
+    if (cat) return cat.name_en;
     return categoryId;
   };
 
@@ -135,19 +133,17 @@ export default function HomeView(props: HomeViewProps) {
   const slides: HeroSlide[] = [
     {
       img: 'return4me-hero-found-id-nairobi',
-      alt: lang === 'en' ? 'Person finding a lost identification card on a Nairobi street' : 'Mtu akipata kadi ya kitambulisho iliyopotea mitaani Nairobi',
+      alt: 'Person finding a lost identification card on a Nairobi street',
       eyebrow: 'Return4me',
       h1: (
         <>
-          {lang === 'en' ? "Found something that isn't yours?" : 'Umepata kitu kisicho chako?'}
+          {"Found something that isn't yours?"}
           <span className="block text-accent-orange mt-2">
-            {lang === 'en' ? 'Help reconnect it with the person who lost it.' : 'Saidia kikirudi kwa mwenye kilichopoteza.'}
+            {'Help reconnect it with the person who lost it.'}
           </span>
         </>
       ),
-      copy: lang === 'en'
-        ? "Return4me's secure lost-and-found network returns found items to their owners — verified, safe and fast."
-        : 'Mtandao salama wa Return4me hurejesha vitu vilivyopatikana kwa wamiliki wao — uliothibitishwa, salama na haraka.',
+      copy: "Return4me's secure lost-and-found network returns found items to their owners — verified, safe and fast.",
       // BATCH 5 (MF-3) — this label was the only "Find My Lost Item" in the
       // application, and it sat on a slide whose heading addresses the person
       // who FOUND something. It now reuses the canonical public-navigation
@@ -155,103 +151,89 @@ export default function HomeView(props: HomeViewProps) {
       // bottom tab bar and this page's own Final CTA already use for /lost.
       // LABEL ONLY: the destination is still `owner` -> /lost, unchanged.
       primary: { label: t.ownerBtn, view: 'owner' },
-      secondary: { label: lang === 'en' ? 'Report a Found Item' : 'Ripoti Kitu Kilichopatikana', view: 'finder' },
+      secondary: { label: 'Report a Found Item', view: 'finder' },
     },
     {
       img: 'return4me-agent-handover',
-      alt: lang === 'en' ? 'Person handing a found item to a Return4me agent' : 'Mtu akimkabidhi wakala wa Return4me kitu kilichopatikana',
+      alt: 'Person handing a found item to a Return4me agent',
       eyebrow: 'Trusted handover',
       h1: (
         <>
-          {lang === 'en' ? 'Safe hands. Real people.' : 'Mikono salama. Watu wa kweli.'}
+          {'Safe hands. Real people.'}
           <span className="block text-accent-orange mt-2">
-            {lang === 'en' ? 'Connect with trusted Return4me agents who complete every return.' : 'Ungana na mawakala wa Return4me wanaoaminika wanaokamilisha kila urejeshaji.'}
+            {'Connect with trusted Return4me agents who complete every return.'}
           </span>
         </>
       ),
-      copy: lang === 'en'
-        ? 'A national network of vetted agents handles drop-offs and verified handovers close to home.'
-        : 'Mtandao wa kitaifa wa mawakala waliothibitishwa hutunza uwasilishaji na urejeshaji uliothibitishwa karibu na nyumbani.',
+      copy: 'A national network of vetted agents handles drop-offs and verified handovers close to home.',
       // Phase 8.1 — this CTA used to open the internal agent PORTAL directly
       // from a public hero. It now opens the public "Become an Agent" journey,
       // which leads to /agent_portal. Agent access is unchanged; it is simply
       // no longer a raw public portal link.
-      primary: { label: lang === 'en' ? 'Become an Agent' : 'Kuwa Wakala', view: 'becomeAgent' },
-      secondary: { label: lang === 'en' ? 'How It Works' : 'Inavyofanya Kazi', scroll: true },
+      primary: { label: 'Become an Agent', view: 'becomeAgent' },
+      secondary: { label: 'How It Works', scroll: true },
     },
     {
       img: 'return4me-app-user-nairobi',
-      alt: lang === 'en' ? 'Kenyan user using the Return4me platform on a smartphone' : 'Mkenya akitumia jukwaa la Return4me kwenye simu',
+      alt: 'Kenyan user using the Return4me platform on a smartphone',
       eyebrow: 'Digital platform',
       h1: (
         <>
-          {lang === 'en' ? 'Lost-and-found, made simpler.' : 'Kutafuta-kurudisha, kumerahisishwa.'}
+          {'Lost-and-found, made simpler.'}
           <span className="block text-accent-orange mt-2">
-            {lang === 'en' ? 'Report, verify and follow your journey through Return4me.' : 'Ripoti, thibitisha na ufuatilie safari yako kupitia Return4me.'}
+            {'Report, verify and follow your journey through Return4me.'}
           </span>
         </>
       ),
-      copy: lang === 'en'
-        ? 'Start with a single report on your phone. The platform matches items and protects every step of the return.'
-        : 'Anza kwa ripoti moja kwenye simu yako. Jukwaa linaoanisha vitu na kulinda kila hatua ya urejeshaji.',
+      copy: 'Start with a single report on your phone. The platform matches items and protects every step of the return.',
       // BATCH 5 (MF-1) — this was the only homepage reporting CTA that did not
       // say lost or found, so a visitor who LOST something could read it as
       // their own path and be taken to the found-item form. It now uses the
       // terminology the application already established (identical to this
       // slide-1 secondary and to the /found document title in App.tsx).
       // LABEL ONLY: the destination is still `finder` -> /found, unchanged.
-      primary: { label: lang === 'en' ? 'Report a Found Item' : 'Ripoti Kitu Kilichopatikana', view: 'finder' },
-      secondary: { label: lang === 'en' ? 'How It Works' : 'Inavyofanya Kazi', scroll: true },
+      primary: { label: 'Report a Found Item', view: 'finder' },
+      secondary: { label: 'How It Works', scroll: true },
     },
     {
       img: 'return4me-successful-return',
-      alt: lang === 'en' ? 'Lost item being returned to its owner through Return4me' : 'Kitu kilichopotea kinarejeshwa kwa mmiliki wake kupitia Return4me',
+      alt: 'Lost item being returned to its owner through Return4me',
       eyebrow: 'Successful returns',
       h1: (
         <>
-          {lang === 'en' ? "Lost doesn't have to mean gone forever." : 'Kupoteza hakumaanishi kutoweka milele.'}
+          {"Lost doesn't have to mean gone forever."}
           <span className="block text-accent-orange mt-2">
-            {lang === 'en' ? 'Return4me helps people reconnect with the things that matter.' : 'Return4me husaidia watu kuungana tena na vile walivyopenda.'}
+            {'Return4me helps people reconnect with the things that matter.'}
           </span>
         </>
       ),
-      copy: lang === 'en'
-        ? 'Every return is a story — a phone, an ID or a treasured keepsake, finally back where it belongs.'
-        : 'Kila urejeshaji ni hadithi — simu, kitambulisho au kitu kinachopendwa — kurudi mahali pake.',
+      copy: 'Every return is a story — a phone, an ID or a treasured keepsake, finally back where it belongs.',
       // BATCH 5 (MF-2) — "Get Started" communicated neither what begins nor
       // which of the two journeys it selects. It now reuses `t.ownerBtn`
       // ("I Lost Something"), the canonical label for /lost, so the EN/SW
       // pair can never drift. LABEL ONLY: destination still `owner` -> /lost.
       primary: { label: t.ownerBtn, view: 'owner' },
-      secondary: { label: lang === 'en' ? 'How It Works' : 'Inavyofanya Kazi', scroll: true },
+      secondary: { label: 'How It Works', scroll: true },
     },
   ];
 
   // ── HOW IT WORKS STEPS ──────────────────────────────────────────────────
   const steps = [
     {
-      title: lang === 'en' ? 'Report' : 'Ripoti',
-      desc: lang === 'en'
-        ? 'Tell us what you lost or found — a photo, a location, a few details.'
-        : 'Tuambie ulichopoteza au umepata — picha, mahali, maelezo machache.',
+      title: 'Report',
+      desc: 'Tell us what you lost or found — a photo, a location, a few details.',
     },
     {
-      title: lang === 'en' ? 'Match & Verify' : 'Oanisha & Thibitisha',
-      desc: lang === 'en'
-        ? 'Return4me checks for matches and verifies rightful ownership securely.'
-        : 'Return4me huangalia mechi na kuthibitisha umiliki halali kwa usalama.',
+      title: 'Match & Verify',
+      desc: 'Return4me checks for matches and verifies rightful ownership securely.',
     },
     {
-      title: lang === 'en' ? 'Pay Securely' : 'Lipia kwa Usalama',
-      desc: lang === 'en'
-        ? 'Payment is confirmed through M-Pesa before collection. After the Agent records the viewing and handover, settlement follows the applicable dispute window.'
-        : 'Pesa husimiliwa kupitia M-Pesa na huendelezwa hadi kitu kurudishwe na madaraja ya mzozo yakamilike.',
+      title: 'Pay Securely',
+      desc: 'Payment is confirmed through M-Pesa before collection. After the Agent records the viewing and handover, settlement follows the applicable dispute window.',
     },
     {
-      title: lang === 'en' ? 'Collect' : 'Chukua',
-      desc: lang === 'en'
-        ? 'Collect your item from a verified agent, who hands it over to you in person after you have viewed and verified it.'
-        : 'Chukua kitu chako kutoka kwa wakala aliyeidhinishwa — au kipokee kutoka mpataji.',
+      title: 'Collect',
+      desc: 'Collect your item from a verified agent, who hands it over to you in person after you have viewed and verified it.',
     },
   ];
 
@@ -261,7 +243,7 @@ export default function HomeView(props: HomeViewProps) {
       <section
         role="region"
         aria-roledescription="carousel"
-        aria-label={lang === 'en' ? 'How Return4me works' : 'Jinsi Return4me inavyofanya kazi'}
+        aria-label={'How Return4me works'}
         onKeyDown={handleCarouselKeyDown}
         tabIndex={-1}
         className="relative isolate overflow-hidden bg-primary-green"
@@ -392,7 +374,7 @@ export default function HomeView(props: HomeViewProps) {
         <button
           type="button"
           onClick={prevSlide}
-          aria-label={lang === 'en' ? 'Previous slide' : 'Slaidi iliyotangulia'}
+          aria-label={'Previous slide'}
           className="absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 z-10 h-11 w-11 rounded-full bg-black/30 hover:bg-black/50 text-white flex items-center justify-center transition-colors motion-reduce:transition-none"
         >
           <ChevronLeft size={ICON_SIZE.feature} aria-hidden="true" />
@@ -400,7 +382,7 @@ export default function HomeView(props: HomeViewProps) {
         <button
           type="button"
           onClick={nextSlide}
-          aria-label={lang === 'en' ? 'Next slide' : 'Slaidi inayofuata'}
+          aria-label={'Next slide'}
           className="absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 z-10 h-11 w-11 rounded-full bg-black/30 hover:bg-black/50 text-white flex items-center justify-center transition-colors motion-reduce:transition-none"
         >
           <ChevronRight size={ICON_SIZE.feature} aria-hidden="true" />
@@ -417,7 +399,7 @@ export default function HomeView(props: HomeViewProps) {
             already Kiswahili.
             No new translation key, architecture, helper, state or prop is
             introduced — this reuses the pattern the file already uses. */}
-        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1" role="tablist" aria-label={lang === 'en' ? 'Slide indicator' : 'Kiashiria cha slaidi'}>
+        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1" role="tablist" aria-label={'Slide indicator'}>
           {slides.map((s, i) => (
             <button
               key={s.img}
@@ -434,7 +416,7 @@ export default function HomeView(props: HomeViewProps) {
               role="tab"
               aria-selected={i === current}
               aria-controls={`r4m-hero-panel-${i}`}
-              aria-label={lang === 'en' ? `Go to slide ${i + 1} of ${slides.length}` : `Nenda kwenye slaidi ${i + 1} kati ya ${slides.length}`}
+              aria-label={`Go to slide ${i + 1} of ${slides.length}`}
               aria-current={i === current ? 'true' : undefined}
               /* UX-03 — the tab is a 44px target and the DOT is its child. The
                  dot keeps the size-and-colour difference (never colour alone),
@@ -457,21 +439,21 @@ export default function HomeView(props: HomeViewProps) {
           <div className="flex flex-wrap items-center justify-center gap-x-8 gap-y-3 text-caption sm:text-body font-semibold text-[var(--appearance-text-muted)]">
             <span className="flex items-center gap-2">
               <ShieldCheck size={ICON_SIZE.ui} className="text-status-success" aria-hidden="true" />
-              {lang === 'en' ? 'Vetted Agents Only' : 'Mawakala Waliothibitishwa Pekee'}
+              {'Vetted Agents Only'}
             </span>
             <span className="flex items-center gap-2">
               <Users size={ICON_SIZE.ui} className="text-status-success" aria-hidden="true" />
               {activeAgentsCount !== null
-                ? (lang === 'en' ? `${activeAgentsCount} Active Agents` : `Wakala ${activeAgentsCount} Hai`)
-                : (lang === 'en' ? 'Growing Agent Network' : 'Mtandao wa Wakala Unaokua')}
+                ? (`${activeAgentsCount} Active Agents`)
+                : ('Growing Agent Network')}
             </span>
             <span className="flex items-center gap-2">
               <CreditCard size={ICON_SIZE.ui} className="text-status-success" aria-hidden="true" />
-              {lang === 'en' ? 'M-Pesa Supported' : 'Inatumia M-Pesa'}
+              {'M-Pesa Supported'}
             </span>
             <span className="flex items-center gap-2">
               <Lock size={ICON_SIZE.ui} className="text-status-success" aria-hidden="true" />
-              {lang === 'en' ? 'Payment held safely' : 'Pesa inashikiliwa kwa usalama'}
+              {'Payment held safely'}
             </span>
           </div>
         </div>
@@ -488,7 +470,7 @@ export default function HomeView(props: HomeViewProps) {
               <div className="aspect-[4/3] bg-[var(--appearance-surface-muted)] rounded-xl overflow-hidden flex items-center justify-center">
                 <img
                   src="/assets/return4me-earn-and-return.webp"
-                  alt={lang === 'en' ? 'A Return4me agent safely returning a found item to its owner' : 'Wakala wa Return4me anarejeshza kilichopatikana kwa mmiliki wake'}
+                  alt={'A Return4me agent safely returning a found item to its owner'}
                   width="1672"
                   height="941"
                   className="w-full h-full object-cover"
@@ -502,12 +484,10 @@ export default function HomeView(props: HomeViewProps) {
             {/* Content area */}
             <div className="order-1 lg:order-2">
               <h2 id="earn-heading" className="text-section font-bold tracking-tight text-[var(--appearance-text-primary)]">
-                {lang === 'en' ? 'Found something? Help it find its way home.' : 'Umepeleza saidi? Isaidie njia ya nyumbani.'}
+                {'Found something? Help it find its way home.'}
               </h2>
               <p className="mt-4 text-body sm:text-body-large text-[var(--appearance-text-muted)] leading-relaxed">
-                {lang === 'en'
-                  ? "Every lost item has a story. Every person who finds something has an opportunity to make a difference — and be rewarded for doing the right thing."
-                  : "Kila kitu kilichopotea kina hadithi. Kila mtu anayepeleza kitu ana fursa kufanya tofauti — na kutunzwa kwa kufanya kitu sahihi."}
+                {"Every lost item has a story. Every person who finds something has an opportunity to make a difference — and be rewarded for doing the right thing."}
               </p>
 
               <div className="mt-8 space-y-6">
@@ -518,17 +498,13 @@ export default function HomeView(props: HomeViewProps) {
                       visitor can tell "I found something" from "I lost
                       something" at a glance. Text unchanged. */}
                   <h3 className="text-body-large font-bold text-[var(--appearance-text-primary)]">
-                    {lang === 'en' ? "If you find something" : "Ikiwa umepeleza kitu"}
+                    {"If you find something"}
                   </h3>
                   <p className="mt-2 text-body text-[var(--appearance-text-muted)] leading-relaxed">
-                    {lang === 'en'
-                      ? "Found someone's ID, phone, bag, certificate or other belonging? Don't leave it behind. Report it on Return4me and give its owner a chance to get it back."
-                      : "Umepeleza kitambulisho, simu, mkoba, cheti au kitu cha mtu? Usiache nyuma. Ripoti kwenye Return4me na umpatie mmiliki wake nia ya kukirejesha."}
+                    {"Found someone's ID, phone, bag, certificate or other belonging? Don't leave it behind. Report it on Return4me and give its owner a chance to get it back."}
                   </p>
                   <p className="mt-2 text-body text-[var(--appearance-text-muted)]">
-                    {lang === 'en'
-                      ? "Successful finders can earn when a reported item is safely returned."
-                      : "Watafutaji wanaofaulu wanaweza kutunzwa inapotangazwa kitu kilichorejeshwa salama."}
+                    {"Successful finders can earn when a reported item is safely returned."}
                   </p>
                   <div className="mt-4">
                     {/* BATCH 5 (MF-5) — the visual hierarchy was inverted: this
@@ -554,17 +530,15 @@ export default function HomeView(props: HomeViewProps) {
                 {/* If you lose something */}
                 <div>
                   <h3 className="text-body-large font-bold text-[var(--appearance-text-primary)]">
-                    {lang === 'en' ? "If you lose something" : "Ikiwa umepoteza kitu"}
+                    {"If you lose something"}
                   </h3>
                   <p className="mt-2 text-body text-[var(--appearance-text-muted)] leading-relaxed">
-                    {lang === 'en'
-                      ? "Lost something important? Search the items our agents are holding. If yours has been found, you can claim it and collect it in person."
-                      : "Umepoteza kitu muhimu? Tafuta vitu vinavyohifadhiwa na mawakala wetu. Kama chako kimepatikana, unaweza kukidai na kukichukua ana kwa ana."}
+                    {"Lost something important? Search the items our agents are holding. If yours has been found, you can claim it and collect it in person."}
                   </p>
                   <div className="mt-4">
                     <Button variant="primary" size="lg" onClick={() => setView('owner')}>
                       <Search size={ICON_SIZE.emphasis} aria-hidden="true" />
-                      {lang === 'en' ? 'Search Found Items' : 'Tafuta Vitu Vilivyopatikana'}
+                      {'Search Found Items'}
                     </Button>
                   </div>
                 </div>
@@ -573,9 +547,9 @@ export default function HomeView(props: HomeViewProps) {
               {/* Closing brand message */}
               <div className="mt-10 pt-6 border-t border-[var(--appearance-border)]">
                 <p className="text-body text-[var(--appearance-text-primary)] leading-relaxed">
-                  {lang === 'en' ? 'Lost something? Search for it.' : 'Umepoteza kitu? Kitafute.'}
+                  {'Lost something? Search for it.'}
                   <br />
-                  {lang === 'en' ? 'Found something? Give it a chance to get home.' : 'Umepeleza kitu? Mpe nia ya kufika nyumbani.'}
+                  {'Found something? Give it a chance to get home.'}
                 </p>
               </div>
             </div>
@@ -599,23 +573,21 @@ export default function HomeView(props: HomeViewProps) {
           <SectionHeading
             titleId="found-items-heading"
             titleClassName="text-section"
-            eyebrow={lang === 'en' ? 'Recently found' : 'Vilivyopatikana hivi karibuni'}
-            title={lang === 'en' ? 'Items waiting for owners' : 'Vitu vinavyosubiri wamiliki'}
-            description={lang === 'en' ? 'These items have been found and are safely held by verified agents.' : 'Hivi vitu vimepatikana na vimeshikiliwa na wakala waliothibitishwa.'}
+            eyebrow={'Recently found'}
+            title={'Items waiting for owners'}
+            description={'These items have been found and are safely held by verified agents.'}
           />
            <div className="mt-6 flex flex-wrap gap-3">
              <Button variant="primary" size="md" onClick={() => setView('owner')}>
                <Search size={ICON_SIZE.ui} aria-hidden="true" />
-               {lang === 'en' ? 'Browse Found Items' : 'Vinjari Vitu Vilivyopatikana'}
+               {'Browse Found Items'}
              </Button>
            </div>
           {/* The journey this section actually leads into, stated once and
               truthfully. It promises no ownership, no guaranteed recovery and
               no payment outcome — only what the existing surfaces do. */}
           <p className="mt-3 text-body leading-relaxed text-[var(--appearance-text-muted)] max-w-2xl">
-            {lang === 'en'
-              ? 'Browse found items → open an item to see its details → select “It’s Mine” to begin a claim.'
-              : 'Vinjari vitu vilivyopatikana → fungua kitu kuona maelezo yake → chagua “Ni Yangu” kuanza dai.'}
+            {'Browse found items → open an item to see its details → select “It’s Mine” to begin a claim.'}
           </p>
           {/* Honest result status. The homepage is deliberately given a slice of
               the newest items, not the whole inventory, so this reports only the
@@ -626,14 +598,12 @@ export default function HomeView(props: HomeViewProps) {
             className="mt-2 text-caption text-[var(--appearance-text-muted)]"
           >
             {recentItemsLoading
-              ? (lang === 'en' ? 'Loading recently found items…' : 'Inapakia vitu vilivyopatikana hivi karibuni…')
+              ? ('Loading recently found items…')
               : recentItemsError
-              ? (lang === 'en' ? 'Recently found items could not be loaded.' : 'Vitu vilivyopatikana hivi karibuni havikuweza kupakiwa.')
+              ? ('Recently found items could not be loaded.')
               : recentItems.length === 0
-              ? (lang === 'en' ? 'No recently found items are available right now.' : 'Hakuna vitu vilivyopatikana hivi karibuni kwa sasa.')
-              : (lang === 'en'
-                ? `Showing ${recentItems.length} recently found item${recentItems.length === 1 ? '' : 's'}.`
-                : `Inaonyesha vitu ${recentItems.length} vilivyopatikana hivi karibuni.`)}
+              ? ('No recently found items are available right now.')
+              : (`Showing ${recentItems.length} recently found item${recentItems.length === 1 ? '' : 's'}.`)}
           </p>
           {recentItemsLoading ? (
             <div
@@ -654,10 +624,8 @@ export default function HomeView(props: HomeViewProps) {
             <div className="mt-8">
               <EmptyState
                 icon={Package}
-                title={lang === 'en' ? 'Could not load items' : 'Haikuweza kupakia vitu'}
-                description={lang === 'en'
-                  ? 'We could not load recently found items just now.'
-                  : 'Hatukuweza kupakia vitu vilivyopatikana hivi karibuni kwa sasa.'}
+                title={'Could not load items'}
+                description={'We could not load recently found items just now.'}
                 action={
                   /* BATCH 4 — re-invokes the EXISTING App-level
                      fetchRecentItems(). It does not reload the page, adds no
@@ -668,7 +636,7 @@ export default function HomeView(props: HomeViewProps) {
                   onRetryRecentItems ? (
                     <Button variant="accent" size="sm" onClick={onRetryRecentItems}>
                       <RefreshCw size={ICON_SIZE.metadata} aria-hidden="true" />
-                      {lang === 'en' ? 'Try Again' : 'Jaribu Tena'}
+                      {'Try Again'}
                     </Button>
                   ) : undefined
                 }
@@ -678,12 +646,12 @@ export default function HomeView(props: HomeViewProps) {
             <div className="mt-8">
               <EmptyState
                 icon={Package}
-                title={lang === 'en' ? 'No items waiting' : 'Hakuna vitu vinavyosubiri'}
-                description={lang === 'en' ? 'Check back soon — new items are added regularly.' : 'Rudi hivi karibuni — vitu vipya vinaongezwa mara kwa mara.'}
+                title={'No items waiting'}
+                description={'Check back soon — new items are added regularly.'}
                 action={
                   <Button variant="accent" size="sm" onClick={() => setView('finder')}>
                     <MapPin size={ICON_SIZE.metadata} aria-hidden="true" />
-                    {lang === 'en' ? 'Report a Found Item' : 'Ripoti Kitu Kilichopatikana'}
+                    {'Report a Found Item'}
                   </Button>
                 }
               />
@@ -694,10 +662,10 @@ export default function HomeView(props: HomeViewProps) {
                 const isSensitive = item.is_sensitive_document;
                 const hasPhoto = item.photo_url && !isSensitive;
                 const statusText = item.status === 'claimed'
-                  ? (lang === 'en' ? 'Claimed' : 'Imechingwa')
+                  ? ('Claimed')
                   : item.status === 'at_agent'
-                  ? (lang === 'en' ? 'With Agent' : 'Na Wakala')
-                  : (lang === 'en' ? 'Found' : 'Imepatikana');
+                  ? ('With Agent')
+                  : ('Found');
                 const statusVariant = item.status === 'claimed' ? 'warning' : item.status === 'at_agent' ? 'info' : 'success';
                 
                 return (
@@ -724,16 +692,14 @@ export default function HomeView(props: HomeViewProps) {
                          :focus-visible rule, and the card's own radius is what
                          the outline follows. */
                       className="block h-full rounded-panel"
-                      aria-label={lang === 'en'
-                        ? `Open found item details: ${getCategoryName(item.category_id)}`
-                        : `Fungua maelezo ya bidhaa iliyopatikana: ${getCategoryName(item.category_id)}`}
+                      aria-label={`Open found item details: ${getCategoryName(item.category_id)}`}
                     >
                     {/* Thumbnail area */}
                     <div className="aspect-[4/3] bg-[var(--appearance-surface-muted)] relative overflow-hidden">
                       {hasPhoto ? (
                         <img
                           src={item.photo_url}
-                          alt={lang === 'en' ? `${getCategoryName(item.category_id)} - found item` : `${getCategoryName(item.category_id)} - kitu kilichopatikana`}
+                          alt={`${getCategoryName(item.category_id)} - found item`}
                           loading="lazy"
                           decoding="async"
                           width="400"
@@ -745,8 +711,8 @@ export default function HomeView(props: HomeViewProps) {
                           <Lock size={ICON_SIZE.feature} aria-hidden="true" className="mb-2" />
                           <span className="text-caption font-bold">
                             {isSensitive
-                              ? (lang === 'en' ? 'Photo hidden for privacy' : 'Picha imefichwa kwa faragha')
-                              : (lang === 'en' ? 'No photo available' : 'Hakuna picha')}
+                              ? ('Photo hidden for privacy')
+                              : ('No photo available')}
                           </span>
                         </div>
                       )}
@@ -776,8 +742,8 @@ export default function HomeView(props: HomeViewProps) {
                       </h3>
                       <p className="mt-1 text-small text-[var(--appearance-text-muted)] leading-relaxed line-clamp-2">
                         {isSensitive
-                          ? (lang === 'en' ? 'Details hidden for privacy' : 'Maelezo yamefichwa kwa faragha')
-                          : (item.description || (lang === 'en' ? 'No description available' : 'Hakuna maelezo'))}
+                          ? ('Details hidden for privacy')
+                          : (item.description || ('No description available'))}
                       </p>
                       {/* Where it was found. Real data only: the row renders
                           when the public item payload already carries a
@@ -792,7 +758,7 @@ export default function HomeView(props: HomeViewProps) {
                       <div className="mt-3 flex-1" />
                       <div className="mt-3 pt-3 border-t border-[var(--appearance-border)] flex items-center justify-between">
                         <span className="text-caption text-[var(--appearance-text-muted)]">
-                          {new Date(item.created_at).toLocaleDateString(lang === 'en' ? 'en-US' : 'sw-KE', { month: 'short', day: 'numeric', year: 'numeric' })}
+                          {new Date(item.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                         </span>
                         <span className="text-caption font-mono text-[var(--appearance-text-primary)] bg-[var(--appearance-surface-muted)] px-2 py-1 rounded-compact">
                           {item.id.substring(0, 8).toUpperCase()}
@@ -826,7 +792,7 @@ export default function HomeView(props: HomeViewProps) {
                 src="/assets/return4me-agent-handover-1024w.webp"
                 srcSet="/assets/return4me-agent-handover-430w.webp 430w, /assets/return4me-agent-handover-768w.webp 768w, /assets/return4me-agent-handover-1024w.webp 1024w, /assets/return4me-agent-handover-1440w.webp 1440w"
                 sizes="(min-width:1024px) 45vw, 100vw"
-                alt={lang === 'en' ? 'Person handing a found item to a Return4me agent' : 'Mtu akimkabidhi wakala wa Return4me kitu kilichopatikana'}
+                alt={'Person handing a found item to a Return4me agent'}
                 width="1672"
                 height="941"
                 loading="lazy"
@@ -839,9 +805,9 @@ export default function HomeView(props: HomeViewProps) {
               <SectionHeading
                 titleId="how-heading"
                 titleClassName="text-section"
-                eyebrow={lang === 'en' ? 'How it works' : 'Inavyofanya kazi'}
-                title={lang === 'en' ? 'Four simple steps' : 'Hatua nne rahisi'}
-                description={lang === 'en' ? 'From report to recovery — we handle the hard parts.' : 'Kutoka ripoti hadi urejeshaji — tunashughulikia magumu.'}
+                eyebrow={'How it works'}
+                title={'Four simple steps'}
+                description={'From report to recovery — we handle the hard parts.'}
               />
               <ol className="mt-6 space-y-5">
                 {steps.map((step, i) => (
@@ -879,19 +845,17 @@ export default function HomeView(props: HomeViewProps) {
               <SectionHeading
                 titleId="platform-heading"
                 titleClassName="text-section"
-                eyebrow={lang === 'en' ? 'Digital platform' : 'Jukwaa la kidijitali'}
-                title={lang === 'en' ? 'Everything starts with a report.' : 'Yote huanza na ripoti.'}
-                description={lang === 'en'
-                  ? 'From your phone you can start and manage the return journey — no offices to visit, no forms to post.'
-                  : 'Kutoka kwenye simu yako unaweza kuanza na kusimamia safari ya urejeshaji — hakuna ofisi za kuenda, hakuna fomu za kutuma.'}
+                eyebrow={'Digital platform'}
+                title={'Everything starts with a report.'}
+                description={'From your phone you can start and manage the return journey — no offices to visit, no forms to post.'}
               />
               <ul className="mt-6 space-y-3 text-body font-semibold text-[var(--appearance-text-primary)]">
           {[
-            lang === 'en' ? 'Search items agents are holding' : 'Tafuta vitu vilivyo kwa mawakala',
-            lang === 'en' ? 'Report a found item' : 'Ripoti kitu kilichopatikana',
-            lang === 'en' ? 'Verify identity securely' : 'Thibitisha utambulisho kwa usalama',
-            lang === 'en' ? 'Track a claim you have started' : 'Fuatilia daima uliyoianzisha',
-            lang === 'en' ? 'Connect with a vetted agent for the handover' : 'Ungana na wakala aliyeidhinishwa kwa uwasilishaji',
+            'Search items agents are holding',
+            'Report a found item',
+            'Verify identity securely',
+            'Track a claim you have started',
+            'Connect with a vetted agent for the handover',
           ].map((ft) => (
             <li key={ft} className="flex items-center gap-3">
               <span className="inline-block h-2 w-2 rounded-full bg-accent-orange shrink-0" aria-hidden="true" />
@@ -907,7 +871,7 @@ export default function HomeView(props: HomeViewProps) {
             src="/assets/return4me-app-user-nairobi-1024w.webp"
             srcSet="/assets/return4me-app-user-nairobi-430w.webp 430w, /assets/return4me-app-user-nairobi-768w.webp 768w, /assets/return4me-app-user-nairobi-1024w.webp 1024w, /assets/return4me-app-user-nairobi-1440w.webp 1440w"
             sizes="(min-width:1024px) 45vw, 100vw"
-            alt={lang === 'en' ? 'Kenyan user using the Return4me platform on a smartphone' : 'Mkenya akitumia jukwaa la Return4me kwenye simu'}
+            alt={'Kenyan user using the Return4me platform on a smartphone'}
             width="1672"
             height="941"
             loading="lazy"
@@ -930,7 +894,7 @@ export default function HomeView(props: HomeViewProps) {
                 src="/assets/return4me-successful-return-1024w.webp"
                 srcSet="/assets/return4me-successful-return-430w.webp 430w, /assets/return4me-successful-return-768w.webp 768w, /assets/return4me-successful-return-1024w.webp 1024w, /assets/return4me-successful-return-1440w.webp 1440w"
                 sizes="(min-width:1024px) 45vw, 100vw"
-                alt={lang === 'en' ? 'Lost item being returned to its owner through Return4me' : 'Kitu kilichopotea kinarejeshwa kwa mmiliki wake kupitia Return4me'}
+                alt={'Lost item being returned to its owner through Return4me'}
                 width="1672"
                 height="941"
                 loading="lazy"
@@ -941,15 +905,13 @@ export default function HomeView(props: HomeViewProps) {
             {/* Message right */}
             <div>
               <div className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)] mb-3">
-                {lang === 'en' ? 'Successful returns' : 'Urejeshaji uliofanikiwa'}
+                {'Successful returns'}
               </div>
               <h2 id="returns-heading" className="text-section font-bold tracking-tight text-[var(--appearance-text-primary)]">
-                {lang === 'en' ? 'Because getting something back matters.' : 'Kwa sababu kupata kitu kinarejeshwa ni muhimu.'}
+                {'Because getting something back matters.'}
               </h2>
               <p className="mt-4 text-body sm:text-body-large text-[var(--appearance-text-muted)] leading-relaxed max-w-xl">
-                {lang === 'en'
-                  ? 'Every lost item has a person behind it. Return4me exists to make the journey back possible — safely, transparently and with real people nearby.'
-                  : 'Kila kitu kilichopotea kina mtu nyuma yake. Return4me ipo kurahisisha safari ya kurudi — kwa usalama, kwa uwazi na kwa watu halisi wa karibu.'}
+                {'Every lost item has a person behind it. Return4me exists to make the journey back possible — safely, transparently and with real people nearby.'}
               </p>
             </div>
           </div>
@@ -969,11 +931,9 @@ export default function HomeView(props: HomeViewProps) {
         <div className="mx-auto max-w-7xl px-5 sm:px-12">
           <SectionHeading
             titleId="roles-heading"
-            eyebrow={lang === 'en' ? 'How it fits together' : 'Jinsi inavyoshirikiana'}
-            title={lang === 'en' ? 'One network, four roles' : 'Mtandao mmoja, majukumu manne'}
-            description={lang === 'en'
-              ? 'Return4me only works when the person who lost something, the person who found it and the agent who handles the handover can all reach each other safely.'
-              : 'Return4me hufanya kazi wakati mwenye kupoteza, mwenye kupata na wakala anayeshughulikia urejeshaji wanaweza kuwasiliana kwa usalama.'}
+            eyebrow={'How it fits together'}
+            title={'One network, four roles'}
+            description={'Return4me only works when the person who lost something, the person who found it and the agent who handles the handover can all reach each other safely.'}
           />
 
           <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -982,12 +942,10 @@ export default function HomeView(props: HomeViewProps) {
                 <Search size={ICON_SIZE.heading} className="text-[var(--appearance-text-primary)]" aria-hidden="true" />
               </span>
               <h3 className="mt-4 text-body-large font-bold text-[var(--appearance-text-primary)]">
-                {lang === 'en' ? 'Lost something?' : 'Umepoteza kitu?'}
+                {'Lost something?'}
               </h3>
               <p className="mt-2 text-body text-[var(--appearance-text-muted)] leading-relaxed">
-                {lang === 'en'
-                  ? 'Describe what you lost, where you last had it and the details that make it identifiable. Found items reported to Return4me are searchable, so your description can help you recognise your own property.'
-                  : 'Eleza ulichopoteza, mahali ulipokuwa mwisho na maelezo yanayokifanya kitambulike. Vitu vilivyopatikana Return4me vinatafutwa, hivyo maelezo yako yanaweza kukusaidia kutambua mali yako.'}
+                {'Describe what you lost, where you last had it and the details that make it identifiable. Found items reported to Return4me are searchable, so your description can help you recognise your own property.'}
               </p>
               <Button variant="outline" size="md" className="mt-5" onClick={() => setView('owner')}>
                 {t.ownerBtn}
@@ -999,17 +957,13 @@ export default function HomeView(props: HomeViewProps) {
                 <MapPin size={ICON_SIZE.heading} className="text-[var(--appearance-text-primary)]" aria-hidden="true" />
               </span>
               <h3 className="mt-4 text-body-large font-bold text-[var(--appearance-text-primary)]">
-                {lang === 'en' ? 'Found something?' : 'Umepata kitu?'}
+                {'Found something?'}
               </h3>
               <p className="mt-2 text-body text-[var(--appearance-text-muted)] leading-relaxed">
-                {lang === 'en'
-                  ? 'Report what you found and where. The item is held with a vetted agent and the owner is verified before any handover. Where the platform rules provide for it, the finder receives a recovery appreciation share for a verified return.'
-                  : 'Ripoti ulichokipata na mahali. Kitu huhifadhiwa kwa wakala aliyethibitishwa na mmiliki huthibitishwa kabla ya urejeshaji. Pale kanuni za jukwaa zinavyoruhusu, mpata hupokea sehemu ya shukrani kwa urejeshaji uliothibitishwa.'}
+                {'Report what you found and where. The item is held with a vetted agent and the owner is verified before any handover. Where the platform rules provide for it, the finder receives a recovery appreciation share for a verified return.'}
               </p>
               <p className="mt-2 text-caption text-[var(--appearance-text-muted)] leading-relaxed">
-                {lang === 'en'
-                  ? 'Payments and appreciation are handled through Return4me — never demanded privately from an owner.'
-                  : 'Malipo na shukrani hushughulikiwa kupitia Return4me — hazidaiwi kwa faragha kwa mmiliki.'}
+                {'Payments and appreciation are handled through Return4me — never demanded privately from an owner.'}
               </p>
               <Button variant="outline" size="md" className="mt-5" onClick={() => setView('finder')}>
                 {t.finderBtn}
@@ -1021,17 +975,13 @@ export default function HomeView(props: HomeViewProps) {
                 <Users size={ICON_SIZE.heading} className="text-[var(--appearance-text-primary)]" aria-hidden="true" />
               </span>
               <h3 className="mt-4 text-body-large font-bold text-[var(--appearance-text-primary)]">
-                {lang === 'en' ? 'Become an Agent' : 'Kuwa Wakala'}
+                {'Become an Agent'}
               </h3>
               <p className="mt-2 text-body text-[var(--appearance-text-muted)] leading-relaxed">
-                {lang === 'en'
-                  ? 'Agents receive found items, confirm them, and complete verified physical handovers in their own area. Agents earn a share of the recovery fee on the recoveries they actually complete, under the platform rules.'
-                  : 'Mawakala hupokea vitu vilivyopatikana, huhakikisha, na hukamilisha urejeshaji uliothibitishwa katika eneo lao. Mawakala hupata sehemu ya ada ya urejeshaji kwa urejeshaji wanaokamilisha, kwa mujibu wa kanuni za jukwaa.'}
+                {'Agents receive found items, confirm them, and complete verified physical handovers in their own area. Agents earn a share of the recovery fee on the recoveries they actually complete, under the platform rules.'}
               </p>
               <p className="mt-2 text-caption text-[var(--appearance-text-muted)] leading-relaxed">
-                {lang === 'en'
-                  ? 'Every agent is vetted and approved before taking custody of an item. No earnings figures are promised — what an agent receives depends on the recoveries they complete.'
-                  : 'Kila wakala huthibitishwa na kuidhinishwa kabla ya kupokea kitu. Hakuna kiasi cha mapato kinachoahidiwa — anachopata wakala hutegemea urejeshaji anaokamilisha.'}
+                {'Every agent is vetted and approved before taking custody of an item. No earnings figures are promised — what an agent receives depends on the recoveries they complete.'}
               </p>
               <Button variant="outline" size="md" className="mt-5" onClick={() => setView('becomeAgent')}>
                 {t.becomeAgentBtn}
@@ -1043,15 +993,13 @@ export default function HomeView(props: HomeViewProps) {
                 <Store size={ICON_SIZE.heading} className="text-[var(--appearance-text-primary)]" aria-hidden="true" />
               </span>
               <h3 className="mt-4 text-body-large font-bold text-[var(--appearance-text-primary)]">
-                {lang === 'en' ? 'Businesses, venues & communities' : 'Biashara, maeneo na jamii'}
+                {'Businesses, venues & communities'}
               </h3>
               <p className="mt-2 text-body text-[var(--appearance-text-muted)] leading-relaxed">
-                {lang === 'en'
-                  ? 'Offices, malls, campuses, matatu SACCOs and places of worship are where lost property actually accumulates. Registering the venue as an Agent lets items be handed over through the same verified process instead of being held indefinitely.'
-                  : 'Ofisi, maduka makubwa, vyuo, SACCO za matatu na nyumba za ibada ndiko mali zilizopotea hukusanyika. Kusajili eneo kama Wakala huruhusu vitu kuwasilishwa kwa mchakato huo uliothibitishwa badala ya kuhifadhiwa bila kikomo.'}
+                {'Offices, malls, campuses, matatu SACCOs and places of worship are where lost property actually accumulates. Registering the venue as an Agent lets items be handed over through the same verified process instead of being held indefinitely.'}
               </p>
               <Button variant="outline" size="md" className="mt-5" onClick={() => setView('becomeAgent')}>
-                {lang === 'en' ? 'See the Agent process' : 'Ona mchakato wa Wakala'}
+                {'See the Agent process'}
               </Button>
             </div>
           </div>
@@ -1062,12 +1010,10 @@ export default function HomeView(props: HomeViewProps) {
       <section aria-labelledby="final-cta-heading" className="bg-primary-green py-14 sm:py-20">
         <div className="mx-auto max-w-3xl px-5 sm:px-12 text-center">
           <h2 id="final-cta-heading" className="text-section font-bold tracking-tight text-white">
-            {lang === 'en' ? 'Ready to get started?' : 'Tayari kuanza?'}
+            {'Ready to get started?'}
           </h2>
           <p className="mt-3 text-body sm:text-body-large text-white/80 max-w-xl mx-auto">
-            {lang === 'en'
-              ? 'Whether you lost something or found something, we\'re here to help.'
-              : 'Iwe umepoteza kitu au umepata kitu, tuko hapa kukusaidia.'}
+            {'Whether you lost something or found something, we\'re here to help.'}
           </p>
           {/* The band and this white-filled inverse button are the documented
               FIXED brand-green pairing (Batch 3): they are the brand in both

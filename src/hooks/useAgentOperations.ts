@@ -8,9 +8,8 @@ export function buildRejectionPayload(reason: string, customText: string) {
   return { reason: reason === 'Other' ? `Other: ${customText}` : reason };
 }
 
-export function useAgentOperations({ token, lang, refreshCategories }: {
+export function useAgentOperations({ token, refreshCategories }: {
   token: string | null;
-  lang: Language;
   refreshCategories?: () => void;
 }) {
   const [agentStatus, setAgentStatus] = useState<string>('pending');
@@ -72,7 +71,7 @@ export function useAgentOperations({ token, lang, refreshCategories }: {
     } catch (e) {
       console.error(e);
       const serverMessage = e instanceof AgentApiError ? e.message.trim() : '';
-      setQueueError(serverMessage || (lang === 'en' ? "We couldn't load your agent hub right now. Check your connection and try again." : 'Imeshindwa kupakia ukurasa wako wa wakala sasa. Angalia mtandao wako na ujaribu tena.'));
+      setQueueError(serverMessage || ("We couldn't load your agent hub right now. Check your connection and try again."));
     } finally { setQueueLoading(false); }
   };
   const retryQueue = () => { setQueueError(''); void fetchQueues(); };
@@ -90,10 +89,10 @@ export function useAgentOperations({ token, lang, refreshCategories }: {
   const handleSubmitVerification = async (item: any, outcome: 'confirmed' | 'corrected') => {
     setVerifyError(''); setActionSuccessMsg(''); setActionProcessing(true); setProcessingItemId(item?.id ?? null);
     const changed = hasCorrections(item);
-    if (outcome === 'corrected' && !changed) { setVerifyError(lang === 'en' ? 'No fields were actually changed — use "Confirm As Reported" instead, or edit a field first.' : 'Hakuna sehemu iliyobadilishwa — tumia "Thibitisha Kama Ilivyoripotiwa", au badilisha sehemu kwanza.'); finishProcessing(); return; }
+    if (outcome === 'corrected' && !changed) { setVerifyError('No fields were actually changed — use "Confirm As Reported" instead, or edit a field first.'); finishProcessing(); return; }
     try {
       await agentApi.verifyItem(token!, { dropoffCode: item.id, categoryId: verifyCategoryId, name: item.is_sensitive_document ? (verifyName || null) : null, documentNumber: item.is_sensitive_document ? (verifyDocNumber || null) : null, description: verifyDescription || null, foundArea: verifyFoundArea, reason: changed ? verifyReason : '', reasonDetail: changed ? (verifyReasonDetail || null) : null, physicallyVerified: verifyPhysicallyChecked });
-      if (!verifyPhysicallyChecked) { setActionSuccessMsg(lang === 'en' ? 'Saved. Physically inspect the item, then check the box and confirm to approve it.' : 'Imehifadhiwa. Kagua bidhaa kimwili, kisha weka alama kwenye kisanduku na uthibitishe ili kuikubali.'); setVerifyingItemId(null); void fetchQueues(); return; }
+      if (!verifyPhysicallyChecked) { setActionSuccessMsg('Saved. Physically inspect the item, then check the box and confirm to approve it.'); setVerifyingItemId(null); void fetchQueues(); return; }
       const approveData = await agentApi.confirmDropoff(token!, { dropoffCode: item.id });
       setActionSuccessMsg(approveData.message); setVerifyingItemId(null); void fetchQueues();
     } catch (e: any) { setVerifyError(e.message); } finally { finishProcessing(); }
@@ -102,7 +101,7 @@ export function useAgentOperations({ token, lang, refreshCategories }: {
   const handleLookupDropoff = (event: React.FormEvent) => {
     event.preventDefault(); setOperationError('');
     const item = expectedDropoffs.find(i => i.id.trim().toUpperCase() === dropoffCodeInput.trim().toUpperCase());
-    if (!item) { setOperationError(lang === 'en' ? 'No pending item found with that drop-off code.' : 'Hakuna bidhaa inayosubiri yenye msimbo huo.'); return; }
+    if (!item) { setOperationError('No pending item found with that drop-off code.'); return; }
     openVerificationPanel(item); setDropoffCodeInput('');
   };
   const handleRejectDropoff = async (dropoffCode: string) => {
@@ -125,7 +124,7 @@ export function useAgentOperations({ token, lang, refreshCategories }: {
   const startHandoverCamera = async () => {
     setOperationError(''); setUseHandoverCamera(true);
     try { const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } }); if (handoverVideoRef.current) { handoverVideoRef.current.srcObject = stream; await handoverVideoRef.current.play(); } }
-    catch (e) { console.error('Camera access denied:', e); setOperationError(lang === 'en' ? 'Could not access camera. Please use file upload instead.' : 'Imeshindwa kufungua kamera. Tafadhali weka picha ya faili badala yake.'); setUseHandoverCamera(false); }
+    catch (e) { console.error('Camera access denied:', e); setOperationError('Could not access camera. Please use file upload instead.'); setUseHandoverCamera(false); }
   };
   const captureHandoverFrame = () => {
     if (!handoverVideoRef.current || !handoverCanvasRef.current || !pickupCodeModal) return;
@@ -136,15 +135,15 @@ export function useAgentOperations({ token, lang, refreshCategories }: {
   const submitConfirmHandover = async () => {
     if (!pickupCodeModal) return;
     const { claimId, code, photoBase64 } = pickupCodeModal;
-    if (!code || code.trim() === '') { setOperationError(lang === 'en' ? 'Ask the owner for their secret pickup code first.' : 'Muulize mmiliki msimbo wake wa siri kwanza.'); return; }
-    if (!photoBase64) { setOperationError(lang === 'en' ? 'Take a photo of the claimant with the item before confirming handover — this protects both of you if a dispute comes up later.' : 'Piga picha ya mdai akiwa na bidhaa kabla ya kuthibitisha — hii inawalinda nyote wawili endapo mzozo utatokea baadaye.'); return; }
+    if (!code || code.trim() === '') { setOperationError('Ask the owner for their secret pickup code first.'); return; }
+    if (!photoBase64) { setOperationError('Take a photo of the claimant with the item before confirming handover — this protects both of you if a dispute comes up later.'); return; }
     setOperationError(''); setActionProcessing(true); setProcessingItemId(claimId);
     try { const data = await agentApi.confirmHandover(token!, { claimId, pickupCode: code.trim(), handoverPhotoBase64: photoBase64 }); setActionSuccessMsg(data.message); setPickupCodeModal(null); void fetchQueues(); }
     catch (e: any) { setOperationError(e.message); } finally { finishProcessing(); }
   };
   const handleConfirmViewing = (claimId: string) => {
     setActionSuccessMsg(''); setOperationError('');
-    setConfirmModal({ title: lang === 'en' ? 'Confirm Viewing' : 'Thibitisha Ukaguzi', message: lang === 'en' ? "Are you sure you want to confirm that the owner has visually inspected and verified this item? This will trigger the 15-minute payment window and cannot be undone." : "Je, una uhakika unataka kuthibitisha kwamba mmiliki amekagua na kuthibitisha bidhaa hii kwa macho? Hii itaanzisha muda wa dakika 15 wa malipo na kitendo hiki hakiwezi kubatilishwa.", onConfirm: async () => {
+    setConfirmModal({ title: 'Confirm Viewing', message: "Are you sure you want to confirm that the owner has visually inspected and verified this item? This will trigger the 15-minute payment window and cannot be undone.", onConfirm: async () => {
       setActionProcessing(true); setProcessingItemId(claimId);
       try { const data = await agentApi.confirmViewing(token!, claimId); setActionSuccessMsg(data.message); void fetchQueues(); return true; }
       catch (e: any) { setOperationError(e.message); return false; } finally { finishProcessing(); }

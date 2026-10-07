@@ -28,11 +28,9 @@ export type LostReportBadgeVariant = 'success' | 'warning' | 'danger' | 'info' |
 
 interface StatusEntry {
   en: string;
-  sw: string;
   variant: LostReportBadgeVariant;
   /** One-line, customer-facing explanation of what this state means. */
   descriptionEn: string;
-  descriptionSw: string;
   /**
    * Whether the platform is still looking for possible matches for a report in
    * this state. True for exactly the status the backend generates candidates
@@ -44,10 +42,8 @@ interface StatusEntry {
 const STATUS_MAP: Record<string, StatusEntry> = {
   active: {
     en: 'Active',
-    sw: 'Inaendelea',
     variant: 'info',
     descriptionEn: 'We are comparing this report with eligible found items.',
-    descriptionSw: 'Tunalinganisha ripoti hii na vitu vilivyopatikana vinavyostahili.',
     searching: true,
   },
   // Reserved by Phase 9A for a future matcher state; nothing sets it today.
@@ -55,34 +51,26 @@ const STATUS_MAP: Record<string, StatusEntry> = {
   // blank badge.
   match_review: {
     en: 'Under review',
-    sw: 'Inakaguliwa',
     variant: 'warning',
     descriptionEn: 'A possible match is being reviewed.',
-    descriptionSw: 'Mechi inayowezekana inakaguliwa.',
     searching: false,
   },
   resolved: {
     en: 'Resolved',
-    sw: 'Imetatuliwa',
     variant: 'success',
     descriptionEn: 'You marked this report as resolved.',
-    descriptionSw: 'Uliwekwa alama kuwa ripoti hii imetatuliwa.',
     searching: false,
   },
   cancelled: {
     en: 'Cancelled',
-    sw: 'Imeghairiwa',
     variant: 'neutral',
     descriptionEn: 'This report was closed. It is no longer compared with found items.',
-    descriptionSw: 'Ripoti hii ilifungwa. Haifananishwi tena na vitu vilivyopatikana.',
     searching: false,
   },
   lapsed: {
     en: 'Lapsed',
-    sw: 'Imeisha muda',
     variant: 'neutral',
     descriptionEn: 'This report aged out and is no longer compared with found items.',
-    descriptionSw: 'Ripoti hii ilipitwa na muda na haifananishwi tena na vitu vilivyopatikana.',
     searching: false,
   },
 };
@@ -100,22 +88,22 @@ export interface LostReportStatusDisplay {
  * raw token is retained so an unexpected value stays diagnosable rather than
  * rendering blank. It is deliberately NOT treated as "searching".
  */
-export function getLostReportStatusDisplay(status: string, lang: 'en' | 'sw'): LostReportStatusDisplay {
+export function getLostReportStatusDisplay(status: string): LostReportStatusDisplay {
   const entry = STATUS_MAP[status];
   if (!entry) {
     return { label: status, variant: 'neutral', description: '', searching: false };
   }
   return {
-    label: lang === 'sw' ? entry.sw : entry.en,
+    label: entry.en,
     variant: entry.variant,
-    description: lang === 'sw' ? entry.descriptionSw : entry.descriptionEn,
+    description: entry.descriptionEn,
     searching: entry.searching,
   };
 }
 
 /** The statuses for which the platform is still actively looking. */
 export function isSearchingStatus(status: string): boolean {
-  return getLostReportStatusDisplay(status, 'en').searching;
+  return getLostReportStatusDisplay(status).searching;
 }
 
 /** Every status the backend can store, so a test can assert full coverage. */
@@ -132,46 +120,36 @@ export { LOST_REPORT_STATUS_VALUES, DEFAULT_LOST_REPORT_STATUS };
 // `matching_identifier` is the important one: it means a PROTECTED IDENTIFIER
 // agreed, and the explanation must convey exactly that and nothing more. The
 // identifier itself — and the hash — never reach this layer at all.
-const MATCH_REASON_MAP: Record<string, { en: string; sw: string }> = {
+const MATCH_REASON_MAP: Record<string, { en: string }> = {
   same_category: {
     en: 'It is the same kind of item you reported.',
-    sw: 'Ni aina hiyo hiyo ya kitu ulichoripoti.',
   },
   matching_identifier: {
     en: 'An identifying detail you provided matches this item.',
-    sw: 'Maelezo ya utambulisho uliyotoa yanafanana na kitu hiki.',
   },
   matching_document_type: {
     en: 'The type of document or number matches.',
-    sw: 'Aina ya hati au namba inafanana.',
   },
   similar_location: {
     en: 'It was recorded in a similar area to where you lost it.',
-    sw: 'Iliandikwa katika eneo linalofanana na pale ulipopoteza.',
   },
   similar_time: {
     en: 'It was recorded around the time you reported losing it.',
-    sw: 'Iliandikwa karibu na muda ulioripoti kuipoteza.',
   },
   similar_brand: {
     en: 'The brand matches what you described.',
-    sw: 'Chapa inafanana na uliyoeleza.',
   },
   similar_model: {
     en: 'The model matches what you described.',
-    sw: 'Modeli inafanana na uliyoeleza.',
   },
   similar_colour: {
     en: 'The colour matches what you described.',
-    sw: 'Rangi inafanana na uliyoeleza.',
   },
   similar_material: {
     en: 'The material matches what you described.',
-    sw: 'Nyenzo inafanana na uliyoeleza.',
   },
   similar_description: {
     en: 'Some of your description matches the notes on this item.',
-    sw: 'Baadhi ya maelezo yako yanafanana na maelezo ya kitu hiki.',
   },
 };
 
@@ -184,10 +162,10 @@ export const LOST_REPORT_MATCH_REASON_KEYS = Object.keys(MATCH_REASON_MAP);
  * snake_case token — and the card still works, because the reasons are
  * supporting detail, never the whole message.
  */
-export function getMatchReasonText(reason: string, lang: 'en' | 'sw'): string {
+export function getMatchReasonText(reason: string): string {
   const entry = MATCH_REASON_MAP[reason];
   if (!entry) return '';
-  return lang === 'sw' ? entry.sw : entry.en;
+  return entry.en;
 }
 
 // ---------------------------------------------------------------------------
@@ -195,10 +173,10 @@ export function getMatchReasonText(reason: string, lang: 'en' | 'sw'): string {
 // ---------------------------------------------------------------------------
 /** Step labels for the shared <Stepper> (ui/Stepper.tsx). */
 export const LOST_REPORT_WIZARD_STEPS = [
-  { en: 'What was lost', sw: 'Kilichopotea' },
-  { en: 'Describe it', sw: 'Maelezo' },
-  { en: 'Where and when', sw: 'Wapi na lini' },
-  { en: 'Review', sw: 'Hakiki' },
+  { en: 'What was lost' },
+  { en: 'Describe it' },
+  { en: 'Where and when' },
+  { en: 'Review' },
 ] as const;
 
 export const LOST_REPORT_WIZARD_STEP_COUNT = LOST_REPORT_WIZARD_STEPS.length;
@@ -219,16 +197,16 @@ export const LOST_REPORT_WIZARD_STEP_COUNT = LOST_REPORT_WIZARD_STEPS.length;
  * document types the platform does not actually know about.
  */
 export const LOST_REPORT_IDENTIFIER_CLASSES = [
-  { value: 'national-id', en: 'National ID number', sw: 'Namba ya kitambulisho cha kitaifa' },
-  { value: 'passport', en: 'Passport number', sw: 'Namba ya pasipoti' },
-  { value: 'driving-licence', en: 'Driving licence number', sw: 'Namba ya leseni ya udereva' },
-  { value: 'student-id', en: 'Student ID number', sw: 'Namba ya kitambulisho cha mwanafunzi' },
-  { value: 'kra-nhif-nssf', en: 'KRA / SHA / NSSF number', sw: 'Namba ya KRA / SHA / NSSF' },
-  { value: 'atm-credit-card', en: 'Card number', sw: 'Namba ya kadi' },
-  { value: 'vehicle-logbook', en: 'Vehicle logbook number', sw: 'Namba ya logbook ya gari' },
-  { value: 'number-plate', en: 'Number plate', sw: 'Bamba la namba' },
-  { value: 'imei', en: 'IMEI (phone)', sw: 'IMEI (simu)' },
-  { value: 'serial', en: 'Serial number', sw: 'Namba ya serial' },
+  { value: 'national-id', en: 'National ID number' },
+  { value: 'passport', en: 'Passport number' },
+  { value: 'driving-licence', en: 'Driving licence number' },
+  { value: 'student-id', en: 'Student ID number' },
+  { value: 'kra-nhif-nssf', en: 'KRA / SHA / NSSF number' },
+  { value: 'atm-credit-card', en: 'Card number' },
+  { value: 'vehicle-logbook', en: 'Vehicle logbook number' },
+  { value: 'number-plate', en: 'Number plate' },
+  { value: 'imei', en: 'IMEI (phone)' },
+  { value: 'serial', en: 'Serial number' },
 ] as const;
 
 export type LostReportIdentifierClass = (typeof LOST_REPORT_IDENTIFIER_CLASSES)[number]['value'];

@@ -7,81 +7,23 @@ const read = (relative: string) => fs.readFileSync(path.resolve(repoRoot, relati
 const app = read('src/App.tsx');
 const navbar = read('src/components/Navbar.tsx');
 const shell = read('src/components/dashboard/DashboardShell.tsx');
-const control = read('src/components/LanguageControl.tsx');
-const stripComments = (source: string) =>
-  source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-const shellCode = stripComments(shell);
-const controlCode = stripComments(control);
 
-describe('Batch C authenticated language-control consistency', () => {
-  it('keeps App as the sole language owner and passes its state into the authenticated shell', () => {
-    expect(app).toContain('const [lang, setLang] = useState<AppLanguage>');
-    expect((app.match(/const \[lang, setLang\]/g) || [])).toHaveLength(1);
+describe('Batch C — authenticated shells are English-only', () => {
+  it('App owns no language state and passes none into the shell', () => {
+    expect(app).not.toContain('const [lang, setLang]');
+    expect(app).not.toMatch(/AppLanguage/);
     expect(app).toContain('<DashboardShell');
-    expect(app).toContain('lang={lang}');
-    expect(app).toContain('setLang={setLang}');
-    expect(shell).toContain("lang: 'en' | 'sw'");
-    expect(shell).toContain("setLang: (lang: 'en' | 'sw') => void");
+    expect(app).not.toContain('lang={lang}');
+    expect(app).not.toContain('setLang={setLang}');
+    expect(shell).not.toContain("lang: 'en' | 'sw'");
   });
 
-  it('uses the shared presentation control at the authenticated shell boundary', () => {
-    expect(navbar).toContain("import LanguageControl from './LanguageControl'");
-    expect(shell).toContain("import LanguageControl from '../LanguageControl'");
-    expect((navbar.match(/<LanguageControl /g) || [])).toHaveLength(3);
-    expect(shell).toContain('<LanguageControl');
-    expect(shell).toContain('layout="toggle"');
-    expect(shell).toContain('theme="inverse"');
+  it('mounts no language control on the public bar or the authenticated shell', () => {
+    expect(navbar).not.toContain('LanguageControl');
+    expect(shell).not.toContain('LanguageControl');
   });
 
-  it('preserves exactly English=en and Kiswahili=sw behavior', () => {
-    expect(control).toContain("export type AppLanguage = 'en' | 'sw'");
-    expect(control).toContain("(['en', 'sw'] as const)");
-    expect(control).toContain("setLang('en')");
-    expect(control).toContain("setLang('sw')");
-    expect(control).toContain("setLang(lang === 'en' ? 'sw' : 'en')");
-    expect(control).not.toMatch(/en[-_]KE|sw[-_]KE|french|arabic/i);
-  });
-
-  it('names current and target languages accurately and shows the current language', () => {
-    expect(control).toContain("const currentLanguage = lang === 'en' ? 'English' : 'Kiswahili'");
-    expect(control).toContain("const otherLanguage = lang === 'en' ? 'Kiswahili' : 'English'");
-    expect(control).toContain('Current language: ${currentLanguage}. Switch to ${otherLanguage}.');
-    expect(control).toContain('<span>{currentLanguage}</span>');
-    expect(shell).not.toMatch(/aria-label=\{lang === 'en' \? 'Badilisha lugha'/);
-  });
-
-  it('uses native buttons, an approximately 44px target, and visible focus treatment', () => {
-    expect(control).toContain('<Button');
-    expect(control).toContain("type=\"button\"");
-    expect(control).toContain("size=\"md\"");
-    expect(control).toContain('min-h-[44px]');
-    // UX-02: the local ring (`focus-visible:ring-2`, plus the hand-written white
-    // and brand-green variants that encoded the two surfaces) is GONE. The single
-    // global `:focus-visible` rule is the indicator, and it already repaints
-    // itself white inside `.bg-primary-green` — which is exactly the inverse
-    // (authenticated shell) case. Asserting "no local treatment at all" is the
-    // stronger contract, and it is the one PI-1/C5 applies to every shared
-    // primitive, so the control now matches them.
-    expect(controlCode).not.toMatch(/focus(-visible)?:(outline-none|ring)/);
-    expect(read('src/index.css')).toContain('.bg-primary-green :focus-visible');
-    expect(control).toContain('<Globe size={16} aria-hidden="true" />');
-  });
-
-  it('does not rely on color alone to communicate an active language', () => {
-    expect(control).toContain('aria-pressed={active}');
-    expect(control).toContain('{active && <Check');
-    expect(control).toContain('current language');
-    expect(control).toContain('lugha ya sasa');
-    expect(control).toContain('<span>{currentLanguage}</span>');
-  });
-
-  it('keeps language state, storage, navigation, and session decisions out of the shell/control', () => {
-    expect(shellCode).not.toMatch(/useState[^;]*(?:lang|language)/i);
-    expect(controlCode).not.toMatch(/useState|localStorage|sessionStorage|indexedDB|return4me\.language|fetch\(|window\.location|history\./);
-    expect(control).not.toMatch(/onExitSite|onSignOut|agentToken|adminToken|claim|payment|settlement/);
-  });
-
-  it('keeps account, agent, and admin surfaces behind the one DashboardShell', () => {
+  it('keeps account, agent and admin surfaces behind the one DashboardShell', () => {
     const branch = app.slice(app.indexOf('if (dashboardSurface)'), app.lastIndexOf('return ('));
     for (const surface of ["dashboardSurface === 'account'", "dashboardSurface === 'agent'", "dashboardSurface === 'admin'"]) {
       expect(branch).toContain(surface);
@@ -89,3 +31,4 @@ describe('Batch C authenticated language-control consistency', () => {
     expect((branch.match(/<LanguageControl/g) || [])).toHaveLength(0);
   });
 });
+

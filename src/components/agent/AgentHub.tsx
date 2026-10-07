@@ -131,7 +131,6 @@ export interface AgentHubProps
     AgentHubVerificationProps,
     AgentHubRejectionProps,
     AgentHubFeedbackProps {
-  lang: 'en' | 'sw';
   t: any;
 }
 
@@ -166,7 +165,7 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
 
   const claimBadgeVariant = (item: any) => {
     if (!item.associatedClaim?.status) return 'neutral' as const;
-    return getClaimStatusDisplay(item.associatedClaim.status, props.lang).variant;
+    return getClaimStatusDisplay(item.associatedClaim.status).variant;
   };
 
   /**
@@ -278,7 +277,7 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
               <button
                 type="button"
                 onClick={() => props.setOperationError('')}
-                aria-label={props.lang === 'en' ? 'Dismiss error' : 'Ondoa kosa'}
+                aria-label={'Dismiss error'}
                 className="shrink-0 text-[var(--appearance-danger)] hover:opacity-80 font-bold leading-none px-1"
               >
                 ×
@@ -298,9 +297,7 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
             >
               <AlertCircle size={18} className="shrink-0 mt-0.5" aria-hidden={true} />
               <span className="flex-1">
-                {props.lang === 'en'
-                  ? `Could not refresh: ${props.queueError}`
-                  : `Imeshindwa kuonyesha upya: ${props.queueError}`}
+                {`Could not refresh: ${props.queueError}`}
               </span>
               <button
                 type="button"
@@ -316,7 +313,7 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
                 disabled={props.queueLoading}
                 className="shrink-0 underline font-bold disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {props.lang === 'en' ? 'Retry' : 'Jaribu tena'}
+                {'Retry'}
               </button>
             </div>
           )}
@@ -351,7 +348,7 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
                   {props.actionProcessing ? (
                     <Loader2 className="animate-spin" size={ICON_SIZE.ui} aria-hidden={true} />
                   ) : (
-                    <span>{props.lang === 'en' ? 'Verify' : 'Thibitisha'}</span>
+                    <span>{'Verify'}</span>
                   )}
                 </Button>
               </form>
@@ -469,7 +466,6 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
                         {props.verifyingItemId === item.id && (
                           <AgentVerificationPanel
                             item={item}
-                            lang={props.lang}
                             t={t}
                             categories={props.categories}
                             verifyCategoryId={props.verifyCategoryId}
@@ -540,7 +536,7 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
                               <p className="mt-1 text-caption font-bold uppercase tracking-wide text-accent-orange">{t.agentHandoverQueueRole}</p>
                             </div>
                             <Badge variant={claimBadgeVariant(item)} className="self-start whitespace-normal text-left">
-                              {agentClaimBadge(item.associatedClaim?.status, props.lang).label}
+                              {agentClaimBadge(item.associatedClaim?.status).label}
                             </Badge>
                           </div>
                           <ItemMetadata item={item} />
@@ -593,12 +589,8 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
                         {(item.associatedClaim?.status === 'disputed' || item.associatedClaim?.status === 'released') && (
                           <p className="text-small text-[var(--appearance-text-muted)] font-medium text-left border-t border-[var(--appearance-border)] pt-3">
                             {item.associatedClaim.status === 'disputed'
-                              ? (props.lang === 'en'
-                                ? 'This claim is under dispute review. Do NOT release the item — Return4me will contact you.'
-                                : 'Dai hili linakaguliwa kwa mzozo. USITOE bidhaa — Return4me itawasiliana nawe.')
-                              : (props.lang === 'en'
-                                ? 'This claim is complete — the payout settlement is handled by Return4me.'
-                                : 'Dai hili limekamilika — malipo yanashughulikiwa na Return4me.')}
+                              ? ('This claim is under dispute review. Do NOT release the item — Return4me will contact you.')
+                              : ('This claim is complete — the payout settlement is handled by Return4me.')}
                           </p>
                         )}
 
@@ -606,9 +598,7 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
                         {item.associatedClaim?.status === 'awaiting_agent_confirmation' && (
                           <div className="border-t border-[var(--appearance-border)] pt-3 space-y-2">
                             <p className="text-small text-[var(--appearance-text-muted)] font-medium text-left">
-                              {props.lang === 'en' 
-                                ? 'The owner must travel to your station and visually verify this item is theirs.' 
-                                : 'Mwenye mali lazima afike kituoni kwako na athibitishe kwa macho kuwa bidhaa hii ni yake.'}
+                              {'The owner must travel to your station and visually verify this item is theirs.'}
                             </p>
 
                             {/* What the claimant said before ever seeing this item — compare it
@@ -616,7 +606,6 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
                                 evidence for a non-document item; it was being collected but
                                 never shown here before. */}
                                                         <ClaimVerificationEvidence
-                              lang={props.lang}
                               answers={item.associatedClaim.security_answers}
                               identifyingDetails={item.associatedClaim.owner_identifying_details}
                             />
@@ -635,7 +624,7 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
                               ) : (
                                 <>
                                   <Eye size={ICON_SIZE.ui} aria-hidden={true} />
-                                  <span>{props.lang === 'en' ? 'Confirm Owner Viewed & Verified Item' : 'Thibitisha Mwenye Mali Ameiona & Kukagua'}</span>
+                                  <span>{'Confirm Owner Viewed & Verified Item'}</span>
                                 </>
                               )}
                             </Button>
@@ -653,9 +642,7 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
                         {item.associatedClaim?.status === 'escrow_held' && (
                           <div className="border-t border-[var(--appearance-border)] pt-3 space-y-2">
                             <p className="text-small text-[var(--appearance-text-muted)] font-medium text-left">
-                              {props.lang === 'en'
-                                ? 'Payment is held. Ask the owner for their secret pickup code to complete the handover.'
-                                : 'Malipo yameshikiliwa. Muulize mmiliki msimbo wake wa siri wa kuchukua ili kukamilisha kukabidhi.'}
+                              {'Payment is held. Ask the owner for their secret pickup code to complete the handover.'}
                             </p>
                             <Button
                               type="button"
@@ -669,7 +656,7 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
                               {isItemBusy(item.associatedClaim.id) ? (
                                 <Loader2 className="animate-spin" size={ICON_SIZE.ui} aria-hidden={true} />
                               ) : (
-                                <span>{props.lang === 'en' ? 'Complete Handover' : 'Kamilisha Kukabidhi'}</span>
+                                <span>{'Complete Handover'}</span>
                               )}
                             </Button>
                           </div>
@@ -726,14 +713,14 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
             <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-panel p-6 shadow-raised flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
               <div>
                 <span className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)] block">
-                  {props.lang === 'en' ? 'Total Earned (your commission share)' : 'Jumla Uliyopata (sehemu yako ya kamisheni)'}
+                  {'Total Earned (your commission share)'}
                 </span>
                 <span className="text-section font-black text-[var(--appearance-primary)] tabular-nums block mt-1">
                   KES {props.agentEarnings.totalEarned.toLocaleString()}
                 </span>
               </div>
               <div className="bg-[var(--appearance-surface-muted)] text-[var(--appearance-success)] border border-[var(--appearance-border)] rounded-standard px-4 py-2 text-caption font-bold">
-                {props.agentEarnings.completedPayoutsCount} {props.lang === 'en' ? 'completed handovers paid out' : 'kukabidhi zilizolipwa'}
+                {props.agentEarnings.completedPayoutsCount} {'completed handovers paid out'}
               </div>
             </div>
           )}

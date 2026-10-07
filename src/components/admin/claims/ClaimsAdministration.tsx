@@ -48,7 +48,7 @@ import type {
  */
 const SEARCH_DEBOUNCE_MS = 350;
 
-export default function ClaimsAdministration({ lang, token }: { lang: 'en' | 'sw'; token: string | null }) {
+export default function ClaimsAdministration({ token }: {  token: string | null }) {
   const [draftFilters, setDraftFilters] = useState<ClaimFilterState>(EMPTY_CLAIM_FILTERS);
   const [appliedFilters, setAppliedFilters] = useState<ClaimFilterState>(EMPTY_CLAIM_FILTERS);
   const [offset, setOffset] = useState(0);
@@ -99,15 +99,13 @@ export default function ClaimsAdministration({ lang, token }: { lang: 'en' | 'sw
         setListError(
           e instanceof AdminClaimsApiError
             ? e.message
-            : lang === 'sw'
-              ? 'Huduma ya claims haifikiki.'
-              : 'The claims service could not be reached.',
+            : 'The claims service could not be reached.',
         );
       } finally {
         if (requestId === listRequestId.current) setListLoading(false);
       }
     },
-    [token, lang],
+    [token],
   );
 
   // Re-fetch whenever the applied filters, the page, or an explicit retry change.
@@ -169,24 +167,20 @@ export default function ClaimsAdministration({ lang, token }: { lang: 'en' | 'sw
         if (requestId !== detailRequestId.current) return;
         if (e instanceof AdminClaimsApiError && e.kind === 'not_found') {
           setDetailError(
-            lang === 'sw'
-              ? `Claim ${claimId} haipatikani. Huenda imeondolewa au kitambulisho si sahihi.`
-              : `Claim ${claimId} could not be found. It may have been removed, or the ID is incorrect.`,
+            `Claim ${claimId} could not be found. It may have been removed, or the ID is incorrect.`,
           );
         } else {
           setDetailError(
             e instanceof AdminClaimsApiError
               ? e.message
-              : lang === 'sw'
-                ? 'Maelezo ya claim hayakupakiwa.'
-                : 'The claim details could not be loaded.',
+              : 'The claim details could not be loaded.',
           );
         }
       } finally {
         if (requestId === detailRequestId.current) setDetailLoading(false);
       }
     },
-    [token, lang],
+    [token],
   );
 
   // Detail is fetched only when a claim is opened — never for a whole page.
@@ -209,12 +203,10 @@ export default function ClaimsAdministration({ lang, token }: { lang: 'en' | 'sw
   return (
     <div className="space-y-4">
       <SectionHeading
-        eyebrow={lang === 'sw' ? 'Utawala' : 'Administration'}
-        title={lang === 'sw' ? 'Usimamizi wa Claims' : 'Claims Administration'}
+        eyebrow={'Administration'}
+        title={'Claims Administration'}
         description={
-          lang === 'sw'
-            ? 'Tafuta na kagua claims zote. Sehemu hii ni ya kusoma tu — hakuna kitendo kinachobadilisha claim.'
-            : 'Search and review claims across the platform. This view is read-only — nothing here changes a claim.'
+          'Search and review claims across the platform. This view is read-only — nothing here changes a claim.'
         }
       />
 
@@ -222,7 +214,6 @@ export default function ClaimsAdministration({ lang, token }: { lang: 'en' | 'sw
         value={draftFilters}
         onChange={applyImmediateFilters}
         onReset={resetFilters}
-        lang={lang}
         disabled={listLoading}
       />
 
@@ -232,7 +223,7 @@ export default function ClaimsAdministration({ lang, token }: { lang: 'en' | 'sw
             <span>{listError}</span>
             <Button variant="outline" size="sm" onClick={() => setReloadToken((n) => n + 1)}>
               <RefreshCw size={14} aria-hidden="true" />
-              {lang === 'sw' ? 'Jaribu tena' : 'Retry'}
+              {'Retry'}
             </Button>
           </span>
         </Banner>
@@ -242,7 +233,6 @@ export default function ClaimsAdministration({ lang, token }: { lang: 'en' | 'sw
         loading={listLoading}
         error={listError}
         rows={rows}
-        lang={lang}
         filtersActive={filtersActive}
         selectedClaimId={selectedClaimId}
         onSelect={setSelectedClaimId}
@@ -255,15 +245,12 @@ export default function ClaimsAdministration({ lang, token }: { lang: 'en' | 'sw
         shown={rows.length}
         hasMore={pagination.hasMore}
         loading={listLoading}
-        lang={lang}
         onPrevious={() => setOffset((o) => Math.max(0, o - ADMIN_CLAIMS_PAGE_SIZE))}
         onNext={() => setOffset((o) => o + ADMIN_CLAIMS_PAGE_SIZE)}
       />
 
       <p className="text-[11px] text-brand-muted-text">
-        {lang === 'sw'
-          ? 'Kila claim inapofunguliwa, mfumo hurekodi tukio la ukaguzi kwa msimamizi aliyeingia.'
-          : 'Opening a claim records a server-side audit event against your admin account.'}
+        {'Opening a claim records a server-side audit event against your admin account.'}
       </p>
 
       <ClaimDetailPanel
@@ -271,7 +258,6 @@ export default function ClaimsAdministration({ lang, token }: { lang: 'en' | 'sw
         claim={detail}
         loading={detailLoading}
         error={detailError}
-        lang={lang}
         onClose={() => setSelectedClaimId(null)}
         onRetry={() => selectedClaimId && loadDetail(selectedClaimId)}
         onOpenClaim={setSelectedClaimId}
@@ -287,7 +273,6 @@ function ListBody({
   loading,
   error,
   rows,
-  lang,
   filtersActive,
   selectedClaimId,
   onSelect,
@@ -296,7 +281,6 @@ function ListBody({
   loading: boolean;
   error: string | null;
   rows: AdminClaimListView[];
-  lang: 'en' | 'sw';
   filtersActive: boolean;
   selectedClaimId: string | null;
   onSelect: (claimId: string) => void;
@@ -309,7 +293,7 @@ function ListBody({
         role="status"
         aria-live="polite"
       >
-        <span className="sr-only">{lang === 'sw' ? 'Inapakia claims…' : 'Loading claims…'}</span>
+        <span className="sr-only">{'Loading claims…'}</span>
         <Skeleton shape="rect" />
         <Skeleton shape="rect" />
         <Skeleton shape="rect" />
@@ -322,11 +306,9 @@ function ListBody({
     return (
       <EmptyState
         icon={FileSearch}
-        title={lang === 'sw' ? 'Claims hazikupakiwa' : 'Claims could not be loaded'}
+        title={'Claims could not be loaded'}
         description={
-          lang === 'sw'
-            ? 'Huduma ya claims haikujibu. Tumia "Jaribu tena" — hakuna taarifa iliyobadilika.'
-            : 'The claims service did not respond. Use "Retry" above — nothing was changed.'
+          'The claims service did not respond. Use "Retry" above — nothing was changed.'
         }
       />
     );
@@ -336,26 +318,22 @@ function ListBody({
     return filtersActive ? (
       <EmptyState
         icon={SearchX}
-        title={lang === 'sw' ? 'Hakuna claim inayolingana' : 'No claims match your filters'}
+        title={'No claims match your filters'}
         description={
-          lang === 'sw'
-            ? 'Hakuna claim inayolingana na utafutaji au vichujio hivi. Rekebisha vichujio na ujaribu tena.'
-            : 'No claims match the current search or filters. Adjust them and try again.'
+          'No claims match the current search or filters. Adjust them and try again.'
         }
         action={
           <Button variant="outline" size="sm" onClick={onResetFilters}>
-            {lang === 'sw' ? 'Ondoa vichujio' : 'Clear filters'}
+            {'Clear filters'}
           </Button>
         }
       />
     ) : (
       <EmptyState
         icon={FileSearch}
-        title={lang === 'sw' ? 'Hakuna claims bado' : 'No claims yet'}
+        title={'No claims yet'}
         description={
-          lang === 'sw'
-            ? 'Hakuna claim iliyowasilishwa kwenye mfumo.'
-            : 'No claims have been submitted to the platform yet.'
+          'No claims have been submitted to the platform yet.'
         }
       />
     );
@@ -364,7 +342,6 @@ function ListBody({
   return (
     <ClaimsTable
       rows={rows}
-      lang={lang}
       selectedClaimId={selectedClaimId}
       onSelect={onSelect}
       disabled={false}

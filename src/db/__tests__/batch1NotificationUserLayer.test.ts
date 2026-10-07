@@ -544,8 +544,8 @@ describe('Batch 1 C — state-aware actions', () => {
   it('C10. every state label exists for both languages', async () => {
     for (const s of ['informational', 'action_required', 'pending', 'completed', 'expired'] as const) {
       expect(isCustomerNotificationState(s)).toBe(true);
-      expect(stateLabel(s, 'en')).toBeTruthy();
-      expect(stateLabel(s, 'sw')).toBeTruthy();
+      expect(stateLabel(s)).toBeTruthy();
+      expect(stateLabel(s)).toBeTruthy();
     }
     expect(hasCustomerAction('action_required')).toBe(true);
     expect(hasCustomerAction('expired')).toBe(false);
@@ -722,7 +722,7 @@ describe('Batch 1 E — delivery failure separation', () => {
       customerId: CUST,
       category: 'payment_status',
       title: 'Payment awaiting confirmation',
-      body: PAYMENT_AWAITING_CONFIRMATION_MESSAGE.en,
+      body: PAYMENT_AWAITING_CONFIRMATION_MESSAGE,
       businessReference: 'CLM-PAY-1',
       createdAt: NOW,
     });
@@ -747,7 +747,7 @@ describe('Batch 1 E — delivery failure separation', () => {
     // the outcome is uncertain, instructing a second payment risks a double
     // payment, so the copy must forbid it explicitly and must never contain an
     // un-negated instruction to pay.
-    const raw = PAYMENT_AWAITING_CONFIRMATION_MESSAGE.en;
+    const raw = PAYMENT_AWAITING_CONFIRMATION_MESSAGE;
     expect(raw.toLowerCase()).toContain('confirmation');
     expect(raw.toLowerCase()).toContain("don't pay again"); // the explicit prohibition
     // No instruction to pay, retry the payment, or act as if it failed.
@@ -758,9 +758,9 @@ describe('Batch 1 E — delivery failure separation', () => {
   });
 
   it('E4. the delivery fallback message is neutral', async () => {
-    expect(DELIVERY_FALLBACK_MESSAGE.en).toBeTruthy();
-    expect(containsForbiddenCustomerTerm(DELIVERY_FALLBACK_MESSAGE.en)).toBe(false);
-    expect(containsForbiddenCustomerTerm(PAYMENT_AWAITING_CONFIRMATION_MESSAGE.en)).toBe(false);
+    expect(DELIVERY_FALLBACK_MESSAGE).toBeTruthy();
+    expect(containsForbiddenCustomerTerm(DELIVERY_FALLBACK_MESSAGE)).toBe(false);
+    expect(containsForbiddenCustomerTerm(PAYMENT_AWAITING_CONFIRMATION_MESSAGE)).toBe(false);
   });
 
   it('E5. provider names are NOT exposed in any customer-facing field', async () => {
@@ -1027,8 +1027,8 @@ it('F8. an essential category has no configurable outbound channel', async () =>
 
   it('F15. every category carries a customer-facing label in both languages', async () => {
     for (const category of CUSTOMER_NOTIFICATION_CATEGORIES) {
-      expect(categoryLabel(category, 'en')).toBeTruthy();
-      expect(categoryLabel(category, 'sw')).toBeTruthy();
+      expect(categoryLabel(category)).toBeTruthy();
+      expect(categoryLabel(category)).toBeTruthy();
     }
   });
 });
@@ -1129,7 +1129,7 @@ it('G6. a DIRECT action link cannot reach another customer claim', async () => {
       customerId: MINE,
       category: 'payment_status',
       title: 'Payment awaiting confirmation',
-      body: PAYMENT_AWAITING_CONFIRMATION_MESSAGE.en,
+      body: PAYMENT_AWAITING_CONFIRMATION_MESSAGE,
       businessReference: 'CLM-SAFE-1',
       createdAt: NOW,
     });
@@ -1186,18 +1186,18 @@ describe('Batch 1 H — plain-language wording only', () => {
 
   it('H3. every shipped category and state label is clean', () => {
     for (const category of CUSTOMER_NOTIFICATION_CATEGORIES) {
-      expect(containsForbiddenCustomerTerm(categoryLabel(category, 'en'))).toBe(false);
-      expect(containsForbiddenCustomerTerm(categoryLabel(category, 'sw'))).toBe(false);
+      expect(containsForbiddenCustomerTerm(categoryLabel(category))).toBe(false);
+      expect(containsForbiddenCustomerTerm(categoryLabel(category))).toBe(false);
     }
     for (const state of ['informational', 'action_required', 'pending', 'completed', 'expired'] as const) {
-      expect(containsForbiddenCustomerTerm(stateLabel(state, 'en'))).toBe(false);
-      expect(containsForbiddenCustomerTerm(stateLabel(state, 'sw'))).toBe(false);
+      expect(containsForbiddenCustomerTerm(stateLabel(state))).toBe(false);
+      expect(containsForbiddenCustomerTerm(stateLabel(state))).toBe(false);
     }
   });
 
   it('H4. the required service terminology is used, not the model vocabulary', () => {
-    expect(categoryLabel('document_verification', 'en')).toBe('Document verification');
-    const label = categoryLabel('document_verification', 'en').toLowerCase();
+    expect(categoryLabel('document_verification')).toBe('Document verification');
+    const label = categoryLabel('document_verification').toLowerCase();
     expect(label).not.toContain('ai');
     expect(label).not.toContain('ocr');
   });

@@ -32,12 +32,12 @@ const COUNTY_GROUPS = countiesByUxGroup();
 // It is pure presentation: no lifecycle value, status vocabulary, API contract,
 // verification rule or payment behaviour is involved, and an unknown state
 // simply renders as the first stage.
-const CLAIM_STEPS: { en: string; sw: string }[] = [
-  { en: 'Confirm', sw: 'Thibitisha' },
-  { en: 'Verify', sw: 'Thibitisha utambulisho' },
-  { en: 'Visit hub', sw: 'Tembelea kituo' },
-  { en: 'Pay', sw: 'Lipa' },
-  { en: 'Collect', sw: 'Chukua' },
+const CLAIM_STEPS: { en: string }[] = [
+  { en: 'Confirm' },
+  { en: 'Verify' },
+  { en: 'Visit hub' },
+  { en: 'Pay' },
+  { en: 'Collect' },
 ];
 
 const CLAIM_STEP_INDEX: Record<string, number> = {
@@ -74,54 +74,48 @@ const CLAIM_STEP_INDEX: Record<string, number> = {
  * key were introduced by UX-09.
  */
 const CLAIM_STAGE_GUIDE: {
-  title: { en: string; sw: string };
-  what: { en: string; sw: string };
-  actor: { en: string; sw: string };
+  title: { en: string };
+  what: { en: string };
+  actor: { en: string };
 }[] = [
   {
-    title: { en: 'Confirm the item is yours', sw: 'Thibitisha kuwa kitu hiki ni chako' },
+    title: { en: 'Confirm the item is yours' },
     what: {
       en: 'Check the photo and description, confirm the phone number we should verify, then accept the terms.',
-      sw: 'Angalia picha na maelezo, uthibitishe nambari ya simu tutakayothibitisha, kisha kubali masharti.',
     },
-    actor: { en: 'You', sw: 'Wewe' },
+    actor: { en: 'You' },
   },
   {
-    title: { en: 'Prove ownership', sw: 'Thibitisha umiliki' },
+    title: { en: 'Prove ownership' },
     what: {
       en: 'Answer the security questions, then enter the code we send to your verified email address.',
-      sw: 'Jibu maswali ya usalama, kisha weka msimbo tutakaotuma kwenye barua pepe yako iliyothibitishwa.',
     },
-    actor: { en: 'You', sw: 'Wewe' },
+    actor: { en: 'You' },
   },
   {
-    title: { en: 'Visit the hub and inspect the item', sw: 'Tembelea kituo na ukague bidhaa' },
+    title: { en: 'Visit the hub and inspect the item' },
     what: {
       en: 'Go to the confirmed hub shown below, inspect the item in person, and let the agent confirm you have seen it.',
-      sw: 'Nenda kituo kilichothibitishwa hapa chini, kague bidhaa kwa macho, na umruhusu wakala athibitishe kuwa umeiona.',
     },
-    actor: { en: 'You and the agent', sw: 'Wewe na wakala' },
+    actor: { en: 'You and the agent' },
   },
   {
-    title: { en: 'Pay the collection fee', sw: 'Lipa ada ya kuchukua' },
+    title: { en: 'Pay the collection fee' },
     what: {
       en: 'Send the M-Pesa prompt to the number below and complete it on your phone with your PIN.',
-      sw: 'Tuma ombi la M-Pesa kwa nambari iliyo hapa chini na ulikamilishe kwenye simu yako kwa PIN yako.',
     },
-    actor: { en: 'You, on M-Pesa', sw: 'Wewe, kwenye M-Pesa' },
+    actor: { en: 'You, on M-Pesa' },
   },
   {
-    title: { en: 'Collect your item', sw: 'Chukua bidhaa yako' },
+    title: { en: 'Collect your item' },
     what: {
       en: 'Show the agent your secret pickup code, collect your item, then rate the agent.',
-      sw: 'Mwonyeshe wakala msimbo wako wa siri, chukua bidhaa yako, kisha mtoe wakala alama.',
     },
-    actor: { en: 'You and the agent', sw: 'Wewe na wakala' },
+    actor: { en: 'You and the agent' },
   },
 ];
 
 interface OwnerViewProps {
-  lang: 'en' | 'sw';
   categories: any[];
   categoriesLoading?: boolean;
   categoriesError?: boolean;
@@ -198,10 +192,8 @@ function isValidKenyanPhoneForPayer(raw: string): boolean {
 // never advanced — silently misleading. Stopping the interval and saying so is
 // the honest minimal behaviour; nothing about the claim itself is affected, and
 // a page refresh resumes polling.
-function statusPollThrottledMessage(lang: 'en' | 'sw'): string {
-  return lang === 'en'
-    ? 'Status checks are paused for a moment to avoid overloading the server. Please refresh this page in a minute — your claim is safe and still progressing.'
-    : 'Ukaguzi wa hali umesimamishwa kwa muda ili kuepuka kuzidisha seva. Tafadhali pakia upya ukurasa huu baada ya dakika moja — dai lako liko salama na linaendelea.';
+function statusPollThrottledMessage(): string {
+  return 'Status checks are paused for a moment to avoid overloading the server. Please refresh this page in a minute — your claim is safe and still progressing.';
 }
 
 // ---------------------------------------------------------------------------
@@ -235,25 +227,17 @@ type PickupDetailsState =
 // Product copy for each pickup-details state, kept in one place so the
 // awaiting-agent and handover screens cannot drift apart, and bilingual to
 // match the rest of this view.
-function pickupLoadingMessage(lang: 'en' | 'sw'): string {
-  return lang === 'en'
-    ? 'Retrieving the pickup location…'
-    : 'Inapata mahali pa kuchukua bidhaa…';
+function pickupLoadingMessage(): string {
+  return 'Retrieving the pickup location…';
 }
-function pickupNoHubMessage(lang: 'en' | 'sw'): string {
-  return lang === 'en'
-    ? 'No hub has been assigned yet. The pickup location will appear here as soon as one is available.'
-    : 'Hakuna kituo kilichopangwa bado. Mahali pa kuchukua bidhaa kutadhihirika hapa mara tu kitakapopatikana.';
+function pickupNoHubMessage(): string {
+  return 'No hub has been assigned yet. The pickup location will appear here as soon as one is available.';
 }
-function pickupIneligibleMessage(lang: 'en' | 'sw'): string {
-  return lang === 'en'
-    ? 'Pickup details are no longer available for this claim.'
-    : 'Maelezo ya kuchukua bidhaa hayapatikani tena kwa dai hili.';
+function pickupIneligibleMessage(): string {
+  return 'Pickup details are no longer available for this claim.';
 }
-function pickupErrorMessage(lang: 'en' | 'sw'): string {
-  return lang === 'en'
-    ? 'We could not retrieve the pickup details right now.'
-    : 'Imeshindikana kupata maelezo ya kuchukua bidhaa kwa sasa.';
+function pickupErrorMessage(): string {
+  return 'We could not retrieve the pickup details right now.';
 }
 
 /**
@@ -262,7 +246,7 @@ function pickupErrorMessage(lang: 'en' | 'sw'): string {
  * directions link. Renders only what it was given, so a coarse or stale hub
  * object can never masquerade as freshly retrieved pickup information.
  */
-function HubDetails({ agent, lang, showDirections = false }: { agent: any; lang: 'en' | 'sw'; showDirections?: boolean }) {
+function HubDetails({ agent, showDirections = false }: { agent: any;  showDirections?: boolean }) {
   const hasCoordinates = agent?.latitude !== undefined && agent?.latitude !== null
     && agent?.longitude !== undefined && agent?.longitude !== null;
   return (
@@ -273,7 +257,7 @@ function HubDetails({ agent, lang, showDirections = false }: { agent: any; lang:
       )}
       {agent?.contact_phone && (
         <p className="text-ink-muted text-xs font-semibold mt-1">
-          {lang === 'en' ? 'Phone' : 'Simu'}: <span className="font-mono">{agent.contact_phone}</span>
+          {'Phone'}: <span className="font-mono">{agent.contact_phone}</span>
         </p>
       )}
       {showDirections && hasCoordinates && (
@@ -284,7 +268,7 @@ function HubDetails({ agent, lang, showDirections = false }: { agent: any; lang:
           className="inline-flex items-center gap-1 text-primary-green text-xs font-bold mt-2 underline underline-offset-2 hover:text-accent-orange transition"
         >
           <MapPin size={13} />
-          {lang === 'sw' ? 'Fungua Maelekezo kwenye Google Maps' : 'Open Directions in Google Maps'}
+          {'Open Directions in Google Maps'}
         </a>
       )}
     </div>
@@ -300,12 +284,10 @@ function HubDetails({ agent, lang, showDirections = false }: { agent: any; lang:
  */
 function PickupDetailsPanel({
   state,
-  lang,
   showDirections = false,
   onRetry,
 }: {
   state: PickupDetailsState;
-  lang: 'en' | 'sw';
   showDirections?: boolean;
   onRetry: () => void;
 }) {
@@ -313,19 +295,19 @@ function PickupDetailsPanel({
     return (
       <div className="flex items-center gap-2 text-ink-muted text-xs py-1">
         <Loader2 className="animate-spin text-primary-green shrink-0" size={14} />
-        <span>{pickupLoadingMessage(lang)}</span>
+        <span>{pickupLoadingMessage()}</span>
       </div>
     );
   }
 
   if (state.status === 'ineligible') {
-    return <p className="rounded-xl border border-line-subtle bg-canvas-muted px-3 py-2 text-ink-muted text-xs">{pickupIneligibleMessage(lang)}</p>;
+    return <p className="rounded-xl border border-line-subtle bg-canvas-muted px-3 py-2 text-ink-muted text-xs">{pickupIneligibleMessage()}</p>;
   }
 
   if (state.status === 'error') {
     return (
       <div className="space-y-2">
-        <p className="rounded-xl border border-status-danger-border bg-status-danger-surface px-3 py-2 text-status-danger text-xs">{pickupErrorMessage(lang)}</p>
+        <p className="rounded-xl border border-status-danger-border bg-status-danger-surface px-3 py-2 text-status-danger text-xs">{pickupErrorMessage()}</p>
         {state.retryable && (
           <Button
             type="button"
@@ -335,7 +317,7 @@ function PickupDetailsPanel({
             className="min-h-11"
           >
             <RefreshCw size={12} aria-hidden="true" />
-            {lang === 'en' ? 'Try again' : 'Jaribu tena'}
+            {'Try again'}
           </Button>
         )}
       </div>
@@ -345,14 +327,14 @@ function PickupDetailsPanel({
   // Ready: a null agent is a deliberate "no hub assigned yet" answer from the
   // server, not a failure — and never a cue to keep showing older details.
   if (!state.agent) {
-    return <p className="rounded-xl border border-line-subtle bg-canvas-muted px-3 py-2 text-ink-muted text-xs">{pickupNoHubMessage(lang)}</p>;
+    return <p className="rounded-xl border border-line-subtle bg-canvas-muted px-3 py-2 text-ink-muted text-xs">{pickupNoHubMessage()}</p>;
   }
 
-  return <HubDetails agent={state.agent} lang={lang} showDirections={showDirections} />;
+  return <HubDetails agent={state.agent} showDirections={showDirections} />;
 }
 
-export default function OwnerView({ lang, categories, categoriesLoading = false, categoriesError = false, onOpenItem, initialClaimItem = null, onReportLost, isSignedIn = false, onRequireTrackSignIn, trackIntent = false }: OwnerViewProps) {
-  const t = translations[lang];
+export default function OwnerView({ categories, categoriesLoading = false, categoriesError = false, onOpenItem, initialClaimItem = null, onReportLost, isSignedIn = false, onRequireTrackSignIn, trackIntent = false }: OwnerViewProps) {
+  const t = translations.en;
 
   // Search States
   const [searchQuery, setSearchQuery] = useState('');
@@ -437,7 +419,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
   // step falls back to stage 0 exactly as the rail does.
   const claimStageIndex = CLAIM_STEP_INDEX[verificationStep] ?? 0;
   const claimStageGuide = CLAIM_STAGE_GUIDE[claimStageIndex];
-  const stageOf = (v: { en: string; sw: string }) => (lang === 'en' ? v.en : v.sw);
+  const stageOf = (v: { en: string }) => (v.en);
 
   // Verification Form states
   const [ownerPhone, setOwnerPhone] = useState('');
@@ -770,7 +752,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
     }
 
     if (!ownerPhone.trim()) {
-      setErrorMsg(lang === 'en' ? 'Please enter your phone number before claiming.' : 'Tafadhali weka nambari yako ya simu kabla ya kudai.');
+      setErrorMsg('Please enter your phone number before claiming.');
       setSearchLoading(false);
       return;
     }
@@ -905,7 +887,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           // hammer a throttled endpoint every 3 seconds in silence.
           clearInterval(interval);
           setPollingStatus('timeout');
-          setErrorMsg(statusPollThrottledMessage(lang));
+          setErrorMsg(statusPollThrottledMessage());
         }
       } catch (e) {
         console.error('Polling status error:', e);
@@ -927,9 +909,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
       if (secondsPassed > 90) {
         clearInterval(interval);
         setPollingStatus('timeout');
-        setErrorMsg(lang === 'en' 
-          ? 'Payment confirmation timed out. If you entered your M-Pesa PIN, please try refreshing or checking with the agent.' 
-          : 'Uthibitisho wa malipo umechukua muda mrefu. Ikiwa umeweka PIN ya M-Pesa, tafadhali pakia upya au uwasiliane nasi.');
+        setErrorMsg('Payment confirmation timed out. If you entered your M-Pesa PIN, please try refreshing or checking with the agent.');
         return;
       }
 
@@ -950,7 +930,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           // stop the loop and surface it rather than retrying every 3 seconds.
           clearInterval(interval);
           setPollingStatus('timeout');
-          setErrorMsg(statusPollThrottledMessage(lang));
+          setErrorMsg(statusPollThrottledMessage());
         }
       } catch (e) {
         console.error('Polling payment status error:', e);
@@ -1029,7 +1009,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
   // and payment provider have actually recorded.
   const checkPaymentStatus = async () => {
     if (!paidClaim?.id || !paymentSessionId) {
-      setErrorMsg(lang === 'en' ? 'No active payment session yet. Please send the M-Pesa prompt first.' : 'Hakuna session ya malipo bado. Tafadhali tuma ombi la M-Pesa kwanza.');
+      setErrorMsg('No active payment session yet. Please send the M-Pesa prompt first.');
       return;
     }
     setErrorMsg('');
@@ -1054,7 +1034,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
         if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
         setVerificationStep('payment_window_expired');
       } else if (s?.status === 'failed') {
-        setErrorMsg(lang === 'en' ? 'The payment failed. Please try a new payment.' : 'Malipo yameshindikana. Tafadhali jaribu tena.');
+        setErrorMsg('The payment failed. Please try a new payment.');
       } else {
         setPollingStatus('pending');
       }
@@ -1138,13 +1118,11 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               }}
             >
               <Clock size={14} className="text-accent-orange" aria-hidden="true" />
-              <span>{lang === 'en' ? 'Track My Existing Claim' : 'Fuatilia Ombi Lako'}</span>
+              <span>{'Track My Existing Claim'}</span>
             </Button>
             {!isSignedIn && (
               <p className="text-caption text-ink-muted">
-                {lang === 'sw'
-                  ? 'Kufuatilia claim kunahitaji akaunti ya Return4me. Utarudishwa hapa moja kwa moja baada ya kuingia.'
-                  : 'Tracking a claim needs a Return4me account. You are returned here straight after signing in.'}
+                {'Tracking a claim needs a Return4me account. You are returned here straight after signing in.'}
               </p>
             )}
           </div>
@@ -1163,43 +1141,37 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             className="bg-white rounded-2xl border border-line-subtle p-5 sm:p-6 shadow-sm"
           >
             <h2 id="lost-entry-heading" className="text-base sm:text-lg font-extrabold text-ink">
-              {lang === 'sw' ? 'Umepoteza kitu?' : 'Something of yours is missing?'}
+              {'Something of yours is missing?'}
             </h2>
             <p className="mt-1 text-sm text-ink-muted leading-relaxed max-w-2xl">
-              {lang === 'sw'
-                ? 'Kuna njia mbili. Chagua inayokufaa.'
-                : 'There are two different journeys here. Choose the one that matches your situation.'}
+              {'There are two different journeys here. Choose the one that matches your situation.'}
             </p>
 
             <div className="mt-4 grid gap-4 md:grid-cols-2">
               <div className="rounded-2xl border border-primary-green/20 bg-primary-green/5 p-4 sm:p-5 flex flex-col">
                 <h3 className="text-sm font-extrabold text-ink">
-                  {lang === 'sw' ? 'Sijaripoti bado — nataka kuripoti' : 'I have lost it — I want to report it'}
+                  {'I have lost it — I want to report it'}
                 </h3>
                 <p className="mt-1.5 text-xs text-ink-muted leading-relaxed flex-1">
-                  {lang === 'sw'
-                    ? 'Wasilisha ripoti ya kitu kilichopotea. Tutalinganisha na vitu vilivyopatikana vinavyostahili kudaiwa na kukuonyesha kinachofanana. Ripoti yako ni ya faragha.'
-                    : 'File a lost-item report. We compare it with found items that are eligible to be claimed and show you anything that looks similar. Your report stays private to you.'}
+                  {'File a lost-item report. We compare it with found items that are eligible to be claimed and show you anything that looks similar. Your report stays private to you.'}
                 </p>
                 <div className="mt-4">
                   <Button variant="primary" size="md" onClick={() => onReportLost && onReportLost()}>
                     <AlertTriangle size={14} />
-                    {lang === 'sw' ? 'Ripoti Kitu Kilichopotea' : 'Report a Lost Item'}
+                    {'Report a Lost Item'}
                   </Button>
                 </div>
               </div>
 
               <div className="rounded-2xl border border-line-subtle bg-brand-beige/40 p-4 sm:p-5 flex flex-col">
                 <h3 className="text-sm font-extrabold text-ink">
-                  {lang === 'sw' ? 'Labda kimepatikana — nataka kukitafuta' : 'It may have been found — I want to search for it'}
+                  {'It may have been found — I want to search for it'}
                 </h3>
                 <p className="mt-1.5 text-xs text-ink-muted leading-relaxed flex-1">
-                  {lang === 'sw'
-                    ? 'Tafuta vitu vilivyowasilishwa kama vilivyopatikana hapa chini, kisha dai kitu ambacho ni chako. Ikiwa umeshaanza ombi, fuatilia hali yake.'
-                    : 'Search the items reported as found in the search below, then claim the one that is yours. Already started a claim? Track its status above.'}
+                  {'Search the items reported as found in the search below, then claim the one that is yours. Already started a claim? Track its status above.'}
                 </p>
                 <p className="mt-4 text-xs font-bold text-ink-muted">
-                  {lang === 'sw' ? 'Tumia utafutaji hapa chini' : 'Use the search below'}
+                  {'Use the search below'}
                 </p>
               </div>
             </div>
@@ -1217,7 +1189,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           <form onSubmit={handleSearch} className="space-y-5 rounded-2xl border border-line-subtle bg-white p-5 shadow-sm sm:p-6">
             <div className="grid gap-4">
               <label className="grid gap-2 sm:grid-cols-[9rem_1fr] sm:items-center">
-                <span className="text-xs font-extrabold uppercase tracking-wider text-primary-green">{lang === 'en' ? 'Item details' : 'Maelezo ya kitu'}</span>
+                <span className="text-xs font-extrabold uppercase tracking-wider text-primary-green">{'Item details'}</span>
                 <span className="relative">
                   <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder={t.searchPlaceholder} aria-label={t.searchPlaceholder} className="w-full rounded-2xl border border-line-subtle bg-brand-beige py-3 pl-10 pr-4 text-sm focus:border-accent-orange" />
                   <Search className="absolute left-3.5 top-3.5 text-ink-muted" size={18} aria-hidden="true" />
@@ -1225,40 +1197,40 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               </label>
 
               <fieldset className="grid gap-3 sm:grid-cols-2">
-                <legend className="mb-1 text-xs font-extrabold uppercase tracking-wider text-primary-green sm:col-span-2">{lang === 'en' ? 'Where was it found?' : 'Ilipopatikana wapi?'}</legend>
+                <legend className="mb-1 text-xs font-extrabold uppercase tracking-wider text-primary-green sm:col-span-2">{'Where was it found?'}</legend>
                 <label className="grid gap-1.5">
-                  <span className="text-xs font-bold text-ink-muted">{lang === 'en' ? 'Category' : 'Kategoria'}</span>
-                  <select value={selectedCat} onChange={e => setSelectedCat(e.target.value)} aria-label={lang === 'en' ? 'Filter by category' : 'Chuja kwa kategoria'} className="w-full rounded-2xl border border-line-subtle bg-white px-3 py-3 text-sm focus:border-accent-orange disabled:bg-brand-light-gray disabled:text-brand-muted-text" disabled={categoriesLoading || categoriesError}>
-                    {categoriesLoading ? <option value="">{lang === 'en' ? 'Loading categories...' : 'Inapakia kategoria...'}</option> : categoriesError ? <option value="">{lang === 'en' ? 'Categories unavailable — please refresh' : 'Kategoria hazipatikani - tafadhali pakia upya'}</option> : [<option key="all-categories" value="">{lang === 'en' ? 'All categories' : 'Kategoria zote'}</option>, ...categories.filter(cat => cat.name_en && cat.name_sw).map(cat => <option key={cat.id} value={cat.id}>{lang === 'en' ? cat.name_en : cat.name_sw}</option>)]}
+                  <span className="text-xs font-bold text-ink-muted">{'Category'}</span>
+                  <select value={selectedCat} onChange={e => setSelectedCat(e.target.value)} aria-label={'Filter by category'} className="w-full rounded-2xl border border-line-subtle bg-white px-3 py-3 text-sm focus:border-accent-orange disabled:bg-brand-light-gray disabled:text-brand-muted-text" disabled={categoriesLoading || categoriesError}>
+                    {categoriesLoading ? <option value="">{'Loading categories...'}</option> : categoriesError ? <option value="">{'Categories unavailable — please refresh'}</option> : [<option key="all-categories" value="">{'All categories'}</option>, ...categories.filter(cat => cat.name_en && cat.name_sw).map(cat => <option key={cat.id} value={cat.id}>{cat.name_en}</option>)]}
                   </select>
                 </label>
                 <label className="grid gap-1.5">
-                  <span className="text-xs font-bold text-ink-muted">{lang === 'en' ? 'County' : 'Kaunti'}</span>
-                  <select value={selectedCounty} onChange={e => { setSelectedCounty(e.target.value); setSelectedAdministrativeUnit(''); }} aria-label={lang === 'en' ? 'Filter by county' : 'Chuja kwa kaunti'} className="w-full rounded-2xl border border-line-subtle bg-white px-3 py-3 text-sm focus:border-accent-orange">
-                    <option value="">{lang === 'en' ? 'All counties' : 'Kaunti zote'}</option>
+                  <span className="text-xs font-bold text-ink-muted">{'County'}</span>
+                  <select value={selectedCounty} onChange={e => { setSelectedCounty(e.target.value); setSelectedAdministrativeUnit(''); }} aria-label={'Filter by county'} className="w-full rounded-2xl border border-line-subtle bg-white px-3 py-3 text-sm focus:border-accent-orange">
+                    <option value="">{'All counties'}</option>
                     {COUNTY_GROUPS.map(group => <optgroup key={group.group} label={group.group}>{group.counties.map(county => <option key={county.code} value={county.name}>{county.name}</option>)}</optgroup>)}
                   </select>
                 </label>
                 <label className="grid gap-1.5 sm:col-span-2">
-                  <span className="text-xs font-bold text-ink-muted">{lang === 'en' ? 'Sub-county' : 'Kaunti ndogo'}</span>
-                  <select value={selectedAdministrativeUnit} onChange={e => setSelectedAdministrativeUnit(e.target.value)} disabled={!selectedCounty} aria-label={lang === 'en' ? 'Filter by sub-county' : 'Chuja kwa kaunti ndogo'} className="w-full rounded-2xl border border-line-subtle bg-white px-3 py-3 text-sm focus:border-accent-orange disabled:bg-brand-light-gray disabled:text-brand-muted-text">
-                    <option value="">{lang === 'en' ? (selectedCounty ? 'All sub-counties' : 'Select county first') : (selectedCounty ? 'Kaunti ndogo zote' : 'Chagua kaunti kwanza')}</option>
+                  <span className="text-xs font-bold text-ink-muted">{'Sub-county'}</span>
+                  <select value={selectedAdministrativeUnit} onChange={e => setSelectedAdministrativeUnit(e.target.value)} disabled={!selectedCounty} aria-label={'Filter by sub-county'} className="w-full rounded-2xl border border-line-subtle bg-white px-3 py-3 text-sm focus:border-accent-orange disabled:bg-brand-light-gray disabled:text-brand-muted-text">
+                    <option value="">{(selectedCounty ? 'All sub-counties' : 'Select county first')}</option>
                     {selectedCounty && administrativeUnitsForCounty(selectedCounty).map(unit => <option key={unit.id} value={unit.id}>{unit.name}</option>)}
                   </select>
                 </label>
               </fieldset>
 
               <label className="grid gap-2 sm:grid-cols-[9rem_1fr] sm:items-center">
-                <span className="text-xs font-extrabold uppercase tracking-wider text-primary-green">{lang === 'en' ? 'Exact place / area' : 'Mahali halisi / eneo'}</span>
+                <span className="text-xs font-extrabold uppercase tracking-wider text-primary-green">{'Exact place / area'}</span>
                 <span className="relative">
-                  <input type="text" value={selectedArea} onChange={e => setSelectedArea(e.target.value)} aria-label={lang === 'en' ? 'Exact place or area' : 'Mahali halisi au eneo'} placeholder={lang === 'en' ? 'Street, estate, building, landmark, stage or market' : 'Barabara, eneo, jengo, alama, kituo au sokoni'} className="w-full rounded-2xl border border-line-subtle bg-brand-beige py-3 pl-10 pr-4 text-sm focus:border-accent-orange" />
+                  <input type="text" value={selectedArea} onChange={e => setSelectedArea(e.target.value)} aria-label={'Exact place or area'} placeholder={'Street, estate, building, landmark, stage or market'} className="w-full rounded-2xl border border-line-subtle bg-brand-beige py-3 pl-10 pr-4 text-sm focus:border-accent-orange" />
                   <MapPin className="absolute left-3.5 top-3.5 text-ink-muted" size={18} aria-hidden="true" />
                 </span>
               </label>
             </div>
             <button type="submit" disabled={searchLoading} className="inline-flex min-h-[44px] w-full items-center justify-center gap-2 rounded-2xl bg-accent-strong px-8 py-3 font-bold text-white shadow-lg shadow-orange-500/10 transition hover:bg-accent-strong-hover disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto">
               {searchLoading ? <Loader2 className="animate-spin" size={18} aria-hidden="true" /> : <Search size={18} aria-hidden="true" />}
-              <span>{lang === 'en' ? 'Search found items' : 'Tafuta vitu vilivyopatikana'}</span>
+              <span>{'Search found items'}</span>
             </button>
           </form>
 
@@ -1267,11 +1239,9 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             <ShieldAlert size={18} className="text-accent-orange shrink-0 mt-0.5" />
             <div>
               <span className="font-bold block mb-0.5">
-                {lang === 'en' ? 'Kenyan Privacy Shield Activated' : 'Ngao ya Faragha ya Kenya Imewashwa'}
+                {'Kenyan Privacy Shield Activated'}
               </span>
-              {lang === 'en'
-                ? 'To safeguard owners, we never reveal exact document numbers, full names, or finder details in search. Exact matches require entering correct search queries (salted-hash matching).'
-                : 'Kuwalinda wamiliki, hatuonyeshi nambari kamili za hati, majina kamili, au taarifa za mwopaji kwenye utafutaji. Ulinganisho kamili unahitaji kuandika hoja sahihi za utafutaji (ulinganisho wa salted-hash).'}
+              {'To safeguard owners, we never reveal exact document numbers, full names, or finder details in search. Exact matches require entering correct search queries (salted-hash matching).'}
             </div>
           </div>
 
@@ -1279,10 +1249,10 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           <div className="space-y-4">
             <h2 className="text-lg font-bold text-primary-green">
               {searchLoading ? (
-                <span>{lang === 'en' ? 'Searching secure registry...' : 'Kutafuta rejesta salama...'}</span>
+                <span>{'Searching secure registry...'}</span>
               ) : (
                 <span>
-                  {searchResults.length} {searchResults.length === 1 ? (lang === 'en' ? 'found item' : 'bidhaa iliyopatikana') : (lang === 'en' ? 'found items' : 'vitu vilivyopatikana')} {lang === 'en' ? 'matching:' : 'zinazolingana:'}
+                  {searchResults.length} {searchResults.length === 1 ? ('found item') : ('found items')} {'matching:'}
                 </span>
               )}
             </h2>
@@ -1290,17 +1260,17 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             {searchLoading ? (
               <div className="bg-white border border-line-subtle rounded-2xl p-12 text-center text-ink-muted flex flex-col items-center justify-center space-y-3 shadow-sm">
                 <Loader2 className="animate-spin text-accent-orange" size={32} />
-                <span className="text-sm font-medium">{lang === 'en' ? 'Searching the secure registry...' : 'Kutafuta kwenye rejesta salama...'}</span>
+                <span className="text-sm font-medium">{'Searching the secure registry...'}</span>
               </div>
             ) : errorMsg ? (
               <div className="bg-status-danger-surface border border-status-danger-border text-status-danger px-6 py-8 rounded-2xl text-center text-sm space-y-2">
                 <AlertCircle size={28} className="mx-auto text-status-danger" />
-                <p className="font-bold">{lang === 'en' ? 'Search Failed' : 'Utafutaji Umeshindwa'}</p>
+                <p className="font-bold">{'Search Failed'}</p>
                 <p className="text-xs text-status-danger">{errorMsg}</p>
               </div>
             ) : searchResults.length === 0 ? (
               <div className="bg-white border border-line-subtle rounded-2xl p-12 text-center text-ink-muted text-sm space-y-3">
-                <p className="font-bold text-base text-primary-green">{lang === 'en' ? 'No Items Found' : 'Hakuna Bidhaa Zilizopatikana'}</p>
+                <p className="font-bold text-base text-primary-green">{'No Items Found'}</p>
                 <p className="max-w-md mx-auto text-ink-muted leading-relaxed">{t.noResults}</p>
                 <div className="pt-2">
                   <button
@@ -1317,7 +1287,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                     }}
                     className="text-caption font-black text-primary-green hover:underline cursor-pointer"
                   >
-                    {lang === 'en' ? 'Clear Filters & Show All' : 'Futa Vichungi & Onyesha Zote'}
+                    {'Clear Filters & Show All'}
                   </button>
                 </div>
               </div>
@@ -1332,10 +1302,10 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                         {item.is_sensitive_document ? (
                           <div className="flex flex-col items-center justify-center p-2 text-center h-full w-full bg-brand-light-gray text-brand-muted-text">
                             <Lock size={18} className="text-ink-muted mb-1 shrink-0" />
-                            <span className="text-caption font-bold leading-tight text-ink-muted">{lang === 'en' ? 'Photo hidden for privacy' : 'Picha imefichwa kwa faragha'}</span>
+                            <span className="text-caption font-bold leading-tight text-ink-muted">{'Photo hidden for privacy'}</span>
                           </div>
                         ) : (
-                          <img src={item.photo_url} alt={lang === 'en' ? 'Found item' : 'Kitu kilichopatikana'} className="w-full h-full object-cover" />
+                          <img src={item.photo_url} alt={'Found item'} className="w-full h-full object-cover" />
                         )}
                       </div>
 
@@ -1343,7 +1313,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                       <div className="flex-1 space-y-1.5 min-w-0">
                         <div className="flex items-center justify-between">
                           <span className="bg-status-success-surface text-status-success text-caption font-extrabold px-2.5 py-1 rounded-full uppercase">
-                            {lang === 'en' ? cat?.name_en : cat?.name_sw}
+                            {cat?.name_en}
                           </span>
                           <span className="text-caption text-ink-muted font-mono font-medium">
                             {new Date(item.created_at).toLocaleDateString()}
@@ -1363,9 +1333,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                                 onOpenItem(item.id);
                               }}
                               className="hover:underline"
-                              aria-label={lang === 'en'
-                                ? `Open details for found item: ${item.document_name_fuzzy}`
-                                : `Fungua maelezo ya bidhaa: ${item.document_name_fuzzy}`}
+                              aria-label={`Open details for found item: ${item.document_name_fuzzy}`}
                             >
                               {item.document_name_fuzzy}
                             </a>
@@ -1381,13 +1349,13 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                             (a legacy row) simply renders no county line. */}
                         {item.found_county && (
                           <p className="text-caption font-extrabold text-ink-muted uppercase tracking-widest">
-                            {lang === 'en' ? 'County' : 'Kaunti'}: {item.found_county}
+                            {'County'}: {item.found_county}
                           </p>
                         )}
 
                         {item.administrative_unit_name && (
                           <p className="text-caption text-ink-muted">
-                            {lang === 'en' ? 'Sub-county' : 'Kaunti ndogo'}: {item.administrative_unit_name}
+                            {'Sub-county'}: {item.administrative_unit_name}
                           </p>
                         )}
                         <p className="text-ink-muted text-xs line-clamp-2">
@@ -1443,27 +1411,25 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
       {verificationStep !== 'search' && verificationStep !== 'payment_window_expired' && (
         <div className="max-w-xl mx-auto mb-6 space-y-3">
           <Stepper
-            steps={CLAIM_STEPS.map((s) => ({ label: lang === 'en' ? s.en : s.sw }))}
+            steps={CLAIM_STEPS.map((s) => ({ label: s.en }))}
             currentStep={claimStageIndex}
-            label={lang === 'en' ? 'Claim progress' : 'Maendeleo ya dai'}
+            label={'Claim progress'}
           />
           {/* The guide card. One dominant next action is stated in words before
               the controls below repeat it, so the claimant never has to infer
               from the buttons what the journey expects of them. */}
           <section
-            aria-label={lang === 'en' ? 'What happens at this stage' : 'Kinachotokea katika hatua hii'}
+            aria-label={'What happens at this stage'}
             className="bg-canvas-muted border border-line-subtle rounded-standard p-4 space-y-1 text-left"
           >
             <p className="text-caption font-extrabold uppercase tracking-widest text-ink-muted">
-              {lang === 'en'
-                ? `Stage ${claimStageIndex + 1} of ${CLAIM_STEPS.length}`
-                : `Hatua ${claimStageIndex + 1} ya ${CLAIM_STEPS.length}`}
+              {`Stage ${claimStageIndex + 1} of ${CLAIM_STEPS.length}`}
               {' · '}
               {stageOf(claimStageGuide.title)}
             </p>
             <p className="text-small text-ink leading-snug">{stageOf(claimStageGuide.what)}</p>
             <p className="text-caption text-ink-muted leading-snug">
-              {lang === 'en' ? 'Who acts next' : 'Anayefanya hatua inayofuata'}: {stageOf(claimStageGuide.actor)}
+              {'Who acts next'}: {stageOf(claimStageGuide.actor)}
             </p>
           </section>
         </div>
@@ -1473,18 +1439,18 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
       {verificationStep === 'confidence_gate' && selectedItem && (
         <div className="bg-white rounded-2xl border border-line-subtle p-6 md:p-8 shadow-sm max-w-xl mx-auto space-y-6 fade-in">
           <div className="text-center space-y-2">
-            <h2 className="text-2xl font-extrabold text-primary-green">{lang === 'en' ? 'Confirm Your Ownership' : 'Thibitisha Umiliki Wako'}</h2>
-            <p className="text-ink-muted text-body">{lang === 'en' ? 'Please review the item details and confirm you are the rightful owner before continuing.' : 'Tafadhali angalia maelezo ya kitu hiki na uthibitishe kuwa wewe ni mmiliki halali kabla ya kuendelea.'}</p>
+            <h2 className="text-2xl font-extrabold text-primary-green">{'Confirm Your Ownership'}</h2>
+            <p className="text-ink-muted text-body">{'Please review the item details and confirm you are the rightful owner before continuing.'}</p>
           </div>
 
           <div className="border border-line-subtle rounded-2xl p-4 bg-brand-beige space-y-3">
-            <h3 className="font-extrabold text-sm text-ink border-b border-line-subtle pb-2">{lang === 'en' ? 'Item Information' : 'Maelezo ya Kitu'}</h3>
+            <h3 className="font-extrabold text-sm text-ink border-b border-line-subtle pb-2">{'Item Information'}</h3>
             <div className="flex gap-4">
               <div className="w-16 h-16 rounded-xl bg-[var(--appearance-surface)] border border-line-subtle overflow-hidden shrink-0 flex items-center justify-center">
                 {selectedItem.is_sensitive_document ? (
                   <div className="flex flex-col items-center justify-center p-1 text-center h-full w-full bg-brand-light-gray text-brand-muted-text">
                     <Lock size={14} className="text-ink-muted mb-0.5 shrink-0" />
-                    <span className="text-caption font-bold leading-tight text-ink-muted">{lang === 'en' ? 'Photo hidden for privacy' : 'Picha imefichwa kwa faragha'}</span>
+                    <span className="text-caption font-bold leading-tight text-ink-muted">{'Photo hidden for privacy'}</span>
                   </div>
                 ) : (
                   <img
@@ -1498,21 +1464,19 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               <div className="space-y-1">
                 <p className="text-xs font-extrabold text-ink">{selectedItem.document_name_fuzzy}</p>
                 <p className="text-small text-ink-muted">{selectedItem.location_description}</p>
-                <p className="text-caption text-ink-muted font-mono">{lang === 'en' ? 'Found Hub' : 'Kituo cha Wakala'}: {selectedItem.agent?.business_name}</p>
+                <p className="text-caption text-ink-muted font-mono">{'Found Hub'}: {selectedItem.agent?.business_name}</p>
               </div>
             </div>
           </div>
 
           <div className="space-y-4">
             <p className="text-caption text-ink-muted bg-status-info-surface border border-status-info-border rounded-xl p-3">
-              {lang === 'sw'
-                ? 'Kisha utajibu maswali ya usalama kuhusu kitu hiki ili kuthibitisha kuwa ni chako. Majibu yako yanabaki kuwa ya faragha na hutumika kuthibitisha wewe pekee.'
-                : 'Next you will answer category-specific security questions about this item to prove ownership. Your answers stay private and are only used to verify you.'}
+              {'Next you will answer category-specific security questions about this item to prove ownership. Your answers stay private and are only used to verify you.'}
             </p>
 
             {/* Contact Phone for OTP */}
             <div className="space-y-1">
-              <label htmlFor="owner-phone" className="block text-caption font-bold text-ink uppercase tracking-wider">{lang === 'en' ? 'Your Phone Number (Matched Against Your Claim)' : 'Nambari Yako ya Simu (Inayolinganishwa na Dai Lako)'} *</label>
+              <label htmlFor="owner-phone" className="block text-caption font-bold text-ink uppercase tracking-wider">{'Your Phone Number (Matched Against Your Claim)'} *</label>
               <input
                 id="owner-phone"
                 type="tel"
@@ -1540,9 +1504,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 placeholder="e.g. claimant@gmail.com"
               />
               <span className="text-caption text-ink-muted block leading-tight">
-                {lang === 'en'
-                  ? 'Provide an email address if you wish to receive billing receipts and collection notices.'
-                  : 'Toa barua pepe ikiwa ungependa kupokea risiti za malipo na taarifa za kuchukua bidhaa.'}
+                {'Provide an email address if you wish to receive billing receipts and collection notices.'}
               </span>
             </div>
 
@@ -1561,21 +1523,21 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 required
               />
               <label htmlFor="owner-agreed-terms" className="text-xs text-ink-muted leading-tight select-none cursor-pointer">
-                {lang === 'en' ? 'I have read and agree to the Return4me' : 'Nimesoma na nakubali'}{' '}
+                {'I have read and agree to the Return4me'}{' '}
                 <button
                   type="button"
                   onClick={() => (window as any).setView?.('terms')}
                   className="text-primary-green hover:underline font-bold inline"
                 >
-                  {lang === 'en' ? 'Terms of Service' : 'Vigezo na Masharti'}
+                  {'Terms of Service'}
                 </button>{' '}
-                {lang === 'en' ? 'and' : 'na'}{' '}
+                {'and'}{' '}
                 <button
                   type="button"
                   onClick={() => (window as any).setView?.('privacy')}
                   className="text-primary-green hover:underline font-bold inline"
                 >
-                  {lang === 'en' ? 'Privacy Policy' : 'Sera ya Faragha'}
+                  {'Privacy Policy'}
                 </button>
               </label>
             </div>
@@ -1593,7 +1555,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               onClick={() => setVerificationStep('search')}
               className="w-full sm:flex-1"
             >
-              {lang === 'en' ? 'Back' : 'Nyuma'}
+              {'Back'}
             </Button>
             <Button
               type="button"
@@ -1603,7 +1565,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               onClick={() => setVerificationStep('tier1_security')}
               className="w-full sm:flex-1"
             >
-              {lang === 'en' ? 'Proceed to Claim' : 'Endelea na Dai'}
+              {'Proceed to Claim'}
             </Button>
           </div>
         </div>
@@ -1614,7 +1576,6 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           src/config/verificationProfiles.ts */}
       {verificationStep === 'tier1_security' && selectedItem && (
         <VerificationForm
-          lang={lang}
           categoryId={selectedItem.category_id || 'other-item'}
           isSensitiveDocument={selectedItem.is_sensitive_document !== false}
           onSubmit={handleTier1Submit}
@@ -1636,12 +1597,10 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           </div>
           <div>
             <h2 className="text-xl font-extrabold text-primary-green mb-1">
-              {lang === 'en' ? 'Verify your code' : 'Thibitisha msimbo wako'}
+              {'Verify your code'}
             </h2>
             <p className="text-ink-muted text-xs">
-              {lang === 'en'
-                ? 'Enter the 4-digit code we sent to the verified email address on this claim.'
-                : 'Weka msimbo wa tarakimu 4 tulioutuma kwenye barua pepe iliyothibitishwa ya dai hili.'}
+              {'Enter the 4-digit code we sent to the verified email address on this claim.'}
             </p>
           </div>
 
@@ -1664,7 +1623,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               maxLength={4}
               className="w-full border-2 border-line-subtle rounded-xl text-center py-3 text-xl font-mono tracking-widest focus:border-accent-orange"
               placeholder="••••"
-              aria-label={lang === 'sw' ? 'Msimbo wa OTP wa tarakimu 4' : '4-digit OTP code'}
+              aria-label={'4-digit OTP code'}
               required
             />
 
@@ -1673,10 +1632,10 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               variant="primary"
               size="lg"
               loading={searchLoading}
-              loadingLabel={lang === 'en' ? 'Verifying your code' : 'Inathibitisha msimbo wako'}
+              loadingLabel={'Verifying your code'}
               className="w-full"
             >
-              {lang === 'en' ? 'Verify code' : 'Thibitisha msimbo'}
+              {'Verify code'}
               <ArrowRight size={18} aria-hidden="true" />
             </Button>
           </form>
@@ -1690,7 +1649,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             <Coins size={28} />
           </div>
           <div>
-            <h2 className="text-xl font-extrabold text-primary-green mb-1">{lang === 'en' ? 'Complete Payment to Continue' : 'Maliza Malipo Kuendelea'}</h2>
+            <h2 className="text-xl font-extrabold text-primary-green mb-1">{'Complete Payment to Continue'}</h2>
             <p className="text-ink-muted text-xs">{t.paymentSubtitle}</p>
           </div>
 
@@ -1706,12 +1665,10 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               <Clock size={18} className="shrink-0 mt-0.5 text-accent-orange" />
               <div>
                 <span className="font-bold block mb-0.5 text-primary-green">
-                  {lang === 'en' ? 'Payment Window Expiry Countdown' : 'Muda wa Kulipa Unayoyoma'}
+                  {'Payment Window Expiry Countdown'}
                 </span>
                 <p className="text-ink-muted mb-1 font-medium">
-                  {lang === 'en' 
-                    ? 'You must complete the payment within 15 minutes of in-person verification. If you do not pay, the item will be unlocked for other claimants and a strike will be registered on your phone number.' 
-                    : 'Lazima ukamilishe malipo ndani ya dakika 15 baada ya kuthibitisha kuona bidhaa. Usipolipa, bidhaa itafunguliwa kwa wadai wengine na utapata adhabu ya strike kwenye nambari yako ya simu.'}
+                  {'You must complete the payment within 15 minutes of in-person verification. If you do not pay, the item will be unlocked for other claimants and a strike will be registered on your phone number.'}
                 </p>
                 <div className="font-mono text-base font-extrabold text-primary-green">
                   {Math.floor(timeLeft / 60)}m {timeLeft % 60}s
@@ -1750,10 +1707,10 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 <AlertCircle size={18} className="text-accent-orange shrink-0 mt-0.5" />
                 <div>
                   <span className="font-bold block mb-1">
-                    {lang === 'en' ? 'Recovery Benefit' : 'Faida ya Kurejesha'}
+                    {'Recovery Benefit'}
                   </span>
                   <p className="font-medium text-ink-muted">
-                    {lang === 'en' ? noteEn : noteSw}
+                    {noteEn}
                   </p>
                 </div>
               </div>
@@ -1786,26 +1743,26 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             const platformShare = catRecord ? Math.round(Number(catRecord.platform_share)) : null;
             const money = (value: number | null) =>
               value === null
-                ? (lang === 'en' ? 'Unavailable' : 'Haipatikani')
+                ? ('Unavailable')
                 : `KES ${value}`;
 
             return (
               <div className="bg-brand-beige rounded-2xl border border-line-subtle p-5 text-left space-y-3">
                 <div className="flex justify-between items-center text-xs font-bold text-ink-muted uppercase tracking-wider">
-                  <span>{lang === 'en' ? 'Fee breakdown' : 'Mchanganuo wa ada'}</span>
-                  <span>{lang === 'en' ? 'Amount' : 'Kiasi'}</span>
+                  <span>{'Fee breakdown'}</span>
+                  <span>{'Amount'}</span>
                 </div>
                 <div className="h-px bg-line-subtle" />
                 <div className="flex justify-between text-sm">
-                  <span className="text-ink-muted font-medium">{lang === 'en' ? 'Finder Honorarium (Reward)' : 'Motisha ya Aliyepata (Zawadi)'}</span>
+                  <span className="text-ink-muted font-medium">{'Finder Honorarium (Reward)'}</span>
                   <span className="font-mono font-bold text-ink-muted">{money(finderShare)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-ink-muted font-medium">{lang === 'en' ? 'Physical Agent Hub Handling' : 'Ushughulikiaji wa Kituo cha Wakala'}</span>
+                  <span className="text-ink-muted font-medium">{'Physical Agent Hub Handling'}</span>
                   <span className="font-mono font-bold text-ink-muted">{money(agentShare)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-ink-muted font-medium">{lang === 'en' ? 'Return4me platform fee' : 'Ada ya jukwaa la Return4me'}</span>
+                  <span className="text-ink-muted font-medium">{'Return4me platform fee'}</span>
                   <span className="font-mono font-bold text-ink-muted">{money(platformShare)}</span>
                 </div>
                 <div className="h-px bg-line-subtle" />
@@ -1819,7 +1776,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
           {/* Checkout triggers */}
           <div className="space-y-3">
-            <span className="text-xs text-ink-muted block font-medium">{lang === 'en' ? 'Secured M-Pesa Payment' : 'Malipo ya M-Pesa Salama'}</span>
+            <span className="text-xs text-ink-muted block font-medium">{'Secured M-Pesa Payment'}</span>
 
             {/* M-Pesa number that will receive the STK Push prompt. The payer may use a
                 different valid M-Pesa number than the claim's registered phone
@@ -1841,16 +1798,14 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 aria-invalid={(payerPhone || ownerPhone).trim() !== '' && !isValidKenyanPhoneForPayer(payerPhone || ownerPhone)}
               />
               <p className="text-ink-muted text-xs">
-                {lang === 'en'
-                  ? 'Enter the Safaricom number that should receive the payment prompt. You may use a different M-Pesa number than the one registered on the claim — your payment stays securely linked to this claim.'
-                  : 'Weka nambari ya Safaricom itakayopokea ombi la malipo. Unaweza kutumia nambari tofauti ya M-Pesa kuliko ile iliyobaki kwenye claim — malipo yako yataunganishwa kwa usalama na claim hii.'}
+                {'Enter the Safaricom number that should receive the payment prompt. You may use a different M-Pesa number than the one registered on the claim — your payment stays securely linked to this claim.'}
               </p>
               {(() => {
                 const candidate = (payerPhone || ownerPhone).trim();
                 if (candidate === '') {
                   return (
                     <p className="text-ink-muted text-xs">
-                      {lang === 'en' ? 'Enter an M-Pesa phone number.' : 'Weka nambari ya M-Pesa.'}
+                      {'Enter an M-Pesa phone number.'}
                     </p>
                   );
                 }
@@ -1858,7 +1813,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                   return (
                     <p className="text-status-danger text-xs font-medium flex items-center gap-1" role="alert">
                       <AlertCircle size={14} className="shrink-0" />
-                      <span>{lang === 'en' ? 'Enter a valid Kenyan M-Pesa number.' : 'Weka nambari halali ya M-Pesa ya Kenya.'}</span>
+                      <span>{'Enter a valid Kenyan M-Pesa number.'}</span>
                     </p>
                   );
                 }
@@ -1866,9 +1821,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                   <p className="text-status-success text-xs flex items-center gap-1">
                     <CheckCircle size={14} className="shrink-0" />
                     <span>
-                      {lang === 'en'
-                        ? 'Payment prompt will be sent to this number.'
-                        : 'Ombi la malipo litatumwa kwa nambari hii.'}
+                      {'Payment prompt will be sent to this number.'}
                     </span>
                   </p>
                 );
@@ -1891,10 +1844,10 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               size="lg"
               disabled={!isValidKenyanPhoneForPayer(payerPhone || ownerPhone)}
               loading={isPaying}
-              loadingLabel={lang === 'en' ? 'Sending the payment prompt' : 'Inatuma ombi la malipo'}
+              loadingLabel={'Sending the payment prompt'}
               className="w-full"
             >
-              {lang === 'en' ? 'Send M-Pesa STK Push' : 'Tuma M-Pesa STK Push'}
+              {'Send M-Pesa STK Push'}
               <ArrowRight size={18} aria-hidden="true" />
             </Button>
           </div>
@@ -1909,27 +1862,25 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           </div>
           <div>
             <h2 className="text-xl font-extrabold text-primary-green mb-1">
-              {lang === 'en' ? 'Waiting for M-Pesa Confirmation' : 'Inasubiri Uthibitisho wa M-Pesa'}
+              {'Waiting for M-Pesa Confirmation'}
             </h2>
             <p className="text-ink-muted text-xs">
-              {lang === 'en' 
-                ? `A payment request has been sent to ${payerPhone || ownerPhone}. Complete the payment on your phone using your M-Pesa PIN. Return4me is waiting for confirmation from the payment provider.`
-                : `Ombi la malipo limetumwa kwa ${payerPhone || ownerPhone}. Kamilisha malipo kwenye simu yako kwa kutumia PIN ya M-Pesa. Return4me inasubiri uthibitisho kutoka kwa mtoa-huduma wa malipo.`}
+              {`A payment request has been sent to ${payerPhone || ownerPhone}. Complete the payment on your phone using your M-Pesa PIN. Return4me is waiting for confirmation from the payment provider.`}
             </p>
           </div>
 
           <div className="bg-brand-beige border border-line-subtle rounded-2xl p-5 text-left text-xs space-y-3 font-medium text-stone-600" role="status" aria-live="polite">
             <div className="flex items-center space-x-2 text-emerald-600">
               <CheckCircle size={16} />
-              <span>{lang === 'en' ? 'STK Push sent successfully' : 'Ombi la malipo limetumwa kwa ufanisi'}</span>
+              <span>{'STK Push sent successfully'}</span>
             </div>
             <div className="flex items-center space-x-2 text-stone-500">
               <Loader2 className="animate-spin text-accent-orange shrink-0" size={14} />
-              <span>{lang === 'en' ? 'Waiting for PIN and payment authorization...' : 'Inasubiri kuweka PIN na idhini ya malipo...'}</span>
+              <span>{'Waiting for PIN and payment authorization...'}</span>
             </div>
             <div className="flex items-center space-x-2 text-stone-400">
               <Lock size={14} className="opacity-40 shrink-0" />
-              <span>{lang === 'en' ? 'Payment receipt' : 'Kipokezi cha malipo'}</span>
+              <span>{'Payment receipt'}</span>
             </div>
           </div>
 
@@ -1948,7 +1899,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               disabled={isPaying}
               className="w-full"
             >
-              {lang === 'en' ? 'Check payment status' : 'Angalia hali ya malipo'}
+              {'Check payment status'}
             </Button>
 
             <Button
@@ -1956,10 +1907,10 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               variant="secondary"
               size="md"
               loading={isPaying}
-              loadingLabel={lang === 'en' ? 'Sending the payment prompt' : 'Inatuma ombi la malipo'}
+              loadingLabel={'Sending the payment prompt'}
               className="w-full"
             >
-              {lang === 'en' ? "Didn't get the prompt? Resend" : 'Hukupokea ujumbe? Tuma tena'}
+              {"Didn't get the prompt? Resend"}
             </Button>
 
             {/* Documented exception: the local test-mode simulator is
@@ -1972,7 +1923,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 disabled={isPaying}
                 className="w-full bg-status-warning-surface hover:bg-status-warning-surface/70 text-status-warning py-3 rounded-2xl font-bold text-xs transition cursor-pointer disabled:opacity-50 border border-dashed border-status-warning-border"
               >
-                {lang === 'en' ? 'Simulate Payment Success (test mode only)' : 'Iga Malipo Yaliyofaulu (hali ya majaribio)'}
+                {'Simulate Payment Success (test mode only)'}
               </button>
             )}
           </div>
@@ -1996,10 +1947,9 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               distinct — and "Fetching..." only ever appears while a real
               request is in flight. */}
           <div className="bg-brand-beige p-5 rounded-2xl text-left border border-line-subtle space-y-2">
-            <h3 className="text-caption font-extrabold text-ink-muted uppercase tracking-widest">{lang === 'en' ? 'Pickup physical agent point' : 'Kituo cha wakala wa kuchukua'}</h3>
+            <h3 className="text-caption font-extrabold text-ink-muted uppercase tracking-widest">{'Pickup physical agent point'}</h3>
             <PickupDetailsPanel
               state={pickupDetails}
-              lang={lang}
               showDirections
               onRetry={retryPickupDetails}
             />
@@ -2009,13 +1959,13 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               it up again, but it is NOT the secret code the agent asks for. */}
           <div className="bg-canvas-muted text-ink-muted p-4 rounded-2xl space-y-1">
             <span className="text-caption font-bold uppercase tracking-widest text-ink-muted">
-              {lang === 'sw' ? 'Nambari ya Rejea ya Dai (si msimbo wa siri)' : 'Claim Reference (not a secret code)'}
+              {'Claim Reference (not a secret code)'}
             </span>
             <div className="text-lg font-mono font-bold tracking-wider text-ink-muted">
               {paidClaim.id}
             </div>
             <p className="text-caption text-ink-muted">
-              {lang === 'sw' ? 'Tumia hii ukitafuta hali ya dai lako baadaye.' : 'Use this if you need to look up your claim status later.'}
+              {'Use this if you need to look up your claim status later.'}
             </p>
           </div>
 
@@ -2028,13 +1978,11 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               </div>
             ) : (
               <p className="text-sm text-stone-100 font-semibold">
-                {lang === 'sw'
-                  ? 'Tumekutumia msimbo wako wa siri wa nambari 6. Tafuta barua pepe kutoka Return4me.'
-                  : 'We\'ve sent your secret 6-digit code. Look for an email from Return4me.'}
+                {'We\'ve sent your secret 6-digit code. Look for an email from Return4me.'}
               </p>
             )}
             <p className="text-caption text-stone-300">
-              {lang === 'sw' ? 'Toa msimbo huu wa siri kwa Agent PEKEE wakati wa kuchukua bidhaa yako.' : 'Give this secret code to the Agent ONLY when collecting your item.'}
+              {'Give this secret code to the Agent ONLY when collecting your item.'}
             </p>
 
             {/* P1 (B-2) — recovery action.
@@ -2051,29 +1999,23 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 size="sm"
                 onClick={requestPickupCodeResend}
                 loading={pickupCodeResendState.status === 'sending'}
-                loadingLabel={lang === 'sw' ? 'Inatuma msimbo mwingine' : 'Sending a new pickup code'}
+                loadingLabel={'Sending a new pickup code'}
               >
-                {lang === 'sw' ? 'Tuma msimbo mwingine' : 'Resend my pickup code'}
+                {'Resend my pickup code'}
               </Button>
               <p className="text-caption text-stone-300 mt-2">
-                {lang === 'sw'
-                  ? 'Ukitumia msimbo mwingine, msimbo wa awali hautumiki tena.'
-                  : 'Requesting a new code immediately invalidates the previous one.'}
+                {'Requesting a new code immediately invalidates the previous one.'}
               </p>
               {pickupCodeResendState.status === 'sent' && (
                 <p role="status" className="text-caption font-bold text-accent-orange mt-2">
-                  {lang === 'sw'
-                    ? 'Msimbo mpya umetumwa kwenye barua pepe yako. Angalia barua pepe kutoka Return4me.'
-                    : 'A new code has been sent to your email address. Look for an email from Return4me.'}
+                  {'A new code has been sent to your email address. Look for an email from Return4me.'}
                 </p>
               )}
               {pickupCodeResendState.status === 'error' && (
                 <p role="alert" className="text-caption font-bold text-stone-100 mt-2">
                   {pickupCodeResendState.message
                     ? pickupCodeResendState.message
-                    : lang === 'sw'
-                      ? 'Hatukuweza kutuma msimbo kwa sasa. Hakuna msimbo uliobadilishwa — jaribu tena baadaye.'
-                      : 'We could not send a code right now. Your existing code is unchanged — please try again shortly.'}
+                    : 'We could not send a code right now. Your existing code is unchanged — please try again shortly.'}
                 </p>
               )}
             </div>
@@ -2081,7 +2023,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
           {simulatedPickupCode && (
             <div className="bg-status-warning-surface border border-dashed border-status-warning-border text-status-warning p-3 rounded-xl text-caption font-bold">
-              {lang === 'sw' ? 'Hali ya majaribio: msimbo huu umeonyeshwa hapa kwa sababu barua pepe halisi haitumwi wakati wa majaribio ya ndani.' : 'Test mode: this code is shown here because real email isn\'t sent during local testing.'}
+              {'Test mode: this code is shown here because real email isn\'t sent during local testing.'}
             </div>
           )}
 
@@ -2090,12 +2032,10 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             <AlertTriangle size={20} className="shrink-0 mt-0.5 text-status-warning" />
             <div className="text-xs space-y-1">
               <p className="font-extrabold">
-                {lang === 'sw' ? 'MUHIMU: Andika au piga picha ya msimbo huu sasa.' : 'IMPORTANT: Write down or screenshot this code now.'}
+                {'IMPORTANT: Write down or screenshot this code now.'}
               </p>
               <p className="text-status-warning">
-                {lang === 'sw'
-                  ? 'Lazima umpe wakala msimbo huu wa siri ili kuchukua bidhaa yako physically. Kuupoteza kunaweza kuchelewesha kuchukua kwako — angalia barua pepe yako tena ikiwa unahitaji kuupata tena.'
-                  : 'You must give this exact secret code to the agent in person to collect your item. Losing it may delay your pickup — check your email again if you need to retrieve it.'}
+                {'You must give this exact secret code to the agent in person to collect your item. Losing it may delay your pickup — check your email again if you need to retrieve it.'}
               </p>
             </div>
           </div>
@@ -2104,7 +2044,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           <div className="border-t border-line-subtle pt-5 space-y-3">
             <h4 className="text-xs font-extrabold text-primary-green uppercase tracking-wider">{t.rateAgentLabel}</h4>
             {ratingSubmitted ? (
-              <span className="text-xs text-status-success font-bold block">{lang === 'en' ? 'Thank you for supporting community trust in Kenya!' : 'Asante kwa kusaidia kuaminiana katika jamii nchini Kenya!'}</span>
+              <span className="text-xs text-status-success font-bold block">{'Thank you for supporting community trust in Kenya!'}</span>
             ) : (
               <div className="flex items-center justify-center space-x-2">
                 {[1, 2, 3, 4, 5].map((star) => (
@@ -2112,7 +2052,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                     key={star}
                     type="button"
                     onClick={() => submitRating(star)}
-                    aria-label={lang === 'en' ? ('Rate ' + star + ' out of 5') : ('Toa ' + star + ' kati ya 5')}
+                    aria-label={('Rate ' + star + ' out of 5')}
                     className="min-w-[44px] min-h-[44px] inline-flex items-center justify-center text-stone-300 hover:text-accent-orange transition rounded-small cursor-pointer"
                   >
                     <div
@@ -2143,7 +2083,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               handleSearch(); // Refresh lists
             }}
           >
-            {lang === 'en' ? 'Go Back to Search' : 'Rudi kwenye Kutafuta'}
+            {'Go Back to Search'}
           </Button>
         </div>
       )}
@@ -2156,12 +2096,10 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           </div>
           <div>
             <h2 className="text-xl font-extrabold text-primary-green mb-1">
-              {lang === 'en' ? 'Physical Viewing Verification Required' : 'Uthibitisho wa Kuona Bidhaa Unahitajika'}
+              {'Physical Viewing Verification Required'}
             </h2>
             <p className="text-ink-muted text-xs">
-              {lang === 'en' 
-                ? 'Your ownership claim code is approved! Now, you must visit the agent physical hub to visually inspect your item. The agent will confirm you have viewed and verified the item before payment is requested.' 
-                : 'Msimbo wako wa kudai umethibitishwa! Sasa, lazima utembelee kituo cha wakala ili ukague bidhaa yako physically. Wakala atathibitisha kuwa umeona na kukagua bidhaa kabla ya malipo kuombwa.'}
+              {'Your ownership claim code is approved! Now, you must visit the agent physical hub to visually inspect your item. The agent will confirm you have viewed and verified the item before payment is requested.'}
             </p>
           </div>
 
@@ -2192,11 +2130,10 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               placeholder while making no request at all. */}
           <div className="bg-brand-beige rounded-2xl border border-line-subtle p-5 text-left space-y-3">
             <span className="text-caption font-extrabold text-ink-muted uppercase tracking-widest block">
-              {lang === 'en' ? 'Hub Location / Mahali pa Wakala' : 'Mahali pa Wakala'}
+              {'Hub Location / Mahali pa Wakala'}
             </span>
             <PickupDetailsPanel
               state={pickupDetails}
-              lang={lang}
               onRetry={retryPickupDetails}
             />
           </div>
@@ -2204,9 +2141,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 text-xs text-left text-primary-green flex items-start space-x-2" role="status" aria-live="polite">
             <Loader2 className="animate-spin text-primary-green shrink-0 mt-0.5" size={16} />
             <p className="font-medium text-ink-muted">
-              {lang === 'en' 
-                ? 'Waiting for the agent to visually verify you have inspected the item... Keep this page open.' 
-                : 'Tunasubiri wakala athibitishe kuwa umekagua bidhaa physically... Tafadhali weka ukurasa huu wazi.'}
+              {'Waiting for the agent to visually verify you have inspected the item... Keep this page open.'}
             </p>
           </div>
         </div>
@@ -2220,12 +2155,10 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
           </div>
           <div>
             <h2 className="text-xl font-extrabold text-status-danger mb-1">
-              {lang === 'en' ? 'Payment Window Expired' : 'Muda wa Kulipa Umeisha'}
+              {'Payment Window Expired'}
             </h2>
             <p className="text-ink-muted text-xs">
-              {lang === 'en' 
-                ? 'Your 15-minute payment window has expired. For security and fairness, the item has been unlocked for other potential claimants, and a strike has been recorded against your phone number. Repeated strikes will restrict you from making future claims.' 
-                : 'Muda wako wa dakika 15 wa kulipa umeisha. Kwa usalama na usawa, bidhaa hii imefunguliwa kwa wadai wengine na nambari yako imerekodiwa strike. Strikes zikizidi utazuiwa kufanya madai zaidi.'}
+              {'Your 15-minute payment window has expired. For security and fairness, the item has been unlocked for other potential claimants, and a strike has been recorded against your phone number. Repeated strikes will restrict you from making future claims.'}
             </p>
           </div>
 
@@ -2249,7 +2182,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
               setIsConfident(false);
             }}
           >
-            {lang === 'en' ? 'Back to Search' : 'Rudi kwenye Kutafuta'}
+            {'Back to Search'}
           </Button>
         </div>
       )}
@@ -2271,18 +2204,18 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             ref={trackModalRef}
             tabIndex={-1}
             aria-modal="true"
-            aria-label={lang === 'sw' ? 'Fuatilia Ombi Lako' : 'Track My Claim'}
+            aria-label={'Track My Claim'}
           >
             <div className="flex items-center justify-between border-b border-line-subtle pb-3">
               <h3 className="text-xl font-extrabold text-primary-green flex items-center gap-2">
                 <Clock size={20} className="text-accent-orange" />
-                <span>{lang === 'sw' ? 'Fuatilia Ombi Lako' : 'Track My Claim'}</span>
+                <span>{'Track My Claim'}</span>
               </h3>
               <button
                 type="button"
                 onClick={() => setShowTrackModal(false)}
                 className="text-ink-muted hover:text-brand-dark-text font-bold text-lg cursor-pointer px-2 py-1 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg hover:bg-brand-light-gray"
-                aria-label={lang === 'sw' ? 'Funga' : 'Close'}
+                aria-label={'Close'}
               >
                 <X size={18} aria-hidden="true" />
               </button>
@@ -2364,7 +2297,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                 {trackLoading ? (
                   <Loader2 className="animate-spin" size={18} />
                 ) : (
-                  <span>{lang === 'sw' ? 'Tafuta Taarifa za Ombi' : 'Look Up Claim Status'}</span>
+                  <span>{'Look Up Claim Status'}</span>
                 )}
               </button>
             </form>
@@ -2373,22 +2306,22 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
             {trackResult && (
               <div className="mt-4 bg-canvas-muted border border-line-subtle p-4 rounded-2xl space-y-3 fade-in text-xs">
                 <div className="flex items-center justify-between">
-                  <span className="font-extrabold text-ink-muted">{lang === 'en' ? 'Status:' : 'Hali:'}</span>
-                  <span className={`${getClaimStatusDisplay(trackResult.claim.status, lang).className} px-2.5 py-1 rounded-full font-bold uppercase tracking-wider text-caption`}>
-                    {getClaimStatusDisplay(trackResult.claim.status, lang).label}
+                  <span className="font-extrabold text-ink-muted">{'Status:'}</span>
+                  <span className={`${getClaimStatusDisplay(trackResult.claim.status).className} px-2.5 py-1 rounded-full font-bold uppercase tracking-wider text-caption`}>
+                    {getClaimStatusDisplay(trackResult.claim.status).label}
                   </span>
                 </div>
 
                 {trackResult.item && (
                   <div className="space-y-1 border-t border-line-subtle pt-2">
-                    <p className="font-bold text-primary-green text-sm">{trackResult.item.document_name_fuzzy || (lang === 'en' ? 'Found Item' : 'Kitu Kilichopatikana')}</p>
-                    <p className="text-ink-muted">{lang === 'en' ? 'Location:' : 'Mahali:'} {trackResult.item.location_description}</p>
+                    <p className="font-bold text-primary-green text-sm">{trackResult.item.document_name_fuzzy || ('Found Item')}</p>
+                    <p className="text-ink-muted">{'Location:'} {trackResult.item.location_description}</p>
                   </div>
                 )}
 
                 {trackResult.agent && (
                   <div className="bg-white p-3 rounded-xl border border-line-subtle space-y-1">
-                    <p className="font-bold text-ink">{lang === 'en' ? 'Assigned Agent Hub:' : 'Kituo cha Wakala Aliyepangiwa:'}</p>
+                    <p className="font-bold text-ink">{'Assigned Agent Hub:'}</p>
                     <p className="text-primary-green font-extrabold">{trackResult.agent.business_name}</p>
                     <p className="text-ink-muted">{trackResult.agent.location_address}</p>
                     <p className="text-ink-muted font-mono">{trackResult.agent.contact_phone}</p>
@@ -2397,7 +2330,7 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
 
                 {trackResult.claim.collection_code && (
                   <div className="bg-status-success-surface border border-status-success-border p-3 rounded-xl text-center">
-                    <p className="text-caption text-status-success uppercase font-bold tracking-widest">{lang === 'en' ? 'Collection Verification Code' : 'Msimbo wa Uthibitishaji wa Kuchukua'}</p>
+                    <p className="text-caption text-status-success uppercase font-bold tracking-widest">{'Collection Verification Code'}</p>
                     <p className="text-2xl font-mono font-black text-primary-green tracking-widest mt-0.5">{trackResult.claim.collection_code}</p>
                   </div>
                 )}
@@ -2440,32 +2373,22 @@ export default function OwnerView({ lang, categories, categoriesLoading = false,
                   >
                     <span>
                       {trackResult.claim.status === 'pending_payment'
-                        ? (lang === 'sw' ? 'Endelea Kulipa Sasa' : 'Continue to Payment')
-                        : (lang === 'sw' ? 'Endelea na Ombi Hili' : 'Continue to My Claim')}
+                        ? ('Continue to Payment')
+                        : ('Continue to My Claim')}
                     </span>
                     <ArrowRight size={16} />
                   </button>
                 ) : (
                   <p className="text-ink-muted italic text-center pt-1">
                     {trackResult.claim.status === 'refunded'
-                      ? (lang === 'sw'
-                          ? 'Umepoteza mzozo huu, lakini fedha yako ya awali imerejeshwa kikamilifu kwa M-Pesa yako. Angalia ujumbe wa M-Pesa kwa uthibitisho.'
-                          : 'You lost this dispute, but your original payment has been fully refunded to your M-Pesa. Check your M-Pesa messages for confirmation.')
+                      ? ('You lost this dispute, but your original payment has been fully refunded to your M-Pesa. Check your M-Pesa messages for confirmation.')
                       : trackResult.claim.status === 'refunding'
-                      ? (lang === 'sw'
-                          ? 'Uamuzi wa mzozo umefanywa na urejeshaji wa fedha yako unaendelea kwa sasa. Utapokea ujumbe wa M-Pesa hivi karibuni.'
-                          : 'The dispute has been decided and your refund is currently being processed. You will receive an M-Pesa confirmation shortly.')
+                      ? ('The dispute has been decided and your refund is currently being processed. You will receive an M-Pesa confirmation shortly.')
                       : trackResult.claim.status === 'disputed'
-                      ? (lang === 'sw'
-                          ? 'Mtu mwingine pia amedai bidhaa hii. Wasimamizi wanakagua ushahidi na watawasiliana nawe hivi karibuni.'
-                          : 'Another person has also claimed this item. Our admin team is reviewing the evidence and will be in touch soon.')
+                      ? ('Another person has also claimed this item. Our admin team is reviewing the evidence and will be in touch soon.')
                       : trackResult.claim.status === 'rejected'
-                      ? (lang === 'sw'
-                          ? 'Ombi hili halikuthibitishwa. Ikiwa unaamini hii ni kosa, wasiliana na usaidizi.'
-                          : 'This claim was not approved. If you believe this is a mistake, please contact support.')
-                      : (lang === 'sw'
-                          ? 'Ombi hili haliwezi kuendelezwa hapa kwa sasa. Wasiliana na msaada ikiwa unahitaji msaada zaidi.'
-                          : 'This claim cannot be resumed here right now. Contact support if you need further help.')}
+                      ? ('This claim was not approved. If you believe this is a mistake, please contact support.')
+                      : ('This claim cannot be resumed here right now. Contact support if you need further help.')}
                   </p>
                 )}
               </div>

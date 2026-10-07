@@ -28,15 +28,11 @@ export interface Labelled {
 
 const NA_EN = 'Not available';
 
-function bilingual(lang: 'en' | 'sw', en: string, sw: string): string {
-  return lang === 'sw' ? sw : en;
-}
-
 /** Human label + semantic tone for a raw claim status. Delegates to the shared
  *  claim-status vocabulary so the console can never drift from the customer
  *  surfaces or show a raw snake_case token. */
-export function presentClaimStatus(status: string, lang: 'en' | 'sw'): Labelled {
-  const display = getClaimStatusDisplay(status, lang);
+export function presentClaimStatus(status: string): Labelled {
+  const display = getClaimStatusDisplay(status);
   return { label: display.label, tone: display.variant as Tone };
 }
 
@@ -48,13 +44,12 @@ export function presentClaimStatus(status: string, lang: 'en' | 'sw'): Labelled 
 export function presentPayment(
       _hasPaid: boolean,
   paidAt: string | null,
-  lang: 'en' | 'sw',
 ): Labelled & { at: string | null; paid: boolean } {
       const paid = paidAt !== null;
   return {
     paid,
     at: paid ? paidAt : null,
-    label: paid ? bilingual(lang, 'Paid', 'Imelipwa') : bilingual(lang, 'Not paid', 'Haijalipwa'),
+    label: paid ? 'Paid' : 'Not paid',
     tone: paid ? 'success' : 'neutral',
   };
 }
@@ -64,59 +59,59 @@ export function presentPayment(
  * claim STATUS). Words only — this is not an amount and must never be rendered
  * next to a currency symbol.
  */
-export function presentFinancialState(state: string, lang: 'en' | 'sw'): Labelled {
+export function presentFinancialState(state: string): Labelled {
   switch (state) {
     case 'escrow_held':
-      return { label: bilingual(lang, 'Escrow held', 'Amana imeshikiliwa'), tone: 'success' };
+      return { label: 'Escrow held', tone: 'success' };
     case 'settling':
-      return { label: bilingual(lang, 'Settling', 'Inakamilika'), tone: 'success' };
+      return { label: 'Settling', tone: 'success' };
     case 'settled':
-      return { label: bilingual(lang, 'Settled', 'Imekamilika'), tone: 'success' };
+      return { label: 'Settled', tone: 'success' };
     case 'refunding':
-      return { label: bilingual(lang, 'Refund in progress', 'Urejeshaji unaendelea'), tone: 'warning' };
+      return { label: 'Refund in progress', tone: 'warning' };
     case 'refunded':
-      return { label: bilingual(lang, 'Refunded', 'Imerejeshwa'), tone: 'info' };
+      return { label: 'Refunded', tone: 'info' };
     case 'rejected':
-      return { label: bilingual(lang, 'Rejected', 'Imekataliwa'), tone: 'danger' };
+      return { label: 'Rejected', tone: 'danger' };
     default:
-      return { label: bilingual(lang, 'Unpaid', 'Haijalipwa'), tone: 'neutral' };
+      return { label: 'Unpaid', tone: 'neutral' };
   }
 }
 
-export function presentDisputeState(state: string, lang: 'en' | 'sw'): Labelled {
+export function presentDisputeState(state: string): Labelled {
   switch (state) {
     case 'open':
-      return { label: bilingual(lang, 'Open', 'Wazi'), tone: 'warning' };
+      return { label: 'Open', tone: 'warning' };
     case 'resolved':
-      return { label: bilingual(lang, 'Resolved', 'Imetatuliwa'), tone: 'success' };
+      return { label: 'Resolved', tone: 'success' };
     default:
-      return { label: bilingual(lang, 'None', 'Hakuna'), tone: 'neutral' };
+      return { label: 'None', tone: 'neutral' };
   }
 }
 
 /** Applies to the current claim or to a dispute participant. */
-export function presentRole(role: string | null, lang: 'en' | 'sw'): string {
-  if (role === 'original') return bilingual(lang, 'Original claimant', 'Mdai wa awali');
-  if (role === 'contesting') return bilingual(lang, 'Contesting claimant', 'Mdai anayegombea');
+export function presentRole(role: string | null): string {
+  if (role === 'original') return 'Original claimant';
+  if (role === 'contesting') return 'Contesting claimant';
   return NA_EN;
 }
 
-export function presentVerificationTier(tier: number | null, lang: 'en' | 'sw'): string {
-  if (tier === 1) return bilingual(lang, 'Tier 1 — document check', 'Ngazi 1 — ukaguzi wa hati');
-  if (tier === 2) return bilingual(lang, 'Tier 2 — questions + ID', 'Ngazi 2 — maswali + kitambulisho');
-  if (tier === 3) return bilingual(lang, 'Tier 3 — agent handover', 'Ngazi 3 — makabidhiano ya wakala');
-  if (typeof tier === 'number') return bilingual(lang, `Tier ${tier}`, `Ngazi ${tier}`);
+export function presentVerificationTier(tier: number | null): string {
+  if (tier === 1) return 'Tier 1 — document check';
+  if (tier === 2) return 'Tier 2 — questions + ID';
+  if (tier === 3) return 'Tier 3 — agent handover';
+  if (typeof tier === 'number') return `Tier ${tier}`;
   return NA_EN;
 }
 
-export function presentPresence(present: boolean, lang: 'en' | 'sw'): Labelled {
+export function presentPresence(present: boolean): Labelled {
   return present
-    ? { label: bilingual(lang, 'Provided', 'Imetolewa'), tone: 'success' }
-    : { label: bilingual(lang, 'Not provided', 'Haikutolewa'), tone: 'neutral' };
+    ? { label: 'Provided', tone: 'success' }
+    : { label: 'Not provided', tone: 'neutral' };
 }
 
-export function presentBoolean(value: boolean, lang: 'en' | 'sw'): string {
-  return value ? bilingual(lang, 'Yes', 'Ndiyo') : bilingual(lang, 'No', 'Hapana');
+export function presentBoolean(value: boolean): string {
+  return value ? 'Yes' : 'No';
 }
 
 /**
@@ -128,23 +123,18 @@ export function presentBoolean(value: boolean, lang: 'en' | 'sw'): string {
 export function presentHistoricalClaim(
   claim: { status_at_dispute: string | null; paid_at_dispute: string | null },
   snapshotIncomplete: boolean,
-  lang: 'en' | 'sw',
 ): { status: string; payment: string; unknown: boolean } {
   const unknown =
     snapshotIncomplete === true || (claim.status_at_dispute === null && claim.paid_at_dispute === null);
   if (unknown) {
-    const unknownText = bilingual(
-      lang,
-      'Unknown — historical snapshot unavailable',
-      'Haijulikani — hakuna rekodi ya wakati huo',
-    );
+    const unknownText = 'Unknown — historical snapshot unavailable';
     return { status: unknownText, payment: unknownText, unknown: true };
   }
-  const status = claim.status_at_dispute ? presentClaimStatus(claim.status_at_dispute, lang).label : NA_EN;
+  const status = claim.status_at_dispute ? presentClaimStatus(claim.status_at_dispute).label : NA_EN;
   const payment =
     claim.paid_at_dispute !== null
-      ? bilingual(lang, 'Paid', 'Imelipwa')
-      : bilingual(lang, 'Not paid', 'Haijalipwa');
+      ? 'Paid'
+      : 'Not paid';
   return { status, payment, unknown: false };
 }
 
@@ -154,11 +144,11 @@ export function presentHistoricalClaim(
  * value is an absolute timestamp rendered in the viewer's locale; no timezone
  * semantics are altered.
  */
-export function formatTimestamp(value: string | null | undefined, lang: 'en' | 'sw'): string {
+export function formatTimestamp(value: string | null | undefined): string {
   if (value === null || value === undefined || value === '') return NA_EN;
   const parsed = new Date(value);
   if (isNaN(parsed.getTime())) return NA_EN;
-  return parsed.toLocaleString(lang === 'sw' ? 'sw-KE' : 'en-KE', {
+  return parsed.toLocaleString('en-KE', {
     year: 'numeric',
     month: 'short',
     day: '2-digit',

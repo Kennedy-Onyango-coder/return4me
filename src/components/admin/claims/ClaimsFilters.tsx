@@ -72,13 +72,11 @@ export default function ClaimsFilters({
   value,
   onChange,
   onReset,
-  lang,
   disabled,
 }: {
   value: ClaimFilterState;
   onChange: (next: ClaimFilterState) => void;
   onReset: () => void;
-  lang: 'en' | 'sw';
   disabled: boolean;
 }) {
   const set = (patch: Partial<ClaimFilterState>) => onChange({ ...value, ...patch });
@@ -89,26 +87,26 @@ export default function ClaimsFilters({
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div className="space-y-1 sm:col-span-2">
           <label htmlFor="r4m-claims-search-field" className="block text-xs font-bold text-brand-dark-text">
-            {lang === 'sw' ? 'Tafuta kwa' : 'Search by'}
+            {'Search by'}
           </label>
           <div className="flex gap-2">
             <Select
               id="r4m-claims-search-field"
               hideLabel
-              label={lang === 'sw' ? 'Tafuta kwa' : 'Search by'}
+              label={'Search by'}
               value={value.searchField}
               disabled={disabled}
               onChange={(e) => set({ searchField: e.target.value as ClaimSearchField })}
               className="w-44 shrink-0"
             >
-              <option value="claimId">{lang === 'sw' ? 'Kitambulisho cha claim' : 'Claim ID'}</option>
-              <option value="itemId">{lang === 'sw' ? 'Kitambulisho cha kitu' : 'Item ID'}</option>
-              <option value="claimantPhone">{lang === 'sw' ? 'Simu ya mdai' : 'Claimant phone'}</option>
+              <option value="claimId">{'Claim ID'}</option>
+              <option value="itemId">{'Item ID'}</option>
+              <option value="claimantPhone">{'Claimant phone'}</option>
             </Select>
             <Input
               type="search"
               hideLabel
-              label={lang === 'sw' ? 'Tafuta claims' : 'Search claims'}
+              label={'Search claims'}
               placeholder={
                 value.searchField === 'claimantPhone'
                   ? '0712 345 678'
@@ -123,59 +121,57 @@ export default function ClaimsFilters({
             />
           </div>
           <p className="text-[11px] text-brand-muted-text">
-            {lang === 'sw'
-              ? 'Utafutaji unafanywa kwenye seva, si kwenye kivinjari.'
-              : 'Search runs on the server, not in the browser.'}
+            {'Search runs on the server, not in the browser.'}
           </p>
         </div>
 
         <Select
-          label={lang === 'sw' ? 'Hali ya claim' : 'Claim status'}
+          label={'Claim status'}
           value={value.status}
           disabled={disabled}
           onChange={(e) => set({ status: e.target.value })}
         >
-          <option value="">{lang === 'sw' ? 'Zote' : 'All statuses'}</option>
+          <option value="">{'All statuses'}</option>
           {CLAIM_STATUS_VALUES.map((s: string) => (
             <option key={s} value={s}>
-              {presentClaimStatus(s, lang).label}
+              {presentClaimStatus(s).label}
             </option>
           ))}
         </Select>
 
         <Select
-          label={lang === 'sw' ? 'Malipo' : 'Payment'}
+          label={'Payment'}
           value={value.hasPaid}
           disabled={disabled}
           onChange={(e) => set({ hasPaid: e.target.value })}
         >
-          <option value="">{lang === 'sw' ? 'Zote' : 'Paid or not paid'}</option>
-          <option value="true">{lang === 'sw' ? 'Imelipwa' : 'Paid'}</option>
-          <option value="false">{lang === 'sw' ? 'Haijalipwa' : 'Not paid'}</option>
+          <option value="">{'Paid or not paid'}</option>
+          <option value="true">{'Paid'}</option>
+          <option value="false">{'Not paid'}</option>
         </Select>
 
         <Select
-          label={lang === 'sw' ? 'Mzozo' : 'Dispute'}
+          label={'Dispute'}
           value={value.disputeState}
           disabled={disabled}
           onChange={(e) => set({ disputeState: e.target.value })}
         >
-          <option value="">{lang === 'sw' ? 'Zote' : 'Any dispute state'}</option>
-          <option value="none">{lang === 'sw' ? 'Hakuna' : 'No dispute'}</option>
-          <option value="open">{lang === 'sw' ? 'Wazi' : 'Open'}</option>
-          <option value="resolved">{lang === 'sw' ? 'Imetatuliwa' : 'Resolved'}</option>
+          <option value="">{'Any dispute state'}</option>
+          <option value="none">{'No dispute'}</option>
+          <option value="open">{'Open'}</option>
+          <option value="resolved">{'Resolved'}</option>
         </Select>
 
         <Input
           type="date"
-          label={lang === 'sw' ? 'Imeundwa kutoka' : 'Created from'}
+          label={'Created from'}
           value={value.createdFrom}
           disabled={disabled}
           onChange={(e) => set({ createdFrom: e.target.value })}
         />
         <Input
           type="date"
-          label={lang === 'sw' ? 'Imeundwa hadi' : 'Created to'}
+          label={'Created to'}
           value={value.createdTo}
           disabled={disabled}
           onChange={(e) => set({ createdTo: e.target.value })}
@@ -187,22 +183,18 @@ export default function ClaimsFilters({
             size="sm"
             onClick={onReset}
             disabled={disabled || !active}
-            aria-label={lang === 'sw' ? 'Ondoa vichujio vyote' : 'Clear all filters'}
+            aria-label={'Clear all filters'}
           >
             <X size={14} aria-hidden="true" />
-            {lang === 'sw' ? 'Ondoa vichujio' : 'Clear filters'}
+            {'Clear filters'}
           </Button>
         </div>
       </div>
 
       <p className="text-[11px] text-brand-muted-text" aria-live="polite">
         {active
-          ? lang === 'sw'
-            ? 'Vichujio vinaendelea kutumika kwenye kila ukurasa.'
-            : 'Filters stay applied across pages.'
-          : lang === 'sw'
-            ? 'Hakuna kichujio kinachotumika.'
-            : 'No filters applied.'}
+          ? 'Filters stay applied across pages.'
+          : 'No filters applied.'}
       </p>
     </div>
   );

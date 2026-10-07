@@ -16,15 +16,13 @@ import { formatTimestamp, presentPayment } from './claimsPresentation';
 export default function ClaimPaymentState({
   hasPaid,
   paidAt,
-  lang,
   showTimestamp = true,
 }: {
   hasPaid: boolean;
   paidAt: string | null;
-  lang: 'en' | 'sw';
   showTimestamp?: boolean;
 }) {
-  const payment = presentPayment(hasPaid, paidAt, lang);
+  const payment = presentPayment(hasPaid, paidAt);
   return (
     <span className="inline-flex flex-col gap-0.5">
       <Badge variant={payment.tone} icon={payment.paid ? BadgeCheck : MinusCircle}>
@@ -32,7 +30,7 @@ export default function ClaimPaymentState({
       </Badge>
       {showTimestamp && (
         <span className="text-[11px] text-brand-muted-text">
-          {payment.at ? formatTimestamp(payment.at, lang) : lang === 'sw' ? 'Hakuna tarehe ya malipo' : 'No payment recorded'}
+          {payment.at ? formatTimestamp(payment.at) : 'No payment recorded'}
         </span>
       )}
     </span>

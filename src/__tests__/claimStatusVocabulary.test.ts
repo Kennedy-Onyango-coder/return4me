@@ -46,8 +46,8 @@ describe('claim status vocabulary', () => {
 
   it('24. every value in claims_status_check has a non-raw customer-facing mapping', () => {
     for (const status of dbStatuses) {
-      const en = getClaimStatusDisplay(status, 'en');
-      const sw = getClaimStatusDisplay(status, 'sw');
+      const en = getClaimStatusDisplay(status);
+      const sw = getClaimStatusDisplay(status);
       expect(en.label).not.toBe(status);
       expect(sw.label).not.toBe(status);
       expect(en.label).not.toContain('_');
@@ -59,16 +59,16 @@ describe('claim status vocabulary', () => {
   });
 
   it('22. pending_settlement has a human-readable bilingual label', () => {
-    const en = getClaimStatusDisplay('pending_settlement', 'en');
-    const sw = getClaimStatusDisplay('pending_settlement', 'sw');
+    const en = getClaimStatusDisplay('pending_settlement');
+    const sw = getClaimStatusDisplay('pending_settlement');
     expect(en.label).toBe('Awaiting Payout Release');
     expect(sw.label).toBe('Inasubiri Malipo Kutolewa');
     expect(en.label).not.toContain('pending_settlement');
   });
 
   it('23. releasing has a human-readable bilingual label', () => {
-    const en = getClaimStatusDisplay('releasing', 'en');
-    const sw = getClaimStatusDisplay('releasing', 'sw');
+    const en = getClaimStatusDisplay('releasing');
+    const sw = getClaimStatusDisplay('releasing');
     expect(en.label).toBe('Payout In Progress');
     expect(sw.label).toBe('Malipo Yanaendelea');
     expect(en.label).not.toContain('releasing');
@@ -90,9 +90,9 @@ describe('claim status vocabulary', () => {
       ['refunded', 'Umerejeshewa kwa M-Pesa', 'Refunded to M-Pesa', 'bg-sky-100 text-sky-800'],
     ];
     for (const [status, sw, en, className] of expectations) {
-      expect(getClaimStatusDisplay(status, 'sw').label).toBe(sw);
-      expect(getClaimStatusDisplay(status, 'en').label).toBe(en);
-      expect(getClaimStatusDisplay(status, 'en').className).toBe(className);
+      expect(getClaimStatusDisplay(status).label).toBe(sw);
+      expect(getClaimStatusDisplay(status).label).toBe(en);
+      expect(getClaimStatusDisplay(status).className).toBe(className);
     }
   });
 

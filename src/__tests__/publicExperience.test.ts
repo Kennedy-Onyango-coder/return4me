@@ -404,6 +404,19 @@ describe('finder report flow (Phase 8.5)', () => {
     expect(gpsCopy).not.toMatch(/closest Return4me Agent hub/);
     expect(gpsCopy).not.toMatch(/securing your payout faster/);
     expect(gpsCopy).not.toMatch(/Precise Agent Match Enabled/);
+
+    // GEO-E1.1 - the device/current location is an agent-matching hint ONLY.
+    // The copy must never present it as the item's found location, and the
+    // captured state must name its purpose instead of implying a location was
+    // captured or verified. Both languages point at the county, sub-county and
+    // exact place as the description of where the item was found.
+    expect(gpsCopy).toContain('Agent Matching Location Captured');
+    expect(gpsCopy).not.toContain("'Location Captured'");
+    expect(gpsCopy).not.toContain('Mahali Pamehifadhiwa');
+    expect(gpsCopy).toContain('not necessarily where you found the item');
+    expect(gpsCopy).toContain('describe where you found it');
+    expect(gpsCopy).toContain('si lazima hapo ulipopata kitu');
+    expect(gpsCopy).toContain('yanayoeleza ulipopata kitu');
   });
 });
 

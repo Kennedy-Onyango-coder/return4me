@@ -35,7 +35,6 @@ import { Button, Banner, ICON_SIZE, Spinner } from './ui';
 //   control that silently does nothing.
 
 interface Props {
-  lang: 'en' | 'sw';
   /** Hands off to the EXISTING /account sign-in surface. */
   onSignIn: () => void;
   /** Returns to the public home surface. */
@@ -56,9 +55,9 @@ interface Props {
  */
 type ActivationState = 'working' | 'activated' | 'invalid' | 'unavailable';
 
-export default function CustomerActivationView({ lang, onSignIn, onExit, hasToken }: Props) {
-  const sw = lang === 'sw';
-  const t = (en: string, swText: string) => (sw ? swText : en);
+export default function CustomerActivationView({ onSignIn, onExit, hasToken }: Props) {
+
+
 
   const [state, setState] = useState<ActivationState>('working');
   // A ref, not state: the token is used for exactly one request and must not
@@ -129,7 +128,7 @@ export default function CustomerActivationView({ lang, onSignIn, onExit, hasToke
       <div className="flex-grow flex items-center justify-center w-full py-24">
         <Spinner
           size={ICON_SIZE.feature}
-          label={t('Activating your account', 'Inaanzisha akaunti yako')}
+          label={'Activating your account'}
           className="text-[var(--appearance-primary)]"
         />
       </div>
@@ -146,14 +145,14 @@ export default function CustomerActivationView({ lang, onSignIn, onExit, hasToke
       <div className="w-full max-w-md space-y-4">
         <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-panel shadow-raised p-5 sm:p-6">
           <p className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">
-            {t('Return4me account', 'Akaunti ya Return4me')}
+            {'Return4me account'}
           </p>
           <h1 className="mt-1 text-subsection sm:text-section font-extrabold tracking-tight text-[var(--appearance-text-primary)]">
             {activated
-              ? t('Your account is ready', 'Akaunti yako iko tayari')
+              ? 'Your account is ready'
               : invalid
-                ? t('This activation link cannot be used', 'Kiungo hiki cha kuamilisha hikiwezi kutumika')
-                : t('We could not activate your account', 'Hatukuweza kuiwasha akaunti yako')}
+                ? 'This activation link cannot be used'
+                : 'We could not activate your account'}
           </h1>
 
           {/* Announced to assistive tech by the shared Banner primitives:
@@ -162,51 +161,33 @@ export default function CustomerActivationView({ lang, onSignIn, onExit, hasToke
               state carries a distinct icon and distinct wording. */}
           {activated && (
             <Banner kind="success" className="mt-4">
-              {t(
-                'Your email address is verified and your account is now active. You are signed in.',
-                'Barua pepe yako imethibitishwa na akaunti yako sasa iko hai. Umeingia.'
-              )}
+              {'Your email address is verified and your account is now active. You are signed in.'}
             </Banner>
           )}
 
           {invalid && (
             <Banner kind="error" className="mt-4">
-              {t(
-                'This activation link is incomplete, has already been used, or has expired. For your security, an activation link can only be used once.',
-                'Kiungo hiki cha kuamilisha hakikamiliki, kimetumika tayari, au kimeisha muda. Kwa usalama wako, kiungo cha kuamilisha kinaweza kutumika mara moja tu.'
-              )}
+              {'This activation link is incomplete, has already been used, or has expired. For your security, an activation link can only be used once.'}
             </Banner>
           )}
 
           {retryable && (
             <Banner kind="warning" className="mt-4">
-              {t(
-                'We could not reach Return4me to complete the activation. Your account has not been activated yet.',
-                'Hatukuweza kufika kwenye Return4me kumalisha kuamilisha. Akaunti yako bado haijasishwa.'
-              )}
+              {'We could not reach Return4me to complete the activation. Your account has not been activated yet.'}
             </Banner>
           )}
 
           <p className="mt-4 text-body-large text-[var(--appearance-text-muted)] leading-relaxed">
             {activated
-              ? t(
-                  'You can go to your account now, or continue to Return4me.',
-                  'Unaweza kwenda kwenye akaunti yako sasa, au uendelee kwenye Return4me.'
-                )
+              ? 'You can go to your account now, or continue to Return4me.'
               : invalid
-                ? t(
-                    'If you have just registered, open the activation email on this device and use the link in it. If you have already activated this account, simply sign in.',
-                    'Ukiwa umejiandikisha hivi karibuni, fungua barua pepe ya kuamilisha kwenye kifaa hiki na tumia kiungo kilichomo. Ukiwa tayari umeamilisha akaunti hii, ingia tu.'
-                  )
-                : t(
-                    'Please try again in a moment. If it keeps failing, open the activation email on this device and use the link in it again.',
-                    'Tafadhali jaribu tena baadaye mawingu. Ikiwa inashindika mara kwa mara, fungua tena barua pepe ya kuamilisha kwenye kifaa hiki na tumia kiungo kile kile.'
-                  )}
+                ? 'If you have just registered, open the activation email on this device and use the link in it. If you have already activated this account, simply sign in.'
+                : 'Please try again in a moment. If it keeps failing, open the activation email on this device and use the link in it again.'}
           </p>
 
           <div className="mt-5 space-y-2">
             <Button type="button" variant="primary" size="lg" className="w-full" onClick={onSignIn}>
-              {t('Go to sign in', 'Nenda kuingia')}
+              {'Go to sign in'}
             </Button>
             {retryable && (
               <Button
@@ -216,11 +197,11 @@ export default function CustomerActivationView({ lang, onSignIn, onExit, hasToke
                 className="w-full"
                 onClick={() => window.location.reload()}
               >
-                {t('Try again', 'Jaribu tena')}
+                {'Try again'}
               </Button>
             )}
             <Button type="button" variant="ghost" size="md" className="w-full" onClick={onExit}>
-              {t('Back to Return4me', 'Rudi Return4me')}
+              {'Back to Return4me'}
             </Button>
           </div>
         </div>

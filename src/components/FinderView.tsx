@@ -69,12 +69,12 @@ const COUNTY_GROUPS = countiesByUxGroup();
 //   * the photograph controls (camera, upload, retake, remove) and the two GPS
 //     boxes keep their existing markup, because their exact bilingual strings
 //     and assistive wiring are pinned by that same suite.
-const FINDER_STEPS: { en: string; sw: string }[] = [
-  { en: 'What', sw: 'Nini' },
-  { en: 'Identify', sw: 'Tambua' },
-  { en: 'Where', sw: 'Wapi' },
-  { en: 'Contact', sw: 'Mawasiliano' },
-  { en: 'Review & Submit', sw: 'Hakiki na Tuma' },
+const FINDER_STEPS: { en: string }[] = [
+  { en: 'What' },
+  { en: 'Identify' },
+  { en: 'Where' },
+  { en: 'Contact' },
+  { en: 'Review & Submit' },
 ];
 
 /**
@@ -103,14 +103,13 @@ const IMAGE_ACCEPT = 'image' + '/' + '*';
 
 
 interface FinderViewProps {
-  lang: 'en' | 'sw';
   categories: any[];
   categoriesLoading?: boolean;
   categoriesError?: boolean;
 }
 
-export default function FinderView({ lang, categories, categoriesLoading = false, categoriesError = false }: FinderViewProps) {
-  const t = translations[lang];
+export default function FinderView({ categories, categoriesLoading = false, categoriesError = false }: FinderViewProps) {
+  const t = translations.en;
   const errorBannerRef = useRef<HTMLDivElement | null>(null);
 
   /**
@@ -118,7 +117,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
    * its copy, so the new stage strings stay inline instead of adding keys to the
    * shared bundle for sentences only this journey shows.
    */
-  const tr = (en: string, sw: string) => (lang === 'sw' ? sw : en);
+
 
   // UX-05 — the guided journey's own state, and the single focus target a stage
   // change moves to.
@@ -238,7 +237,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
       }
     } catch (e) {
       console.error('Camera access denied:', e);
-      setErrorMsg(lang === 'en' ? 'Could not access camera. Please use file upload instead.' : 'Imeshindwa kufungua kamera. Tafadhali weka picha ya faili badala yake.');
+      setErrorMsg('Could not access camera. Please use file upload instead.');
       setUseCamera(false);
     }
   };
@@ -302,13 +301,13 @@ export default function FinderView({ lang, categories, categoriesLoading = false
   // it, only that Return4me is handling it).
   const analyzePhoto = async (base64Data: string) => {
     setIsAnalyzing(true);
-    setAnalysisStatus(lang === 'en' ? 'Return4me is preparing to scan your item...' : 'Return4me inajiandaa kuchanganua bidhaa yako...');
+    setAnalysisStatus('Return4me is preparing to scan your item...');
     setErrorMsg('');
 
     try {
       // Simulate real-time progress steps for a gorgeous UX
-      setTimeout(() => setAnalysisStatus(lang === 'en' ? 'Reading document layout...' : 'Kusoma muundo wa hati...'), 800);
-      setTimeout(() => setAnalysisStatus(lang === 'en' ? 'Extracting identity details...' : 'Kuchambua maelezo ya utambulisho...'), 1600);
+      setTimeout(() => setAnalysisStatus('Reading document layout...'), 800);
+      setTimeout(() => setAnalysisStatus('Extracting identity details...'), 1600);
 
       const response = await fetch('/api/items/analyze', {
         method: 'POST',
@@ -329,7 +328,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
       setExtractedName(data.fullName || '');
     } catch (e: any) {
       console.error(e);
-      setErrorMsg(lang === 'en' ? 'We couldn\'t scan that automatically. Please enter the details manually below.' : 'Hatukuweza kuchanganua kiotomatiki. Tafadhali weka maelezo kwa mkono hapa chini.');
+      setErrorMsg('We couldn\'t scan that automatically. Please enter the details manually below.');
     } finally {
       setIsAnalyzing(false);
     }
@@ -392,7 +391,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
   const stepErrorFor = (target: number): string | null => {
     if (target === 0) {
       if (!categoryId || !photoBase64) {
-        return lang === 'en' ? 'Please fill out all required fields and upload/capture a photo.' : 'Tafadhali jaza sehemu zote na uweke picha.';
+        return 'Please fill out all required fields and upload/capture a photo.';
       }
       return null;
     }
@@ -401,7 +400,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
 
     if (target === 1) {
       if (!isSensitive && (!description || !extractedName)) {
-        return lang === 'en' ? 'Please provide a title and description.' : 'Tafadhali weka kichwa cha habari na maelezo.';
+        return 'Please provide a title and description.';
       }
       return null;
     }
@@ -412,26 +411,26 @@ export default function FinderView({ lang, categories, categoriesLoading = false
     // client-side check never substitutes for that.
     if (target === 2) {
       if (!foundCounty) {
-        return lang === 'en' ? 'Please choose the county where you found the item.' : 'Tafadhali chagua kaunti ulipopata kitu.';
+        return 'Please choose the county where you found the item.';
       }
       if (!foundAdministrativeUnit) {
-        return lang === 'en' ? 'Please choose the sub-county where you found the item.' : 'Tafadhali chagua kaunti ndogo ulipopata kitu.';
+        return 'Please choose the sub-county where you found the item.';
       }
       if (!locationDescription) {
-        return tr('Please enter the exact place where you found the item.', 'Tafadhali weka mahali halisi ulipopata kitu.');
+        return 'Please enter the exact place where you found the item.';
       }
       return null;
     }
 
     if (target === 3) {
       if (!finderPhone) {
-        return tr('Please enter the phone number for your M-Pesa payout.', 'Tafadhali weka nambari ya simu kwa malipo yako ya M-Pesa.');
+        return 'Please enter the phone number for your M-Pesa payout.';
       }
       if (createAccount && !agreedTerms) {
-        return lang === 'en' ? 'You must agree to the Terms of Service and Privacy Policy to create an account.' : 'Ni lazima ukubali Vigezo na Masharti ili kufungua akaunti.';
+        return 'You must agree to the Terms of Service and Privacy Policy to create an account.';
       }
       if (finderEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(finderEmail)) {
-        return lang === 'en' ? 'Please enter a valid email address.' : 'Tafadhali weka barua pepe sahihi.';
+        return 'Please enter a valid email address.';
       }
       return null;
     }
@@ -468,11 +467,11 @@ export default function FinderView({ lang, categories, categoriesLoading = false
   // county datasets exactly as the fields themselves read them.
   const selectedCategory = categories.find((c: any) => c.id === categoryId);
   const selectedCategoryLabel = selectedCategory
-    ? ((lang === 'sw' ? selectedCategory.name_sw : selectedCategory.name_en) || selectedCategory.name_en || categoryId)
+    ? ((selectedCategory.name_en) || selectedCategory.name_en || categoryId)
     : '';
   const isSensitiveCategory = isSelectedCategorySensitive();
   const foundAdministrativeUnitName = foundAdministrativeUnits.find((unit) => unit.id === foundAdministrativeUnit)?.name ?? '';
-  const stepperSteps = FINDER_STEPS.map((s) => ({ label: tr(s.en, s.sw) }));
+  const stepperSteps = FINDER_STEPS.map((s) => ({ label: s.en }));
   const currentStepLabel = stepperSteps[Math.max(0, Math.min(step, stepperSteps.length - 1))].label;
 
   // Submit complete found item report
@@ -525,9 +524,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
     // text ("Failed to fetch", "Unexpected token < in JSON…") is
     // implementation detail and must not reach a public user.
     const submitErrorMessage =
-      lang === 'en'
-        ? 'We could not submit your report. Please check your connection and try again.'
-        : 'Hatukuweza kuwasilisha ripoti yako. Tafadhali angalia muunganisho wako na ujaribu tena.';
+      'We could not submit your report. Please check your connection and try again.';
 
     try {
       const response = await fetch('/api/items/report', {
@@ -612,18 +609,16 @@ export default function FinderView({ lang, categories, categoriesLoading = false
               <div>
                 <h4 className="text-lg font-bold text-primary-green">{dropoffResult.assignedAgent.business_name}</h4>
                 <p className="text-ink-muted text-sm font-medium">{dropoffResult.assignedAgent.location_address}</p>
-                <p className="text-ink-muted text-xs mt-1">{lang === 'en' ? 'Phone' : 'Simu'}: {dropoffResult.assignedAgent.contact_phone}</p>
+                <p className="text-ink-muted text-xs mt-1">{'Phone'}: {dropoffResult.assignedAgent.contact_phone}</p>
               </div>
             </div>
           ) : (
             <div className="bg-amber-50 p-5 rounded-2xl text-left border border-amber-200 space-y-2">
               <h3 className="text-xs font-extrabold text-amber-700 uppercase tracking-widest">
-                {lang === 'en' ? 'Finding Your Agent' : 'Tunatafuta Agent Wako'}
+                {'Finding Your Agent'}
               </h3>
               <p className="text-amber-900 text-sm font-medium">
-                {lang === 'en'
-                  ? "We couldn't confidently match a nearby Return4me agent automatically. Our team is finding the right one for your location and will notify you with drop-off details shortly."
-                  : 'Hatukuweza kuchagua Agent wa karibu kiotomatiki kwa uhakika. Timu yetu inatafuta anayefaa eneo lako na utajulishwa maelezo ya kuwasilisha hivi karibuni.'}
+                {"We couldn't confidently match a nearby Return4me agent automatically. Our team is finding the right one for your location and will notify you with drop-off details shortly."}
               </p>
             </div>
           )}
@@ -637,7 +632,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
             <p className="text-caption text-stone-300">
               {dropoffResult.assignedAgent
                 ? t.directionNote
-                : (lang === 'en' ? 'Keep this code — you\'ll need it once an agent is assigned.' : 'Hifadhi msimbo huu — utahitajika mara Agent atakapopangwa.')}
+                : ('Keep this code — you\'ll need it once an agent is assigned.')}
             </p>
           </div>
 
@@ -646,12 +641,10 @@ export default function FinderView({ lang, categories, categoriesLoading = false
             <AlertTriangle size={20} className="shrink-0 mt-0.5 text-amber-600" />
             <div className="text-xs space-y-1">
               <p className="font-extrabold">
-                {lang === 'sw' ? 'MUHIMU: Andika au piga picha ya msimbo huu sasa.' : 'IMPORTANT: Write down or screenshot this code now.'}
+                {'IMPORTANT: Write down or screenshot this code now.'}
               </p>
               <p className="text-amber-800">
-                {lang === 'sw'
-                  ? 'Utahitaji kuutoa msimbo huu kwa wakala wa Return4me utakapopeleka bidhaa physically. Ukiupoteza, wasiliana na msaada ukitumia nambari yako ya simu ili kuurejesha.'
-                  : "You will need to give this exact code to the Return4me agent when you physically drop off the item. If you lose it, contact support with your phone number to recover it."}
+                {"You will need to give this exact code to the Return4me agent when you physically drop off the item. If you lose it, contact support with your phone number to recover it."}
               </p>
             </div>
           </div>
@@ -674,7 +667,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
             }}
             className="w-full bg-accent-strong hover:bg-accent-strong-hover text-white py-3.5 rounded-2xl font-bold transition flex items-center justify-center space-x-2 shadow-lg shadow-orange-500/10"
           >
-            <span>{lang === 'en' ? 'Report Another Item' : 'Ripoti Kitu Kingine'}</span>
+            <span>{'Report Another Item'}</span>
             <ArrowRight size={18} />
           </button>
         </div>
@@ -689,13 +682,13 @@ export default function FinderView({ lang, categories, categoriesLoading = false
           <Stepper
             steps={stepperSteps}
             currentStep={step}
-            label={tr('Report a found item progress', 'Maendeleo ya kuripoti kitu kilichopatikana')}
+            label={'Report a found item progress'}
           />
 
           {/* One polite announcement per stage change, for screen readers that do
               not track the rail's aria-current. */}
           <p className="sr-only" role="status" aria-live="polite">
-            {tr('Step', 'Hatua')} {step + 1} {tr('of', 'kati ya')} {FINDER_STEPS.length}: {currentStepLabel}
+            {'Step'} {step + 1} {'of'} {FINDER_STEPS.length}: {currentStepLabel}
           </p>
 
           {/* ---------------- STAGE 1 — WHAT DID YOU FIND? ---------------- */}
@@ -703,11 +696,8 @@ export default function FinderView({ lang, categories, categoriesLoading = false
             <section aria-labelledby={STEP_HEADING_ID} className="space-y-5">
               <StepIntro
                 headingRef={stepHeadingRef}
-                title={tr('What did you find?', 'Ulipata nini?')}
-                description={tr(
-                  'Start with a photograph and the closest category. Both are how your report is lined up with a lost item of the same kind.',
-                  'Anza na picha na aina inayokaribiana. Vyote viwili hutumika kuoanisha ripoti yako na kitu kilichopotea cha aina hiyo.'
-                )}
+                title={'What did you find?'}
+                description={'Start with a photograph and the closest category. Both are how your report is lined up with a lost item of the same kind.'}
               />
 
 
@@ -728,14 +718,14 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                         onClick={captureFrame}
                         className="bg-accent-orange text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-lg transition hover:bg-accent-hover"
                       >
-                        {lang === 'en' ? 'Capture' : 'Piga Picha'}
+                        {'Capture'}
                       </button>
                       <button
                         type="button"
                         onClick={stopCamera}
                         className="bg-stone-800 text-white px-5 py-2.5 rounded-xl font-bold text-sm transition hover:bg-stone-700"
                       >
-                        {lang === 'en' ? 'Cancel' : 'Ghairi'}
+                        {'Cancel'}
                       </button>
                     </div>
                   </div>
@@ -744,9 +734,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                     <img
                       src={photoBase64}
                       alt={
-                        lang === 'en'
-                          ? `Photo of the ${categories.find(c => c.id === categoryId)?.name_en || 'found item'} you are reporting`
-                          : `Picha ya ${categories.find(c => c.id === categoryId)?.name_sw || 'bidhaa iliyopatikana'} unayoripoti`
+                        `Photo of the ${categories.find(c => c.id === categoryId)?.name_en || 'found item'} you are reporting`
                       }
                       className="w-full h-full object-contain"
                     />
@@ -756,27 +744,27 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                         type="button"
                         onClick={startCamera}
                         className="bg-white text-primary-green p-2.5 rounded-full hover:bg-stone-100 shadow-md transition"
-                        title={lang === 'sw' ? 'Piga picha tena' : 'Retake photo'}
-                        aria-label={lang === 'sw' ? 'Piga picha tena' : 'Retake photo'}
+                        title={'Retake photo'}
+                        aria-label={'Retake photo'}
                       >
                         <Camera size={18} />
                       </button>
-                      <label className="bg-white text-primary-green p-2.5 rounded-full hover:bg-stone-100 shadow-md transition cursor-pointer" aria-label={lang === 'sw' ? 'Pakia picha' : 'Upload a photo'}>
+                      <label className="bg-white text-primary-green p-2.5 rounded-full hover:bg-stone-100 shadow-md transition cursor-pointer" aria-label={'Upload a photo'}>
                         <Upload size={18} />
                         <input
                           type="file"
                           accept={IMAGE_ACCEPT}
                           onChange={handleFileUpload}
                           className="hidden"
-                          aria-label={lang === 'sw' ? 'Pakia picha' : 'Upload a photo'}
+                          aria-label={'Upload a photo'}
                         />
                       </label>
                       <button
                         type="button"
                         onClick={() => { setPhotoBase64(null); setExtractedName(''); setExtractedNumber(''); }}
                         className="bg-red-50 text-red-600 p-2.5 rounded-full hover:bg-red-100 shadow-md transition"
-                        title={lang === 'sw' ? 'Ondoa picha' : 'Remove photo'}
-                        aria-label={lang === 'sw' ? 'Ondoa picha' : 'Remove photo'}
+                        title={'Remove photo'}
+                        aria-label={'Remove photo'}
                       >
                         <X size={18} />
                       </button>
@@ -789,8 +777,8 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                       <Camera size={24} />
                     </div>
                     <div className="space-y-1">
-                      <p className="text-sm font-bold text-ink-muted">{lang === 'en' ? 'Take a photo or upload file' : 'Piga picha au weka faili ya picha'}</p>
-                      <p className="text-xs text-ink-muted">{lang === 'sw' ? 'Picha itasaidia kulinganisha ripoti yako na bidhaa zilizopotezwa na wamiliki.' : 'A clear photo helps match your report with lost items owned by others.'}</p>
+                      <p className="text-sm font-bold text-ink-muted">{'Take a photo or upload file'}</p>
+                      <p className="text-xs text-ink-muted">{'A clear photo helps match your report with lost items owned by others.'}</p>
                     </div>
                     <div className="flex items-center justify-center space-x-3">
                       <button
@@ -845,9 +833,9 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                     disabled={categoriesLoading || categoriesError}
                   >
                     {categoriesLoading ? (
-                      <option value="">{lang === 'en' ? 'Loading categories...' : 'Inapakia kategoria...'}</option>
+                      <option value="">{'Loading categories...'}</option>
                     ) : categoriesError ? (
-                      <option value="">{lang === 'en' ? 'Categories unavailable — please refresh' : 'Kategoria hazipatikani - tafadhali pakia upya'}</option>
+                      <option value="">{'Categories unavailable — please refresh'}</option>
                     ) : (
                       (() => {
                         const validCategories = categories.filter(cat => cat.name_en && cat.name_sw);
@@ -856,10 +844,10 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                           console.warn(`[FinderView] Filtered out ${invalidCount} incomplete categories from rendering.`);
                         }
                         return [
-                          <option key="select-category" value="">{lang === 'en' ? '-- Select Category --' : '-- Chagua Kategoria --'}</option>,
+                          <option key="select-category" value="">{'-- Select Category --'}</option>,
                           ...validCategories.map(cat => (
                             <option key={cat.id} value={cat.id}>
-                              {lang === 'en' ? cat.name_en : cat.name_sw} (Fee: KES {cat.total_fee})
+                              {cat.name_en} (Fee: KES {cat.total_fee})
                             </option>
                           ))
                         ];
@@ -876,11 +864,8 @@ export default function FinderView({ lang, categories, categoriesLoading = false
             <section aria-labelledby={STEP_HEADING_ID} className="space-y-5">
               <StepIntro
                 headingRef={stepHeadingRef}
-                title={tr('Identify the item', 'Tambua kitu')}
-                description={tr(
-                  'Add the identifying details, or correct anything the scan filled in. These are the details that make an exact match possible.',
-                  'Ongeza maelezo ya kutambua, au rekebisha yoyote ambayo uchanganuzi uliweka. Haya ni maelezo yanayowezesha mechi kamili.'
-                )}
+                title={'Identify the item'}
+                description={'Add the identifying details, or correct anything the scan filled in. These are the details that make an exact match possible.'}
               />
 
               {(() => {
@@ -900,18 +885,18 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                         type="text"
                         value={extractedNumber}
                         onChange={(e) => setExtractedNumber(e.target.value)}
-                        placeholder={lang === 'en' ? 'e.g. 32904812' : 'Mfano: 32904812'}
+                        placeholder={'e.g. 32904812'}
                       />
                     );
                 } else {
                   return (
                     <Input
                       id="finder-description"
-                      label={lang === 'en' ? 'Item Description' : 'Maelezo ya Bidhaa'}
+                      label={'Item Description'}
                       type="text"
                       value={description}
                       onChange={(e) => setDescription(e.target.value)}
-                      placeholder={lang === 'en' ? 'e.g. Black leather with silver ring' : 'Mfano: Ngozi nyeusi yenye pete ya fedha'}
+                      placeholder={'e.g. Black leather with silver ring'}
                       required
                     />
                   );
@@ -925,11 +910,11 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                   return (
                     <Input
                       id="finder-item-name"
-                      label={lang === 'en' ? 'Item Title (e.g. Keychain, Phone)' : 'Kichwa cha Bidhaa'}
+                      label={'Item Title (e.g. Keychain, Phone)'}
                       type="text"
                       value={extractedName}
                       onChange={(e) => setExtractedName(e.target.value)}
-                      placeholder={lang === 'en' ? 'e.g. Black Keychain' : 'Mfano: Mnyororo mweusi wa funguo'}
+                      placeholder={'e.g. Black Keychain'}
                       required
                     />
                   );
@@ -941,7 +926,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                       type="text"
                       value={extractedName}
                       onChange={(e) => setExtractedName(e.target.value)}
-                      placeholder={lang === 'en' ? 'e.g. MWANGI KAMAU' : 'Mfano: MWANGI KAMAU'}
+                      placeholder={'e.g. MWANGI KAMAU'}
                       className="uppercase"
                     />
                   );
@@ -953,9 +938,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                   or authenticity — so the person reporting must review it. */}
               {photoBase64 && !isAnalyzing && (extractedNumber || extractedName) && (
                 <p className="text-caption text-ink-muted leading-normal">
-                  {lang === 'en'
-                    ? 'Please check the details above and correct anything the scan got wrong.'
-                    : 'Tafadhali angalia maelezo hapo juu na urekebishe yoyote ambayo uchanganuzi ulikosea.'}
+                  {'Please check the details above and correct anything the scan got wrong.'}
                 </p>
               )}
 
@@ -967,11 +950,8 @@ export default function FinderView({ lang, categories, categoriesLoading = false
             <section aria-labelledby={STEP_HEADING_ID} className="space-y-5">
               <StepIntro
                 headingRef={stepHeadingRef}
-                title={tr('Where did you find it?', 'Ulipata kitu wapi?')}
-                description={tr(
-                  'The county is what your report is compared against. The exact place is your own description of where the item was found.',
-                  'Kaunti ndiyo inayolinganishwa na ripoti yako. Mahali halisi ni maelezo yako mwenyewe ya mahali kitu kilipopatikana.'
-                )}
+                title={'Where did you find it?'}
+                description={'The county is what your report is compared against. The exact place is your own description of where the item was found.'}
               />
 
 
@@ -988,7 +968,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                     AND re-validated server-side, which is the authority. */}
                 <Select
                   id="finder-county"
-                  label={lang === 'en' ? 'County where you found it' : 'Kaunti ulipopata kitu'}
+                  label={'County where you found it'}
                   value={foundCounty}
                   onChange={(e) => {
                     setFoundCounty(e.target.value);
@@ -996,11 +976,9 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                   }}
                   required
                   disabled={isSubmitting}
-                  hint={lang === 'en'
-                    ? 'We use this to compare your report with items lost in the same county.'
-                    : 'Tunatumia hii kulinganisha ripoti yako na vitu vilivyopotea katika kaunti moja.'}
+                  hint={'We use this to compare your report with items lost in the same county.'}
                 >
-                  <option value="">{lang === 'en' ? 'Select a county' : 'Chagua kaunti'}</option>
+                  <option value="">{'Select a county'}</option>
                   {COUNTY_GROUPS.map((group) => (
                     <optgroup key={group.group} label={group.group}>
                       {group.counties.map((county) => (
@@ -1014,16 +992,14 @@ export default function FinderView({ lang, categories, categoriesLoading = false
 
                 <Select
                   id="finder-administrative-unit"
-                  label={lang === 'en' ? 'Sub-county where you found it' : 'Kaunti ndogo ulipopata kitu'}
+                  label={'Sub-county where you found it'}
                   value={foundAdministrativeUnit}
                   onChange={(e) => setFoundAdministrativeUnit(e.target.value)}
                   required
                   disabled={isSubmitting || !foundCounty}
-                  hint={lang === 'en'
-                    ? 'This structured selection is separate from the exact place you enter below.'
-                    : 'Uteuzi huu tofauti na mahali halisi unayoingia hapa chini.'}
+                  hint={'This structured selection is separate from the exact place you enter below.'}
                 >
-                  <option value="">{foundCounty ? (lang === 'en' ? 'Select a sub-county' : 'Chagua kaunti ndogo') : (lang === 'en' ? 'Select county first' : 'Chagua kaunti kwanza')}</option>
+                  <option value="">{foundCounty ? ('Select a sub-county') : ('Select county first')}</option>
                   {foundAdministrativeUnits.map((unit) => (
                     <option key={unit.id} value={unit.id}>{unit.name}</option>
                   ))}
@@ -1042,12 +1018,10 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                       <MapPin className="text-accent-orange shrink-0 mt-0.5" size={18} />
                       <div className="space-y-1">
                         <h4 className="text-xs font-bold text-ink leading-none">
-                          {lang === 'en' ? 'Help Us Match an Agent' : 'Tusaidie Kupata Wakala'}
+                          {'Help Us Match an Agent'}
                         </h4>
                         <p className="text-caption text-ink-muted leading-normal">
-                          {lang === 'en'
-                            ? 'Turning on your location can help us match your report to a nearby available Return4me Agent hub for your drop-off. If no Agent can be matched, our team will assign one for you.'
-                            : 'Kuwasha mahali ulipo kunaweza kutusaidia kulinganisha ripoti yako na Wakala wa Return4me aliye karibu na anayepatikana kwa kuwasilisha. Iwapo Wakala hapatikani, timu yetu itakupangia mmoja.'}
+                          {'Turning on your location helps us match your report to a nearby available Return4me Agent hub for your drop-off. This is where you are now, and it may not be where you found the item. The county, sub-county and exact place you set are what describe where you found it. If no Agent can be matched, our team will assign one for you.'}
                         </p>
                       </div>
                     </div>
@@ -1060,12 +1034,12 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                       {gpsLoading ? (
                         <>
                           <Loader2 className="animate-spin" size={14} />
-                          <span>{lang === 'en' ? 'Accessing GPS Coordinates...' : 'Tunatafuta GPS Mahali Ulipo...'}</span>
+                          <span>{'Getting your location...'}</span>
                         </>
                       ) : (
                         <>
                           <MapPin size={14} />
-                          <span>{lang === 'en' ? 'Turn Location On' : 'Washa Mahali Ulipo'}</span>
+                          <span>{'Turn Location On'}</span>
                         </>
                       )}
                     </button>
@@ -1078,12 +1052,10 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                     </div>
                     <div className="flex-1 min-w-0">
                       <h4 className="text-xs font-bold text-emerald-900">
-                        {lang === 'en' ? 'Location Captured' : 'Mahali Pamehifadhiwa'}
+                        {'Agent Matching Location Captured'}
                       </h4>
                       <p className="text-caption text-emerald-700 mt-0.5">
-                        {lang === 'en'
-                          ? 'Your location has been captured and can help us match your report to a nearby available Return4me Agent hub. If no Agent can be matched, our team will assign one for you.'
-                          : 'Mahali ulipo pamehifadhiwa na kunaweza kutusaidia kulinganisha ripoti yako na Wakala wa Return4me aliye karibu na anayepatikana. Iwapo Wakala hapatikani, timu yetu itakupangia mmoja.'}
+                        {'We saved your current location to help match your report to a nearby available Return4me Agent hub. This is where you are now, not necessarily where you found the item. The county, sub-county and exact place you set are what describe where you found it. If no Agent can be matched, our team will assign one for you.'}
                       </p>
                     </div>
                     <button
@@ -1091,7 +1063,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                       onClick={getCoordinates}
                       className="text-caption font-bold text-emerald-800 hover:underline shrink-0"
                     >
-                      {lang === 'en' ? 'Update' : 'Sasisha'}
+                      {'Update'}
                     </button>
                   </div>
                 )}
@@ -1102,7 +1074,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                   type="text"
                   value={locationDescription}
                   onChange={(e) => setLocationDescription(e.target.value)}
-                  placeholder={lang === 'en' ? 'e.g. Near Sarit Centre, Westlands' : 'Mfano: Karibu na Sarit Centre, Westlands'}
+                  placeholder={'e.g. Near Sarit Centre, Westlands'}
                   required
                   aria-describedby="finder-location-hint"
                 />
@@ -1111,9 +1083,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                     type; it promises nothing about automatic identification,
                     matching, speed or payout, and it invents no vocabulary. */}
                 <span id="finder-location-hint" className="text-caption text-ink-muted block leading-tight">
-                  {lang === 'en'
-                    ? 'Enter the street, estate, building, landmark or nearby place you know.'
-                    : 'Weka barabara, mtaa, jengo, alama ya eneo au mahali pengine unapojua.'}
+                  {'Enter the street, estate, building, landmark or nearby place you know.'}
                 </span>
               </div>
                 {gpsMessage && <p className="text-caption text-ink-muted" role="status">{gpsMessage}</p>}
@@ -1150,9 +1120,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                   still accepted for manual assignment rather than failing or
                   inventing a nearby agent. */}
               <p className="text-caption text-ink-muted leading-normal">
-                {lang === 'en'
-                  ? 'The county you choose is what we use to compare your report with items lost in the same area. Your area description is what owners and agents search. If you also share your device location, Return4me uses the coordinates to look for a real active Agent near you; if none can be matched confidently, your report is still accepted and assigned by our team.'
-                  : 'Kaunti unayochagua ndiyo tunayotumia kulinganisha ripoti yako na vitu vilivyopotea eneo moja. Maelezo ya eneo lako ndiyo yanayotafutwa na wamiliki na mawakala. Ukishiriki pia mahali ulipo kwenye kifaa, Return4me hutumia viwianishi kutafuta Wakala halisi aliye karibu nawe; ikiwa hakuna anayeweza kulinganishwa kwa uhakika, ripoti yako bado inakubaliwa na kupangwa na timu yetu.'}
+                {'The county you choose is what we use to compare your report with items lost in the same area. Your area description is what owners and agents search. If you also share your device location, Return4me uses the coordinates to look for a real active Agent near you; if none can be matched confidently, your report is still accepted and assigned by our team.'}
               </p>
 
             </section>
@@ -1163,11 +1131,8 @@ export default function FinderView({ lang, categories, categoriesLoading = false
             <section aria-labelledby={STEP_HEADING_ID} className="space-y-5">
               <StepIntro
                 headingRef={stepHeadingRef}
-                title={tr('How can we reach you?', 'Tunaweza kukufikia vipi?')}
-                description={tr(
-                  'Your phone number is how the reward reaches you. The email is optional and is used for status alerts only.',
-                  'Nambari yako ya simu ni njia ya zawadi kukufikia. Barua pepe si lazima na hutumika kwa arifa za hali pekee.'
-                )}
+                title={'How can we reach you?'}
+                description={'Your phone number is how the reward reaches you. The email is optional and is used for status alerts only.'}
               />
 
 
@@ -1186,11 +1151,9 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                 label={t.phonePayout}
                 value={finderPhone}
                 onChange={(e) => setFinderPhone(e.target.value)}
-                placeholder={lang === 'en' ? 'e.g. 0712345678' : 'Mfano: 0712345678'}
+                placeholder={'e.g. 0712345678'}
                 required
-                hint={lang === 'en'
-                  ? 'Your phone number is used for your M-Pesa payout and is never shown to claimants.'
-                  : 'Nambari yako ya simu inatumika kwa malipo yako ya M-Pesa na haionyeshwi kwa wadai.'}
+                hint={'Your phone number is used for your M-Pesa payout and is never shown to claimants.'}
               />
 
               {/* Optional Email Details */}
@@ -1199,13 +1162,11 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                 type="email"
                 inputMode="email"
                 autoComplete="email"
-                label={lang === 'en' ? 'Email Address (Optional)' : 'Barua Pepe (Sio Lazima)'}
+                label={'Email Address (Optional)'}
                 value={finderEmail}
                 onChange={(e) => setFinderEmail(e.target.value)}
-                placeholder={lang === 'en' ? 'e.g. finder@gmail.com' : 'Mfano: finder@gmail.com'}
-                hint={lang === 'en'
-                  ? 'Optional email to receive status alerts about your drop-off and payout.'
-                  : 'Barua pepe ya hiari ili kupokea arifa za hali ya uwasilishaji na malipo yako.'}
+                placeholder={'e.g. finder@gmail.com'}
+                hint={'Optional email to receive status alerts about your drop-off and payout.'}
               />
 
               {/* Optional Finder Account signup toggle */}
@@ -1222,9 +1183,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                     className="h-5 w-5 rounded-small border border-[var(--appearance-border-strong)] accent-[var(--appearance-primary)] cursor-pointer"
                   />
                   <label htmlFor="create-finder-account" className="text-caption text-[var(--appearance-text-primary)] font-bold select-none cursor-pointer">
-                    {lang === 'en'
-                      ? 'Create a Return4me Finder Account with this phone number (to track history & payouts)'
-                      : 'Fungua Akaunti ya Msingi wa Return4me kwa nambari hii ya simu (kufuatilia historia na malipo)'}
+                    {'Create a Return4me Finder Account with this phone number (to track history & payouts)'}
                   </label>
                 </div>
 
@@ -1239,21 +1198,21 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                       required={createAccount}
                     />
                     <label htmlFor="finder-agreed-terms" className="text-caption text-[var(--appearance-text-muted)] leading-tight select-none cursor-pointer">
-                      {lang === 'en' ? 'I have read and agree to the Return4me' : 'Nimesoma na nakubali'}{' '}
+                      {'I have read and agree to the Return4me'}{' '}
                       <button
                         type="button"
                         onClick={() => (window as any).setView?.('terms')}
                         className="text-[var(--appearance-primary)] hover:underline font-bold inline"
                       >
-                        {lang === 'en' ? 'Terms of Service' : 'Vigezo na Masharti'}
+                        {'Terms of Service'}
                       </button>{' '}
-                      {lang === 'en' ? 'and' : 'na'}{' '}
+                      {'and'}{' '}
                       <button
                         type="button"
                         onClick={() => (window as any).setView?.('privacy')}
                         className="text-[var(--appearance-primary)] hover:underline font-bold inline"
                       >
-                        {lang === 'en' ? 'Privacy Policy' : 'Sera ya Faragha'}
+                        {'Privacy Policy'}
                       </button>
                       . *
                     </label>
@@ -1270,74 +1229,71 @@ export default function FinderView({ lang, categories, categoriesLoading = false
             <section aria-labelledby={STEP_HEADING_ID} className="space-y-5">
               <StepIntro
                 headingRef={stepHeadingRef}
-                title={tr('Check your report', 'Hakiki ripoti yako')}
-                description={tr(
-                  'You can go back and change anything before the report is sent.',
-                  'Unaweza kurudi nyuma na kubadilisha chochote kabla ya kutuma ripoti.'
-                )}
+                title={'Check your report'}
+                description={'You can go back and change anything before the report is sent.'}
               />
 
               <ReviewGroup
-                title={tr('What you found', 'Ulipata nini')}
-                editLabel={tr('Edit', 'Badilisha')}
+                title={'What you found'}
+                editLabel={'Edit'}
                 onEdit={() => goToStep(0)}
               >
                 <SummaryRow
                   icon={Camera}
                   label={t.capturePhoto}
-                  value={photoBase64 ? tr('Photograph attached', 'Picha imewekwa') : tr('No photograph yet', 'Hakuna picha bado')}
+                  value={photoBase64 ? 'Photograph attached' : 'No photograph yet'}
                 />
                 <SummaryRow
                   label={t.categoryLabel}
-                  value={selectedCategoryLabel || tr('Not chosen', 'Hakujachagua')}
+                  value={selectedCategoryLabel || 'Not chosen'}
                 />
               </ReviewGroup>
 
               <ReviewGroup
-                title={tr('Identifying details', 'Maelezo ya kutambua')}
-                editLabel={tr('Edit', 'Badilisha')}
+                title={'Identifying details'}
+                editLabel={'Edit'}
                 onEdit={() => goToStep(1)}
               >
                 {isSensitiveCategory ? (
                   <>
-                    <SummaryRow label={t.docNumberLabel} value={extractedNumber.trim() || tr('Not provided', 'Hakujatoa')} />
-                    <SummaryRow label={t.docNameLabel} value={extractedName.trim() || tr('Not provided', 'Hakujatoa')} />
+                    <SummaryRow label={t.docNumberLabel} value={extractedNumber.trim() || 'Not provided'} />
+                    <SummaryRow label={t.docNameLabel} value={extractedName.trim() || 'Not provided'} />
                   </>
                 ) : (
                   <>
-                    <SummaryRow label={tr('Item title', 'Kichwa cha bidhaa')} value={extractedName.trim() || tr('Not provided', 'Hakujatoa')} />
-                    <SummaryRow label={tr('Description', 'Maelezo')} value={description.trim() || tr('Not provided', 'Hakujatoa')} />
+                    <SummaryRow label={'Item title'} value={extractedName.trim() || 'Not provided'} />
+                    <SummaryRow label={'Description'} value={description.trim() || 'Not provided'} />
                   </>
                 )}
               </ReviewGroup>
 
               <ReviewGroup
-                title={tr('Where you found it', 'Ulipopata kitu')}
-                editLabel={tr('Edit', 'Badilisha')}
+                title={'Where you found it'}
+                editLabel={'Edit'}
                 onEdit={() => goToStep(2)}
               >
                 <SummaryRow
                   icon={MapPin}
-                  label={tr('Place', 'Mahali')}
+                  label={'Place'}
                   value={[locationDescription.trim(), foundAdministrativeUnitName, foundCounty].filter(Boolean).join(', ')}
                 />
                 <SummaryRow
-                  label={tr('Coordinates shared', 'Viwianishi vimetolewa')}
-                  value={latitude === null || longitude === null ? tr('No', 'Hapana') : tr('Yes', 'Ndiyo')}
+                  label={'Coordinates shared'}
+                  value={latitude === null || longitude === null ? 'No' : 'Yes'}
                 />
               </ReviewGroup>
 
 
               <ReviewGroup
-                title={tr('How we reach you', 'Tunavyowasiliana nawe')}
-                editLabel={tr('Edit', 'Badilisha')}
+                title={'How we reach you'}
+                editLabel={'Edit'}
                 onEdit={() => goToStep(3)}
               >
-                <SummaryRow label={t.phonePayout} value={finderPhone.trim() || tr('Not provided', 'Hakujatoa')} />
-                <SummaryRow label={tr('Email', 'Barua pepe')} value={finderEmail.trim() || tr('Not provided', 'Hakujatoa')} />
+                <SummaryRow label={t.phonePayout} value={finderPhone.trim() || 'Not provided'} />
+                <SummaryRow label={'Email'} value={finderEmail.trim() || 'Not provided'} />
                 <SummaryRow
-                  label={tr('Finder account', 'Akaunti ya msingi')}
-                  value={createAccount ? tr('To be created', 'Itafunguliwa') : tr('Not requested', 'Hakukuomba')}
+                  label={'Finder account'}
+                  value={createAccount ? 'To be created' : 'Not requested'}
                 />
               </ReviewGroup>
 
@@ -1345,26 +1301,17 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                   and promises no outcome the code cannot keep. */}
               <div className="rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] p-4 sm:p-5 space-y-2">
                 <h4 className="text-body-large font-semibold text-[var(--appearance-text-primary)]">
-                  {tr('What happens next', 'Kinachofuata')}
+                  {'What happens next'}
                 </h4>
                 <ul className="space-y-1.5 text-small text-[var(--appearance-text-muted)] leading-relaxed">
                   <li>
-                    {tr(
-                      'Your report is saved with a drop-off code, and you will need that code when you hand the item to the Return4me agent.',
-                      'Ripoti yako huhifadhiwa na msimbo wa kuwasilisha, na utahitaji msimbo huo unapokabidhi kitu kwa wakala wa Return4me.'
-                    )}
+                    {'Your report is saved with a drop-off code, and you will need that code when you hand the item to the Return4me agent.'}
                   </li>
                   <li>
-                    {tr(
-                      'If you shared your location, the coordinates are used to look for a real active Return4me Agent near you. If no Agent can be matched, our team will assign one for you.',
-                      'Ikiwa ulishiriki mahali ulipo, viwianishi hutumika kutafuta Wakala halisi wa Return4me aliye karibu nawe. Iwapo Wakala hapatikani, timu yetu itakupangia mmoja.'
-                    )}
+                    {'If you shared your location, the coordinates are used to look for a real active Return4me Agent near you. If no Agent can be matched, our team will assign one for you.'}
                   </li>
                   <li>
-                    {tr(
-                      'Your phone number is used for your M-Pesa payout and is never shown to claimants.',
-                      'Nambari yako ya simu inatumika kwa malipo yako ya M-Pesa na haionyeshwi kwa wadai.'
-                    )}
+                    {'Your phone number is used for your M-Pesa payout and is never shown to claimants.'}
                   </li>
                 </ul>
               </div>
@@ -1376,7 +1323,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
           <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 border-t border-[var(--appearance-border)] pt-5">
             {step > 0 ? (
               <Button type="button" variant="ghost" size="md" onClick={goBack} disabled={isSubmitting}>
-                {tr('Back', 'Rudi')}
+                {'Back'}
               </Button>
             ) : (
               <span aria-hidden="true" />
@@ -1393,7 +1340,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                 disabled={isSubmitting}
                 className="w-full sm:w-auto"
               >
-                {tr('Continue', 'Endelea')}
+                {'Continue'}
               </Button>
             )}
           </div>
@@ -1408,7 +1355,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                   changes, but a focused button's name change is not reliably
                   announced (Phase 8.5). */}
               <p className="sr-only" role="status" aria-live="polite">
-                {isSubmitting ? (lang === 'en' ? 'Submitting your report…' : 'Inawasilisha ripoti yako…') : ''}
+                {isSubmitting ? ('Submitting your report…') : ''}
               </p>
 
               <button
@@ -1420,7 +1367,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                 {isSubmitting ? (
                   <>
                     <Loader2 className="animate-spin" size={18} />
-                    <span>{lang === 'en' ? 'Processing your submission…' : 'Inashughulikia uwasilishaji wako…'}</span>
+                    <span>{'Processing your submission…'}</span>
                   </>
                 ) : (
                   <>
@@ -1434,9 +1381,7 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                   with a grayed-out button and no photo yet looked broken. */}
               {!isSubmitting && !photoBase64 && (
                 <p className="text-center text-xs text-ink-muted -mt-2">
-                  {lang === 'sw'
-                    ? 'Weka picha ya bidhaa hapo juu ili uweze kuwasilisha.'
-                    : 'Add a photo of the item above before you can submit.'}
+                  {'Add a photo of the item above before you can submit.'}
                 </p>
               )}
             </>
