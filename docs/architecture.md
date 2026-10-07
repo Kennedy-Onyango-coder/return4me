@@ -135,13 +135,19 @@ sites. See [notifications.md](notifications.md).
 ## Payment architecture
 
 IntaSend issues an M-Pesa STK push; the customer approves on their handset. A
-webhook from the provider is the only authority on whether money moved. The
-application never treats an initiated request as a payment.
+webhook from the provider is the only authority on whether money moved, and a
+completed payment that the webhook misses is recovered through IntaSend's
+authoritative payment-status API (on demand and via a background sweep). The
+application never treats an initiated request as a payment, never trusts a
+browser, and never marks a claim paid merely because an invoice exists.
 
 The `pending_payment → escrow_held` move is a compare-and-swap. The provider can
 deliver a webhook more than once, and without the CAS a duplicate delivery would
 re-run the escrow side effects. Amounts are reconciled against the persisted
-payment session, and a mismatch is refused rather than accepted.
+payment session, and a mismatch is refused rather than accepted. The claim's
+payment window is 24 hours from agent confirmation; each individual STK attempt
+has its own short session window and can be retried while the claim window stays
+open.
 
 Settlement is likewise a CAS, so an automatic sweep and an administrator's
 manual release cannot both pay out.

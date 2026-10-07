@@ -142,9 +142,13 @@ describe('payment session: DB primitives are CAS-guarded', () => {
     expect(dbTs).toMatch(/eq\(paymentSessionsTable\.status, 'created'\)/);
   });
 
-  it('attemptPaymentSessionConfirm only transitions from pending (idempotent)', () => {
+  it('attemptPaymentSessionConfirm transitions from pending OR locally-expired (idempotent, never from a terminal state)', () => {
+    // A late provider-confirmed COMPLETE must still be honoured even if the local
+    // STK session was already marked expired (config/paymentWindows.ts: the
+    // session window is short; the CLAIM window is 24h). It is a single CAS, so a
+    // duplicate webhook for an already-confirmed session is still a no-op.
     expect(dbTs).toMatch(/status: 'confirmed'/);
-    expect(dbTs).toMatch(/eq\(paymentSessionsTable\.status, 'pending'\)/);
+    expect(dbTs).toMatch(/'pending', 'expired'/);
   });
 
   it('finalizePaymentSessionInitiated records the provider invoice on the reserved state', () => {

@@ -102,10 +102,13 @@ phone number, checked in one shared place.
 |---|---|---|---|
 | POST | `/api/webhooks/intasend` | Webhook secret | Provider callback |
 
-The webhook is the only authority on whether money moved. It is verified against
-`INTASEND_WEBHOOK_SECRET`, its amount is reconciled against the persisted
-payment session, and the escrow transition is a compare-and-swap so a repeated
-delivery cannot pay twice. See [claims-and-payments.md](claims-and-payments.md).
+The webhook is the only authority on whether money moved. It is authenticated
+against `INTASEND_WEBHOOK_CHALLENGE` (the challenge value IntaSend sends in the
+collection payload), its amount is reconciled against the persisted payment
+session, and the escrow transition is a compare-and-swap so a repeated delivery
+cannot pay twice. A completed payment that was missed by the webhook is also
+recovered through the authoritative IntaSend status API (on demand and by a
+background sweep). See [claims-and-payments.md](claims-and-payments.md).
 
 ## Agents
 

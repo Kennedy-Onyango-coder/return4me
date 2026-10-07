@@ -1051,12 +1051,12 @@ describe('stage 5 â€” payment authorization, session and authoritative amou
 // STAGE 6 â€” SIGNED INTASEND WEBHOOK, RECONCILIATION, ESCROW, PICKUP CODE
 //
 // Real contracts read from source:
-//  * Signature is HMAC-SHA256 over JSON.stringify(payload) with
-//    INTASEND_WEBHOOK_SECRET, sent as x-intasend-signature.
-//  * Signature rejection is PRODUCTION-ONLY in the route (401). Under the test
-//    runner NODE_ENV='test' a bad signature is warned and CONTINUES, so every
-//    signature case below temporarily sets NODE_ENV='production' to exercise
-//    the real production branch, then restores it.
+//  * Authentication is the configured IntaSend webhook CHALLENGE, carried in the
+//    payload (`challenge`). It is NOT an HMAC signature. A missing or mismatched
+//    challenge is rejected 401.
+//  * Challenge rejection is enforced in the route whenever a challenge is
+//    configured (and always in production), so the cases below exercise the real
+//    production branch by temporarily setting NODE_ENV='production'.
 //  * Malformed amounts (non-numeric/object/boolean/array) make
 //    reconcileWebhookAmount return 'unknown', which routes to
 //    fetchAuthoritativeCollectionStatus. Under test INTASEND_SECRET_KEY is a
@@ -1064,13 +1064,16 @@ describe('stage 5 â€” payment authorization, session and authoritative amou
 //    behaviour, with no outbound provider call.
 // ===========================================================================
 const WEBHOOK = '/api/webhooks/intasend';
-const sign = (body: any) =>
-  crypto.createHmac('sha256', process.env.INTASEND_WEBHOOK_SECRET!).update(JSON.stringify(body)).digest('hex');
+// Current IntaSend collection-webhook contract: authentication is the configured
+// CHALLENGE (sent in the payload), not an HMAC signature. The suite configures a
+// known challenge and posts it with each event.
+const WEBHOOK_CHALLENGE = 'e2e-collection-challenge';
+process.env.INTASEND_WEBHOOK_CHALLENGE = WEBHOOK_CHALLENGE;
 
-const postHook = async (body: any, sig: string | null) => {
+const postHook = async (body: any, challenge: string | null) => {
+  const payload = challenge === null ? { ...body } : { ...body, challenge };
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (sig) headers['x-intasend-signature'] = sig;
-  const res = await fetch(base + WEBHOOK, { method: 'POST', headers, body: JSON.stringify(body) });
+  const res = await fetch(base + WEBHOOK, { method: 'POST', headers, body: JSON.stringify(payload) });
   let json: any = null;
   try { json = await res.json(); } catch { /* not json */ }
   return { status: res.status, body: json };
@@ -1096,7 +1099,7 @@ const escrowSnapshot = async (id: string) => {
 let pickupPhaseOnly = '';
 
 describe('stage 6 â€” signed IntaSend webhook, reconciliation and escrow', () => {
-  it('refuses a MISSING signature in production mode (no financial mutation)', async () => {
+  it('refuses a MISSING challenge in production mode (no financial mutation)', async () => {
     const before = await escrowSnapshot(claimId);
     const body = { invoice_id: 'INV-MISSING-SIG', state: 'COMPLETE', api_ref: claimId, value: '500' };
     const r = await asProduction(() => postHook(body, null));
@@ -1104,7 +1107,7 @@ describe('stage 6 â€” signed IntaSend webhook, reconciliation and escrow', 
     expect(await escrowSnapshot(claimId)).toEqual(before);
   });
 
-  it('refuses an INVALID signature in production mode (no financial mutation)', async () => {
+  it('refuses an INVALID challenge in production mode (no financial mutation)', async () => {
     const before = await escrowSnapshot(claimId);
     const body = { invoice_id: 'INV-BAD-SIG', state: 'COMPLETE', api_ref: claimId, value: '500' };
     const r = await asProduction(() => postHook(body, 'deadbeef'.repeat(8)));
@@ -1112,12 +1115,12 @@ describe('stage 6 â€” signed IntaSend webhook, reconciliation and escrow', 
     expect(await escrowSnapshot(claimId)).toEqual(before);
   });
 
-  it('refuses a signature computed over a DIFFERENT body', async () => {
+  it('refuses a WRONG challenge even outside production (a configured challenge is always enforced)', async () => {
     const before = await escrowSnapshot(claimId);
     const bodyB = { invoice_id: 'INV-SWAP', state: 'COMPLETE', api_ref: claimId, value: '500' };
     // Signed for body A, transmitting body B â€” proves the signature covers the
     // actual raw payload rather than a loose field.
-    const r = await asProduction(() => postHook(bodyB, sign({ ...bodyB, value: '1' })));
+    const r = await postHook(bodyB, 'not-the-configured-challenge');
     expect(r.status).toBe(401);
     expect(await escrowSnapshot(claimId)).toEqual(before);
   });
@@ -1125,7 +1128,7 @@ describe('stage 6 â€” signed IntaSend webhook, reconciliation and escrow', 
   it('refuses a cross-claim webhook: claim-1 payment cannot move claim-2', async () => {
     const before = await escrowSnapshot(secondClaimId);
     const body = { invoice_id: 'INV-CROSS', state: 'COMPLETE', api_ref: secondClaimId, value: '500' };
-    await postHook(body, sign(body));
+    await postHook(body, WEBHOOK_CHALLENGE);
     expect(await escrowSnapshot(secondClaimId)).toEqual(before);
   });
 
@@ -1133,7 +1136,7 @@ describe('stage 6 â€” signed IntaSend webhook, reconciliation and escrow', 
     for (const bad of ['abc', {}, false, [], '', undefined, 0, -500]) {
       const body: any = { invoice_id: 'INV-MALFORMED', state: 'COMPLETE', api_ref: claimId };
       body.value = bad;
-      const r = await postHook(body, sign(body));
+      const r = await postHook(body, WEBHOOK_CHALLENGE);
       expect(r.status).toBeLessThan(500);
       expect((await db.getClaim(claimId))!.status).toBe('pending_payment');
     }
@@ -1145,7 +1148,7 @@ describe('stage 6 â€” signed IntaSend webhook, reconciliation and escrow', 
   it('holds escrow when the reported AMOUNT does not reconcile', async () => {
     const before = await escrowSnapshot(claimId);
     const body = { invoice_id: 'INV-MISMATCH', state: 'COMPLETE', api_ref: claimId, value: '1' };
-    await postHook(body, sign(body));
+    await postHook(body, WEBHOOK_CHALLENGE);
     const after = await escrowSnapshot(claimId);
     expect(after.status).toBe('pending_payment');
     expect(after.paid_at).toBeNull();
@@ -1160,7 +1163,7 @@ describe('stage 6 â€” signed IntaSend webhook, reconciliation and escrow', 
     invoiceId = `PS-${claimId}-E2E`;
 
     const body = { invoice_id: invoiceId, state: 'COMPLETE', api_ref: claimId, value: String(serverFee) };
-    const r = await postHook(body, sign(body));
+    const r = await postHook(body, WEBHOOK_CHALLENGE);
     expect(r.status).toBeLessThan(500);
     expect((await db.getClaim(claimId))!.status).toBe('escrow_held');
   });
@@ -1191,8 +1194,8 @@ describe('stage 6 â€” signed IntaSend webhook, reconciliation and escrow', 
     const hashBefore = String((await db.getPickupCode(claimId))!.code_hash);
 
     const body = { invoice_id: invoiceId, state: 'COMPLETE', api_ref: claimId, value: '500' };
-    await postHook(body, sign(body));
-    await postHook(body, sign(body));
+    await postHook(body, WEBHOOK_CHALLENGE);
+    await postHook(body, WEBHOOK_CHALLENGE);
 
     const claim: any = await db.getClaim(claimId);
     expect(claim.status).toBe('escrow_held');

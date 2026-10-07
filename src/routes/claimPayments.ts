@@ -30,6 +30,7 @@ import { requireCustomerAuth } from '../services/customerAuth.ts';
 import { hashCode, timingSafeEqualHex, toE164Kenyan } from '../services/auth.ts';
 import { PaymentService } from '../services/payments.ts';
 import { isPickupEligibleClaimStatus, CLAIM_UNAVAILABLE_MESSAGE } from '../config/claimStatuses.ts';
+import { PAYMENT_SESSION_WINDOW_MS } from '../config/paymentWindows.ts';
 import { toOwnerSafeAgentView, toOwnerSafeItemView, toOwnerSafeClaimView } from '../services/ownerSafeViews.ts';
 
 
@@ -46,6 +47,17 @@ export function registerClaimPaymentRoutes(
     claimGuessLimiter: any;
     paymentSessionStatusLimiter: any;
     claimStatusPollLimiter: any;
+    /**
+     * The ONE canonical financial-confirmation path (server.ts). Injected so the
+     * payment-session status route can perform on-demand provider reconciliation
+     * for a missed webhook WITHOUT inventing a second confirmation implementation.
+     * Returns a pickup code on an actual confirmation, or null otherwise.
+     */
+    processClaimPaymentConfirmed: (
+      claimId: string,
+      invoiceId: string,
+      confirmedAmount?: number | string | null
+    ) => Promise<string | null>;
   }
 ) {
   const {
@@ -59,7 +71,17 @@ export function registerClaimPaymentRoutes(
     claimGuessLimiter,
     paymentSessionStatusLimiter,
     claimStatusPollLimiter,
+    processClaimPaymentConfirmed,
   } = deps;
+
+  // Per-session throttle for ON-DEMAND provider reconciliation (see the session
+  // status route). The route is polled every 3 seconds by the claimant's
+  // browser, so without this a single open tab could hammer IntaSend. The
+  // background sweep is the durable backstop; this only makes the on-demand
+  // path responsive for a missed webhook.
+  const SESSION_RECONCILE_MIN_INTERVAL_MS = 15 * 1000;
+  const lastSessionReconcileAttempt = new Map<string, number>();
+
   function toSafePaymentSession(session: any): any {
     if (!session) return null;
     return {
@@ -202,17 +224,28 @@ export function registerClaimPaymentRoutes(
         // Authoritative server-side amount — never taken from the client.
         const resolvedFee = resolveAuthoritativePaymentFee(item, category);
 
-        // Reuse an existing active (non-terminal) session for this claim so a
-        // refresh or tab-reopen never spawns duplicate concurrent sessions.
-        const existing = (await db.listPaymentSessionsForClaim(claimId))
+        // Reuse an existing active (non-terminal AND not-yet-expired) session for
+        // this claim so a refresh or tab-reopen never spawns duplicate concurrent
+        // sessions. A session whose short STK window has elapsed is NOT reusable:
+        // it is expired here (an authoritative server-side transition) and a FRESH
+        // session is created below, while the CLAIM stays in pending_payment for
+        // the whole 24-hour claim window.
+        const nowMs = Date.now();
+        const activeSession = (await db.listPaymentSessionsForClaim(claimId))
           .find((s: any) => !['confirmed', 'failed', 'cancelled', 'expired'].includes(s.status));
-        if (existing) {
-          return res.json({ success: true, paymentSession: toSafePaymentSession(existing), reused: true });
+        if (activeSession && new Date(activeSession.expires_at).getTime() >= nowMs) {
+          return res.json({ success: true, paymentSession: toSafePaymentSession(activeSession), reused: true });
+        }
+        if (activeSession) {
+          // Stale attempt: expire it so it can never be re-initiated or reused,
+          // then fall through and create a fresh session.
+          await db.expirePaymentSession(activeSession.id);
         }
 
-        // Session window == the claim's payment window (agent_confirmed_at + 15 min).
-        const baseMs = claim.agent_confirmed_at ? new Date(claim.agent_confirmed_at).getTime() : Date.now();
-        const expiresAt = new Date(baseMs + 15 * 60 * 1000);
+        // The individual STK attempt gets its OWN short window — deliberately NOT
+        // tied to agent_confirmed_at, so a claimant who returns hours later can
+        // still open a new attempt while the claim window remains open.
+        const expiresAt = new Date(nowMs + PAYMENT_SESSION_WINDOW_MS);
         const sessionId = 'PS-' + crypto.randomBytes(8).toString('hex').toUpperCase();
         const created = await db.createPaymentSession({
           id: sessionId,
@@ -355,6 +388,43 @@ export function registerClaimPaymentRoutes(
         // claim's URL.
         if (session.claim_id !== claimId) {
           return res.status(403).json({ error: 'Session ya malipo haihusiani na claim hii. / This payment session does not belong to this claim.' });
+        }
+
+        // ------------------------------------------------------------------
+        // ON-DEMAND PROVIDER RECONCILIATION.
+        //
+        // A completed M-Pesa payment must not be lost merely because the webhook
+        // was missed, delayed, or the browser was closed. When the session still
+        // carries a provider invoice and the CLAIM is still within its window,
+        // ask IntaSend for the authoritative status through the ONE canonical
+        // confirmation path — the same function the webhook uses. This can only
+        // ever confirm a real, provider-verified, amount-reconciled payment; the
+        // browser is never trusted to declare success. Throttled per session so
+        // the 3-second poll cannot hammer the provider.
+        // ------------------------------------------------------------------
+        if (
+          claim.status === 'pending_payment'
+          && session.provider_invoice_id
+          && (session.status === 'pending' || session.status === 'expired')
+        ) {
+          const lastAttempt = lastSessionReconcileAttempt.get(sessionId) || 0;
+          if (Date.now() - lastAttempt >= SESSION_RECONCILE_MIN_INTERVAL_MS) {
+            lastSessionReconcileAttempt.set(sessionId, Date.now());
+            try {
+              await processClaimPaymentConfirmed(claimId, session.provider_invoice_id);
+            } catch (reconcileErr: any) {
+              console.error(`[PAYMENT SESSION STATUS] On-demand reconciliation failed for session ${sessionId}:`, reconcileErr);
+            }
+            // Re-read the authoritative state after the attempt.
+            const refreshedClaim = await db.getClaim(claimId);
+            if (refreshedClaim) claim = refreshedClaim;
+            const refreshedSession = await db.getPaymentSessionById(sessionId);
+            if (refreshedSession) {
+              session.status = refreshedSession.status;
+              session.confirmed_at = refreshedSession.confirmed_at;
+              session.provider_reference = refreshedSession.provider_reference;
+            }
+          }
         }
 
         // Authoritative server-side session expiry: a session past its window that

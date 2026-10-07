@@ -137,13 +137,20 @@ a staging operator may choose them deliberately.
 |---|---|---|
 | `INTASEND_PUBLISHABLE_KEY` | Publishable key, sent to the client | No |
 | `INTASEND_SECRET_KEY` | Server-side API key | Yes |
-| `INTASEND_WEBHOOK_SECRET` | Verifies inbound webhooks | Yes |
+| `INTASEND_WEBHOOK_CHALLENGE` | Authenticates inbound collection webhooks (challenge value) | Yes |
 | `DISPUTE_WINDOW_HOURS` | Hours between handover and settlement eligibility | No |
 | `ENABLE_DEV_PAYMENT_SIMULATION` | Enables the payment simulation routes | No |
 
-`INTASEND_WEBHOOK_SECRET` is what makes a webhook trustworthy. Without it, a
-crafted request could mark a claim as paid. This variable is not optional in
-production even though `.env.example` describes the secret as such.
+`INTASEND_WEBHOOK_CHALLENGE` is what makes a webhook trustworthy. IntaSend's
+current collection-webhook contract authenticates the callback with the challenge
+value you configure in the IntaSend dashboard (carried in the payload as
+`challenge`), not with an HMAC signature. Without it, a crafted request could mark
+a claim as paid, so it is not optional in production — the server refuses to boot
+when it is unset or still a placeholder.
+
+The former `INTASEND_WEBHOOK_SECRET` variable (HMAC-SHA256 signature) is no
+longer read. It is retained only as a documented deprecation in `.env.example` so
+an existing deployment is told exactly what changed.
 
 `DISPUTE_WINDOW_HOURS` sets how long a completed handover waits before money is
 released. A longer window protects the platform from fraudulent handovers; a

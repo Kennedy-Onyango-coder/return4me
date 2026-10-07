@@ -11,7 +11,8 @@ timer.
 
 | Sweep | Interval | What it does |
 |---|---|---|
-| `expireStaleClaims` | 60 seconds | Moves unpaid, agent-confirmed claims to `payment_window_expired` and records a payment strike |
+| `expireStaleClaims` | 60 seconds | Moves unpaid, agent-confirmed claims past their 24-hour payment window to `payment_window_expired` and records a payment strike |
+| `reconcilePendingPaymentSessions` | 60 seconds | Recovers a completed M-Pesa payment whose webhook was missed or delayed, via the authoritative IntaSend status API |
 | `releaseDueSettlements` | 5 minutes | Pays the disbursement split for claims whose dispute window has closed |
 | `socialRetrySweep` | 5 minutes | Retries failed found-notice social publications |
 | `notificationRetrySweep` | 5 minutes | Re-dispatches due retryable notifications |
@@ -106,10 +107,17 @@ logs for the specific payout that is failing.
 
 ### A webhook reports a payment but the claim did not move
 
-Check, in order: the webhook signature secret is set; the amount matched the
+Check, in order: `INTASEND_WEBHOOK_CHALLENGE` is set and matches the value
+configured in the IntaSend dashboard; the payload's `topic` is
+`collection_event` and its `state` is `COMPLETE`; the amount matched the
 persisted session; and the claim was still in `pending_payment` when the webhook
 arrived. An amount mismatch is refused by design, and a claim already moved out
-of `pending_payment` means the payment was already applied. See
+of `pending_payment` means the payment was already applied.
+
+If a payment is confirmed at IntaSend but the claim is still `pending_payment`,
+the reconciliation sweep should recover it within a minute (or immediately when
+the claimant taps "check payment status"). Check the `[PAYMENT RECONCILE SWEEP]`
+and `[INTASEND AUTHORITATIVE LOOKUP]` log lines for the reason. See
 [claims-and-payments.md](claims-and-payments.md).
 
 ### Notification rows are stuck in `sending`

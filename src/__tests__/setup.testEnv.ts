@@ -72,6 +72,10 @@ const OUTBOUND_PROVIDER_ENV_VARS = [
   'INTASEND_PUBLISHABLE_KEY',
   'INTASEND_SECRET_KEY',
   'INTASEND_WEBHOOK_SECRET',
+  // Current IntaSend collection webhook authentication value. Neutralised so a
+  // developer's real .env cannot make the webhook contract tests depend on a
+  // machine-specific challenge (the suite sets its own where it needs one).
+  'INTASEND_WEBHOOK_CHALLENGE',
   // Resend — transactional email.
   'RESEND_API_KEY',
   // Social publishing — posts to real public channels.

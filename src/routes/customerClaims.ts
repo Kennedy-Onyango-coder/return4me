@@ -32,6 +32,10 @@ import {
 import { smsRateLimit } from '../services/smsRateLimit.ts';
 import { requireCustomerAuth, generateSecureId, customerOtpLastSent } from '../services/customerAuth.ts';
 import { INACTIVE_CLAIM_STATUSES, isPickupEligibleClaimStatus } from '../config/claimStatuses';
+// The ONE server-authoritative claim payment window (24 hours). Imported rather
+// than re-typed so the customer-facing deadline can never drift from the window
+// server.ts actually enforces (it previously hard-coded 15 minutes here).
+import { CLAIM_PAYMENT_WINDOW_MS } from '../config/paymentWindows';
 import { toOwnerSafeAgentView, toOwnerSafeItemView } from '../services/ownerSafeViews';
 import { compareVerificationAnswers, isAnswerValidationFailure } from '../services/verificationValidation';
 
@@ -119,10 +123,11 @@ const CLAIM_LINK_RESEND_MS = 30 * 1000;
 // spend against a victim's claim, and small enough that an owner who genuinely
 // lost the first message is not locked out for long.
 const PICKUP_CODE_RESEND_COOLDOWN_MS = 2 * 60 * 1000;
-// The payment window the claim lifecycle already uses (agent_confirmed_at + 15
-// minutes — see checkClaimExpiry in server.ts). Used only to derive a
-// display-safe `expires_at`; it does not itself expire anything.
-const PAYMENT_WINDOW_MS = 15 * 60 * 1000;
+// The claim payment window the lifecycle enforces (agent_confirmed_at + the
+// canonical 24-hour CLAIM_PAYMENT_WINDOW_MS — see config/paymentWindows.ts and
+// checkClaimExpiry in server.ts). Used only to derive a display-safe
+// `expires_at`; it does not itself expire anything.
+const PAYMENT_WINDOW_MS = CLAIM_PAYMENT_WINDOW_MS;
 
 const MESSAGES = {
   notLinked: 'Claim hii haipo kwenye akaunti yako. / This claim is not linked to your account.',

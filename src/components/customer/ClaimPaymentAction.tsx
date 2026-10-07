@@ -60,9 +60,10 @@ export interface ClaimPaymentActionProps {
 // shared vocabulary.
 const PAYABLE_STATUS = 'pending_payment';
 
-// The server opens a 15-minute payment window. The poll mirrors OwnerView: a
-// 3-second cadence with a 90-second ceiling so a stalled provider can never
-// leave an unbounded request loop running.
+// The CLAIM stays open for a full 24 hours after agent confirmation (see
+// config/paymentWindows.ts); each individual M-Pesa prompt is short-lived. The
+// poll mirrors OwnerView: a 3-second cadence with a 90-second ceiling so a
+// stalled provider can never leave an unbounded request loop running.
 const POLL_INTERVAL_MS = 3000;
 const POLL_TIMEOUT_MS = 90000;
 
@@ -245,11 +246,19 @@ export default function ClaimPaymentAction({
         setPolling(false);
         setPhase('confirmed');
         onConfirmedRef.current();
-      } else if (sessionStatus === 'expired' || claimStatus === 'payment_window_expired') {
+      } else if (claimStatus === 'payment_window_expired') {
+        // The CLAIM's 24-hour window has closed — the only terminal case that
+        // requires re-linking (a fresh claim must be created).
         setPolling(false);
         setPhase('error');
         setNote('The payment window has closed. Link the claim again from the item page to start a new payment.');
         onConfirmedRef.current();
+      } else if (sessionStatus === 'expired') {
+        // The individual M-Pesa prompt expired, but the CLAIM is still within its
+        // 24-hour payment window. Do NOT end the claim — offer a fresh prompt.
+        setPolling(false);
+        setPhase('error');
+        setNote('That M-Pesa prompt expired, but your claim is still open. Tap "Try again" to get a new prompt.');
       } else if (sessionStatus === 'failed') {
         setPolling(false);
         setPhase('error');

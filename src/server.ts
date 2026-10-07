@@ -172,6 +172,11 @@ import { registerWebhookRoutes } from './routes/webhooks';
 // testing. confirm-viewing and confirm-handover deliberately remain inline.
 import { registerAgentOperationalRoutes } from './routes/agentOps';
 import { claimStatusPollLimiter, paymentSessionStatusLimiter } from './config/claimStatusPollLimiter';
+// Server-authoritative payment timing policy. The claim-level window is 24
+// HOURS (the product requirement) and is deliberately distinct from the short
+// per-attempt STK session window — see config/paymentWindows.ts for why the two
+// must never be collapsed back into one number.
+import { hasClaimPaymentWindowElapsed } from './config/paymentWindows';
 // PHASE 10 (F-1): the ONE server-port resolver. This file previously hardcoded
 // the listen port and ignored the environment, which breaks port-injecting
 // container platforms (see config/serverPort.ts for the full reasoning).
@@ -503,8 +508,8 @@ function assertBootSecrets() {
     if (isPlaceholderKey(process.env.INTASEND_PUBLISHABLE_KEY) || isPlaceholderKey(process.env.INTASEND_SECRET_KEY)) {
       throw new Error('FATAL: INTASEND_PUBLISHABLE_KEY / INTASEND_SECRET_KEY are missing or still placeholder values in production mode. Without real keys, all M-Pesa payments would be silently simulated as successful with no real money moving. The app refuses to boot.');
     }
-    if (isPlaceholderKey(process.env.INTASEND_WEBHOOK_SECRET)) {
-      throw new Error('FATAL: INTASEND_WEBHOOK_SECRET is missing or still a placeholder value in production mode. Without it, payment webhook signatures cannot be verified, and the app refuses to boot rather than accept unverified payment confirmations.');
+    if (isPlaceholderKey(process.env.INTASEND_WEBHOOK_CHALLENGE)) {
+      throw new Error('FATAL: INTASEND_WEBHOOK_CHALLENGE is missing or still a placeholder value in production mode. Without it, IntaSend collection webhooks cannot be authenticated (the current IntaSend contract authenticates with the configured challenge, not an HMAC signature), and the app refuses to boot rather than accept unverified payment confirmations.');
     }
     if (smsEnabled && (isPlaceholderKey(process.env.AFRICASTALKING_API_KEY) || isPlaceholderKey(process.env.AFRICASTALKING_USERNAME) || isPlaceholderKey(process.env.AFRICASTALKING_SENDER_ID))) {
       throw new Error('FATAL: Africa\'s Talking configuration is missing or still placeholder values in production mode while SMS_ENABLED is "true". Without it, secret pickup codes would only ever be logged to the server console, never actually delivered to owners by SMS. Enable valid Africa\'s Talking credentials and an approved Sender ID, or set SMS_ENABLED="false" to launch on email/Resend alone. The app refuses to boot.');
@@ -1031,6 +1036,15 @@ async function startServer() {
     // Safe across multiple instances because the claim is a database
     // compare-and-swap, not an in-process lock â€” see claimDueNotificationRetries.
     setInterval(notificationRetrySweep, 5 * 60 * 1000);
+    // Durable payment reconciliation every 60 seconds: recovers a completed
+    // M-Pesa payment whose webhook was missed or delayed, without depending on
+    // the claimant's browser being open. It runs the ONE canonical confirmation
+    // path (attached to the app by createApp - see reconcilePendingPaymentSessions).
+    const reconcileSweep = (app as any).__reconcilePendingPaymentSessions;
+    if (typeof reconcileSweep === 'function') {
+      setInterval(reconcileSweep, 60 * 1000);
+    }
+
   });
 }
 
@@ -2745,6 +2759,12 @@ async function createApp() {
     claimGuessLimiter,
     paymentSessionStatusLimiter,
     claimStatusPollLimiter,
+    // The ONE canonical financial-confirmation path, shared with the IntaSend
+    // webhook and the background reconciliation sweep. Injected (never moved or
+    // duplicated) so the payment-session status route can perform ON-DEMAND
+    // provider reconciliation for a missed webhook without inventing a second
+    // implementation.
+    processClaimPaymentConfirmed,
   });
 
   // 6c. Short-lived, single-purpose payment authorization. Owners have no
@@ -2965,7 +2985,7 @@ async function createApp() {
     if (session && sessionRecon === 'unknown') {
       // Escalate to the provider BEFORE the session is marked confirmed, so a
       // payment we cannot verify never consumes the session's one confirmation.
-      const resolved = await PaymentService.fetchAuthoritativeCollectionStatus(invoiceId, session.amount);
+      const resolved = await PaymentService.fetchAuthoritativeCollectionStatus(invoiceId, session.amount, session.claim_id || claimId);
       if (!resolved.verified) {
         await db.logAudit('SYSTEM', 'WEBHOOK_AMOUNT_UNVERIFIED', `Claim ${claimId} session ${session.id} invoice ${invoiceId}: callback amount unusable and provider verification failed (${resolved.reason}). Payment NOT confirmed; escrow withheld.`);
         console.error(`[WEBHOOK SESSION AMOUNT] Provider verification failed for session ${session.id} (${resolved.reason}). Escrow withheld.`);
@@ -3014,7 +3034,7 @@ async function createApp() {
       // This is the legacy/direct-payment path (no payment_sessions row): the
       // callback carried no usable amount, so the provider is the only remaining
       // authority. Without a verified amount we do NOT enter escrow.
-      const resolved = await PaymentService.fetchAuthoritativeCollectionStatus(invoiceId, expectedFee);
+      const resolved = await PaymentService.fetchAuthoritativeCollectionStatus(invoiceId, expectedFee, claimId);
       if (!resolved.verified) {
         await db.logAudit('SYSTEM', 'WEBHOOK_AMOUNT_UNVERIFIED', `Claim ${claimId} invoice ${invoiceId}: no usable amount in callback and provider verification failed (${resolved.reason}). Payment NOT confirmed; escrow withheld.`);
         console.error(`[WEBHOOK AMOUNT RECONCILIATION] Provider verification failed for claim ${claimId} (${resolved.reason}). Escrow withheld.`);
@@ -4727,6 +4747,58 @@ async function createApp() {
 
     return res.status(status).json({ error: message });
   });
+  // ---------------------------------------------------------------------
+  // DURABLE PAYMENT RECONCILIATION SWEEP (canonical-path only).
+  //
+  // Runs the SAME financial confirmation the webhook runs —
+  // processClaimPaymentConfirmed — for any claim still in pending_payment that
+  // has a payment session carrying a provider invoice. That canonical function
+  // asks IntaSend for the authoritative status (fetchAuthoritativeCollectionStatus),
+  // reconciles the amount and invoice identity, and performs the session CAS and
+  // the claim CAS. This sweep therefore:
+  //   * never re-initiates an STK push,
+  //   * never duplicates a confirmation (the CAS guards are the single winner),
+  //   * never confirms an amount mismatch or another claim's invoice,
+  //   * respects a per-invoice throttle so it cannot hammer IntaSend, and
+  //   * is fully wrapped in try/catch so a provider outage cannot crash the server.
+  // It is defined here (not at module level) so it shares the ONE closure that
+  // owns processClaimPaymentConfirmed, and it is attached to the app so
+  // startServer() can schedule it without createApp() installing any timer itself
+  // (tests mount createApp() and must never start a sweep).
+  async function reconcilePendingPaymentSessions() {
+    try {
+      const allClaims = await db.getClaims();
+      let processed = 0;
+      for (const claim of allClaims) {
+        if (processed >= RECONCILE_MAX_PER_SWEEP) break;
+        if (claim.status !== 'pending_payment') continue;
+        const sessions = await db.listPaymentSessionsForClaim(claim.id);
+        for (const session of sessions) {
+          if (processed >= RECONCILE_MAX_PER_SWEEP) break;
+          // Only sessions that could still be confirmed AND that carry a
+          // provider invoice we can actually ask the provider about.
+          if (!session || !session.provider_invoice_id) continue;
+          if (session.status !== 'pending' && session.status !== 'expired') continue;
+          const last = lastReconcileAttemptByInvoice.get(session.provider_invoice_id) || 0;
+          if (Date.now() - last < RECONCILE_MIN_INTERVAL_MS) continue;
+          lastReconcileAttemptByInvoice.set(session.provider_invoice_id, Date.now());
+          processed++;
+          try {
+            const pickupCode = await processClaimPaymentConfirmed(claim.id, session.provider_invoice_id);
+            if (pickupCode) {
+              console.log(`[PAYMENT RECONCILE SWEEP] Recovered a completed payment for claim ${claim.id} (session ${session.id}).`);
+            }
+          } catch (err) {
+            console.error(`[PAYMENT RECONCILE SWEEP] Reconciliation failed for session ${session.id}:`, err);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[PAYMENT RECONCILE SWEEP] Sweep failed:', err);
+    }
+  }
+  (app as any).__reconcilePendingPaymentSessions = reconcilePendingPaymentSessions;
+
   return app;
 }
 
@@ -4754,9 +4826,12 @@ async function generateUniqueClaimId(maxAttempts: number = 5): Promise<string> {
 }
 
 async function checkClaimExpiry(claim: any): Promise<any> {
+  // 24-HOUR CLAIM PAYMENT WINDOW (config/paymentWindows.ts). A claimant who logs
+  // out, closes the browser or simply returns later keeps the claim for a full
+  // day; only the individual short-lived STK session expires quickly, and that
+  // never expires the claim.
   if (claim.status === 'pending_payment' && claim.agent_confirmed_at) {
-    const confirmedTime = new Date(claim.agent_confirmed_at).getTime();
-    if (Date.now() - confirmedTime > 15 * 60 * 1000) {
+    if (hasClaimPaymentWindowElapsed(claim.agent_confirmed_at)) {
       console.log(`[INLINE-CHECK] Claim ${claim.id} payment window expired. Expiring now.`);
       try {
         const expired = await db.expirePendingPaymentClaim(claim.id);
@@ -4857,14 +4932,30 @@ async function socialRetrySweep() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// DURABLE PAYMENT RECONCILIATION — sweep policy.
+//
+// A completed M-Pesa payment must not depend on the claimant keeping the
+// browser open, on a 90-second frontend poll, or on a single webhook delivery.
+// RECONCILE_MIN_INTERVAL_MS throttles how often a SINGLE provider invoice is
+// re-queried (avoiding hammering IntaSend across poll-heavy periods), and
+// RECONCILE_MAX_PER_SWEEP bounds the work a single sweep run may do so a large
+// backlog can never hold the process.
+// ---------------------------------------------------------------------------
+const RECONCILE_MIN_INTERVAL_MS = 30 * 1000; // at most one provider query per invoice per 30s
+const RECONCILE_MAX_PER_SWEEP = 25;
+// invoice id -> epoch ms of the last reconciliation attempt made in this process
+const lastReconcileAttemptByInvoice = new Map<string, number>();
+
 async function expireStaleClaims() {
   try {
     const allClaims = await db.getClaims();
     const now = Date.now();
     for (const claim of allClaims) {
       if (claim.status === 'pending_payment' && claim.agent_confirmed_at) {
-        const confirmedTime = new Date(claim.agent_confirmed_at).getTime();
-        if (now - confirmedTime > 15 * 60 * 1000) {
+        // 24-HOUR claim payment window (config/paymentWindows.ts) — not the
+        // 15-minute STK session window.
+        if (hasClaimPaymentWindowElapsed(claim.agent_confirmed_at, now)) {
           console.log(`[SWEEP] Claim ${claim.id} payment window expired. Transitioning status and recording strike for ${maskPhoneForLog(claim.owner_phone)}`);
           try {
             const expired = await db.expirePendingPaymentClaim(claim.id);

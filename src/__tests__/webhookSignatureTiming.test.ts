@@ -3,19 +3,18 @@ import fs from 'fs';
 import path from 'path';
 
 // Regression test: the IntaSend webhook handler (POST /api/webhooks/intasend)
-// used to compare its computed HMAC-SHA256 signature against the header/
-// embedded signature with plain `===` — a variable-time string comparison.
-// Every other secret comparison in this codebase (OTP codes, pickup codes,
-// the claim payment-auth token) goes through timingSafeEqualHex specifically
-// to avoid this class of issue; the webhook handler was the one place that
-// didn't. Static source-audit test (same pattern as adminRouteAudit.test.ts)
-// since server.ts doesn't export its Express app separately from
-// startServer()'s bootstrap.
+// authenticates collection events with the configured CHALLENGE value (sent in
+// the payload), NOT with an HMAC signature header. This replaced a prior HMAC
+// implementation whose `===` comparison was variable-time — and, more
+// importantly, whose contract did not match IntaSend's collection webhook at
+// all, so real completed payments were rejected as unauthenticated and left the
+// claim stuck in `pending_payment`.
 //
-// P2-A3.3: the route was extracted verbatim into routes/webhooks.ts, so the
-// resolver below reads from whichever file owns it. Every assertion is
-// unchanged — this is a source-LOCATION change only, and the assertion that
-// both checks are timing-safe still has to find exactly two.
+// Every secret comparison in this codebase must be timing-safe. The challenge
+// is an opaque string (not a hex digest), so it is hashed to a fixed length and
+// compared with crypto.timingSafeEqual. This is a static source-audit test
+// (server.ts's Express app is not separately exported), following the same
+// pattern as adminRouteAudit.test.ts.
 
 const serverTs = fs.readFileSync(path.resolve(__dirname, '../server.ts'), 'utf8');
 const webhooksTs = fs.readFileSync(path.resolve(__dirname, '../routes/webhooks.ts'), 'utf8');
@@ -32,16 +31,25 @@ function routeBody(method: 'get' | 'post', route: string): string {
   return webhooksTs.slice(moduleStart, moduleStart + 3000);
 }
 
-describe('IntaSend webhook signature verification is timing-safe', () => {
+describe('IntaSend webhook challenge verification is timing-safe', () => {
   const body = routeBody('post', '/api/webhooks/intasend');
 
-  it('does not use a plain === comparison against the computed HMAC digest', () => {
-    expect(body).not.toMatch(/computed === signatureHeader/);
-    expect(body).not.toMatch(/computed === signature\b/);
+  it('does not compare the challenge with a plain === ', () => {
+    expect(body).not.toMatch(/challenge\s*===\s*configuredChallenge/);
+    expect(body).not.toMatch(/configuredChallenge\s*===\s*challenge/);
   });
 
-  it('uses timingSafeEqualHex for both the header and embedded signature checks', () => {
-    const matches = body.match(/timingSafeEqualHex\(computed,/g) || [];
-    expect(matches.length).toBe(2);
+  it('verifies the challenge through the timing-safe helper', () => {
+    expect(body).toContain('challengeMatches(payload.challenge, configuredChallenge)');
+  });
+
+  it('the helper hashes both sides to a fixed length and uses crypto.timingSafeEqual', () => {
+    const start = webhooksTs.indexOf('function challengeMatches');
+    expect(start, 'challengeMatches helper not found').toBeGreaterThan(-1);
+    const helper = webhooksTs.slice(start, start + 700);
+    // Fixed-length digests make crypto.timingSafeEqual safe to call (it requires
+    // equal-length buffers) and stop a length difference leaking via early exit.
+    expect(helper).toMatch(/createHash\('sha256'\)/);
+    expect(helper).toMatch(/crypto\.timingSafeEqual\(/);
   });
 });

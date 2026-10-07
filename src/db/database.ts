@@ -4974,16 +4974,25 @@ await drizzleDb.transaction(async (tx) => {
     }
   }
 
-  // Compare-and-swap: pending -> confirmed, once. A duplicate/retried provider
-  // webhook for an already-confirmed session is a no-op (returns false), one
-  // layer of the end-to-end webhook idempotency (the claim-level
-  // attemptClaimEscrowHold is the other).
+  // Compare-and-swap: pending (or locally-expired) -> confirmed, once. A
+  // duplicate/retried provider webhook for an already-confirmed session is a
+  // no-op (returns false), one layer of the end-to-end webhook idempotency (the
+  // claim-level attemptClaimEscrowHold is the other).
+  //
+  // WHY 'expired' IS INCLUDED: the session window is a short STK-attempt window,
+  // NOT the claim's 24-hour payment window. If the provider authoritatively
+  // reports COMPLETE (a late M-Pesa approval, or a webhook that arrived after the
+  // session was locally expired), the money HAS moved and the confirmation must
+  // not be silently dropped just because this process had already given up on
+  // the attempt. A session that never produced a provider invoice can never be
+  // confirmed here, because attemptClaimEscrowHold / the caller only reach this
+  // with a real invoice id.
   public async attemptPaymentSessionConfirm(id: string): Promise<boolean> {
     try {
       const rows = await drizzleDb
         .update(paymentSessionsTable)
         .set({ status: 'confirmed', confirmed_at: new Date() })
-        .where(and(eq(paymentSessionsTable.id, id), eq(paymentSessionsTable.status, 'pending')))
+        .where(and(eq(paymentSessionsTable.id, id), sql`${paymentSessionsTable.status} IN ('pending', 'expired')`))
         .returning();
       return rows.length > 0;
     } catch (error) {

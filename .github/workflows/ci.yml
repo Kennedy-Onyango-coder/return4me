@@ -94,7 +94,7 @@ jobs:
           # (every one of these vars is legitimately read via
           # `process.env.X` throughout src/, which must not itself trip
           # this check), and not empty/quotes-only.
-          PATTERN='(JWT_SECRET|ADMIN_PASSCODE|DOC_HASH_SALT|INTASEND_SECRET_KEY|INTASEND_WEBHOOK_SECRET|STORAGE_SECRET|SQL_ADMIN_PASSWORD|RESEND_API_KEY|TELEGRAM_BOT_TOKEN|TWITTER_API_SECRET|TWITTER_ACCESS_TOKEN_SECRET|FACEBOOK_PAGE_ACCESS_TOKEN|AFRICASTALKING_API_KEY)\s*[:=]\s*["'"'"']?(?!REPLACE_WITH_|MY_|process\.env\.|["'"'"']?\s*$)[A-Za-z0-9+/_.=-]{8,}'
+          PATTERN='(JWT_SECRET|ADMIN_PASSCODE|DOC_HASH_SALT|INTASEND_SECRET_KEY|INTASEND_WEBHOOK_CHALLENGE|INTASEND_WEBHOOK_SECRET|STORAGE_SECRET|SQL_ADMIN_PASSWORD|RESEND_API_KEY|TELEGRAM_BOT_TOKEN|TWITTER_API_SECRET|TWITTER_ACCESS_TOKEN_SECRET|FACEBOOK_PAGE_ACCESS_TOKEN|AFRICASTALKING_API_KEY)\s*[:=]\s*["'"'"']?(?!REPLACE_WITH_|MY_|process\.env\.|["'"'"']?\s*$)[A-Za-z0-9+/_.=-]{8,}'
           MATCHES=$(echo "$FILES" | xargs -I{} grep -lPn "$PATTERN" {} 2>/dev/null || true)
           if [ -n "$MATCHES" ]; then
             echo "::error::Possible committed secret found in: $MATCHES"

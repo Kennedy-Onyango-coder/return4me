@@ -177,7 +177,7 @@ describe('Case 3 — making SMS optional must not have made anything else option
       "if (process.env.ALLOW_MOCK_OTP_BYPASS === 'true') {",
       "if (process.env.ENABLE_DEV_PAYMENT_SIMULATION === 'true') {",
       'if (isPlaceholderKey(process.env.INTASEND_PUBLISHABLE_KEY) || isPlaceholderKey(process.env.INTASEND_SECRET_KEY)) {',
-      'if (isPlaceholderKey(process.env.INTASEND_WEBHOOK_SECRET)) {',
+      'if (isPlaceholderKey(process.env.INTASEND_WEBHOOK_CHALLENGE)) {',
       'if (!process.env.JWT_SECRET) {',
       'if (!process.env.DOC_HASH_SALT) {',
       'if (!process.env.ADMIN_PASSCODE) {',

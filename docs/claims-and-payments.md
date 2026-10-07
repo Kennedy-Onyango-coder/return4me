@@ -72,8 +72,12 @@ non-retryable as notifications: the exact message cannot be rebuilt. See
 ### Agent confirmation
 
 An agent assigned to the item confirms the item is physically present. This
-moves the claim to `pending_payment` and opens a payment window, recorded as
-`agent_confirmed_at` plus a 15 minute window.
+moves the claim to `pending_payment` and opens the claim's payment window,
+recorded as `agent_confirmed_at` plus a 24-hour window (`CLAIM_PAYMENT_WINDOW_MS`
+in `config/paymentWindows.ts`). The window is server-authoritative and is
+deliberately distinct from a single M-Pesa prompt's short session window: an
+individual prompt may expire within minutes, but the CLAIM remains payable for
+the whole day and the claimant can request a fresh prompt at any point.
 
 ### Payment
 
@@ -103,8 +107,14 @@ against a different payment reference than the one already recorded.
 ### Amount reconciliation
 
 The webhook amount is compared against the persisted payment session. A mismatch
-is refused, not accepted and not adjusted. The webhook is verified against
-`INTASEND_WEBHOOK_SECRET` before any of this.
+is refused, not accepted and not adjusted. The webhook is authenticated against
+`INTASEND_WEBHOOK_CHALLENGE` before any of this.
+
+A completed payment that the webhook misses is not lost: the claimant's
+"check payment status" action and a background reconciliation sweep both ask the
+authoritative IntaSend payment-status API, and a COMPLETE, amount-reconciled
+response is confirmed through the SAME canonical confirmation path the webhook
+uses.
 
 A mismatch is evidence of either a provider fault or something the application
 does not understand, and quietly reconciling the difference would move money on
@@ -228,9 +238,11 @@ administrator can also settle manually through
 
 ### Payment window expiry
 
-A claim that is confirmed but not paid within the window is swept every 60
+A claim that is confirmed but not paid within its window is swept every 60
 seconds and moved to `payment_window_expired`, and a payment strike is recorded
-against the phone number. Expiry is abandonment, not a rival claim, which is why
+against the phone number. The window is 24 hours from `agent_confirmed_at`
+(`CLAIM_PAYMENT_WINDOW_MS`), so a claimant who logs out or closes the browser
+does not lose the claim. Expiry is abandonment, not a rival claim, which is why
 that status is inactive and does not block a new claim on the item.
 
 Strikes accumulate in `claim_payment_strikes` and inform abuse decisions.

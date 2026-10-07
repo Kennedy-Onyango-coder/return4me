@@ -11,9 +11,16 @@ function maskPhoneForLog(phone: string | null | undefined): string {
   return clean.slice(0, -6) + '***' + clean.slice(-3);
 }
 
-// Configuration variables for IntaSend
+// Configuration variables for IntaSend.
+//
+// PRODUCTION HOST: the current IntaSend API is served from api.intasend.com.
+// The previous value (the legacy `payment.` subdomain host) no longer matches
+// the documented contract — the status reconciliation below issues a POST to
+// `{base}/payment/status/`, which must resolve against api.intasend.com in
+// production (and sandbox.intasend.com in sandbox). The same host is used for
+// the STK collection and disburse/refund calls.
 const INTASEND_BASE_URL = process.env.NODE_ENV === 'production'
-  ? 'https://payment.intasend.com/api/v1'
+  ? 'https://api.intasend.com/api/v1'
   : 'https://sandbox.intasend.com/api/v1';
 
 // Recognizes an unset/placeholder API key under any of the common
@@ -277,7 +284,8 @@ export const PaymentService = {
    */
   async fetchAuthoritativeCollectionStatus(
     invoiceId: string,
-    expectedAmount: number | string
+    expectedAmount: number | string,
+    expectedApiRef?: string | null
   ): Promise<{
     verified: boolean;
     reason: string;
@@ -308,14 +316,25 @@ export const PaymentService = {
 
     let data: any;
     try {
+      // CURRENT PROVIDER CONTRACT (IntaSend Payment Status):
+      //   POST {base}/payment/status/
+      //   body: { "invoice_id": "<id>" }
+      //   response: { invoice: { invoice_id, state, value, api_ref, provider_ref, ... } }
+      //
+      // This replaced a GET {base}/payment/status/{invoiceId} call against the
+      // legacy `payment.` host, which the current API no longer serves — so
+      // every reconciliation attempt 404'd and a COMPLETE payment could never be
+      // confirmed from the provider side (the other half of the
+      // real-money-stuck-as-pending defect).
       const response = await fetchWithTimeout(
-        `${INTASEND_BASE_URL}/payment/status/${encodeURIComponent(trimmedInvoice)}`,
+        `${INTASEND_BASE_URL}/payment/status/`,
         {
-          method: 'GET',
+          method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${secretKey}`,
           },
+          body: JSON.stringify({ invoice_id: trimmedInvoice }),
         },
         12000
       );
@@ -341,6 +360,20 @@ export const PaymentService = {
     // with a different invoice is not evidence about this payment.
     if (!providerInvoiceId || providerInvoiceId !== trimmedInvoice) {
       return unverified('provider_invoice_identity_mismatch', { providerInvoiceId });
+    }
+
+    // CROSS-CLAIM ISOLATION (defence in depth). api_ref is the merchant
+    // (Return4me) reference, which is set to the claim id when the collection is
+    // created. When the caller knows which claim this invoice must belong to,
+    // a response whose api_ref names a DIFFERENT claim is not evidence about
+    // this payment and is refused — the same guarantee the session's
+    // uq_payment_sessions_provider_invoice index enforces at the DB layer,
+    // re-checked against the provider's own record.
+    if (expectedApiRef != null && String(expectedApiRef).trim() !== '') {
+      const providerApiRef = invoice.api_ref != null ? String(invoice.api_ref).trim() : null;
+      if (!providerApiRef || providerApiRef !== String(expectedApiRef).trim()) {
+        return unverified('provider_api_ref_mismatch', { providerInvoiceId, providerApiRef });
+      }
     }
 
     const providerState = invoice.state ? String(invoice.state).trim().toUpperCase() : null;
@@ -371,7 +404,13 @@ export const PaymentService = {
       providerState,
       providerAmount,
       providerInvoiceId,
-      providerReference: invoice.transaction_id ? String(invoice.transaction_id) : null,
+      // provider_ref is the PROVIDER/M-Pesa transaction reference. It is the
+      // only provider-side reference that is evidence about the money movement,
+      // and it is deliberately returned as an opaque string — never treated as
+      // proof of payment on its own (the `verified` flag, state and amount are).
+      providerReference: invoice.provider_ref
+        ? String(invoice.provider_ref)
+        : (invoice.transaction_id ? String(invoice.transaction_id) : null),
     };
   },
 

@@ -87,6 +87,7 @@ Five sweeps run on timers in every process, started when the server listens:
 | Sweep | Interval |
 |---|---|
 | Claim payment window expiry | 60 seconds |
+| Payment reconciliation | 60 seconds |
 | Due settlements | 5 minutes |
 | Social publication retry | 5 minutes |
 | Notification retry | 5 minutes |
@@ -129,7 +130,7 @@ send an activation email.
 | `RESEND_FROM_EMAIL` | An unverified or Resend test sender restricts delivery to the API key owner. Activation and handover emails appear to send and never arrive. |
 | `JWT_SECRET` | Code-level fallback means a missing value starts the server with a publicly known signing key. |
 | `DOC_HASH_SALT` | Falls back to `JWT_SECRET`; rotating the JWT secret then changes every document hash and empties in-flight rate-limit buckets. |
-| `INTASEND_WEBHOOK_SECRET` | Unset means a webhook cannot be verified, and a crafted request could mark a claim as paid. |
+| `INTASEND_WEBHOOK_CHALLENGE` | Unset means a collection webhook cannot be authenticated, and a crafted request could mark a claim as paid. The server refuses to boot in production without it. |
 | `SMS_ENABLED` | Off is the recommended launch setting: SMS is skipped and fails closed, and the Africa's Talking credentials are not required to boot. Set to `true` only with real credentials and an approved Sender ID — from then on a missing or placeholder value refuses to boot. |
 
 SMS is optional at launch. `SMS_ENABLED="false"` is the recommended initial
