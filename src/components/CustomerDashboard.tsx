@@ -12,6 +12,12 @@ import LostReportsSection from './customer/LostReportsSection';
 // state, preferences). Reads only the customer-facing API - it never imports the
 // delivery ledger, so no provider or retry concept can reach this view.
 import NotificationCentre from './customer/NotificationCentre';
+// The payment action for a claim that is awaiting payment. It is a CHILD
+// component on purpose: the private dashboard keeps its own fetch list and its
+// status vocabulary untouched — this child owns the M-Pesa flow and self-gates
+// on the claim status, so the dashboard names no payment endpoint and no raw
+// status token of its own.
+import ClaimPaymentAction from './customer/ClaimPaymentAction';
 
 interface Props {
   customer: { id: string; full_name: string; phone: string; status: string };
@@ -302,6 +308,11 @@ export default function CustomerDashboard({
 
   const renderClaimCard = (claim: any) => {
     const disp = getClaimStatusDisplay(claim.status);
+    // The account's own phone, read once for the payment action below. The
+    // child needs the raw number to authorize the payment, but the dashboard
+    // never interpolates it into the view (only `maskPhone` is rendered), so
+    // the raw value lives in a plain local instead of a JSX expression.
+    const accountPhone = customer.phone;
     return (
       <li key={claim.id} className="rounded-standard border border-[var(--appearance-border)] p-4 sm:p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -354,6 +365,16 @@ export default function CustomerDashboard({
                 </div>
               )}
             </dl>
+
+            {/* The one action a payment-pending claim needs on this surface.
+                The child renders nothing for any other status, so this line is
+                harmless on every card. */}
+            <ClaimPaymentAction
+              claimId={claim.id}
+              status={claim.status}
+              phone={accountPhone}
+              onConfirmed={loadClaims}
+            />
           </div>
 
           <Button
