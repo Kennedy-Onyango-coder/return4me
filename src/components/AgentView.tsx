@@ -6,7 +6,7 @@ import AgentHub from './agent/AgentHub';
 import { ShieldCheck, Plus, CheckCircle, PackageOpen, HelpCircle, Loader2, AlertCircle, Lock, Eye, Camera, Upload, MapPin, Mail } from 'lucide-react';
 import { countiesByUxGroup } from '../config/kenyaCounties';
 import { administrativeUnitsForCounty } from '../config/kenyaAdministrativeUnits';
-import { detectBrowserLocation, type DetectedLocation } from '../services/browserLocation';
+import { detectBrowserLocation, hasGeographyConflict, type DetectedLocation } from '../services/browserLocation';
 import { useAgentOperations } from '../hooks/useAgentOperations';
 import { Banner, Button, ICON_SIZE, Input } from './ui';
 import Skeleton from './ui/Skeleton';
@@ -503,6 +503,19 @@ export default function AgentView({ lang, token, setToken, categories, refreshCa
                 {agentDetectedLocation.accuracy !== null && (
                   <p className="text-caption text-[var(--appearance-text-secondary)]">
                     {tr('GPS accuracy', 'Usahihi wa GPS')}: ±{Math.round(agentDetectedLocation.accuracy)} {tr('metres', 'mita')}
+                  </p>
+                )}
+                {agentDetectedLocation.accuracyTier !== 'strong' && (
+                  <p className="text-caption text-[var(--appearance-text-secondary)]">
+                    {agentDetectedLocation.accuracyTier === 'unknown'
+                      ? tr('Location accuracy is not available. Treat this as an approximate suggestion.', 'Usahihi wa eneo haupatikani. Chukulia hii kama pendekezo la kukisia.')
+                      : tr('Location accuracy is low. Treat this as an approximate suggestion.', 'Usahihi wa eneo ni mdogo. Chukulia hii kama pendekezo la kukisia.')}
+                  </p>
+                )}
+                {hasGeographyConflict(agentCounty, agentDetectedLocation.county) && (
+                  <p className="text-caption text-[var(--appearance-text-secondary)]">
+                    {tr('Your selected service area differs from the detected area. Using this location will replace your selection.', 'Eneo lako la huduma lililochaguliwa linatofautiana na eneo lililogunduliwa. Kutumia eneo hili kutabadilisha chaguo lako.')}{' '}
+                    <strong>{agentCounty} → {agentDetectedLocation.county}</strong>
                   </p>
                 )}
                 <Button type="button" variant="secondary" size="md" className="w-full" onClick={applyDetectedAgentLocation}>

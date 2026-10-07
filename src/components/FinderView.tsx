@@ -13,7 +13,7 @@ import { translations } from '../types';
 // expected. The exact-location field stays free text.
 import { countiesByUxGroup } from '../config/kenyaCounties';
 import { administrativeUnitsForCounty } from '../config/kenyaAdministrativeUnits';
-import { detectBrowserLocation, type DetectedLocation } from '../services/browserLocation';
+import { detectBrowserLocation, hasGeographyConflict, type DetectedLocation } from '../services/browserLocation';
 import { Camera, Upload, AlertCircle, AlertTriangle, MapPin, CheckCircle, Shield, ArrowRight, Loader2, RefreshCw, X, type LucideIcon } from 'lucide-react';
 // UX-05 — the guided five-stage journey is assembled from the shared UI
 // foundation (Stepper + the Input/Select/Button primitives) instead of
@@ -347,17 +347,30 @@ export default function FinderView({ lang, categories, categoriesLoading = false
       setLongitude(result.location.longitude);
       setGpsAccuracy(result.location.accuracy);
       setDetectedLocation(result.location);
-      setGpsMessage(result.location.county ? 'Detected location applied. You can still edit any field.' : 'GPS coordinates captured. We could not reliably determine your county or sub-county; enter them manually.');
+      // DETECTION NEVER APPLIES GEOGRAPHY BY ITSELF — it only captures the
+      // coordinates and offers a suggestion the Finder must confirm below. The
+      // wording distinguishes a strong fix from a coarse one and never claims
+      // the area is verified.
+      setGpsMessage(
+        result.location.county
+          ? (result.location.accuracyTier === 'strong'
+              ? 'Location detected. Review the suggested area below, then confirm it or keep your own selection.'
+              : 'Location detected, but the reading is not highly precise. Review the suggested area below before using it.')
+          : 'GPS coordinates captured. We could not reliably determine your county or sub-county; enter them manually.',
+      );
     }
     setGpsLoading(false);
   };
 
   const useDetectedLocation = () => {
     if (!detectedLocation?.county) return;
+    // The ONLY path that may change the Finder's geography — an explicit tap on
+    // "Use this location". Detection itself never mutates a selection, and the
+    // server re-validates the county/sub-county pairing regardless.
     setFoundCounty(detectedLocation.county);
     setFoundAdministrativeUnit(detectedLocation.subCountyId ?? '');
     if (detectedLocation.place && !locationDescription.trim()) setLocationDescription(detectedLocation.place);
-    setGpsMessage(detectedLocation.subCountyId ? 'Detected location applied. You can still edit any field.' : 'We detected your county but could not reliably determine your sub-county. Please select it manually.');
+    setGpsMessage(detectedLocation.subCountyId ? 'Suggested area applied. You can still edit any field.' : 'We detected your county but could not reliably determine your sub-county. Please select it manually.');
   };
 
   // =========================================================================
@@ -1106,24 +1119,36 @@ export default function FinderView({ lang, categories, categoriesLoading = false
                 {gpsMessage && <p className="text-caption text-ink-muted" role="status">{gpsMessage}</p>}
                 {detectedLocation && (
                   <div className="rounded-xl border border-emerald-200 bg-white p-3 text-xs text-ink space-y-2" role="status">
-                    <p className="font-bold">Location detected</p>
+                    <p className="font-bold">Suggested area</p>
+                    {detectedLocation.accuracyTier !== 'strong' && (
+                      <p className="text-amber-700">
+                        {detectedLocation.accuracyTier === 'unknown'
+                          ? 'Location accuracy is not available from this device — treat this as an approximate suggestion.'
+                          : 'Location accuracy is low — treat this area as an approximate suggestion.'}
+                      </p>
+                    )}
                     {detectedLocation.county && <p>County: <strong>{detectedLocation.county}</strong></p>}
                     {detectedLocation.subCountyId ? <p>Sub-county: <strong>{foundAdministrativeUnits.find(unit => unit.id === detectedLocation.subCountyId)?.name ?? 'Please confirm'}</strong></p> : detectedLocation.county && <p>We detected your county, but couldn't reliably determine your sub-county. Please select it manually.</p>}
                     {detectedLocation.place && <p>Detected place: {detectedLocation.place}</p>}
                     {gpsAccuracy !== null && <p>GPS accuracy: approximately {Math.round(gpsAccuracy)} metres</p>}
+                    {hasGeographyConflict(foundCounty, detectedLocation.county) && (
+                      <p className="text-amber-700">Your selected area (<strong>{foundCounty}</strong>) differs from the detected area (<strong>{detectedLocation.county}</strong>). Using this location will replace your selection.</p>
+                    )}
                     {detectedLocation.county && <div className="flex flex-wrap gap-2"><button type="button" onClick={useDetectedLocation} className="font-bold text-primary-green underline">Use this location</button><button type="button" onClick={() => setDetectedLocation(null)} className="font-bold text-ink-muted underline">Edit</button><button type="button" onClick={() => setGpsMessage('Keep your selected county, sub-county and exact place.')} className="font-bold text-ink-muted underline">Keep my selected location</button></div>}
                   </div>
                 )}
 
               {/* REQUEST 12/26 — truthful statement of what the location is actually
-                  used for. The browser supplies coordinates only; there is no
-                  reverse geocoding in this backend, so the app never claims to know
-                  the neighbourhood ("You are around Westlands") and never shows the
-                  raw coordinates back to the user. What it can honestly say is what
-                  the server does: it attempts to match a real, active, vetted agent
-                  by distance, and when no agent can be confidently matched the
-                  report is still accepted for manual assignment rather than failing
-                  or inventing a nearby agent. */}
+                  used for. The browser supplies the coordinates; the backend also
+                  exposes an advisory reverse-geocoding endpoint that GEO-C uses to
+                  SUGGEST a nearby area. That suggestion is never authoritative — a
+                  coordinate is not a boundary — so the app never claims to know the
+                  neighbourhood ("You are around Westlands") and never shows the raw
+                  coordinates back to the user. What it can honestly say is what the
+                  server does: it attempts to match a real, active, vetted agent by
+                  distance, and when no agent can be confidently matched the report is
+                  still accepted for manual assignment rather than failing or
+                  inventing a nearby agent. */}
               <p className="text-caption text-ink-muted leading-normal">
                 {lang === 'en'
                   ? 'The county you choose is what we use to compare your report with items lost in the same area. Your area description is what owners and agents search. If you also share your device location, Return4me uses the coordinates to look for a real active Agent near you; if none can be matched confidently, your report is still accepted and assigned by our team.'
