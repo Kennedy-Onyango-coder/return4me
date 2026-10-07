@@ -299,6 +299,31 @@ describe('B2 HTTP - profile (G3)', () => {
     expect((await (await get('/api/customer/data-export', P.token)).json()).account.email).toBe(before);
   });
 
+  it('burns the change after the guess ceiling, so the six-digit space cannot be walked', async () => {
+    // A six-digit code is only ~10^6 wide. Without a ceiling an attacker who
+    // holds the (session-bound) changeId could walk the whole range inside the
+    // 30-minute TTL. The route must DESTROY the pending change at the ceiling so
+    // that even the CORRECT code can no longer redeem it.
+    const P = await freshPrincipal();
+    const newEmail = 'ceiling-' + RUN.toLowerCase() + '@example.test';
+    const start = await send('POST', '/api/customer/profile/identity', P.token, { kind: 'email', value: newEmail }, P.ip);
+    const { changeId } = await start.json();
+    const issued = sent[sent.length - 1];
+    // Guaranteed not to equal the real code, so every one of these is a failure.
+    const wrong = issued.code === '000000' ? '111111' : '000000';
+
+    // IDENTITY_CHANGE_MAX_VERIFICATION_ATTEMPTS === 5: five wrong codes are each
+    // answered 400, and the fifth destroys the change.
+    for (let i = 0; i < 5; i++) {
+      expect((await send('POST', '/api/customer/profile/identity/verify', P.token, { changeId, code: wrong })).status).toBe(400);
+    }
+    // The correct code is now dead too - there is no change left to redeem.
+    expect((await send('POST', '/api/customer/profile/identity/verify', P.token, { changeId, code: issued.code })).status).toBe(400);
+    // And nothing moved.
+    expect((await (await get('/api/customer/data-export', P.token)).json()).account.email).not.toBe(newEmail);
+  });
+
+
   it('a code can be redeemed only ONCE', async () => {
     const P = await freshPrincipal();
     const newEmail = 'once-' + RUN.toLowerCase() + '@example.test';

@@ -26,6 +26,8 @@
 //   alone cannot silently destroy an account or repoint its identity.
 // =============================================================================
 
+import crypto from 'crypto';
+
 import { requireCustomerAuth } from '../services/customerAuth.ts';
 import { smsRateLimit } from '../services/smsRateLimit.ts';
 import { identityEmailChangeRateLimit } from '../services/identityChangeRateLimit.ts';
@@ -38,6 +40,7 @@ import {
 } from '../services/emailOtp.ts';
 import {
   CUSTOMER_ACCOUNT_STRINGS,
+  IDENTITY_CHANGE_MAX_VERIFICATION_ATTEMPTS,
   IDENTITY_CHANGE_VERIFICATION_TTL_MS,
   deriveDeviceLabel,
 } from '../config/customerAccountPolicy.ts';
@@ -50,7 +53,13 @@ const BAD_REQUEST = { error: 'Ombi la awali si sahihi. / Invalid request.' };
 
 /** Six digits, generated server-side. The plaintext is never stored. */
 function newVerificationCode(): string {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  // CSPRNG, NOT Math.random(). This code is the ONLY proof of control over the
+  // identifier being claimed, so its unpredictability is a security property:
+  // Math.random() is not cryptographically secure and its stream is predictable
+  // from a few observed outputs. `randomInt(low, high)` is uniform with no modulo
+  // bias and matches the generator every other one-time code in the codebase uses
+  // (see services/customerAuth.ts).
+  return crypto.randomInt(100000, 1000000).toString();
 }
 
 /** Opaque id for a verification attempt; safe to return since it grants nothing alone. */
@@ -373,6 +382,19 @@ export function registerCustomerAccountRoutes(app: any, deps: {
         return res.status(400).json({ error: 'Msimbo huu umeisha muda. / That code has expired.' });
       }
       if (hashCode(code) !== record.code_hash) {
+        // BOUNDED GUESSING. A six-digit space is small enough that an attacker
+        // holding the (session-bound) changeId could otherwise walk the whole
+        // range inside the 30-minute TTL. Count the failure ATOMICALLY, and once
+        // the ceiling is reached BURN the change so it can never be redeemed even
+        // with the correct code. The response is byte-identical to an ordinary
+        // wrong code, so the eventual lockout is not itself an oracle.
+        const attempts = await db.incrementCustomerIdentityChangeAttempts({
+          id: changeId,
+          customerId: req.customer.id,
+        });
+        if (attempts >= IDENTITY_CHANGE_MAX_VERIFICATION_ATTEMPTS) {
+          await db.consumeCustomerIdentityChange({ id: changeId, customerId: req.customer.id });
+        }
         return res.status(400).json({ error: 'Msimbo si sahihi. / That code is not correct.' });
       }
 

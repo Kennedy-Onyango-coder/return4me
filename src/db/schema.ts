@@ -1088,6 +1088,11 @@ export const customer_identity_changes = pgTable(
     expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
     // NULL = not yet verified. Set once, atomically, at redemption.
     consumed_at: timestamp("consumed_at", { withTimezone: true }),
+    // How many WRONG codes have been presented. Bounded: at
+    // IDENTITY_CHANGE_MAX_VERIFICATION_ATTEMPTS the change is burned, so a
+    // six-digit space cannot be walked inside the TTL. Bumped atomically.
+    attempt_count: integer("attempt_count").notNull().default(0),
+
     created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => {

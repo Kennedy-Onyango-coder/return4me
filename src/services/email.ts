@@ -25,6 +25,41 @@ import {
 let resendInstance: Resend | null = null;
 
 /**
+ * Upper bound on a single Resend HTTP round-trip.
+ *
+ * A provider that accepts the connection and then never answers would otherwise
+ * pin the request (and its worker) indefinitely. A timeout here is deliberately
+ * AMBIGUOUS: `sendWithId`'s catch cannot tell whether the request was accepted
+ * before the connection stalled, so it must not record a clean failure. Bounded
+ * so an unresponsive provider cannot stall the request path; overridable for
+ * tests via EMAIL_PROVIDER_TIMEOUT_MS.
+ */
+const EMAIL_PROVIDER_TIMEOUT_MS = (() => {
+  const raw = Number(process.env.EMAIL_PROVIDER_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 10_000;
+})();
+
+/**
+ * Reject if `operation` has not settled within EMAIL_PROVIDER_TIMEOUT_MS.
+ *
+ * A race rather than an AbortSignal on purpose: the Resend SDK's request-options
+ * type exposes no signal, so this bounds the WAIT without depending on SDK
+ * internals. The `finally` clears the timer so a fast provider leaks nothing.
+ */
+function withProviderTimeout<T>(operation: Promise<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label} did not respond within ${EMAIL_PROVIDER_TIMEOUT_MS}ms`)),
+      EMAIL_PROVIDER_TIMEOUT_MS,
+    );
+  });
+  return Promise.race([operation, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+/**
  * The process's single Resend client.
  *
  * The "is this key usable" decision is NOT made here: it lives in
@@ -551,7 +586,7 @@ export const EmailService = {
     }
 
     try {
-      const response = await client.emails.send({
+      const sendPromise = client.emails.send({
         from: fromEmail,
         to,
         subject,
@@ -565,6 +600,8 @@ export const EmailService = {
         // reply address.
         ...(replyTo ? { replyTo } : {}),
       });
+
+      const response = await withProviderTimeout(sendPromise, 'Resend send');
 
       if (response.error) {
         console.error('[EMAIL SERVICE] Resend API error:', response.error);

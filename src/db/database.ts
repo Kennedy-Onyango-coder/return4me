@@ -6750,6 +6750,60 @@ await drizzleDb.transaction(async (tx) => {
   }
 
   /**
+   * Count a WRONG verification code for a pending identity change and return the
+   * new attempt total.
+   *
+   * Read-modify-write, NOT SQL arithmetic: this is the idiom the rest of this
+   * file already uses (incrementOtpAttempts, incrementClaimOtpAttempts,
+   * currentCount) because the sandbox database this suite runs on silently
+   * produced NULL for both `attempt_count + 1` as a bare column and the `sql`
+   * template form. The value is read, coerced (NULL/NaN -> 0), then written back
+   * as an ABSOLUTE number. Absent a fully atomic UPDATE this is not perfectly
+   * atomic under concurrency, but the counter is a backstop rather than the only
+   * defence - the change is also session-bound, single-use, and TTL-bound - so a
+   * rare lost update merely costs an attacker a guess or two and the ceiling
+   * still holds.
+   *
+   * The customer_id is part of BOTH the read and the write, so a change id
+   * belonging to another account matches nothing and returns 0 - the same
+   * cross-customer rule the rest of this batch uses.
+   */
+  public async incrementCustomerIdentityChangeAttempts(params: {
+    id: string;
+    customerId: string;
+  }): Promise<number> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(customerIdentityChangesTable)
+        .where(
+          and(
+            eq(customerIdentityChangesTable.id, params.id),
+            eq(customerIdentityChangesTable.customer_id, params.customerId),
+          ),
+        )
+        .limit(1);
+      if (rows.length === 0) return 0;
+      const current = Number(rows[0].attempt_count);
+      const next = (Number.isFinite(current) ? current : 0) + 1;
+      await drizzleDb
+        .update(customerIdentityChangesTable)
+        .set({ attempt_count: next })
+        .where(
+          and(
+            eq(customerIdentityChangesTable.id, params.id),
+            eq(customerIdentityChangesTable.customer_id, params.customerId),
+          ),
+        );
+      return next;
+    } catch (error) {
+      console.error("Failed to increment customer identity change attempts:", error);
+      return 0;
+    }
+  }
+
+
+  /**
    * Apply a verified identifier to the customer row.
    *
    * Callers must have redeemed the change first: this method is only reachable

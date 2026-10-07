@@ -165,6 +165,20 @@ export const CUSTOMER_IDENTITY_KINDS: readonly CustomerIdentityKind[] = ['email'
 export const IDENTITY_CHANGE_VERIFICATION_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 /**
+ * How many WRONG verification codes a pending identity change tolerates before
+ * it is destroyed.
+ *
+ * A six-digit space is only ~10^6, small enough that an attacker who holds a
+ * live change id (it is returned to the requesting session, so it is not itself
+ * a secret) could otherwise walk the entire range inside the 30-minute TTL.
+ * Rather than merely throttling, the change is BURNED at the ceiling, so the
+ * number of usable guesses is bounded by this constant however fast they are
+ * presented. Defined here, in the single policy module, so the route that
+ * enforces it and any future reader cannot disagree about the value.
+ */
+export const IDENTITY_CHANGE_MAX_VERIFICATION_ATTEMPTS = 5;
+
+/**
  * Whether an identity change has been verified and may become authoritative.
  *
  * Single-use and time-bounded: the same predicate decides both whether a

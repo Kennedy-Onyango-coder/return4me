@@ -1604,6 +1604,11 @@ created_at TIMESTAMP WITH TIME ZONE NOT NULL
     )`,
     `CREATE INDEX IF NOT EXISTS idx_customer_identity_changes_customer ON customer_identity_changes(customer_id, kind)`,
     `CREATE INDEX IF NOT EXISTS idx_customer_identity_changes_expiry ON customer_identity_changes(expires_at)`,
+    // Bounded guessing (see config/customerAccountPolicy.ts): the count of WRONG
+    // codes presented for a pending identity change. Additive + idempotent so an
+    // already-running database picks the column up without a rebuild.
+    `ALTER TABLE customer_identity_changes ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0`,
+
 
     // --- H9 / H10: customer session device + activity context -------------
     // last_seen_at (the H10 inactivity clock) and revoked_at (H9 per-session
