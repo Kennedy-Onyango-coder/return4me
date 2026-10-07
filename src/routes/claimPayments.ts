@@ -395,15 +395,18 @@ export function registerClaimPaymentRoutes(
         //
         // A completed M-Pesa payment must not be lost merely because the webhook
         // was missed, delayed, or the browser was closed. When the session still
-        // carries a provider invoice and the CLAIM is still within its window,
-        // ask IntaSend for the authoritative status through the ONE canonical
+        // carries a provider invoice and the CLAIM is still awaiting payment —
+        // OR has just been swept to 'payment_window_expired' (a late, but real,
+        // provider approval the canonical path may still recover via its gated
+        // predicate) — ask IntaSend for the authoritative status through the ONE
+        // canonical
         // confirmation path — the same function the webhook uses. This can only
         // ever confirm a real, provider-verified, amount-reconciled payment; the
         // browser is never trusted to declare success. Throttled per session so
         // the 3-second poll cannot hammer the provider.
         // ------------------------------------------------------------------
         if (
-          claim.status === 'pending_payment'
+          (claim.status === 'pending_payment' || claim.status === 'payment_window_expired')
           && session.provider_invoice_id
           && (session.status === 'pending' || session.status === 'expired')
         ) {

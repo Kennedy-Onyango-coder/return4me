@@ -116,6 +116,30 @@ authoritative IntaSend payment-status API, and a COMPLETE, amount-reconciled
 response is confirmed through the SAME canonical confirmation path the webhook
 uses.
 
+#### Late payment after the window
+
+The claim window (24h) and a single M-Pesa prompt's session window (minutes)
+differ, and the expiry sweep runs every 60 seconds, so a genuine approval can
+land after the claim has already been moved to `payment_window_expired`. That
+status is otherwise terminal — it has no entry in the transition table and
+`isAllowedClaimTransition` refuses every edge out of it — but that blanket
+refusal is for workflow callers, not for a money fact. The canonical
+confirmation path therefore carries exactly one gated exception: when, on facts
+freshly re-read immediately before the atomic CAS, the claim is still
+`payment_window_expired`, carries no `paid_at`, the amount is positively
+reconciled, the provider invoice is bound to this claim, and the session's single
+confirmation was won, the claim is recovered to `escrow_held` through the same
+single-statement compare-and-swap. No session is consumed until the payment is
+positively verified.
+
+The gate is a predicate, `canRecoverExpiredClaimPayment`
+(`config/claimStatuses.ts`); the edge is recorded as data,
+`EXPIRED_CLAIM_PAYMENT_RECOVERY_EDGE`, so it is auditable; and each recovery is
+written to the audit log (`CLAIM_PAYMENT_RECOVERY_EXPIRED`). Every other path — a
+legacy direct payment with no payment session, a replayed webhook, or any other
+claim status — falls through to the ordinary refusing behaviour, so the default
+in-window path is unchanged.
+
 A mismatch is evidence of either a provider fault or something the application
 does not understand, and quietly reconciling the difference would move money on
 the basis of a record the application cannot vouch for.
@@ -256,6 +280,12 @@ treated on erasure.
 
 Terminal statuses, with no outgoing edges: `released`, `refunded`, `rejected`,
 `payment_window_expired`.
+
+`payment_window_expired` has exactly one gated exception, and it is a payment
+fact rather than a workflow edge: a genuinely verified, amount-reconciled late
+payment may be recovered to `escrow_held` by the canonical confirmation path
+alone (see "Late payment after the window"). The edge is deliberately absent from
+the table above, so every generic caller still refuses it.
 
 A transition from a status to itself is permitted as an explicit idempotent
 no-op, so a retried request that re-asserts the current state is not an error.

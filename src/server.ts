@@ -76,7 +76,7 @@ import {
 // Phase 7C.7 (R1): isPickupEligibleClaimStatus is the canonical pickup-eligibility
 // predicate introduced by Phase 7C.5. /api/claims/lookup now gates its agent
 // disclosure with it so that route cannot drift from routes/publicItems.ts.
-import { INACTIVE_CLAIM_STATUSES, isPickupEligibleClaimStatus, CLAIM_UNAVAILABLE_MESSAGE } from './config/claimStatuses';
+import { INACTIVE_CLAIM_STATUSES, isPickupEligibleClaimStatus, CLAIM_UNAVAILABLE_MESSAGE, canRecoverExpiredClaimPayment } from './config/claimStatuses';
 import { toOwnerSafeAgentView, toOwnerSafeClaimView, toOwnerSafeItemView } from './services/ownerSafeViews';
 // Phase 7B: the shared public (unauthenticated) item read model. getRoughArea
 // moved here from this file so the public search route and the new public
@@ -2999,16 +2999,19 @@ async function createApp() {
       authoritativeAmount = resolved.providerAmount;
     }
 
+    // This delivery may only authorise the terminal-recovery edge below if it is
+    // on the primary, invoice-bound session path whose single confirmation is
+    // available ('pending'/'expired', won just below) or was already won
+    // ('confirmed' on an earlier delivery). The session is NOT written here: its
+    // confirmation is consumed only AFTER the claim CAS actually moves the claim
+    // (see below), so a failed claim transition can never strand a 'confirmed'
+    // session against an unheld claim. A session in no confirmable state must
+    // not be allowed to confirm a claim.
+    let sessionConfirmed = false;
     if (session) {
-      // Per-session idempotency: only an unreserved, non-terminal session is
-      // marked confirmed here; a duplicate webhook for an already-confirmed
-      // session is a no-op. The claim-level CAS below is the outer idempotency
-      // guard.
-      const sessionConfirmed = await db.attemptPaymentSessionConfirm(session.id);
-      if (!sessionConfirmed && session.status !== 'confirmed') {
-        // The session wasn't in 'pending' (e.g. it was already confirmed). This
-        // is safe to proceed from only when it's already confirmed; otherwise do
-        // not let a session that was never initiated confirm the claim.
+      if (session.status === 'confirmed' || session.status === 'pending' || session.status === 'expired') {
+        sessionConfirmed = true;
+      } else {
         console.warn(`[WEBHOOK SESSION] Invoice ${invoiceId} for session ${session.id} was not in a confirmable state (status=${session.status}).`);
         return null;
       }
@@ -3048,14 +3051,55 @@ async function createApp() {
       }
     }
 
-    // Atomic compare-and-swap: only the delivery that actually wins the
-    // 'pending_payment' -> 'escrow_held' transition proceeds past this
-    // point. A duplicate/retried webhook for an already-confirmed claim
-    // returns false here and is dropped as a no-op, instead of re-running
-    // the confirmation flow (new pickup code, duplicate emails) a
-    // second time.
-    const won = await db.attemptClaimEscrowHold(claimId, invoiceId);
+    // GATED LATE-PAYMENT RECOVERY (the ONE edge out of a terminal claim). The
+    // 24h claim window outlives a single 15m STK session and the expiry sweep
+    // runs every 60s, so a genuine approval can land AFTER the sweep moved the
+    // claim to 'payment_window_expired'. The amount is reconciled above and the
+    // invoice is bound to THIS claim, so the money is real; the ordinary CAS
+    // (which matches only 'pending_payment') would silently orphan it. That is
+    // the defect this closes. canRecoverExpiredClaimPayment (config/
+    // claimStatuses.ts) is the ONLY gate, evaluated HERE on facts freshly
+    // re-read immediately before the CAS; when false the CAS keeps its original
+    // 'pending_payment' predicate.
+    const currentClaim = await db.getClaim(claimId);
+    const recoverExpiredClaim = currentClaim
+      ? canRecoverExpiredClaimPayment({
+          claimStatus: currentClaim.status,
+          paidAt: currentClaim.paid_at,
+          paymentVerified: claimRecon === 'match',
+          paymentSessionBoundToClaim: !!session && session.claim_id === claimId,
+          sessionConfirmed,
+        })
+      : false;
+
+    // Atomic CAS: only the delivery that actually wins the 'pending_payment' ->
+    // 'escrow_held' transition (or the gated 'payment_window_expired' ->
+    // 'escrow_held' edge) proceeds past this point. A duplicate webhook for an
+    // already-confirmed claim returns false and is dropped as a no-op.
+    const won = recoverExpiredClaim
+      ? await db.attemptClaimEscrowHold(claimId, invoiceId, { recoverExpiredClaim: true })
+      : await db.attemptClaimEscrowHold(claimId, invoiceId);
     if (!won) return null;
+
+    // The claim CAS above and the session's single confirmation were consumed
+    // ATOMICALLY, in ONE transaction, inside attemptClaimEscrowHold: the claim
+    // moved to 'escrow_held' (with paid_at) and the invoice-bound session was
+    // moved to 'confirmed' TOGETHER — or NEITHER was written. That closes the
+    // reverse inconsistency (a paid claim with an unconfirmed session) that two
+    // separate committed statements allowed, and preserves the preferable
+    // claim-CAS-first ordering. The explicit confirm below is retained as an
+    // idempotent, defence-in-depth second layer: the session is already
+    // 'confirmed', so this is a no-op (it matches only 'pending'/'expired') and
+    // can never re-open the inconsistency.
+    if (session) {
+      await db.attemptPaymentSessionConfirm(session.id);
+    }
+
+    if (recoverExpiredClaim) {
+      // IDs-only audit trail for the one terminal-claim edge (never secrets).
+      await db.logAudit('SYSTEM', 'CLAIM_PAYMENT_RECOVERY_EXPIRED', `Claim ${claimId}: verified late payment (invoice ${invoiceId}, session ${session?.id ?? 'none'}) recovered from payment_window_expired to escrow_held.`);
+      console.log(`[PAYMENT RECOVERY] Claim ${claimId} recovered from payment_window_expired to escrow_held (invoice ${invoiceId}).`);
+    }
 
     // BATCH 3 / P5 - customer notification for the confirmed payment.
     //
@@ -4771,7 +4815,11 @@ async function createApp() {
       let processed = 0;
       for (const claim of allClaims) {
         if (processed >= RECONCILE_MAX_PER_SWEEP) break;
-        if (claim.status !== 'pending_payment') continue;
+        // 'payment_window_expired' is included so a provider approval that lands
+        // after the 60-second expiry sweep can still be recovered through the
+        // canonical confirmation path (its gated predicate decides whether the
+        // late payment is honoured). The default in-window path is unchanged.
+        if (claim.status !== 'pending_payment' && claim.status !== 'payment_window_expired') continue;
         const sessions = await db.listPaymentSessionsForClaim(claim.id);
         for (const session of sessions) {
           if (processed >= RECONCILE_MAX_PER_SWEEP) break;

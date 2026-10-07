@@ -203,6 +203,86 @@ export function isAllowedClaimTransition(from: string, to: string): boolean {
 }
 
 /**
+ * ===========================================================================
+ * THE ONE GATED EXCEPTION OUT OF A TERMINAL CLAIM STATUS
+ * ===========================================================================
+ * `payment_window_expired` is TERMINAL, and deliberately so: it has NO entry in
+ * CLAIM_ALLOWED_TRANSITIONS, `isAllowedClaimTransition` refuses every edge out of
+ * it, and the file above lists it as terminal. That blanket refusal is correct
+ * for every GENERIC transition caller (routes, admin tooling, dispute machinery):
+ * an abandoned claim must not be resurrected by an ordinary status write.
+ *
+ * There is exactly ONE legitimate exception, and it is a PAYMENT fact, not a
+ * workflow decision. The claim's payment window is 24h from `agent_confirmed_at`
+ * (config/paymentWindows.ts) while a single STK session lives for 15m; an M-Pesa
+ * approval can therefore land AFTER the 60-second expiry sweep has already moved
+ * the claim to `payment_window_expired`. When that happens the payment is real,
+ * provider-verified and amount-reconciled, yet the ordinary claim CAS (which only
+ * matched `pending_payment`) matched nothing: the money was silently orphaned and
+ * the claimant was never credited. That is a data-integrity defect in the money
+ * path, not an intended lifecycle rule.
+ *
+ * `EXPIRED_CLAIM_PAYMENT_RECOVERY_EDGE` records that single edge as DATA so it is
+ * auditable, and `canRecoverExpiredClaimPayment` is the ONLY gate that may
+ * authorise it. The edge is deliberately NOT added to CLAIM_ALLOWED_TRANSITIONS,
+ * so `isAllowedClaimTransition` (and therefore every generic transitionClaimStatus
+ * caller) still refuses it; it is reachable only from the canonical
+ * payment-confirmation path — server.ts `processClaimPaymentConfirmed` — after the
+ * predicate below returns true on freshly-read, provider-verified facts.
+ */
+export const EXPIRED_CLAIM_PAYMENT_RECOVERY_EDGE = Object.freeze({
+  from: 'payment_window_expired',
+  to: 'escrow_held',
+} as const);
+
+/**
+ * The positive facts the canonical payment path must be able to PROVE before the
+ * gated recovery edge may fire. Every field is a positive fact, never an
+ * absence: a missing/unknown value can never satisfy the predicate, so a partial
+ * or ambiguous state falls through to the ordinary (refusing) behaviour.
+ */
+export interface ExpiredClaimPaymentRecoveryFacts {
+  /** The claim's CURRENT status, freshly re-read (a webhook can race the sweep). */
+  claimStatus: string;
+  /** The claim's authoritative payment marker. Non-null ⇒ already paid. */
+  paidAt: string | Date | null | undefined;
+  /** The provider amount was POSITIVELY reconciled to what this claim owes. */
+  paymentVerified: boolean;
+  /** The provider invoice is bound to THIS very claim (cross-claim isolation). */
+  paymentSessionBoundToClaim: boolean;
+  /** The session's single confirmation CAS has been won (now or on an earlier delivery). */
+  sessionConfirmed: boolean;
+}
+
+/**
+ * The ONLY gate for `payment_window_expired -> escrow_held`. Returns true only
+ * when every fact proves a genuine, verified late payment for THIS claim:
+ *
+ *   1. the claim is STILL `payment_window_expired` (never a blanket unlock), and
+ *   2. it carries NO `paid_at` (never write payment truth twice), and
+ *   3. the amount was positively reconciled, and
+ *   4. the invoice is bound to this claim, and
+ *   5. the session's one confirmation was won.
+ *
+ * The `sessionConfirmed` / `paymentSessionBoundToClaim` requirements deliberately
+ * mean a legacy, session-less direct payment can never recover a terminal claim:
+ * recovery is reserved for the primary, invoice-bound payment-session path where
+ * the amount and the claim↔invoice binding are both provider-proven. Combined
+ * with the single-statement CAS in `attemptClaimEscrowHold`, this makes the edge
+ * idempotent: a replayed webhook sees `paid_at` set (or a non-matching source
+ * status) and is refused, and only one caller can ever win it.
+ */
+export function canRecoverExpiredClaimPayment(facts: ExpiredClaimPaymentRecoveryFacts): boolean {
+  return (
+    facts.claimStatus === EXPIRED_CLAIM_PAYMENT_RECOVERY_EDGE.from // (1) only the swept-inactivity state
+    && (facts.paidAt === null || facts.paidAt === undefined)       // (2) not already paid
+    && facts.paymentVerified === true                             // (3) amount positively reconciled
+    && facts.paymentSessionBoundToClaim === true                   // (4) invoice bound to THIS claim
+    && facts.sessionConfirmed === true                            // (5) the session's confirmation was won
+  );
+}
+
+/**
  * ONE body, used for EVERY claim-ownership failure on the claim-ID-keyed
  * routes that take the owner's registered phone:
  *

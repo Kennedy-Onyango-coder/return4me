@@ -87,7 +87,7 @@ describe('payment session: initiation endpoint', () => {
 
 describe('payment session: webhook confirmation', () => {
   const fnStart = serverTs.indexOf('const session = await db.getPaymentSessionByProviderInvoice(invoiceId);');
-  const body = fnStart > -1 ? serverTs.slice(fnStart, fnStart + 9000) : '';
+  const body = fnStart > -1 ? serverTs.slice(fnStart, fnStart + 12000) : '';
 
   it('resolves the provider invoice to its payment session', () => {
     expect(fnStart).toBeGreaterThan(-1);

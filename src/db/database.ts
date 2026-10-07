@@ -3727,30 +3727,130 @@ class DatabaseEngine {
   // pickup code is generated (overwriting the first, so the owner's earlier
   // SMS code silently stops working) and duplicate emails/SMS go out. This
   // mirrors the attemptSettlementRelease() CAS pattern used for payout release.
-  public async attemptClaimEscrowHold(claimId: string, paymentRef: string): Promise<boolean> {
+  public async attemptClaimEscrowHold(
+    claimId: string,
+    paymentRef: string,
+    options: { recoverExpiredClaim?: boolean } = {},
+  ): Promise<boolean> {
     // Defence in depth (SC-2/§18): refuse to execute an edge that is not in the
     // canonical transition table. pending_payment -> escrow_held is the ONLY
     // legal entry into escrow_held, and this CAS is its only producer.
     if (!isAllowedClaimTransition('pending_payment', 'escrow_held')) {
       throw new Error('Illegal transition pending_payment -> escrow_held rejected by the claim transition table.');
     }
+    // GATED EXCEPTION — the ONE edge out of a TERMINAL claim status.
+    //
+    // `options.recoverExpiredClaim` (default false) additionally admits
+    // 'payment_window_expired' as a source state, so a verified, amount-reconciled
+    // late payment can still be credited after the 60-second sweep has already
+    // moved the claim. It must be set ONLY by the canonical payment-confirmation
+    // path (server.ts processClaimPaymentConfirmed) and ONLY after
+    // canRecoverExpiredClaimPayment() — config/claimStatuses.ts — has returned
+    // true on freshly-read, provider-verified facts. This method does NOT
+    // re-derive those facts: it is the last line, not the gate. The edge
+    // 'payment_window_expired -> escrow_held' is deliberately ABSENT from
+    // CLAIM_ALLOWED_TRANSITIONS, so transitionClaimStatus() and every other
+    // generic caller still cannot reach it.
+    //
+    const recoverExpiredClaim = options.recoverExpiredClaim === true;
+    const claimSourcePredicate = recoverExpiredClaim
+      ? sql`${claimsTable.status} IN ('pending_payment', 'payment_window_expired')`
+      : eq(claimsTable.status, 'pending_payment');
+
+    // =====================================================================
+    // THE CLAIM CAS AND THE PAYMENT-SESSION CAS ARE ONE TRANSACTION.
+    // =====================================================================
+    // Reaching 'escrow_held' is the SAME financial fact as the invoice-bound
+    // payment session's single confirmation, so the two writes must commit or
+    // roll back TOGETHER. Performed as two independent statements they were not
+    // coherent: a failure/crash between them left a PAID claim
+    // (status='escrow_held', paid_at set) whose session was never 'confirmed'
+    // — a paid-without-confirmed-session state (the reverse of the older bug
+    // where a 'confirmed' session was stranded against an unheld claim).
+    //
+    // The ordering is deliberate and unchanged: the CLAIM CAS runs FIRST, and
+    // only a claim that actually moved proceeds to the session CAS. Both run in
+    // ONE `drizzleDb.transaction`, and a session CAS that cannot be won THROWS,
+    // so the claim CAS above rolls back with it — the two writes are now either
+    // both committed or both discarded. The session is also validated BEFORE the
+    // claim moves, so a session that is not confirmable refuses the hold outright
+    // (no partial write to undo).
     try {
-      const rows = await drizzleDb
-        .update(claimsTable)
-        .set({
-          status: 'escrow_held',
-          // THE authoritative payment confirmation (SC-4/SC-6). Set here and
-          // nowhere else: this statement only matches a claim still in
-          // 'pending_payment', so a duplicate webhook, a wrong claim/invoice,
-          // a failed or abandoned STK attempt can never reach it.
-          paid_at: new Date(),
-          // Provider reference only — never to be read as proof of payment.
-          payment_reference: paymentRef || null,
-          updated_at: new Date(),
-        })
-        .where(and(eq(claimsTable.id, claimId), eq(claimsTable.status, 'pending_payment')))
-        .returning();
-      return rows.length > 0;
+      return await drizzleDb.transaction(async (tx) => {
+        // (1) Resolve the invoice-bound session FOR THIS CLAIM, if any. The
+        //     provider invoice is the binding key (paymentRef === invoiceId). A
+        //     'confirmed' session is an already-consumed confirmation (idempotent
+        //     replay); a 'pending'/'expired' session is confirmable now; any other
+        //     state cannot be confirmed and must refuse the hold.
+        let sessionIdToConfirm: string | null = null;
+        if (paymentRef) {
+          const sessionRows = await tx
+            .select()
+            .from(paymentSessionsTable)
+            .where(eq(paymentSessionsTable.provider_invoice_id, paymentRef));
+          const boundSession = sessionRows.find((s: any) => s.claim_id === claimId);
+          if (sessionRows.length > 0 && !boundSession) {
+            // The invoice is real but belongs to a DIFFERENT claim. Refuse so a
+            // cross-claim invoice can never cause THIS claim to be held — defence
+            // in depth over the canonical path's own cross-claim guard.
+            console.error(`[ESCROW ATOMIC] Refusing escrow hold for claim ${claimId}: invoice ${paymentRef} is bound to another claim.`);
+            return false;
+          }
+          if (boundSession) {
+            const sessionStatus = String(boundSession.status);
+            if (sessionStatus === 'confirmed') {
+              sessionIdToConfirm = null;
+            } else if (sessionStatus === 'pending' || sessionStatus === 'expired') {
+              sessionIdToConfirm = boundSession.id;
+            } else {
+              // 'created'/'payment_initiated'/'failed'/'cancelled': holding the
+              // claim now would strand payment truth against an unconfirmable
+              // session. Refuse BEFORE writing anything.
+              console.error(`[ESCROW ATOMIC] Refusing escrow hold for claim ${claimId}: bound session ${boundSession.id} is in non-confirmable state '${sessionStatus}'.`);
+              return false;
+            }
+          }
+        }
+
+        // (2) CLAIM CAS — the authoritative payment confirmation (SC-4/SC-6) and
+        //     the 'escrow_held' status in ONE statement. It only matches a claim
+        //     still in 'pending_payment' (or, for the gated late-payment recovery,
+        //     the swept 'payment_window_expired'), so a duplicate webhook, a wrong
+        //     claim/invoice, a failed or abandoned STK attempt can never reach it.
+        //     `payment_reference` is the provider reference only — never proof of
+        //     payment.
+        const rows = await tx
+          .update(claimsTable)
+          .set({
+            status: 'escrow_held',
+            paid_at: new Date(),
+            payment_reference: paymentRef || null,
+            updated_at: new Date(),
+          })
+          .where(and(eq(claimsTable.id, claimId), claimSourcePredicate))
+          .returning();
+        if (rows.length === 0) return false;
+
+        // (3) SESSION CAS — the session's single confirmation, in the SAME
+        //     transaction. If it cannot be won (a concurrent writer moved the
+        //     session between the read above and here), THROW: that rolls back the
+        //     claim CAS too, so we NEVER commit a paid claim whose session
+        //     confirmation did not persist.
+        if (sessionIdToConfirm) {
+          const confirmedRows = await tx
+            .update(paymentSessionsTable)
+            .set({ status: 'confirmed', confirmed_at: new Date() })
+            .where(and(
+              eq(paymentSessionsTable.id, sessionIdToConfirm),
+              sql`${paymentSessionsTable.status} IN ('pending', 'expired')`,
+            ))
+            .returning();
+          if (confirmedRows.length === 0) {
+            throw new Error(`Payment session ${sessionIdToConfirm} could not be confirmed atomically for claim ${claimId}. Rolling back the escrow hold.`);
+          }
+        }
+        return true;
+      });
     } catch (error) {
       console.error("Failed to atomically hold claim in escrow:", error);
       return false;
