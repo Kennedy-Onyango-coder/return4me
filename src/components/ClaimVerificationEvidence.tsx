@@ -24,7 +24,7 @@ export default function ClaimVerificationEvidence({ answers, identifyingDetails 
   if (!identifyingDetails?.trim() && !entries.length) return null;
   return (
     <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-left space-y-1.5">
-      <p className="text-[9px] font-extrabold text-amber-700 uppercase tracking-widest">
+      <p className="text-caption font-extrabold text-amber-700 uppercase tracking-widest">
         {'Claimant stated (before seeing item) — verify it matches:'}
       </p>
       {identifyingDetails?.trim() && (

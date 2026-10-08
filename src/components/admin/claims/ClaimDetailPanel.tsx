@@ -69,7 +69,7 @@ export default function ClaimDetailPanel({
       >
         <header className="sticky top-0 z-10 bg-white border-b border-brand-border px-5 py-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">
+            <p className="text-caption font-extrabold uppercase tracking-widest text-brand-muted-text">
               {'Claim details'}
             </p>
             <h2 id="r4m-claim-detail-title" className="font-mono text-sm font-extrabold text-brand-dark-text break-all">
@@ -119,7 +119,7 @@ function DetailSkeleton() {
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="bg-white border border-brand-border rounded-2xl px-4 py-3">
-      <h3 className="text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text mb-2">{title}</h3>
+      <h3 className="text-caption font-extrabold uppercase tracking-widest text-brand-muted-text mb-2">{title}</h3>
       <div className="space-y-1.5 text-sm text-brand-dark-text">{children}</div>
     </section>
   );
@@ -233,7 +233,7 @@ function ClaimDetailBody({
         <Field label={'Settlement release'}>
           {formatTimestamp(claim.settlement.settle_at)}
         </Field>
-        <p className="text-[11px] text-brand-muted-text pt-1">
+        <p className="text-caption text-brand-muted-text pt-1">
           {'This system keeps no monetary balance record, so no amount is shown.'}
         </p>
       </Panel>
@@ -314,17 +314,17 @@ function DisputePanels({ claim }: { claim: AdminClaimDetailView;  }) {
 
       <Panel title={'Dispute — state when filed'}>
         {thisHistorical.unknown && (
-          <p className="flex items-start gap-1.5 text-[11px] text-brand-muted-text pb-1">
+          <p className="flex items-start gap-1.5 text-caption text-brand-muted-text pb-1">
             <AlertCircle size={13} aria-hidden="true" className="mt-0.5 shrink-0" />
             {'This dispute predates the historical snapshot, so the state at filing is genuinely unknown — it does not mean unpaid.'}
           </p>
         )}
-        <p className="text-[11px] font-bold text-brand-dark-text pt-1">
+        <p className="text-caption font-bold text-brand-dark-text pt-1">
           {'This claim'}
         </p>
         <Field label={'Status at dispute'}>{thisHistorical.status}</Field>
         <Field label={'Payment at dispute'}>{thisHistorical.payment}</Field>
-        <p className="text-[11px] font-bold text-brand-dark-text pt-2">
+        <p className="text-caption font-bold text-brand-dark-text pt-2">
           {'Other claim'}
         </p>
         <Field label={'Status at dispute'}>{otherHistorical.status}</Field>
@@ -357,7 +357,7 @@ function RelatedClaimsPanel({
     <Panel title={'Related claims'}>
       {disputeOther?.claim_id && (
         <div className="pb-2">
-          <p className="text-[11px] text-brand-muted-text mb-1">
+          <p className="text-caption text-brand-muted-text mb-1">
             {'Other side of the dispute'}
           </p>
           <SiblingRow id={disputeOther.claim_id} onOpenClaim={onOpenClaim} />
@@ -371,16 +371,16 @@ function RelatedClaimsPanel({
               <span className="flex flex-wrap items-center gap-2 mt-1 pl-0.5">
                 <ClaimStatusBadge status={sib.status} />
                 <ClaimPaymentState hasPaid={sib.has_paid} paidAt={sib.paid_at} showTimestamp={false} />
-                <span className="font-mono text-[11px] text-brand-muted-text">
+                <span className="font-mono text-caption text-brand-muted-text">
                   {sib.claimant_phone || 'Not available'}
                 </span>
-                <span className="text-[11px] text-brand-muted-text">{formatTimestamp(sib.created_at)}</span>
+                <span className="text-caption text-brand-muted-text">{formatTimestamp(sib.created_at)}</span>
               </span>
             </li>
           ))}
         </ul>
       )}
-      <p className="text-[11px] text-brand-muted-text pt-1">
+      <p className="text-caption text-brand-muted-text pt-1">
         {'No claim is assumed to be a winner or fraudulent here — only server state is shown.'}
       </p>
     </Panel>

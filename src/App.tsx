@@ -1019,28 +1019,28 @@ export default function App() {
             <p className="mt-1">Vetted &amp; Physical Handovers only.</p>
             <p className="mt-2">
               Privacy &amp; data requests:{' '}
-              <a href="mailto:privacy@return4me.co.ke" className="font-semibold text-primary-green hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)]">
+              <a href="mailto:privacy@return4me.co.ke" className="font-semibold text-primary-green hover:underline">
                 privacy@return4me.co.ke
               </a>
             </p>
             <p className="mt-1">
               Help &amp; support:{' '}
-              <a href="mailto:support@return4me.co.ke" className="font-semibold text-primary-green hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)]">
+              <a href="mailto:support@return4me.co.ke" className="font-semibold text-primary-green hover:underline">
                 support@return4me.co.ke
               </a>
             </p>
           </div>
           <div className="flex flex-col sm:flex-row gap-2 sm:gap-6">
-            <button onClick={() => goToView('help')} className="text-xs sm:text-sm font-bold text-primary-green hover:underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)]">
+            <button onClick={() => goToView('help')} className="text-xs sm:text-sm font-bold text-primary-green hover:underline cursor-pointer">
               Help &amp; FAQ
             </button>
-            <button onClick={() => setView('privacy')} className="text-xs sm:text-sm font-bold text-primary-green hover:underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)]">
+            <button onClick={() => setView('privacy')} className="text-xs sm:text-sm font-bold text-primary-green hover:underline cursor-pointer">
               Privacy Policy
             </button>
-            <button onClick={() => setView('terms')} className="text-xs sm:text-sm font-bold text-primary-green hover:underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)]">
+            <button onClick={() => setView('terms')} className="text-xs sm:text-sm font-bold text-primary-green hover:underline cursor-pointer">
               Terms of Service
             </button>
-            <button onClick={() => setView('terms')} className="text-xs sm:text-sm font-bold text-primary-green hover:underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)]">
+            <button onClick={() => setView('terms')} className="text-xs sm:text-sm font-bold text-primary-green hover:underline cursor-pointer">
               Fee Schedule
             </button>
           </div>

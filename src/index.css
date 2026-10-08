@@ -457,6 +457,57 @@ body {
   }
 }
 
+/* HORIZONTALLY SCROLLABLE DATA REGIONS (Batch C — responsive hardening)
+   A wide operational table is the one case where horizontal scrolling is the
+   RIGHT answer: shrinking a nine-column ledger until the columns fit would make
+   it unreadable, and hiding columns would hide information. But scrolling is
+   only acceptable if the user can TELL there is more to the right, and if a
+   keyboard user can actually reach it.
+
+   `.r4m-scroll-x` is the single shared answer for both, so no screen invents
+   its own:
+
+     - the four background layers are the standard "scrolling shadow"
+       technique. The two `local` veils travel WITH the content and the two
+       `scroll` shadows stay pinned to the box, so the shadow is visible only
+       while the box is genuinely scrollable in that direction — no JavaScript,
+       no extra element, no resize observer, and no layout change. The veil is
+       painted in the surface role so it reads correctly in both themes.
+     - `:focus-visible` keeps the ONE global focus language (the same 2px
+       treatment as every other control) so a keyboard user can see which
+       region owns the arrow keys.
+
+   Markup contract: the element also carries role="region", an aria-label and
+   tabindex="0" (see the table wrappers), which is what makes the scroll
+   keyboard-operable and announced. This class is deliberately layer-free so it
+   cannot be overridden by a utility class on the same element. */
+.r4m-scroll-x {
+  /* The veil is painted in the surface role so it reads correctly in both
+     themes. A legacy light-only card (bg-white in BOTH themes — the privacy
+     document tables) overrides JUST this role with `.r4m-scroll-x-on-white`
+     rather than forking the whole affordance. */
+  --r4m-scroll-veil: var(--appearance-surface);
+  overflow-x: auto;
+  background-image:
+    linear-gradient(to right, var(--r4m-scroll-veil) 40%, rgba(255, 255, 255, 0)),
+    linear-gradient(to left, var(--r4m-scroll-veil) 40%, rgba(255, 255, 255, 0)),
+    radial-gradient(farthest-side at 0 50%, rgba(0, 32, 18, 0.16), rgba(0, 32, 18, 0)),
+    radial-gradient(farthest-side at 100% 50%, rgba(0, 32, 18, 0.16), rgba(0, 32, 18, 0));
+  background-position: 0 0, 100% 0, 0 0, 100% 0;
+  background-repeat: no-repeat;
+  background-size: 40px 100%, 40px 100%, 14px 100%, 14px 100%;
+  background-attachment: local, local, scroll, scroll;
+}
+
+.r4m-scroll-x-on-white {
+  --r4m-scroll-veil: #FFFFFF;
+}
+
+.r4m-scroll-x:focus-visible {
+  outline: 2px solid var(--appearance-focus);
+  outline-offset: -2px;
+}
+
 /* SUBTLE MOTION POLICY (Phase 2A)
    The design system intentionally ships no entrance/parallax animation.
    The one existing decorative animation (.fade-in page entrance) is

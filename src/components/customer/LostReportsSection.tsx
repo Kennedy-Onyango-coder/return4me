@@ -457,7 +457,7 @@ function ReportCard({
         <div id={`lost-report-matches-${report.id}`} className="space-y-3 border-t border-brand-border pt-4">
           {/* Names the region this disclosure opened, so the candidates read as
               a child of THIS report rather than as unrelated entries. */}
-          <p className="text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">
+          <p className="text-caption font-extrabold uppercase tracking-widest text-brand-muted-text">
             {'Possible matches'}
           </p>
           <PossibleMatches

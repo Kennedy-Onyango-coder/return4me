@@ -181,7 +181,7 @@ export default function AgentActivationView({ onSignIn, onExit, hasToken }: Prop
           aria-labelledby="agent-activation-title"
           className="bg-white border border-brand-border rounded-2xl p-5 sm:p-6"
         >
-          <p className="text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">
+          <p className="text-caption font-extrabold uppercase tracking-widest text-brand-muted-text">
             {'Return4me agent'}
           </p>
           <h1 id="agent-activation-title" className="mt-1 text-xl sm:text-2xl font-extrabold tracking-tight text-brand-dark-text">

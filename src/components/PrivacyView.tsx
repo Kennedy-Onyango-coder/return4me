@@ -181,7 +181,7 @@ export default function PrivacyView({ setView }: PrivacyViewProps) {
           <p>
             We collect the minimum amount of personal data necessary to provide a secure and reliable document recovery service.
           </p>
-          <div className="overflow-x-auto border border-stone-200 rounded-xl">
+          <div className="r4m-scroll-x r4m-scroll-x-on-white border border-stone-200 rounded-xl" role="region" aria-label={'Personal data collected'} tabIndex={0}>
             <table className="min-w-full divide-y divide-stone-200 text-xs">
               <thead className="bg-stone-50">
                 <tr>
@@ -328,7 +328,7 @@ export default function PrivacyView({ setView }: PrivacyViewProps) {
           <p className="text-xs text-stone-500 mt-3">
             The table below lists the external services that process information on Return4me's behalf, and the categories of information involved. It describes what each service receives; it does not address the legal status of any provider. SMS delivery is currently switched off: Return4me sends no text messages, so our SMS provider receives nothing about you while it remains disabled.
           </p>
-          <div className="overflow-x-auto border border-stone-200 rounded-xl mt-2">
+          <div className="r4m-scroll-x r4m-scroll-x-on-white border border-stone-200 rounded-xl mt-2" role="region" aria-label={'External services that process information'} tabIndex={0}>
             <table className="min-w-full divide-y divide-stone-200 text-xs">
               <thead className="bg-stone-50">
                 <tr>

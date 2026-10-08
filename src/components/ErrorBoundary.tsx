@@ -50,7 +50,7 @@ export default class ErrorBoundary extends React.Component<Props, State> {
           <div className="p-4 bg-stone-900 text-red-400 rounded-2xl text-xs font-mono overflow-auto max-h-60 space-y-2">
             <p className="font-extrabold">{this.state.error?.toString()}</p>
             {this.state.errorInfo && (
-              <pre className="text-[10px] leading-tight whitespace-pre-wrap">
+              <pre className="text-caption leading-tight whitespace-pre-wrap">
                 {this.state.errorInfo.componentStack}
               </pre>
             )}

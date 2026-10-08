@@ -29,7 +29,7 @@ export default function ClaimPaymentState({
         {payment.label}
       </Badge>
       {showTimestamp && (
-        <span className="text-[11px] text-brand-muted-text">
+        <span className="text-caption text-brand-muted-text">
           {payment.at ? formatTimestamp(payment.at) : 'No payment recorded'}
         </span>
       )}

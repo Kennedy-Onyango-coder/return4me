@@ -143,7 +143,7 @@ export default function DashboardShell({
             <div className="flex items-center justify-end gap-1.5 sm:gap-2 flex-wrap">
               {identityLabel && (
                 <span
-                  className="hidden sm:inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-[11px] font-bold max-w-[220px]"
+                  className="hidden sm:inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-caption font-bold max-w-[220px]"
                   title={identityLabel}
                 >
                   <User size={12} aria-hidden="true" />

@@ -159,7 +159,7 @@ export default function LostReportsAdministration({ token }: {  token: string | 
     return (match.name_en) || match.name_en || categoryId;
   };
 
-  const thClass = 'px-3 py-2.5 text-left text-[10px] font-extrabold uppercase tracking-wider text-stone-500 whitespace-nowrap';
+  const thClass = 'px-3 py-2.5 text-left text-caption font-extrabold uppercase tracking-wider text-brand-muted-text whitespace-nowrap';
   const tdClass = 'px-3 py-3 align-top text-xs text-stone-700';
 
   return (
@@ -187,14 +187,14 @@ export default function LostReportsAdministration({ token }: {  token: string | 
           stored in `lost_reports.county`, and the server re-validates it with
           resolveCountyName() regardless of what this control sends. */}
       <div className="flex flex-wrap items-center gap-2">
-        <label htmlFor="admin-lost-county" className="text-xs font-extrabold uppercase tracking-wider text-stone-500">
+        <label htmlFor="admin-lost-county" className="text-caption font-extrabold uppercase tracking-wider text-[var(--appearance-text-muted)]">
           {'County'}
         </label>
         <select
           id="admin-lost-county"
           value={county}
           onChange={(e) => handleCountyChange(e.target.value)}
-          className="border border-stone-300 rounded-xl px-3 py-2 text-xs bg-white focus:outline-none focus:border-accent-orange"
+          className="h-11 min-w-0 max-w-full rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface)] px-3 text-body text-[var(--appearance-text-primary)] transition-colors focus:border-[var(--appearance-focus)]"
         >
           <option value="">{'All Counties'}</option>
           {COUNTY_GROUPS.map((group) => (
@@ -276,7 +276,7 @@ function ReportsTable({
 
 
   return (
-    <div className="bg-white border border-stone-100 rounded-2xl shadow-sm overflow-x-auto">
+    <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl shadow-sm r4m-scroll-x" role="region" aria-label={'Lost reports table'} tabIndex={0}>
       <table className="min-w-full">
         <caption className="sr-only">
           {'Lost reports, newest first'}
@@ -308,7 +308,7 @@ function ReportsTable({
                 <td className={tdClass}>
                   <Badge variant="code">{report.id}</Badge>
                   {report.has_document_number && (
-                    <span className="mt-1.5 block text-[10px] font-bold uppercase tracking-wider text-stone-400">
+                    <span className="mt-1.5 block text-caption font-bold uppercase tracking-wider text-brand-muted-text">
                       {'Identifier recorded'}
                     </span>
                   )}

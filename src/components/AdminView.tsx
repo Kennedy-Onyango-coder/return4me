@@ -2706,7 +2706,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                                 setTwoFaMessage('');
                                 setTwoFaShowDisableForm(true);
                               }}
-                              className="self-start text-caption font-bold text-status-danger underline hover:no-underline cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange/40 rounded"
+                              className="self-start text-caption font-bold text-status-danger underline hover:no-underline cursor-pointer rounded"
                             >
                               {'Disable 2FA'}
                             </button>
@@ -2807,7 +2807,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                     <button
                       type="button"
                       onClick={cancelTwoFaEnrollForm}
-                      className="text-caption font-bold text-[var(--appearance-text-muted)] underline hover:no-underline cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-orange/40 rounded"
+                      className="text-caption font-bold text-[var(--appearance-text-muted)] underline hover:no-underline cursor-pointer rounded"
                     >
                       {'Cancel setup'}
                     </button>
@@ -3880,7 +3880,10 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
               </div>
 
               <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl shadow-sm overflow-hidden">
-                <div className="overflow-x-auto">
+                {/* A six-column ledger cannot be made to fit a 320px phone without
+                    deleting information, so it scrolls — but only inside a region
+                    the user can see and the keyboard can reach. */}
+                <div className="r4m-scroll-x" role="region" aria-label={'Recent ledger transactions'} tabIndex={0}>
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="bg-[var(--appearance-surface-muted)] text-caption font-extrabold text-[var(--appearance-text-muted)] uppercase tracking-widest border-b border-[var(--appearance-border)]">
@@ -4801,7 +4804,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                       <EmptyState icon={Package} title="No categories found on the server." />
                     </div>
                   ) : (
-                    <div className="overflow-x-auto font-sans">
+                    <div className="r4m-scroll-x font-sans" role="region" aria-label={'Category pricing table'} tabIndex={0}>
                       <table className="w-full text-left border-collapse text-caption">
                         <thead>
                           <tr className="bg-[var(--appearance-surface-muted)] border-b border-[var(--appearance-border)] text-[var(--appearance-text-muted)] uppercase tracking-wider font-extrabold text-caption">
@@ -4933,7 +4936,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                     <EmptyState icon={ShieldCheck} title="No active payment strikes recorded on the platform." />
                   </div>
                 ) : (
-                  <div className="overflow-x-auto font-sans">
+                  <div className="r4m-scroll-x font-sans" role="region" aria-label={'Payment strikes table'} tabIndex={0}>
                     <table className="w-full text-left border-collapse text-caption">
                       <thead>
                         <tr className="bg-[var(--appearance-surface-muted)] border-b border-[var(--appearance-border)] text-[var(--appearance-text-muted)] uppercase tracking-wider font-extrabold text-caption">

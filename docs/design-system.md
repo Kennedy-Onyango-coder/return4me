@@ -324,4 +324,46 @@ These pockets are known, classified, and deliberately **not** touched by UX-01.
 4. If a legacy screen needs redesign, record it in the queue table above —
    do not redesign the screen inside an unrelated batch.
 
+## 16. Responsive data regions (Batch C)
+
+A wide operational table is the one place horizontal scrolling is the RIGHT
+answer — shrinking a nine-column ledger until it fits would make it unreadable,
+and hiding columns would hide information. Scrolling is only acceptable when the
+user can tell there is more to the right **and** a keyboard user can reach it,
+so there is exactly one shared answer:
+
+```html
+<div class="r4m-scroll-x" role="region" aria-label="…" tabindex="0">
+  <table>…</table>
+</div>
+```
+
+- `.r4m-scroll-x` (`src/index.css`) applies `overflow-x: auto` plus the four-layer
+  "scrolling shadow": two `local` veils that travel with the content and two
+  `scroll` shadows pinned to the box, so the shadow is visible **only while the
+  box can actually scroll in that direction** — no JavaScript, no extra element,
+  no resize observer, no layout change.
+- The veil is painted in the `--appearance-scroll-veil` role, which defaults to
+  `--appearance-surface`. A legacy light-only card (white in both themes) adds
+  `.r4m-scroll-x-on-white` to override **just that role**, rather than forking
+  the affordance.
+- `role` + `aria-label` + `tabindex="0"` is the markup contract: it makes the
+  region keyboard-scrollable and announced. `.r4m-scroll-x:focus-visible` uses
+  the same single focus language as every other control (§6).
+
+Two class strings are the **only** permitted bare `overflow-x-auto` left in the
+app, and both are a horizontal strip of *buttons* rather than a data table
+(a browser scrolls a focused button into view on its own, so neither needs a tab
+stop): `.r4m-admin-nav` (admin console sections) and the customer dashboard's
+section strip. `src/__tests__/responsiveUxBatchC.test.ts` pins the exception to
+exactly those two so a third silent scroller cannot appear unnoticed.
+
+### Type floor: current residuals
+
+The 12px floor (§1) now holds across every shipped view **except** one recorded
+exception: `OwnerView`'s star-rating micro-badge. It is pinned by
+`customerDashboardUx09.test.ts` (the documented residual count) and
+`publicExperience.test.ts`, and the Batch C guard asserts it is still exactly one
+occurrence in exactly one file, so it can neither spread nor disappear silently.
+
 

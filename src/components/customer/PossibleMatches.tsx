@@ -159,7 +159,7 @@ function MatchCandidateCard({
 
           {reasons.length > 0 && (
             <div>
-              <p className="text-[11px] font-extrabold uppercase tracking-widest text-brand-muted-text">
+              <p className="text-caption font-extrabold uppercase tracking-widest text-brand-muted-text">
                 {'Why this was suggested'}
               </p>
               <ul className="mt-1.5 space-y-1">

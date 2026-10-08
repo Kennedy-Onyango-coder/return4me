@@ -147,7 +147,7 @@ export default function VerificationForm({
                 />
               )}
               {helpText && (
-                <p className="text-[10px] text-stone-400">{helpText}</p>
+                <p className="text-caption text-[var(--appearance-text-muted)]">{helpText}</p>
               )}
             </div>
           );
@@ -167,7 +167,7 @@ export default function VerificationForm({
             rows={3}
             required
           />
-          <p className="text-[10px] text-stone-400">
+          <p className="text-caption text-[var(--appearance-text-muted)]">
             {'These details are kept strictly private and used solely by the Hub Agent to verify you.'}
           </p>
         </div>
@@ -187,7 +187,7 @@ export default function VerificationForm({
             />
             {idProofBase64 && (
               <div className="space-y-2">
-                <p className="text-[10px] text-emerald-600 font-semibold flex items-center space-x-1">
+                <p className="text-caption text-status-success font-semibold flex items-center space-x-1">
                   <span>{'Photo uploaded and stored securely'}</span>
                 </p>
                 <div className="flex items-start space-x-2 bg-stone-50 p-2.5 rounded-lg border border-stone-200">
@@ -199,7 +199,7 @@ export default function VerificationForm({
                     className="mt-0.5 h-3.5 w-3.5 rounded border-stone-300 text-primary-green focus:ring-primary-green cursor-pointer"
                     required
                   />
-                  <label htmlFor="verify-id-consent" className="text-[10px] text-stone-600 leading-tight select-none cursor-pointer">
+                  <label htmlFor="verify-id-consent" className="text-caption text-stone-600 leading-tight select-none cursor-pointer">
                     {'I explicitly consent to the processing and secure storage of my government identity card/passport for physical owner verification in accordance with ODPC standards. *'}
                   </label>
                 </div>
@@ -226,7 +226,7 @@ export default function VerificationForm({
         {/* Privacy notice */}
         <div className="flex items-start space-x-2 bg-sky-50/50 p-3 rounded-xl border border-sky-100">
           <ShieldCheck size={14} className="text-sky-600 mt-0.5 shrink-0" />
-          <p className="text-[10px] text-sky-700">
+          <p className="text-caption text-status-info">
             {'Your verification answers are completely private.'}
           </p>
         </div>

@@ -86,18 +86,14 @@ export default function ClaimsFilters({
     <div className="bg-white border border-brand-border rounded-2xl p-4 space-y-3">
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div className="space-y-1 sm:col-span-2">
-          <label htmlFor="r4m-claims-search-field" className="block text-xs font-bold text-brand-dark-text">
-            {'Search by'}
-          </label>
-          <div className="flex gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row">
             <Select
               id="r4m-claims-search-field"
-              hideLabel
               label={'Search by'}
               value={value.searchField}
               disabled={disabled}
               onChange={(e) => set({ searchField: e.target.value as ClaimSearchField })}
-              className="w-44 shrink-0"
+              className="w-full sm:w-44 sm:shrink-0"
             >
               <option value="claimId">{'Claim ID'}</option>
               <option value="itemId">{'Item ID'}</option>
@@ -105,7 +101,6 @@ export default function ClaimsFilters({
             </Select>
             <Input
               type="search"
-              hideLabel
               label={'Search claims'}
               placeholder={
                 value.searchField === 'claimantPhone'
@@ -120,7 +115,7 @@ export default function ClaimsFilters({
               onChange={(e) => set({ search: e.target.value })}
             />
           </div>
-          <p className="text-[11px] text-brand-muted-text">
+          <p className="text-caption text-brand-muted-text">
             {'Search runs on the server, not in the browser.'}
           </p>
         </div>
@@ -191,7 +186,7 @@ export default function ClaimsFilters({
         </div>
       </div>
 
-      <p className="text-[11px] text-brand-muted-text" aria-live="polite">
+      <p className="text-caption text-brand-muted-text" aria-live="polite">
         {active
           ? 'Filters stay applied across pages.'
           : 'No filters applied.'}

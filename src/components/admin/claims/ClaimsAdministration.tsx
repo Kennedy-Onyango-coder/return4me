@@ -249,7 +249,7 @@ export default function ClaimsAdministration({ token }: {  token: string | null 
         onNext={() => setOffset((o) => o + ADMIN_CLAIMS_PAGE_SIZE)}
       />
 
-      <p className="text-[11px] text-brand-muted-text">
+      <p className="text-caption text-brand-muted-text">
         {'Opening a claim records a server-side audit event against your admin account.'}
       </p>
 

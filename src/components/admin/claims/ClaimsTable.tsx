@@ -21,7 +21,7 @@ import type { AdminClaimListView } from '../../../services/adminClaimsApiTypes';
  * the server and is rendered verbatim — the UI never tries to unmask it.
  */
 const HEAD =
-  'px-4 py-2.5 text-[11px] font-extrabold uppercase tracking-wider text-brand-muted-text';
+  'px-4 py-2.5 text-caption font-extrabold uppercase tracking-wider text-brand-muted-text';
 
 export default function ClaimsTable({
   rows,
@@ -35,8 +35,11 @@ export default function ClaimsTable({
   disabled: boolean;
 }) {
   return (
-    <div className="bg-white border border-brand-border rounded-2xl overflow-hidden">
-      <div className="overflow-x-auto">
+    <div className="bg-[var(--appearance-surface)] border border-brand-border rounded-2xl overflow-hidden">
+      {/* Nine columns cannot fit a phone. The table keeps every column and
+          scrolls inside a labelled, keyboard-reachable region, so no value is
+          hidden and the overflow is discoverable rather than a guess. */}
+      <div className="r4m-scroll-x" role="region" aria-label={'Claims table'} tabIndex={0}>
         <table className="w-full text-left text-sm border-collapse min-w-[54rem]">
           <caption className="sr-only">
             {'Claims matching the current search and filters'}
@@ -115,7 +118,7 @@ function ClaimRow({
         {row.item ? (
           <span className="flex flex-col gap-1">
             <span className="text-xs text-brand-dark-text">{row.item.category_name_en || row.item.category_id}</span>
-            <span className="font-mono text-[11px] text-brand-muted-text break-all">{row.item.id}</span>
+            <span className="font-mono text-caption text-brand-muted-text break-all">{row.item.id}</span>
             {row.item.is_sensitive_document && (
               <Badge variant="warning" icon={ShieldAlert}>
                 {'Sensitive document'}
@@ -133,7 +136,7 @@ function ClaimRow({
       </td>
       <td className="px-4 py-3 align-top">
         <span className="font-mono text-xs text-brand-dark-text">{row.claimant_phone || 'Not available'}</span>
-        <span className="mt-0.5 block text-[11px] text-brand-muted-text">
+        <span className="mt-0.5 block text-caption text-brand-muted-text">
           {'Tier'} {row.verification_tier ?? '—'}
         </span>
       </td>
