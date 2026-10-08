@@ -31,6 +31,10 @@ import { hashCode, timingSafeEqualHex, toE164Kenyan } from '../services/auth.ts'
 import { PaymentService } from '../services/payments.ts';
 import { isPickupEligibleClaimStatus, CLAIM_UNAVAILABLE_MESSAGE } from '../config/claimStatuses.ts';
 import { PAYMENT_SESSION_WINDOW_MS } from '../config/paymentWindows.ts';
+// THE ONE payment-reconciliation SELECTION predicate. Shared verbatim with the
+// background sweep in server.ts so the on-demand path and the durable backstop
+// can never disagree about which sessions are worth a provider lookup.
+import { paymentReconciliationRefusal } from '../config/paymentReconciliation.ts';
 import { toOwnerSafeAgentView, toOwnerSafeItemView, toOwnerSafeClaimView } from '../services/ownerSafeViews.ts';
 
 
@@ -393,6 +397,10 @@ export function registerClaimPaymentRoutes(
         // ------------------------------------------------------------------
         // ON-DEMAND PROVIDER RECONCILIATION.
         //
+        // The authoritative rule for WHICH claim/session states may be reconciled
+        // is the shared selection predicate documented immediately below — not
+        // the illustrative cases named in this paragraph.
+        //
         // A completed M-Pesa payment must not be lost merely because the webhook
         // was missed, delayed, or the browser was closed. When the session still
         // carries a provider invoice and the CLAIM is still awaiting payment —
@@ -405,11 +413,29 @@ export function registerClaimPaymentRoutes(
         // browser is never trusted to declare success. Throttled per session so
         // the 3-second poll cannot hammer the provider.
         // ------------------------------------------------------------------
-        if (
-          (claim.status === 'pending_payment' || claim.status === 'payment_window_expired')
-          && session.provider_invoice_id
-          && (session.status === 'pending' || session.status === 'expired')
-        ) {
+        // THE selection decision: the SAME predicate the background sweep uses
+        // (config/paymentReconciliation.ts), so the two recovery entry points can
+        // never drift apart. It admits a session in 'pending', 'expired' OR
+        // 'confirmed' — the last so a session stranded against an UNPAID claim
+        // stays reachable — and excludes a claim that already carries `paid_at`.
+        // It is a SELECTION decision only: the canonical confirmation path's own
+        // amount/provider/binding gates and its atomic claim+session CAS still
+        // authorise whatever is written. No client-supplied amount, claim id,
+        // session id or provider reference participates in this decision.
+        const reconciliationRefusal = paymentReconciliationRefusal({
+          claimStatus: claim.status,
+          paidAt: claim.paid_at,
+          sessionStatus: session.status,
+          hasProviderInvoice: !!session.provider_invoice_id,
+        });
+        if (reconciliationRefusal === null) {
+          // A 'confirmed' session against an unpaid claim is a REPAIR, not
+          // ordinary polling: the provider already took the money. Log it as the
+          // unexpected state combination it is, and stay silent on the ordinary
+          // pending/expired path so a 3-second poll produces no log noise.
+          if (session.status === 'confirmed') {
+            console.warn(`[PAYMENT SESSION STATUS] UNEXPECTED STATE COMBINATION: session ${sessionId} is confirmed but claim ${claimId} is unpaid (status=${claim.status}). Attempting canonical recovery.`);
+          }
           const lastAttempt = lastSessionReconcileAttempt.get(sessionId) || 0;
           if (Date.now() - lastAttempt >= SESSION_RECONCILE_MIN_INTERVAL_MS) {
             lastSessionReconcileAttempt.set(sessionId, Date.now());

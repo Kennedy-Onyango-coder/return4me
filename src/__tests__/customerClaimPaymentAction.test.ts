@@ -139,10 +139,36 @@ describe('3: a confirmation is only ever read back from the server', () => {
   });
 
   it('treats a closed window as a terminal, recoverable state', () => {
+    // THE BEHAVIOUR: the CLAIM's 24-hour window closing is the only terminal case
+    // that requires re-linking, so it is evaluated BEFORE the per-attempt session
+    // expiry, which is merely "get a fresh prompt" while the claim stays open.
+    //
+    // This used to be asserted as one verbatim `||` expression
+    // ('sessionStatus === \'expired\' || claimStatus === \'payment_window_expired\'),
+    // which is not a contract — the two conditions were later split into ordered
+    // branches (correctly, since they are NOT interchangeable) and the literal
+    // stopped existing while the BEHAVIOUR was preserved. Assert the ordering and
+    // the outcomes instead, so the test measures the rule rather than one spelling
+    // of it.
     expect(ACTION).toContain("data?.status === 'payment_window_expired'");
-    expect(ACTION).toContain(
-      "sessionStatus === 'expired' || claimStatus === 'payment_window_expired'",
-    );
+
+    const claimWindow = ACTION.indexOf("claimStatus === 'payment_window_expired'");
+    const sessionExpired = ACTION.indexOf("sessionStatus === 'expired'");
+    expect(claimWindow, 'closed-claim-window branch missing').toBeGreaterThan(-1);
+    expect(sessionExpired, 'expired-prompt branch missing').toBeGreaterThan(-1);
+    expect(claimWindow).toBeLessThan(sessionExpired);
+
+    // The terminal branch stops the poll loop AND tells the parent to reload, so
+    // the dashboard can move on to a fresh claim.
+    const claimWindowBranch = ACTION.slice(claimWindow, sessionExpired);
+    expect(claimWindowBranch).toContain('setPolling(false);');
+    expect(claimWindowBranch).toContain('onConfirmedRef.current();');
+
+    // The prompt-expiry branch stops the loop but must NOT end the claim: the
+    // 24-hour window is still open, so the parent is deliberately not signalled.
+    const sessionExpiredBranch = ACTION.slice(sessionExpired, sessionExpired + 600);
+    expect(sessionExpiredBranch).toContain('setPolling(false);');
+    expect(sessionExpiredBranch).not.toContain('onConfirmedRef.current();');
   });
 
   it('tells the parent so it can reload the claim and move on', () => {

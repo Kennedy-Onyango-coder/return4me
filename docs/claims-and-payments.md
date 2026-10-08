@@ -144,6 +144,52 @@ A mismatch is evidence of either a provider fault or something the application
 does not understand, and quietly reconciling the difference would move money on
 the basis of a record the application cannot vouch for.
 
+#### A confirmed session whose claim was never credited
+
+Both recovery entry points used to hand-write the same allow-list of session
+statuses — `pending` or `expired` — so a session already in `confirmed` was
+invisible to both. That is right for the ordinary case, because the canonical
+path confirms the session in the same transaction that moves the claim, so a
+`confirmed` session normally co-exists with a paid claim. It is wrong for the
+stranded case: a session can exist as `confirmed` while its claim is still
+unpaid and has already been swept to `payment_window_expired`. The provider had
+genuinely taken the money, and no code path would ever look at that session
+again.
+
+That selection decision is now one module, `config/paymentReconciliation.ts`,
+imported by both the on-demand status route and the background sweep so the two
+cannot drift apart:
+
+| Export | Meaning |
+|---|---|
+| `RECONCILABLE_SESSION_STATUSES` | `pending`, `expired`, `confirmed` |
+| `RECONCILABLE_CLAIM_STATUSES` | `pending_payment`, `payment_window_expired` |
+| `isPaymentReconciliationEligible` | Whether this session is worth a provider lookup |
+| `paymentReconciliationRefusal` | The one implementation, plus the non-sensitive reason it was refused |
+
+The refusal reasons are `no_provider_invoice`, `claim_already_paid`,
+`claim_status_not_reconcilable` and `session_status_not_reconcilable`, and they
+exist for structured logging rather than for the user.
+
+This is a selection predicate, not an authorisation, and it is deliberately
+permissive: widening it cannot confirm anything by itself, because every
+selected session is handed to the canonical confirmation path, which still
+refuses a session bound to a different claim, a session in no confirmable state
+and an amount that is not positively reconciled. The atomic
+`attemptClaimEscrowHold` remains the only writer of `paid_at`.
+
+A session in `confirmed` is a terminal provider fact — re-asking cannot change
+the provider's answer — so the sweep attempts that repair a bounded number of
+times per process (`RECONCILE_CONFIRMED_REPAIR_MAX_ATTEMPTS`) instead of
+polling forever. Repair attempts, and only repair attempts, are logged; the
+ordinary `pending`/`expired` cycle stays silent.
+
+None of this changes the underlying rule: `claims.paid_at IS NOT NULL` is the
+only proof a claim was paid. A session marked `confirmed` is not proof by
+itself, so it must stay reachable by recovery while the CAS keeps deciding
+whether anything is written.
+
+
 ### Pickup code
 
 Once escrow is held, a pickup code is issued to the owner and a confirmation is

@@ -192,6 +192,12 @@ import { claimStatusPollLimiter, paymentSessionStatusLimiter } from './config/cl
 // per-attempt STK session window — see config/paymentWindows.ts for why the two
 // must never be collapsed back into one number.
 import { hasClaimPaymentWindowElapsed } from './config/paymentWindows';
+// THE ONE payment-reconciliation SELECTION predicate, shared with the on-demand
+// payment-session status route (routes/claimPayments.ts) so the two recovery
+// entry points can never drift apart on which sessions are worth a provider
+// lookup. It is a selection decision only: every selected session is still
+// authorised by processClaimPaymentConfirmed's own gates and the atomic CAS.
+import { isPaymentReconciliationEligible } from './config/paymentReconciliation';
 // PHASE 10 (F-1): the ONE server-port resolver. This file previously hardcoded
 // the listen port and ignored the environment, which breaks port-injecting
 // container platforms (see config/serverPort.ts for the full reasoning).
@@ -4994,7 +5000,30 @@ async function createApp() {
           // Only sessions that could still be confirmed AND that carry a
           // provider invoice we can actually ask the provider about.
           if (!session || !session.provider_invoice_id) continue;
-          if (session.status !== 'pending' && session.status !== 'expired') continue;
+          // THE selection decision — the SAME predicate the on-demand status
+          // route uses (config/paymentReconciliation.ts), so the two recovery
+          // entry points cannot drift apart. It deliberately admits a
+          // 'confirmed' session (so a session stranded against an UNPAID claim
+          // stays reachable) and excludes a claim that already carries
+          // `paid_at`. It authorises nothing: the canonical path's own gates and
+          // the atomic CAS still decide whether anything is written.
+          if (!isPaymentReconciliationEligible({
+            claimStatus: claim.status,
+            paidAt: (claim as any).paid_at,
+            sessionStatus: session.status,
+            hasProviderInvoice: true,
+          })) continue;
+          // A 'confirmed' session is a REPAIR, not ordinary polling: the
+          // provider already took the money and the claim was never credited.
+          const repairingConfirmedSession = session.status === 'confirmed';
+          if (repairingConfirmedSession) {
+            const attempts = confirmedSessionRepairAttempts.get(session.id) || 0;
+            // Bounded: the provider's answer is already terminal, so this must
+            // not become a permanent poll (see the budget's own comment above).
+            if (attempts >= RECONCILE_CONFIRMED_REPAIR_MAX_ATTEMPTS) continue;
+            confirmedSessionRepairAttempts.set(session.id, attempts + 1);
+            console.warn(`[PAYMENT RECONCILE SWEEP] UNEXPECTED STATE COMBINATION: session ${session.id} is confirmed but claim ${claim.id} is unpaid (status=${claim.status}, attempt ${attempts + 1}/${RECONCILE_CONFIRMED_REPAIR_MAX_ATTEMPTS}). Attempting canonical recovery.`);
+          }
           const last = lastReconcileAttemptByInvoice.get(session.provider_invoice_id) || 0;
           if (Date.now() - last < RECONCILE_MIN_INTERVAL_MS) continue;
           lastReconcileAttemptByInvoice.set(session.provider_invoice_id, Date.now());
@@ -5003,6 +5032,11 @@ async function createApp() {
             const pickupCode = await processClaimPaymentConfirmed(claim.id, session.provider_invoice_id);
             if (pickupCode) {
               console.log(`[PAYMENT RECONCILE SWEEP] Recovered a completed payment for claim ${claim.id} (session ${session.id}).`);
+            } else if (repairingConfirmedSession) {
+              // Logged ONLY for the non-ordinary repair case, so an ordinary
+              // polling cycle stays silent. IDs and a non-sensitive reason only
+              // — never an amount, a phone number or a credential.
+              console.warn(`[PAYMENT RECONCILE SWEEP] Confirmed-session recovery REFUSED for claim ${claim.id} (session ${session.id}): the canonical path did not verify a recoverable completion (provider unverified, pending, failed, or a refused precondition).`);
             }
           } catch (err) {
             console.error(`[PAYMENT RECONCILE SWEEP] Reconciliation failed for session ${session.id}:`, err);
@@ -5162,6 +5196,28 @@ const RECONCILE_MIN_INTERVAL_MS = 30 * 1000; // at most one provider query per i
 const RECONCILE_MAX_PER_SWEEP = 25;
 // invoice id -> epoch ms of the last reconciliation attempt made in this process
 const lastReconcileAttemptByInvoice = new Map<string, number>();
+
+// ---------------------------------------------------------------------------
+// CONFIRMED-SESSION REPAIR BUDGET.
+//
+// A session already in `confirmed` is a TERMINAL provider fact: the collection
+// completed, so re-asking the provider cannot change its answer. It is selected
+// by the shared predicate ONLY so a session stranded against an UNPAID claim
+// remains reachable — a state the pre-atomic confirmation path could produce.
+//
+// Because the provider's answer cannot change, that repair is attempted a small,
+// bounded number of times per process instead of on every 60-second sweep
+// forever. This keeps the (deliberately non-ordinary) repair log from becoming a
+// repeating poll and avoids pointless provider traffic, while an operator can
+// still force a retry by restarting the process or by the claimant opening the
+// payment status route, which is throttled separately.
+//
+// It applies to NOTHING else: `pending`/`expired` selection, throttling, ordering
+// and every ordinary path are byte-identical to their previous behaviour.
+// ---------------------------------------------------------------------------
+const RECONCILE_CONFIRMED_REPAIR_MAX_ATTEMPTS = 3;
+// session id -> repair attempts made in this process
+const confirmedSessionRepairAttempts = new Map<string, number>();
 
 async function expireStaleClaims() {
   try {

@@ -26,14 +26,41 @@ const WEBHOOKS = read('src/routes/webhooks.ts');
 const PAYMENTS = read('src/services/payments.ts');
 const SERVER = read('src/server.ts');
 
+// =============================================================================
+// SOURCE SLICING — WHY THERE IS NO CHARACTER BUDGET HERE
+//
+// This file previously sliced the webhook route with a fixed character budget,
+// `WEBHOOKS.slice(start, start + 4200)`. That is not a contract: it is a guess
+// about how long the route body happens to be. When the route gained explanatory
+// comments, TWO assertions in this file began failing against entirely correct
+// code — the assertions were still true, but the text that proved them had moved
+// past the 4,200th character. A brittle source slice turns every future comment
+// into a red test, which trains a reader to distrust the suite.
+//
+// The slice therefore runs from the route registration TO THE END OF THE MODULE,
+// and the structural fact it depends on — that this route is the LAST
+// registration in routes/webhooks.ts, so nothing unrelated can leak into the
+// slice — is itself asserted below. That turns a silent-drift hazard into an
+// explicit, checkable contract.
+// =============================================================================
 function webhookBody(): string {
   const start = WEBHOOKS.indexOf("app.post('/api/webhooks/intasend'");
   expect(start, 'webhook route not found').toBeGreaterThan(-1);
-  return WEBHOOKS.slice(start, start + 4200);
+  return WEBHOOKS.slice(start);
 }
 
 describe('IntaSend collection webhook contract', () => {
   const body = webhookBody();
+
+  it('is the LAST registration in the module (the slice above depends on it)', () => {
+    // Without this, a future second route would silently join the slice and the
+    // assertions below could pass on someone else's code. Asserting the
+    // structural fact keeps the boundary honest instead of implicit.
+    const routeStart = WEBHOOKS.indexOf("app.post('/api/webhooks/intasend'");
+    expect(routeStart).toBe(WEBHOOKS.lastIndexOf('app.post('));
+    // And the module holds exactly one route registration.
+    expect((WEBHOOKS.match(/app\.post\(/g) || []).length).toBe(1);
+  });
 
   it('authenticates with the configured challenge, not an HMAC signature', () => {
     expect(body).toContain('INTASEND_WEBHOOK_CHALLENGE');

@@ -12,7 +12,7 @@ timer.
 | Sweep | Interval | What it does |
 |---|---|---|
 | `expireStaleClaims` | 60 seconds | Moves unpaid, agent-confirmed claims past their 24-hour payment window to `payment_window_expired` and records a payment strike |
-| `reconcilePendingPaymentSessions` | 60 seconds | Recovers a completed M-Pesa payment whose webhook was missed or delayed, via the authoritative IntaSend status API |
+| `reconcilePendingPaymentSessions` | 60 seconds | Recovers a completed M-Pesa payment whose webhook was missed or delayed, via the authoritative IntaSend status API. It also repairs a payment session stranded in `confirmed` against an unpaid claim, a bounded number of times per process |
 | `releaseDueSettlements` | 5 minutes | Pays the disbursement split for claims whose dispute window has closed |
 | `socialRetrySweep` | 5 minutes | Retries failed found-notice social publications |
 | `notificationRetrySweep` | 5 minutes | Re-dispatches due retryable notifications |
@@ -119,6 +119,19 @@ the reconciliation sweep should recover it within a minute (or immediately when
 the claimant taps "check payment status"). Check the `[PAYMENT RECONCILE SWEEP]`
 and `[INTASEND AUTHORITATIVE LOOKUP]` log lines for the reason. See
 [claims-and-payments.md](claims-and-payments.md).
+
+### A session is `confirmed` but the claim is still unpaid
+
+The `[PAYMENT RECONCILE SWEEP] UNEXPECTED STATE COMBINATION` and
+`[PAYMENT SESSION STATUS] UNEXPECTED STATE COMBINATION` lines mean exactly what
+they say: the provider took the money, the session's single confirmation was
+consumed, and the claim was never credited (`paid_at IS NULL`). The recovery
+attempt is bounded per process, so the line appearing three times for one
+session is the budget being spent, not a new failure each time — a refusal after
+that is the canonical path declining to write on facts it could not positively
+verify (see `[PAYMENT RECONCILE SWEEP] Confirmed-session recovery REFUSED`).
+Restarting the process, or the claimant opening the payment status route,
+re-arms the attempt.
 
 ### Notification rows are stuck in `sending`
 
