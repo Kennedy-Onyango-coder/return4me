@@ -729,6 +729,49 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
       setDataError(`Validation Error: The shares (Finder: KES ${catFormFinderShare} + Agent: KES ${catFormAgentShare} + Platform: KES ${catFormPlatformShare} = KES ${sharesSum}) must exactly equal the Total Fee: KES ${catFormTotalFee}.`);
       return;
     }
+    // -------------------------------------------------------------------------
+    // PRICING-AUTHORITY GUARD (Issue A) — AN ADMIN MUST NOT "SUCCESSFULLY" EDIT A
+    // FLAT PRICE THE NEW-ITEM PRICING PATH IGNORES.
+    //
+    // THE PRODUCTION SCENARIO THIS BLOCKS: a USB cable category was in RECOVERY
+    // FEE ENGINE mode (is_admin_modified = false). Its visible Total Fee was
+    // changed from KES 200 to KES 100, the save returned 200 OK, and the admin
+    // list showed the new price — yet the next reported item still locked KES
+    // 200, because in engine mode the flat Total Fee is not what prices anything.
+    // Nothing failed; the admin was simply editing a field that had no effect.
+    //
+    // The server contract is deliberately unchanged and explicit: is_admin_modified
+    // selects the mode, and MODE 2 prices from the engine. So this guard does not
+    // flip any state behind the admin's back — it refuses the ambiguous save and
+    // says exactly what to do instead (tick the override, or edit the engine
+    // fields). The server independently refuses a request that changes the flat
+    // prices without stating a mode at all.
+    //
+    // It only ever fires when the FLAT values actually differ from the values the
+    // category was loaded with, so an ordinary edit (name, engine field, masking
+    // style) is never blocked.
+    // -------------------------------------------------------------------------
+    if (showCategoryForm === 'edit' && selectedCategory && !catFormIsAdminModified) {
+      const loadedTotal = Number(selectedCategory.total_fee);
+      const loadedFinder = Number(selectedCategory.finder_share);
+      const loadedAgent = Number(selectedCategory.agent_share);
+      const loadedPlatform = Number(selectedCategory.platform_share);
+      const flatPricesEdited =
+        total !== loadedTotal ||
+        parseFloat(Number(catFormFinderShare).toFixed(2)) !== loadedFinder ||
+        parseFloat(Number(catFormAgentShare).toFixed(2)) !== loadedAgent ||
+        parseFloat(Number(catFormPlatformShare).toFixed(2)) !== loadedPlatform;
+      if (flatPricesEdited) {
+        setDataError(
+          'Save blocked: you changed the flat pricing values (Total / Finder / Agent / Platform) while this category is in MODE 2 — RECOVERY FEE ENGINE, where those flat values are NOT used to price a new item. ' +
+          'Tick "Use flat fee override" above to make them authoritative (MODE 1), or undo the flat-value changes and configure the fee with Base / Complexity / Delay instead. ' +
+          '/ Uhifadhi umesimamishwa: umebadilisha ada ya kawaida wakati kategoria hii iko kwenye mtindo wa Recovery Fee Engine, ambapo thamani hizo HAZITUMIKI kupanga bei ya bidhaa mpya.'
+        );
+        return;
+      }
+    }
+
+
 
     setCatSaving(true);
     try {
@@ -4358,6 +4401,63 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                           Choose one model: a flat override, or the Recovery Fee Engine that prices every item at report time.
                         </p>
                       </div>
+                      {/* ------------------------------------------------------------------
+                          PRICING AUTHORITY (Issue A) — WHICH MODEL IS ACTUALLY IN CHARGE.
+
+                          An administrator could previously edit the visible flat Total
+                          Fee (e.g. KES 200 -> KES 100) while this category was in
+                          RECOVERY FEE ENGINE mode. The save succeeded, the live admin
+                          list showed the new price, and the next reported item still
+                          locked KES 200 — because in engine mode the flat Total Fee is
+                          not what prices anything. This block states the active mode in
+                          words, and states what a NEW item will lock as a result, so a
+                          flat price can never again be mistaken for the authoritative one.
+
+                          These are the SAME two modes the server implements
+                          (src/services/feeEngine.ts, resolveItemLockedPricing):
+                            MODE 1 FLAT   -> a new item locks the flat fields verbatim
+                            MODE 2 ENGINE -> a new item is priced at Base + Complexity + Delay
+                          No second pricing model is introduced: the preview below is still
+                          the ONE computeRecoveryFee() the server itself prices with.
+                          ------------------------------------------------------------------ */}
+                      <div
+                        id="cat-pricing-mode-banner"
+                        data-pricing-mode={catFormIsAdminModified ? 'flat_admin_override' : 'recovery_fee_engine'}
+                        className="rounded-xl border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] p-4 space-y-2"
+                      >
+                        <p className="text-caption font-extrabold uppercase tracking-wider text-[var(--appearance-text-muted)]">
+                          {'Pricing model in force for NEW items'}
+                        </p>
+                        <p className="text-body font-extrabold text-[var(--appearance-text-primary)]">
+                          {catFormIsAdminModified
+                            ? 'MODE 1 — FLAT / ADMIN OVERRIDE is in force'
+                            : 'MODE 2 — RECOVERY FEE ENGINE is in force'}
+                        </p>
+                        <p className="text-caption text-[var(--appearance-text-muted)] leading-tight">
+                          {catFormIsAdminModified
+                            ? 'Every new item locks the flat Total / Finder / Agent / Platform amounts exactly as entered below. The Recovery Fee Engine configuration is ignored entirely.'
+                            : 'Every new item is priced by the Recovery Fee Engine from Base + Complexity + Delay (capped only by the Ceiling % and the finder cap). The flat Total / Finder / Agent / Platform fields below are stored but are NOT used to price anything, so editing them will not change what a new item is charged.'}
+                        </p>
+                        <p className="text-caption font-bold text-[var(--appearance-text-primary)]">
+                          <span id="cat-pricing-mode-authoritative-price">
+                            {catFormIsAdminModified
+                              ? `A new item would lock: KES ${Number(catFormTotalFee) || 0} total — Finder KES ${Number(catFormFinderShare) || 0}, Agent KES ${Number(catFormAgentShare) || 0}, Platform KES ${Number(catFormPlatformShare) || 0}.`
+                              : `A new item would be priced at Base + Complexity + Delay = KES ${enginePreview.totalFee} (before any declared-value ceiling), split Finder KES ${enginePreview.finderAmount} / Agent KES ${enginePreview.agentAmount} / Platform KES ${enginePreview.platformAmount}.`}
+                          </span>
+                        </p>
+                        {!catFormIsAdminModified && (
+                          <button
+                            type="button"
+                            id="cat-pricing-mode-switch-to-flat"
+                            onClick={() => setCatFormIsAdminModified(true)}
+                            className="rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface)] px-3 py-2 text-caption font-extrabold text-[var(--appearance-text-primary)] hover:border-[var(--appearance-primary)]"
+                          >
+                            {'Make the flat prices authoritative (switch to MODE 1)'}
+                          </button>
+                        )}
+                      </div>
+
+
 
                       {/* Flat fee override toggle — decides whether total_fee/finder_share/
                           agent_share/platform_share below win outright (ignoring the Recovery
@@ -4380,10 +4480,26 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                         <span className="text-body text-[var(--appearance-text-primary)]">
                           <span className="font-bold">Use flat fee override / Tumia ada isiyobadilika</span>
                           <span className="mt-0.5 block text-caption text-[var(--appearance-text-muted)]">
-                            Pins Total / Finder / Agent / Platform fee below exactly and ignores the Recovery Fee Engine config entirely.
+                            When ticked (MODE 1): Total / Finder / Agent / Platform below are authoritative — every new item locks them exactly — and the Recovery Fee Engine config is ignored entirely.
+                            When unticked (MODE 2): the Recovery Fee Engine prices every new item, and these four flat values are NOT used for pricing, so changing them here has no effect on what a new item is charged.
                           </span>
                         </span>
                       </label>
+
+                      {/* Is the flat price below actually the price a new item pays?
+                          Stated on the block itself, so the answer travels with the
+                          fields rather than depending on the admin remembering which
+                          toggle is set. MODE 1 = authoritative, MODE 2 = stored preview
+                          only (the engine prices new items). */}
+                      <p
+                        id="cat-flat-price-authority"
+                        className={`text-caption font-extrabold uppercase tracking-wider ${catFormIsAdminModified ? 'text-status-success' : 'text-status-warning'}`}
+                      >
+                        {catFormIsAdminModified
+                          ? 'These flat prices ARE authoritative (MODE 1) — new items lock them.'
+                          : 'These flat prices are NOT authoritative (MODE 2) — the engine prices new items; these values are stored but ignored.'}
+                      </p>
+
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {/* Total Fee */}

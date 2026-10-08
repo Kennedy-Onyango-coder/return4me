@@ -21,9 +21,28 @@ export type AgentHoldingPickup = FoundItem & {
   associatedClaim?: AgentAssociatedClaim;
 };
 
+/**
+ * The Agent Hub's earnings projection.
+ *
+ * TWO STATES, DELIBERATELY SEPARATE (Issue B): a confirmed handover books an
+ * `agent_payout` ledger row as PENDING and nothing is disbursed until the
+ * dispute window closes. Reporting that as KES 0 "earned" hid a real, owed
+ * payout from the agent, so pending settlement and completed (genuinely paid)
+ * earnings are published as distinct figures.
+ *
+ *   totalEarned               — completed, provider-confirmed payouts only
+ *   completedPayoutsCount     — how many payouts make up totalEarned
+ *   pendingSettlementEarnings — booked payouts still inside their window
+ *   pendingSettlementsCount   — how many are still pending
+ *
+ * A failed payout is in NEITHER figure. An 'unknown' provider outcome is stored
+ * as a pending row, so it is counted as pending and never as completed.
+ */
 export interface AgentEarnings {
   totalEarned: number;
   completedPayoutsCount: number;
+  pendingSettlementEarnings: number;
+  pendingSettlementsCount: number;
 }
 
 export interface AgentQueueResponse {

@@ -18,7 +18,10 @@ export function useAgentOperations({ token, refreshCategories }: {
   const [expectedDropoffs, setExpectedDropoffs] = useState<any[]>([]);
   const [holdingPickups, setHoldingPickups] = useState<any[]>([]);
   const [agentProfile, setAgentProfile] = useState<any | null>(null);
-  const [agentEarnings, setAgentEarnings] = useState<{ totalEarned: number; completedPayoutsCount: number } | null>(null);
+  // Issue B — the Agent Hub's earnings projection carries BOTH states: completed
+  // (paid) earnings and settlement-window pending earnings. The server computes
+  // both from authoritative ledger rows; the browser never derives money.
+  const [agentEarnings, setAgentEarnings] = useState<{ totalEarned: number; completedPayoutsCount: number; pendingSettlementEarnings: number; pendingSettlementsCount: number } | null>(null);
   const [dropoffCodeInput, setDropoffCodeInput] = useState('');
   const [operationError, setOperationError] = useState('');
   const [actionSuccessMsg, setActionSuccessMsg] = useState('');

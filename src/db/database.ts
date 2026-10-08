@@ -2017,24 +2017,80 @@ class DatabaseEngine {
     }
   }
 
+  // Agent earnings for the Agent Hub, split into the two states that actually
+  // exist in the ledger — PENDING SETTLEMENT and COMPLETED (PAID) — because a
+  // single completed-only total is misleading.
+  //
+  // THE DEFECT THIS CLOSES: a claim whose handover has been confirmed sits in
+  // 'pending_settlement' for the whole dispute window, with its agent_payout
+  // ledger row booked as 'pending' and NOTHING disbursed yet. The Hub showed
+  // "Total Earned: KES 0" for that agent the entire time, even though a real,
+  // booked payout was already owed to them — so an agent could not tell "we owe
+  // you this, the dispute window is still running" from "you have earned
+  // nothing".
+  //
+  // WHAT IS COUNTED WHERE (authoritative ledger rows only — never client state):
+  //   pendingSettlementEarnings -> type 'agent_payout' AND status 'pending'
+  //   totalEarned               -> type 'agent_payout' AND status 'completed'
+  //   completedPayoutsCount     -> how many of those completed rows
+  //   pendingSettlementsCount   -> how many of those pending rows
+  //
+  // 'failed' rows are deliberately in NEITHER figure: a failed disbursement is
+  // not money the agent has been paid, and it is not money currently on its way
+  // either — it is an outstanding operational problem, and it must not inflate
+  // either number. 'unknown' provider outcomes are stored by
+  // recordPayoutAttempt() as 'pending' (the one provider failure this codebase
+  // treats as safely retryable), so they land in the PENDING figure and can
+  // never be mistaken for completed earnings.
+  //
+  // PAYMENT TIMING IS UNCHANGED BY ANY OF THIS: 'completed' still means a real
+  // provider confirmation was recorded, nothing is disbursed earlier, and the
+  // 48-hour dispute/settlement window is untouched. This is a visibility change
+  // only.
+  //
   // Total earned by a specific agent: sum of completed agent_payout ledger
   // entries for items assigned to them. Done as two simple queries plus an
   // in-app filter/sum, rather than a SQL join, since it's small enough data
   // to be trivial either way and this keeps it safe against limited join
   // support in the local sandbox/mock database mode used for testing.
-  public async getAgentEarnings(agentId: string): Promise<{ totalEarned: number; completedPayoutsCount: number }> {
+  public async getAgentEarnings(agentId: string): Promise<{
+    /** Completed (genuinely provider-confirmed and paid) agent earnings. */
+    totalEarned: number;
+    /** How many completed agent payouts make up `totalEarned`. */
+    completedPayoutsCount: number;
+    /** Booked agent payouts still inside their settlement window — not yet paid. */
+    pendingSettlementEarnings: number;
+    /** How many pending agent payouts make up `pendingSettlementEarnings`. */
+    pendingSettlementsCount: number;
+  }> {
+    const noEarnings = {
+      totalEarned: 0,
+      completedPayoutsCount: 0,
+      pendingSettlementEarnings: 0,
+      pendingSettlementsCount: 0,
+    };
     try {
       const items = await this.getItems();
       const agentItemIds = new Set(items.filter(i => i.assigned_agent_id === agentId).map(i => i.id));
       if (agentItemIds.size === 0) {
-        return { totalEarned: 0, completedPayoutsCount: 0 };
+        return noEarnings;
       }
       const ledgerEntries = await this.getLedger();
-      const agentPayouts = ledgerEntries.filter(
-        l => l.type === 'agent_payout' && l.status === 'completed' && l.item_id && agentItemIds.has(l.item_id)
+      const agentPayoutRows = ledgerEntries.filter(
+        l => l.type === 'agent_payout' && l.item_id && agentItemIds.has(l.item_id)
       );
-      const totalEarned = agentPayouts.reduce((sum, l) => sum + (typeof l.amount === 'string' ? parseFloat(l.amount) : l.amount), 0);
-      return { totalEarned, completedPayoutsCount: agentPayouts.length };
+      const sumOf = (rows: LedgerEntry[]) =>
+        rows.reduce((sum, l) => sum + (typeof l.amount === 'string' ? parseFloat(l.amount) : l.amount), 0);
+
+      const completedPayouts = agentPayoutRows.filter(l => l.status === 'completed');
+      const pendingSettlements = agentPayoutRows.filter(l => l.status === 'pending');
+
+      return {
+        totalEarned: sumOf(completedPayouts),
+        completedPayoutsCount: completedPayouts.length,
+        pendingSettlementEarnings: sumOf(pendingSettlements),
+        pendingSettlementsCount: pendingSettlements.length,
+      };
     } catch (error) {
       console.error("Failed to compute agent earnings:", error);
       throw new Error("Failed to compute agent earnings.", { cause: error });

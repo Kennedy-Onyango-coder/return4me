@@ -48,7 +48,7 @@ import { NotificationService, buildNotificationIdempotencyKey } from '../service
 import { getAdminNotificationEmail } from '../config/adminNotificationEmail.ts';
 import { OcrService } from '../services/ocr.ts';
 import { uploadBase64Image } from '../services/storage.ts';
-import { computeRecoveryFee } from '../services/feeEngine.ts';
+import { resolveItemLockedPricing } from '../services/feeEngine.ts';
 import { hashDocument } from '../services/documentHash.ts';
 import { maskName } from '../services/social.ts';
 import { resolveFoundCountyInput } from '../services/foundItemCounty.ts';
@@ -250,35 +250,34 @@ export function registerFinderReportRoutes(
                         matchingResult.needsManualAgentReassignment ||
                         (req.body.flaggedForReview !== undefined ? !!req.body.flaggedForReview : (isSensitive ? (!extractedNumber || !extractedName) : false));
 
-      // RECOVERY FEE ENGINE: an admin who has explicitly hand-set a flat fee
-      // for this category (is_admin_modified) keeps that override verbatim —
-      // unchanged legacy behaviour. Otherwise compute the fee from the
-      // category's engine config: base + complexity + delay, capped at
-      // ceiling_percent of the finder's declared value when one was given.
-      // See src/services/feeEngine.ts for the full reasoning.
-      let lockedTotalFee: number | null = cat ? cat.total_fee : null;
-      let lockedFinderShare: number | null = cat ? cat.finder_share : null;
-      let lockedAgentShare: number | null = cat ? cat.agent_share : null;
-      let lockedPlatformShare: number | null = cat ? cat.platform_share : null;
-      let feeCeilingApplied = false;
-
-      if (cat && !cat.is_admin_modified) {
-        const breakdown = computeRecoveryFee({
-          base_fee: cat.base_fee,
-          complexity_fee: cat.complexity_fee,
-          delay_fee: cat.delay_fee,
-          ceiling_percent: cat.ceiling_percent,
-          finder_pct: cat.finder_pct,
-          agent_pct: cat.agent_pct,
-          platform_pct: cat.platform_pct,
-          finder_reward_cap: cat.finder_reward_cap,
-        }, parsedDeclaredValue);
-        lockedTotalFee = breakdown.totalFee;
-        lockedFinderShare = breakdown.finderAmount;
-        lockedAgentShare = breakdown.agentAmount;
-        lockedPlatformShare = breakdown.platformAmount;
-        feeCeilingApplied = breakdown.ceilingApplied;
-      }
+      // -----------------------------------------------------------------------
+      // NEW-ITEM PRICING — the TWO pricing modes, resolved by ONE shared
+      // function so this path and the admin console cannot disagree about which
+      // mode a category is in or what a new item locks.
+      //
+      //   MODE 1 — FLAT / ADMIN OVERRIDE (category.is_admin_modified === true)
+      //     locked_* = the category's own flat total_fee/finder_share/
+      //     agent_share/platform_share, verbatim.
+      //   MODE 2 — RECOVERY FEE ENGINE (is_admin_modified === false)
+      //     locked_* = computeRecoveryFee(base + complexity + delay, capped at
+      //     ceiling_percent of the finder's declared value when one was given).
+      //
+      // See src/services/feeEngine.ts for why the mode is named rather than
+      // left as an inline condition: an admin could edit the visible flat Total
+      // Fee on a MODE 2 category, have the save succeed, and still be charged
+      // the engine's price — the flat field is simply not what prices an item
+      // in that mode. The admin console now states the mode explicitly and
+      // refuses to send that combination.
+      //
+      // ONLY new items are priced here. An item already reported keeps whatever
+      // was locked onto it, so a later category edit can never rewrite history.
+      // -----------------------------------------------------------------------
+      const lockedPricing = resolveItemLockedPricing(cat, parsedDeclaredValue);
+      const lockedTotalFee: number | null = lockedPricing.totalFee;
+      const lockedFinderShare: number | null = lockedPricing.finderShare;
+      const lockedAgentShare: number | null = lockedPricing.agentShare;
+      const lockedPlatformShare: number | null = lockedPricing.platformShare;
+      const feeCeilingApplied = lockedPricing.ceilingApplied;
 
       const newItem = await db.createItem({
         id: dropoffCode,

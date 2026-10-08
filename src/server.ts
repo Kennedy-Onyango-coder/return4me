@@ -33,7 +33,15 @@ import { PaymentService, isPlaceholderKey, reconcileWebhookAmount } from './serv
 import { OcrService } from './services/ocr';
 import { uploadBase64Image } from './services/storage';
 import { SocialService } from './services/social';
-import { computeRecoveryFee } from './services/feeEngine';
+// The ONE authoritative pricing-mode contract (MODE 1 flat override vs MODE 2
+// Recovery Fee Engine) and the ONE "what does a new item lock" resolver. The
+// admin category route uses them to state — and to audit — which mode a saved
+// category is actually in, and what a new item will be charged as a result.
+import {
+  computeRecoveryFee,
+  resolveCategoryPricingMode,
+  resolveItemLockedPricing,
+} from './services/feeEngine';
 import { validateVerificationAnswers, toAgentVerificationEvidence, isAnswerValidationFailure, compareVerificationAnswers } from './services/verificationValidation';
 import {
   CUSTOMER_SESSION_COOKIE,
@@ -4408,6 +4416,53 @@ async function createApp() {
       }
 
       // -----------------------------------------------------------------------
+      // PRICING AUTHORITY (Issue A) — the pricing mode is RESOLVED AND STATED.
+      // -----------------------------------------------------------------------
+      // MODE 1 — FLAT / ADMIN OVERRIDE (is_admin_modified === true)
+      //   A new item locks this category's flat total_fee / finder_share /
+      //   agent_share / platform_share verbatim; the engine config is ignored.
+      // MODE 2 — RECOVERY FEE ENGINE (is_admin_modified === false)
+      //   A new item is priced by computeRecoveryFee(). The four flat fields
+      //   are stored but are NOT what prices anything.
+      //
+      // THE DEFECT THIS CLOSES: an administrator changed the visible flat Total
+      // Fee from KES 200 to KES 100 on a category that was in MODE 2. The save
+      // succeeded, the console showed the new price, and the next reported item
+      // still locked KES 200 — the flat field the admin had just edited was
+      // never authoritative. The server must not accept a request that quietly
+      // means one mode while it uses the other, so:
+      //
+      //   * an explicit boolean selects that mode (unchanged behaviour);
+      //   * editing the EIGHT engine fields never flips a category into flat
+      //     mode — engine configuration stays engine configuration;
+      //   * editing the FOUR flat fields while MODE 2 is explicitly selected is
+      //     accepted, but is reported and audited as NON-AUTHORITATIVE, and the
+      //     console refuses to send that combination at all;
+      //   * changing the flat fields WITHOUT stating a mode is ambiguous and is
+      //     REFUSED rather than defaulted, because silently preserving the old
+      //     mode is exactly how the drift above happened.
+      const oldPricingMode = resolveCategoryPricingMode(existing);
+      const flatPricingFieldsChanged =
+        numTotal !== existing.total_fee ||
+        numFinder !== existing.finder_share ||
+        numAgent !== existing.agent_share ||
+        numPlatform !== existing.platform_share;
+
+      const pricingModeWasStated = typeof is_admin_modified === 'boolean';
+      if (!pricingModeWasStated && flatPricingFieldsChanged) {
+        return res.status(400).json({
+          error: 'Umebadilisha ada ya kawaida (Total / Finder / Agent / Platform) bila kutaja mtindo wa bei. / You changed the flat pricing values without stating the pricing mode. Send is_admin_modified: true to make these flat prices authoritative for new items (FLAT / ADMIN OVERRIDE), or is_admin_modified: false to keep pricing computed by the Recovery Fee Engine (in which case these flat values will NOT be used to price anything).'
+        });
+      }
+
+      // The mode that will actually be PERSISTED. An explicit boolean wins;
+      // otherwise the category keeps the mode it already had (which, by the
+      // guard above, can only be reached when the flat prices were not touched).
+      const effectiveIsAdminModified = pricingModeWasStated
+        ? (is_admin_modified as boolean)
+        : existing.is_admin_modified;
+
+      // -----------------------------------------------------------------------
       // PHASE 16.1 BATCH 1 (CAT-19) â€” Recovery Fee Engine fields are validated too.
       // -----------------------------------------------------------------------
       // Same gap as POST: these eight were cast with a bare `Number()`, so a bad
@@ -4464,12 +4519,18 @@ async function createApp() {
         // Recovery Fee Engine's own base/complexity/delay/ceiling inputs â€”
         // silently pinned the category to its old flat total_fee forever,
         // making the engine fields dead the instant an admin touched them.
-        // is_admin_modified must now be an explicit choice: "yes, ignore
+        // is_admin_modified must be an explicit choice: "yes, ignore
         // the engine and use total_fee/finder_share/etc. verbatim" (true)
         // vs "no, keep computing the fee from base/complexity/delay/
         // ceiling" (false). If the request doesn't say, preserve whatever
         // was already set rather than silently flipping it.
-        is_admin_modified: typeof is_admin_modified === 'boolean' ? is_admin_modified : existing.is_admin_modified,
+        //
+        // ISSUE A: this is now `effectiveIsAdminModified`, resolved (and, when
+        // ambiguous, REFUSED) by the pricing-authority block above — so the
+        // mode that is persisted is always a mode the caller actually stated,
+        // or the untouched existing one. The persisted value is re-read and
+        // verified below before this route reports success.
+        is_admin_modified: effectiveIsAdminModified,
         base_fee: engineFees.base_fee,
         complexity_fee: engineFees.complexity_fee,
         delay_fee: engineFees.delay_fee,
@@ -4490,14 +4551,44 @@ async function createApp() {
           : public_clue_style,
       });
 
+      // -----------------------------------------------------------------------
+      // THE SERVER IS AUTHORITATIVE — verify the PERSISTED mode, don't assume it.
+      // -----------------------------------------------------------------------
+      // The browser is never trusted for money, and this is the money-adjacent
+      // half of that rule: the response and the audit entry must describe the
+      // mode that is actually STORED, not the mode the request asked for. If the
+      // write did not land as requested, fail closed through the shared error
+      // path rather than answering "success" while the category silently prices
+      // new items by the OTHER mode.
+      const persisted = await db.getCategory(id);
+      if (!persisted || persisted.is_admin_modified !== effectiveIsAdminModified) {
+        throw new Error(
+          `Category ${id} pricing mode did not persist as requested (requested is_admin_modified=${effectiveIsAdminModified}, stored=${persisted ? persisted.is_admin_modified : 'missing row'}). Refusing to report success for a category whose new-item pricing mode is not the one selected.`
+        );
+      }
+
+      // What a NEW item reported under this category now locks. Computed with the
+      // SAME resolver the Finder report route uses (MODE 1 -> the flat fields;
+      // MODE 2 -> the engine, with no declared value, i.e. Base+Complexity+Delay),
+      // so the console can state the authoritative price instead of leaving the
+      // administrator to guess whether their edit is the one that applies.
+      const authoritativePricing = resolveItemLockedPricing(persisted, null);
+
       const adminUser = req.user?.username || req.user?.userId || 'admin';
       await db.logAudit(
         adminUser,
         'CATEGORY_UPDATED',
-        `Admin updated category id=${id}, old total_fee=${existing.total_fee}, new total_fee=${total_fee}, public_clue_style=${updatedCat?.public_clue_style ?? existing.public_clue_style}`
+        `Admin updated category id=${id}, old total_fee=${existing.total_fee}, new total_fee=${total_fee}, public_clue_style=${updatedCat?.public_clue_style ?? existing.public_clue_style}, pricing_mode=${authoritativePricing.mode}, previous_pricing_mode=${oldPricingMode}, pricing_mode_stated_by_request=${pricingModeWasStated}, flat_pricing_values_changed=${flatPricingFieldsChanged}, new_item_locks_total_fee=${authoritativePricing.totalFee}, new_item_locks_finder=${authoritativePricing.finderShare}, new_item_locks_agent=${authoritativePricing.agentShare}, new_item_locks_platform=${authoritativePricing.platformShare}`
       );
 
-      res.json({ success: true, category: updatedCat });
+      res.json({
+        success: true,
+        category: updatedCat,
+        // The effective mode and what a new item will lock, so the console can
+        // render the server's own answer rather than inferring one.
+        pricingMode: authoritativePricing.mode,
+        authoritativePricing,
+      });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
