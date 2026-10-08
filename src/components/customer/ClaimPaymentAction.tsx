@@ -1,6 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Loader2, Lock, Smartphone } from 'lucide-react';
 import { Banner, Button, ICON_SIZE } from '../ui';
+// E2-A: both clocks are imported, never re-typed. The claim window bounds the
+// CLAIM; the session window bounds ONE M-Pesa prompt. The copy on this surface
+// has to name each one by the number that actually governs it.
+import { CLAIM_PAYMENT_WINDOW_LABEL, PAYMENT_SESSION_WINDOW_LABEL } from '../../config/paymentWindows';
 
 // =============================================================================
 // CLAIM PAYMENT ACTION — the private /account surface.
@@ -8,7 +12,7 @@ import { Banner, Button, ICON_SIZE } from '../ui';
 // WHY THIS EXISTS
 //   The private dashboard could SHOW a claim awaiting payment (the shared
 //   ClaimStatus vocabulary renders it "Payment Pending", and the card already
-//   showed the 15-minute "Pay before …" deadline) but offered NO way to pay.
+//   showed the claim's payment deadline) but offered NO way to pay.
 //   The only M-Pesa action in the product lived in the public owner journey
 //   (OwnerView), so a customer who reached /account saw an actionable state
 //   with nothing to act on. This child closes that gap.
@@ -64,6 +68,11 @@ const PAYABLE_STATUS = 'pending_payment';
 // config/paymentWindows.ts); each individual M-Pesa prompt is short-lived. The
 // poll mirrors OwnerView: a 3-second cadence with a 90-second ceiling so a
 // stalled provider can never leave an unbounded request loop running.
+//
+// E2-B: the 90-second ceiling is a CLIENT loop bound. It is NOT the server's
+// 15-minute session lifetime and NOT the 24-hour claim window, so reaching it
+// must never take away the customer's ability to READ the server's latest
+// verdict — see `statusReadOnly` below.
 const POLL_INTERVAL_MS = 3000;
 const POLL_TIMEOUT_MS = 90000;
 
@@ -106,6 +115,23 @@ export default function ClaimPaymentAction({
   // Whether a background confirmation poll should be running at all.
   const [polling, setPolling] = useState(false);
 
+  // E2-B — WHY THE 90-SECOND CEILING MUST NOT END THE CUSTOMER'S OPTIONS.
+  //
+  // When the CLIENT poll stops (the 90-second ceiling, or a 429 throttle) the
+  // payment session on the server is completely untouched: the prompt may still
+  // be in flight, or may already have been confirmed. Before this flag existed
+  // the component flipped to `phase === 'error'` and the ONLY control left was
+  // "Try again" — which runs the pay action again (auth -> session -> initiate)
+  // instead of simply re-reading the state the server already holds. A customer
+  // whose M-Pesa PIN had in fact gone through was pushed toward spending a
+  // second prompt, and had no way to ask "did it work?".
+  //
+  // `statusReadOnly` marks exactly that situation, so the render can keep the
+  // server status READ reachable. It never grants success: the read is the same
+  // GET .../payment-session/:sid/status the awaiting phase uses, and the browser
+  // still only ever believes what the server reports.
+  const [statusReadOnly, setStatusReadOnly] = useState(false);
+
   const payable = status === PAYABLE_STATUS;
 
   const readAmount = useCallback((raw: unknown) => {
@@ -129,7 +155,10 @@ export default function ClaimPaymentAction({
         stopped = true;
         setPolling(false);
         setPhase('error');
-        setNote('We are still waiting for M-Pesa to confirm. If you entered your M-Pesa PIN, the payment may still complete — check again in a moment.');
+        // Keep the status READ reachable — the client loop bound is not the
+        // server's session lifetime, and it is certainly not the claim window.
+        setStatusReadOnly(true);
+        setNote('We are still waiting for M-Pesa to confirm. If you entered your M-Pesa PIN, the payment may still complete — use "Check payment status" to read the latest update from our server.');
         return;
       }
       try {
@@ -139,6 +168,9 @@ export default function ClaimPaymentAction({
           stopped = true;
           setPolling(false);
           setPhase('error');
+          // A throttle also only stops the CLIENT loop. The customer keeps the
+          // server status read; nothing here re-authorizes a payment.
+          setStatusReadOnly(true);
           setNote('Status checks are paused for a moment to avoid overloading the server. Your claim is safe — check again in a minute.');
           return;
         }
@@ -153,6 +185,7 @@ export default function ClaimPaymentAction({
           stopped = true;
           setPolling(false);
           setPhase('error');
+          setStatusReadOnly(false);
           setNote('The payment window has closed. Link the claim again from the item page to start a new payment.');
           onConfirmedRef.current();
         }
@@ -175,6 +208,9 @@ export default function ClaimPaymentAction({
     if (!payable || busy) return;
     setBusy(true);
     setNote('');
+    // The customer asked for a prompt, so the ordinary awaiting controls return
+    // as soon as the push is out.
+    setStatusReadOnly(false);
     try {
       const authRes = await fetch(`/api/claims/${claimId}/payment-auth`, {
         method: 'POST',
@@ -228,6 +264,11 @@ export default function ClaimPaymentAction({
   // ---------------------------------------------------------------------------
   // "Check payment status" — asks the BACKEND, never trusts the browser. It can
   // only reflect what the server and provider have actually recorded.
+  //
+  // E2-B: this is also the control that survives the 90-second poll ceiling. It
+  // takes NO new payment authorization, creates NO session and issues NO prompt
+  // — it re-reads the session this customer already has, which is why it is the
+  // correct action to keep offering when the client loop stops.
   // ---------------------------------------------------------------------------
   const checkStatus = useCallback(async () => {
     if (!sessionId || busy) return;
@@ -243,12 +284,14 @@ export default function ClaimPaymentAction({
       const sessionStatus = data?.paymentSession?.status;
       const claimStatus = data?.claim?.status;
       if (sessionStatus === 'confirmed' || claimStatus === 'escrow_held' || claimStatus === 'released') {
+        setStatusReadOnly(false);
         setPolling(false);
         setPhase('confirmed');
         onConfirmedRef.current();
       } else if (claimStatus === 'payment_window_expired') {
         // The CLAIM's 24-hour window has closed — the only terminal case that
         // requires re-linking (a fresh claim must be created).
+        setStatusReadOnly(false);
         setPolling(false);
         setPhase('error');
         setNote('The payment window has closed. Link the claim again from the item page to start a new payment.');
@@ -256,17 +299,29 @@ export default function ClaimPaymentAction({
       } else if (sessionStatus === 'expired') {
         // The individual M-Pesa prompt expired, but the CLAIM is still within its
         // 24-hour payment window. Do NOT end the claim — offer a fresh prompt.
+        setStatusReadOnly(false);
         setPolling(false);
         setPhase('error');
         setNote('That M-Pesa prompt expired, but your claim is still open. Tap "Try again" to get a new prompt.');
       } else if (sessionStatus === 'failed') {
+        setStatusReadOnly(false);
         setPolling(false);
         setPhase('error');
         setNote('The payment failed. Please try again.');
       } else {
+        // STILL PENDING. The server has not confirmed and has not failed, so the
+        // honest state is "we do not know yet" — no success is claimed, and the
+        // bounded poll is restarted (from zero) so the customer who asked to keep
+        // checking gets exactly that. Pressing check again later repeats the same
+        // safe READ; nothing on this path can push a second prompt.
+        setStatusReadOnly(false);
         setPhase('awaiting');
+        setPolling(true);
       }
     } catch (e: any) {
+      // A failed READ changes nothing on the server. Stay in the read-only
+      // controls so the customer can simply try the read again.
+      setStatusReadOnly(true);
       setPhase('error');
       setNote(e?.message || 'We could not check the payment status. Please try again.');
     } finally {
@@ -330,6 +385,20 @@ export default function ClaimPaymentAction({
                   {'Didn\u2019t get the prompt? Resend'}
                 </Button>
               </>
+            ) : statusReadOnly ? (
+              <>
+                {/* E2-B: only the CLIENT poll stopped (90-second ceiling or a 429
+                    throttle). The server session is untouched, so the safe next
+                    step is to READ it again — and "Try again" stays available
+                    beside it for the customer who really does want a new prompt.
+                    Nothing in this branch can push a prompt by itself. */}
+                <Button variant="accent" size="md" onClick={checkStatus} loading={busy} loadingLabel={'Checking the payment status'}>
+                  {'Check payment status'}
+                </Button>
+                <Button variant="secondary" size="md" onClick={payNow} disabled={busy}>
+                  {'Try again'}
+                </Button>
+              </>
             ) : (
               <Button variant="accent" size="md" onClick={payNow} loading={busy} loadingLabel={'Sending the M-Pesa prompt'}>
                 {phase === 'error' ? 'Try again' : 'Pay with M-Pesa'}
@@ -339,7 +408,13 @@ export default function ClaimPaymentAction({
 
           <p className="flex items-center gap-1.5 text-caption text-[var(--appearance-text-muted)]">
             <Lock size={ICON_SIZE.metadata} aria-hidden="true" className="shrink-0" />
-            {'Your payment is held securely as escrow until you collect the item.'}
+            {'Your payment is held securely by our payment provider until you collect the item.'}
+          </p>
+          {/* E2-A: the two clocks, named separately and driven by the constants
+              that actually govern them. The claim is what has the 24-hour
+              deadline; one M-Pesa prompt is the thing that expires in minutes. */}
+          <p className="text-caption text-[var(--appearance-text-muted)]">
+            {`Your claim stays open for ${CLAIM_PAYMENT_WINDOW_LABEL} after the agent confirms the item. A single M-Pesa prompt only stays valid for ${PAYMENT_SESSION_WINDOW_LABEL} — if one expires, your claim is still open and you can ask for a new prompt.`}
           </p>
         </>
       )}

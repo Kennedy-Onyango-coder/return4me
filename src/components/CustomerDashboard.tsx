@@ -54,8 +54,11 @@ function formatDate(value: string | null | undefined): string {
   return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-// The payment window is only 15 minutes, so a date alone would be useless for
-// it — show the actual deadline time.
+// The claim payment window the claimant is shown is the window the server
+// enforces: 24 hours from agent_confirmed_at (see config/paymentWindows.ts).
+// A date alone would be useless for it — show the actual deadline time. The
+// much shorter per-prompt M-Pesa session is a SEPARATE clock and is explained
+// where the prompt is actually triggered (ClaimPaymentAction).
 function formatDateTime(value: string | null | undefined): string {
   if (!value) return '';
   const d = new Date(value);
@@ -357,10 +360,10 @@ export default function CustomerDashboard({
               </div>
               {claim.expires_at && (
                 <div className="flex items-start gap-2">
-                  <dt className="sr-only">{'Payment deadline'}</dt>
+                  <dt className="sr-only">{'Claim payment window deadline'}</dt>
                   <Clock size={ICON_SIZE.metadata} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--appearance-warning)]" />
                   <dd className="leading-relaxed font-semibold text-[var(--appearance-warning)]">
-                    {'Pay before'} {formatDateTime(claim.expires_at)}
+                    {'Claim payment window closes'} {formatDateTime(claim.expires_at)}
                   </dd>
                 </div>
               )}

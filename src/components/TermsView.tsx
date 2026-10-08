@@ -223,17 +223,17 @@ export default function TermsView({ setView }: TermsViewProps) {
         {/* Section 13 */}
         <section className="space-y-3">
           <h2 className="text-lg font-extrabold text-primary-green flex items-center gap-2">
-            <span className="text-accent-orange">13.</span> Physical Verification & 15-Minute Payment Window
+            <span className="text-accent-orange">13.</span> Physical Verification & 24-Hour Payment Window
           </h2>
           <div className="space-y-2">
             <p>
-              To ensure absolute transaction security and eliminate wrong matching errors, the assigned Agent first confirms that the item is physically present at their station. That confirmation opens a short payment window. The owner completes payment via M-Pesa, and payment is only treated as confirmed once the payment provider confirms it. Once confirmed, a pickup code is issued to the owner, who then visits the Agent station to view and verify the item in person. The Agent records the viewing and later confirms the handover, after which settlement follows the applicable dispute window.
+              To ensure absolute transaction security and eliminate wrong matching errors, the assigned Agent first confirms that the item is physically present at their station. That confirmation opens a 24-hour payment window on the claim. The owner completes payment via M-Pesa, and payment is only treated as confirmed once the payment provider confirms it. Once confirmed, a pickup code is issued to the owner, who then visits the Agent station to view and verify the item in person. The Agent records the viewing and later confirms the handover, after which settlement follows the applicable dispute window.
             </p>
             <p>
-              <strong>15-Minute Payment Lockout:</strong> Upon physical Agent verification, a secure 15-minute countdown window is triggered. The owner must complete the escrow payment within this 15-minute window. If payment is not received within this time limit, the lock is automatically released, the claim is expired, and the item is returned to the public search database so other competing claimants are not blocked.
+              <strong>24-Hour Claim Window, 15-Minute M-Pesa Prompt:</strong> These are two different clocks. Once the Agent confirms the item in person, the claim stays payable for 24 hours. Separately, each individual M-Pesa prompt we send to your phone stays valid for 15 minutes — if a prompt expires you have not lost anything, and you can request a new prompt for the same claim as many times as you need while the 24 hours are still running. If no payment at all is received before the 24 hours end, the lock is released, the claim is expired, and the item is returned to the public search database so other competing claimants are not blocked.
             </p>
             <p>
-              <strong>Payment Strikes Policy:</strong> If a claimant triggers an agent verification but fails to make payment within the 15-minute window, a "Payment Strike" is recorded against their phone number. Receiving three (3) active payment strikes will result in an automatic restriction on that phone number, preventing the holder from submitting any further claims until the strikes are cleared by an Administrator.
+              <strong>Payment Strikes Policy:</strong> If a claimant triggers an agent verification but fails to make payment within the 24-hour claim window, a "Payment Strike" is recorded against their phone number. Each strike remains active for five days. Receiving three (3) active payment strikes will result in an automatic restriction on that phone number, preventing the holder from submitting any further claims until the strikes expire or are cleared by an Administrator.
             </p>
           </div>
         </section>

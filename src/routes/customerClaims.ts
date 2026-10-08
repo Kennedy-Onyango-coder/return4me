@@ -581,7 +581,7 @@ export function registerCustomerClaimRoutes(
   );
 
   // Applies the SAME lazy expiry rule the Track Claim status route applies, so
-  // a pending_payment claim whose 15-minute window has long passed is never
+  // a pending_payment claim whose 24-hour claim window has long passed is never
   // presented to the customer as active. Only pending_payment rows are re-read
   // in full — the check is a no-op for every other status — so this stays a
   // bounded number of queries rather than an N+1 across the whole list.

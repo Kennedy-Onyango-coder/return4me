@@ -4907,7 +4907,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
             <div className="space-y-6">
               <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                 <p className="text-caption text-[var(--appearance-text-muted)] max-w-2xl">
-                  Manage users who failed to pay within the 15-minute viewing verification window.
+                  Manage users who failed to pay within the 24-hour claim payment window.
                 </p>
                 <Button
                   variant="outline"

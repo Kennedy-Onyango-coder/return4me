@@ -18,6 +18,14 @@ import Button from './ui/Button';
 // re-typed here. The same source the Finder and the lost-report wizard use.
 import { countiesByUxGroup } from '../config/kenyaCounties';
 import { administrativeUnitsForCounty, resolveAdministrativeUnitId } from '../config/kenyaAdministrativeUnits';
+// E2-A: the two payment clocks are imported, never re-typed. CLAIM_PAYMENT_WINDOW_MS
+// drives the countdown below (the window the SERVER enforces), and the two labels
+// let the copy name each window by the number that actually governs it.
+import {
+  CLAIM_PAYMENT_WINDOW_MS,
+  CLAIM_PAYMENT_WINDOW_LABEL,
+  PAYMENT_SESSION_WINDOW_LABEL,
+} from '../config/paymentWindows';
 
 /** The 47 canonical counties, grouped for display. Static data — read once. */
 const COUNTY_GROUPS = countiesByUxGroup();
@@ -618,7 +626,13 @@ export default function OwnerView({ categories, categoriesLoading = false, categ
     if (verificationStep === 'payment' && paidClaim?.agent_confirmed_at) {
       const confirmedTime = new Date(paidClaim.agent_confirmed_at).getTime();
       const calculateTimeLeft = () => {
-        const diff = confirmedTime + 15 * 60 * 1000 - Date.now();
+        // E2-A: the countdown the claimant SEES must be the window the SERVER
+        // actually enforces. This was an inline `15 * 60 * 1000`, i.e. the
+        // per-prompt session clock, so the browser declared the claim expired
+        // long before checkClaimExpiry would — and told the claimant to stop
+        // paying during a window the server still accepted payment in. It now
+        // counts the canonical CLAIM window from the agent's confirmation.
+        const diff = confirmedTime + CLAIM_PAYMENT_WINDOW_MS - Date.now();
         if (diff <= 0) {
           setTimeLeft(0);
           setVerificationStep('payment_window_expired');
@@ -1668,7 +1682,7 @@ export default function OwnerView({ categories, categoriesLoading = false, categ
                   {'Payment Window Expiry Countdown'}
                 </span>
                 <p className="text-ink-muted mb-1 font-medium">
-                  {'You must complete the payment within 15 minutes of in-person verification. If you do not pay, the item will be unlocked for other claimants and a strike will be registered on your phone number.'}
+                  {`You must complete the payment within ${CLAIM_PAYMENT_WINDOW_LABEL} of in-person verification. Any single M-Pesa prompt only stays valid for ${PAYMENT_SESSION_WINDOW_LABEL}, but your claim itself stays open for the full ${CLAIM_PAYMENT_WINDOW_LABEL} — you can ask for a new prompt as many times as you need. If you do not pay within ${CLAIM_PAYMENT_WINDOW_LABEL}, the item will be unlocked for other claimants and a strike will be registered on your phone number.`}
                 </p>
                 <div className="font-mono text-base font-extrabold text-primary-green">
                   {Math.floor(timeLeft / 60)}m {timeLeft % 60}s
@@ -2158,7 +2172,7 @@ export default function OwnerView({ categories, categoriesLoading = false, categ
               {'Payment Window Expired'}
             </h2>
             <p className="text-ink-muted text-xs">
-              {'Your 15-minute payment window has expired. For security and fairness, the item has been unlocked for other potential claimants, and a strike has been recorded against your phone number. Repeated strikes will restrict you from making future claims.'}
+              {`Your ${CLAIM_PAYMENT_WINDOW_LABEL} payment window has expired. For security and fairness, the item has been unlocked for other potential claimants, and a strike has been recorded against your phone number. Repeated strikes will restrict you from making future claims.`}
             </p>
           </div>
 

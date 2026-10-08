@@ -46,7 +46,7 @@ export const CLAIM_STATUS_VALUES = [
  * Active/History grouping does not shift.
  */
 export const INACTIVE_CLAIM_STATUSES: ReadonlySet<string> = new Set<string>([
-  'payment_window_expired', // abandoned/unpaid within the 15-minute window
+  'payment_window_expired', // abandoned/unpaid within the 24-hour claim window
   'disputed',               // already pulled into the dispute workflow
   'rejected',               // failed owner verification
   'refunded',               // money returned, claim finished

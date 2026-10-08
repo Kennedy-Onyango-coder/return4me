@@ -146,7 +146,7 @@ export function useAgentOperations({ token, refreshCategories }: {
   };
   const handleConfirmViewing = (claimId: string) => {
     setActionSuccessMsg(''); setOperationError('');
-    setConfirmModal({ title: 'Confirm Viewing', message: "Are you sure you want to confirm that the owner has visually inspected and verified this item? This will trigger the 15-minute payment window and cannot be undone.", onConfirm: async () => {
+    setConfirmModal({ title: 'Confirm Viewing', message: "Are you sure you want to confirm that the owner has visually inspected and verified this item? This will open the claim's 24-hour payment window and cannot be undone.", onConfirm: async () => {
       setActionProcessing(true); setProcessingItemId(claimId);
       try { const data = await agentApi.confirmViewing(token!, claimId); setActionSuccessMsg(data.message); void fetchQueues(); return true; }
       catch (e: any) { setOperationError(e.message); return false; } finally { finishProcessing(); }
