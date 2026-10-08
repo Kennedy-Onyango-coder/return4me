@@ -2398,6 +2398,123 @@ class DatabaseEngine {
     }
   }
 
+  // ===========================================================================
+  // BATCH B — AGENT ASSIGNMENT: THE ONE ATOMIC PRIMITIVE.
+  //
+  // WHY THIS EXISTS. Three callers can now decide that an item should go to an
+  // agent: the Finder's report (routes/finderReport.ts), an admin's manual review
+  // (POST /api/admin/items/:id/review) and the new "a previously non-operational
+  // agent has just become operational" matcher. Two of them can run at the same
+  // instant — two agents can be approved seconds apart — so a decision taken in
+  // application code alone is a lost-update race: both would read
+  // `assigned_agent_id IS NULL`, both would write, and the second write would
+  // silently take the item from the first agent.
+  //
+  // The fix is the repository's existing concurrency pattern (see
+  // attemptClaimEscrowHold / attemptSettlementRelease): express the decision as
+  // ONE guarded UPDATE whose WHERE clause re-states every precondition, and let
+  // the DATABASE decide the winner. `.returning()` is what makes the outcome
+  // observable — zero rows means "another attempt got there first", which the
+  // caller must treat as a normal, safe loss rather than an error.
+  //
+  // The guard is deliberately NARROWER than `assigned_agent_id IS NULL`, because
+  // that column alone does not mean "waiting for an agent":
+  //   * `needs_manual_agent_reassignment = true` — the item is genuinely sitting
+  //     in the manual queue. An item the report flow matched automatically has
+  //     this false and must never be re-pointed at a different agent.
+  //   * `status = 'awaiting_dropoff'` — the item has not already moved on.
+  //     at_agent / claimed / expired / rejected / suspected_stolen / legal_hold
+  //     are all excluded, so a rejected, withdrawn, released, recovered or
+  //     hold-frozen item can never be quietly re-assigned.
+  //
+  // Returns true ONLY if THIS call performed the assignment.
+  // ===========================================================================
+  public async attemptAutoAgentAssignment(
+    itemId: string,
+    agentId: string,
+    method: string,
+    distanceKm: number | null,
+  ): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(itemsTable)
+        .set({
+          assigned_agent_id: agentId,
+          agent_assignment_method: method,
+          agent_assignment_distance_km: distanceKm === null || distanceKm === undefined
+            ? null
+            : distanceKm.toString(),
+          needs_manual_agent_reassignment: false,
+        })
+        .where(
+          and(
+            eq(itemsTable.id, itemId),
+            isNull(itemsTable.assigned_agent_id),
+            eq(itemsTable.needs_manual_agent_reassignment, true),
+            eq(itemsTable.status, "awaiting_dropoff"),
+          ),
+        )
+        .returning({ id: itemsTable.id });
+
+      if (rows.length === 0) return false;
+
+      // Accountability: who was assigned, to what, how, how far, and by which
+      // trigger. `agent_assignment_method` already distinguishes this from an
+      // admin `manual_override`, so the audit line names the trigger explicitly.
+      await this.logAudit(
+        "SYSTEM",
+        "AUTO_AGENT_ASSIGNMENT",
+        `Item ${itemId} automatically assigned to agent ${agentId} (method ${method}` +
+          `${distanceKm === null || distanceKm === undefined ? "" : `, ${distanceKm}km`}).`,
+      );
+      return true;
+    } catch (error) {
+      console.error("Database attemptAutoAgentAssignment failed:", error);
+      throw new Error("Failed to auto-assign an agent to the item.", { cause: error });
+    }
+  }
+
+  // The manual-assignment queue, read from the SAME authoritative state the
+  // assignment primitive guards on. If the two ever disagreed, the matcher would
+  // spend its time on items the CAS then refuses — or worse, skip items the CAS
+  // would have accepted.
+  public async getItemsAwaitingManualAgentAssignment(): Promise<FoundItem[]> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(itemsTable)
+        .where(
+          and(
+            eq(itemsTable.status, "awaiting_dropoff"),
+            eq(itemsTable.needs_manual_agent_reassignment, true),
+            isNull(itemsTable.assigned_agent_id),
+          ),
+        );
+      const items = rows.map(parseFoundItem);
+      return Promise.all(items.map(signFoundItem));
+    } catch (error) {
+      console.error("Database query failed:", error);
+      throw new Error("Failed to query items awaiting manual agent assignment.", { cause: error });
+    }
+  }
+
+  // A claim on this item that is still live — i.e. not in a terminal status
+  // (payment_window_expired / released / rejected / refunded). Used to decide
+  // whether there is really a claimant to notify about an agent assignment:
+  // a terminal claim means there is nobody left waiting, and notifying anyway
+  // would be telling someone about a journey that has already ended.
+  public async getActiveClaimsForItem(itemId: string): Promise<Claim[]> {
+    try {
+      const rows = await drizzleDb.select().from(claimsTable).where(eq(claimsTable.item_id, itemId));
+      const claims = rows.map(parseClaim);
+      const signed = await Promise.all(claims.map(signClaim));
+      return signed.filter((claim) => !TERMINAL_CLAIM_STATUSES.has(claim.status));
+    } catch (error) {
+      console.error("Database query failed:", error);
+      throw new Error("Failed to query active claims for item.", { cause: error });
+    }
+  }
+
   // Create new claim
   // `paid_at` is deliberately NOT taken from the caller: a claim can never be
   // CREATED already-paid. Payment truth can only be established by
@@ -3461,13 +3578,13 @@ class DatabaseEngine {
           if (touchesIdentity) {
             return {
               success: false,
-              message: "Marekebisho ya jina/nambari ya hati nyeti yanahitaji uthibitisho wa kimwili wa Agent kabla ya kukubaliwa. / Corrections to a sensitive document's name/number require the Agent's physical verification before they can be accepted.",
+              message: "Corrections to a sensitive document's name/number require the Agent's physical verification before they can be accepted.",
             };
           }
         }
 
         if (changedFields.length > 0 && (!reason || !reason.trim())) {
-          return { success: false, message: 'Toa sababu ya marekebisho. / A reason is required for any correction.' };
+          return { success: false, message: 'A reason is required for any correction.' };
         }
 
         for (const field of changedFields) {
@@ -3531,7 +3648,7 @@ class DatabaseEngine {
       console.error("Database write failed:", error);
       return {
         success: false,
-        message: 'Imeshindwa kuhifadhi uthibitisho wa bidhaa. Tafadhali jaribu tena. / Could not save the item verification. Please try again.',
+        message: 'Could not save the item verification. Please try again.',
       };
     }
   }

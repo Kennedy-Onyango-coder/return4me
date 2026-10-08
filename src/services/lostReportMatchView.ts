@@ -47,7 +47,7 @@ export const REPORT_NOT_ACTIVE_NOTICE = 'lost_report_not_active';
 export const POSSIBLE_MATCH_DISCLOSURE_EN =
   'These are possible matches only. Some details look similar to your report, but this does NOT confirm ownership and it does NOT mean the item has been recovered. To collect anything you must go through the normal claim and verification process.';
 export const POSSIBLE_MATCH_DISCLOSURE_SW =
-  'Hizi ni mechi zinazowezekana tu. Baadhi ya maelezo yanafanana na ripoti yako, lakini hii HAITHIBITISHI umiliki na haimaanishi kitu chako kimerejeshwa. Ili kuchukua kitu chochote lazima upitie mchakato wa kawaida wa madai na uthibitisho.';
+  'These are possible matches only. Some details are similar to your report, but this does NOT confirm ownership and does not mean your item has been recovered. To collect anything you must go through the normal claim and verification process.';
 
 /**
  * Maps internal signals onto the short, allow-listed reasons a customer may

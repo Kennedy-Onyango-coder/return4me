@@ -278,11 +278,11 @@ describe('N8-D — rendering', () => {
   it('each builder returns the EXACT pre-migration subject', () => {
     expect(renderSendPaymentReceivedEmail(
       OWNER_EMAIL, OWNER_PHONE, 'Wallet', 'Hub', '+254700000000', ITEM_ID, PICKUP_CODE,
-    ).subject).toBe('Payment Confirmed / Malipo Imethibitishwa - Return4me');
+    ).subject).toBe('Payment Confirmed - Return4me');
 
     expect(renderSendItemHandedOverEmail(
       OWNER_EMAIL, OWNER_PHONE, 'Wallet', ITEM_ID, '1 January 2026',
-    ).subject).toBe('Item Handed Over Successfully / Bidhaa Imekabidhiwa - Return4me');
+    ).subject).toBe('Item Handed Over Successfully - Return4me');
 
     expect(renderSendAdminNewReassignmentRequestEmail(ITEM_ID, 'Kasarani', OWNER_PHONE).subject)
       .toBe(`[URGENT] Manual Agent Reassignment Needed - Dropoff Code ${ITEM_ID}`);
@@ -291,7 +291,7 @@ describe('N8-D — rendering', () => {
       .toBe('Payment Confirmed / Release Authorized - Return4me');
 
     expect(renderSendFinderItemCollectedEmail(FINDER_EMAIL, 'Wallet', ITEM_ID).subject)
-      .toBe('Your Found Item Has Been Returned / Bidhaa Uliyopata Imerejeshwa - Return4me');
+      .toBe('Your Found Item Has Been Returned - Return4me');
 
     expect(renderSendAdminTransactionLogEmail('PAYMENT_CONFIRMED', CLAIM_ID, ITEM_ID, '1500', 'Hub').subject)
       .toBe(`[ADMIN LOG] PAYMENT_CONFIRMED - Claim ${CLAIM_ID}`);

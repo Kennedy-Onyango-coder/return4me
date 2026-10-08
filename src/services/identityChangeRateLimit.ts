@@ -86,7 +86,7 @@ export const IDENTITY_EMAIL_TARGET_SCOPE = 'identity-email-target';
  * rather than re-typing the copy.
  */
 export const IDENTITY_EMAIL_RATE_LIMIT_MESSAGE =
-  'Maombi mengi ya uthibitisho wa barua pepe. Tafadhali subiri kidogo kabla ya kujaribu tena. / Too many verification requests. Please wait before trying again.';
+  'Too many verification requests. Please wait before trying again.';
 
 /**
  * The refusal body. Deliberately free of SMS wording (an email change is not an

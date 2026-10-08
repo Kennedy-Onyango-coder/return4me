@@ -75,7 +75,7 @@ export function createClaimStatusPollLimiter(
     // Worded distinctly from the discrete-claim limiter message on purpose:
     // when this appears in an operator's logs/alerts it should be obvious that
     // the STATUS-POLLING budget (not the enumeration budget) was reached.
-    message: { error: 'Umeangalia hali ya dai hii mara nyingi mno hivi karibuni. Tafadhali subiri kidogo kisha pakia upya ukurasa. / We have checked this claim\'s status too many times recently. Please wait a moment, then refresh the page.' }
+    message: { error: 'We have checked this claim\'s status too many times recently. Please wait a moment, then refresh the page.' }
   });
 }
 

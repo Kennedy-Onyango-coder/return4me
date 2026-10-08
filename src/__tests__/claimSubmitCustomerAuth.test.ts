@@ -264,7 +264,7 @@ beforeAll(async () => {
   registerClaimRoutes(app, {
     sendServerError: (res: any, error: any, context: string) => {
       console.error(context, error);
-      res.status(500).json({ error: 'Hitilafu imetokea upande wa seva.' });
+      res.status(500).json({ error: 'A server error occurred.' });
     },
     // PERMISSIVE by design: see the limitations at the top of this file.
     canCreateClaim: async () => ({ allowed: true, reason: '' }),

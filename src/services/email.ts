@@ -12,7 +12,7 @@ import {
   emailCallout,
   emailCodeBlock,
   emailDetails,
-  emailDivider,
+
   emailHeading,
   emailKicker,
   emailList,
@@ -135,7 +135,7 @@ export function renderSendPaymentReceivedEmail(
     itemReference: string,
     pickupCode: string
 ): { subject: string; body: string } {
-    const subject = 'Payment Confirmed / Malipo Imethibitishwa - Return4me';
+    const subject = 'Payment Confirmed - Return4me';
 
     const content = [
         emailKicker('Claim payment verified'),
@@ -162,29 +162,6 @@ export function renderSendPaymentReceivedEmail(
             text: 'This secret pickup code is <strong>not</strong> the item reference above. Return4me never asks for it by phone call, SMS or social media, and no agent should ask for it before you are physically at the collection point.',
         }),
         emailNote('Keep this email until you have collected the item. If the agent cannot find your claim, quote the item reference above.'),
-        emailDivider('Kiswahili'),
-        emailHeading('Malipo yamethibitishwa - bidhaa yako inahifadhiwa'),
-        emailParagraph(
-            `Malipo ya dai lako yamepokelewa na kuthibitishwa. <strong>${escapeHtml(itemName)}</strong> inahifadhiwa kwa ajili yako katika kituo cha wakala kilicho hapa chini hadi utakapofika kuichukua.`
-        ),
-        emailDetails([
-            { label: 'Bidhaa', value: itemName },
-            { label: 'Kituo cha kuchukulia', value: agentBusinessName },
-            { label: 'Simu ya wakala', value: agentPhone, mono: true },
-            { label: 'Nambari ya rejea', value: itemReference, mono: true },
-            { label: 'Nambari yako iliyothibitishwa', value: ownerPhone, mono: true },
-        ]),
-        emailCodeBlock({
-            label: 'Msimbo wa siri wa kuchukulia',
-            code: pickupCode,
-            tone: 'success',
-            hint: 'Mpe wakala msimbo huu wakati umesimama kaunta. Unatumika mara moja tu.',
-        }),
-        emailCallout({
-            tone: 'warning',
-            label: 'Usishiriki msimbo huu',
-            text: 'Msimbo huu wa siri si sawa na nambari ya rejea ya bidhaa. Return4me haitauliza msimbo huu kwa simu, SMS au mitandao ya kijamii, na wakala hapaswi kukuuliza kabla ya wewe kufika kituoni.',
-        }),
     ].join('\n');
 
     const { html } = buildEmailMessage({
@@ -213,7 +190,7 @@ export function renderSendItemHandedOverEmail(
     dropoffCode: string,
     dateStr: string
 ): { subject: string; body: string } {
-    const subject = 'Item Handed Over Successfully / Bidhaa Imekabidhiwa - Return4me';
+    const subject = 'Item Handed Over Successfully - Return4me';
 
     const content = [
         emailKicker('Handover recorded'),
@@ -233,23 +210,6 @@ export function renderSendItemHandedOverEmail(
             text: 'The claim on this item is now complete and the item can no longer be claimed by anyone else. Keep the item code above if you need to talk to support about it.',
         }),
         emailNote('If you did not receive this item in person, contact us immediately and quote the item code above.'),
-        emailDivider('Kiswahili'),
-        emailHeading('Bidhaa Imekabidhiwa kikamilifu!'),
-        emailParagraph(
-            `Bidhaa uliyodai, <strong>${escapeHtml(itemName)}</strong>, imekabidhiwa na wakala amerekodi makabidhiano hayo. Asante kwa kutumia Return4me.`
-        ),
-        emailDetails([
-            { label: 'Bidhaa', value: itemName },
-            { label: 'Nambari ya bidhaa', value: dropoffCode, mono: true },
-            { label: 'Nambari ya mmiliki iliyothibitishwa', value: phone, mono: true },
-            { label: 'Tarehe ya makabidhiano', value: dateStr },
-        ]),
-        emailCallout({
-            tone: 'success',
-            label: 'Dai limekamilika',
-            text: 'Dai la bidhaa hii limekamilika na hakuna mtu mwingine anayeweza kuidai tena. Hifadhi nambari ya bidhaa hapo juu kama utahitaji kuwasiliana na huduma kwa wateja.',
-        }),
-        emailNote('Kama hukupokea bidhaa hii ana kwa ana, wasiliana nasi mara moja ukitaja nambari ya bidhaa hapo juu.'),
     ].join('\n');
 
     const { html } = buildEmailMessage({
@@ -359,23 +319,6 @@ export function renderSendAgentPaymentConfirmedEmail(
             'Confirm the handover so the finder&#39;s reward can settle.',
         ]),
         emailNote('If the owner never collects the item, do not release it to anyone else. Report it to support and we will handle the next step.'),
-        emailDivider('Kiswahili'),
-        emailHeading('Malipo yamepokelewa! Umeruhusiwa kutoa bidhaa'),
-        emailParagraph(
-            `Habari ${escapeHtml(agentBusinessName)}, tumepokea na kuthibitisha malipo ya escrow kwa <strong>${escapeHtml(itemName)}</strong>, bidhaa inayohifadhiwa kwenye kituo chako. Umeruhusiwa kumpa mmiliki bidhaa hiyo.`
-        ),
-        emailDetails([
-            { label: 'Bidhaa', value: itemName },
-            { label: 'Nambari ya bidhaa', value: dropoffCode, mono: true },
-            { label: 'Nambari ya dai', value: claimId, mono: true },
-            { label: 'Hali ya uwasilishaji', value: 'Umeruhusiwa - inasubiri kuchukuliwa' },
-        ]),
-        emailCallout({
-            tone: 'warning',
-            label: 'Usitoe bidhaa bila msimbo',
-            text: 'Mmiliki ametumiwa msimbo wa siri wa kuchukulia. Muulize msimbo huo, uuingize kwenye portal ya wakala, na umpe bidhaa tu pale portal inapokubali msimbo huo. Msimbo huo ndio uthibitisho pekee wa umiliki.',
-        }),
-        emailNote('Kama mmiliki hatakuja kuchukua bidhaa, usimpe mtu mwingine. Ripoti kwa Return4me na tutashughulikia hatua inayofuata.'),
     ].join('\n');
 
     const { html } = buildEmailMessage({
@@ -402,7 +345,7 @@ export function renderSendFinderItemCollectedEmail(
     itemName: string,
     dropoffCode: string
 ): { subject: string; body: string } {
-    const subject = 'Your Found Item Has Been Returned / Bidhaa Uliyopata Imerejeshwa - Return4me';
+    const subject = 'Your Found Item Has Been Returned - Return4me';
 
     const content = [
         emailKicker('Thank you'),
@@ -421,22 +364,6 @@ export function renderSendFinderItemCollectedEmail(
             text: 'Your finder reward has been dispatched to the M-Pesa number you reported with. If it has not arrived within 24 hours, reply to this email quoting the item code above.',
         }),
         emailNote('Honest finders are the whole point of Return4me. Thank you for doing the right thing with something that was not yours.'),
-        emailDivider('Kiswahili'),
-        emailHeading('Asante! Bidhaa uliyoipata imerejeshwa kwa mmiliki'),
-        emailParagraph(
-            `Bidhaa uliyowasilisha, <strong>${escapeHtml(itemName)}</strong>, imechukuliwa na mmiliki wake. Kwa sababu uliiripoti kwa uaminifu, mtu amepata mali yake tena.`
-        ),
-        emailDetails([
-            { label: 'Bidhaa', value: itemName },
-            { label: 'Nambari ya bidhaa', value: dropoffCode, mono: true },
-            { label: 'Hali', value: 'Imerejeshwa kikamilifu' },
-        ]),
-        emailCallout({
-            tone: 'success',
-            label: 'Asante yako inakuja',
-            text: 'Zawadi yako ya mwadhi imetumwa kwenye nambari ya M-Pesa uliyoripoti nayo. Kama haijafika ndani ya saa 24, jibu barua pepe hii ukitaja nambari ya bidhaa hapo juu.',
-        }),
-        emailNote('Watu waaminifu kama wewe ndio msingi wa Return4me. Asante kwa kufanya jambo sahihi.'),
     ].join('\n');
 
     const { html } = buildEmailMessage({
@@ -450,6 +377,148 @@ export function renderSendFinderItemCollectedEmail(
 
     return { subject, body: html };
 }
+/**
+ * BATCH B — an item has been assigned to an agent (EventType
+ * AGENT_ITEM_ASSIGNED).
+ *
+ * Until this batch an assignment was invisible to the agent until they happened
+ * to open the hub, so a hub could hold unreported work indefinitely. This message
+ * names the item and the one action expected of the agent.
+ *
+ * WHAT IT DELIBERATELY OMITS: the routing method that produced the match
+ * (`gps_haversine` / `geocoded_text` / `manual_override` are internal control
+ * vocabulary), the finder's phone number, the claimant's security answers, and
+ * any fee or valuation. None of it is needed to check an item in, and all of it
+ * already exists behind the authenticated hub.
+ */
+export function renderSendAgentItemAssignedEmail(
+    agentBusinessName: string,
+    dropoffCode: string
+): { subject: string; body: string } {
+    const subject = 'New Item Assigned to Your Hub - Return4me';
+
+    const content = [
+        emailKicker('Assignment'),
+        emailHeading('An item has been assigned to your hub'),
+        emailParagraph(
+            `Hello <strong>${escapeHtml(agentBusinessName)}</strong>, a found item has been routed to you. It is waiting to be checked in at your hub.`
+        ),
+        emailDetails([
+            { label: 'Item code', value: dropoffCode, mono: true },
+        ]),
+        emailCallout({
+            tone: 'info',
+            label: 'What to do next',
+            text: 'Open the Agent Hub and verify the item when it arrives at your counter. The finder is not told their item has been safely received until you have checked it in.',
+        }),
+        emailNote('This is an automated assignment notification. Do not forward it outside operations.'),
+    ].join('\n');
+
+    const { html } = buildEmailMessage({
+        subject,
+        preheader: `Item ${dropoffCode} is waiting for you to check it in at your hub.`,
+        headerLabel: 'New assignment',
+        accent: EMAIL_THEME.info,
+        content,
+        footerNote: `Item ${escapeHtml(dropoffCode)}. Verify it from the Agent Hub.`,
+    });
+
+    return { subject, body: html };
+}
+
+/**
+ * BATCH B — the finder is told an agent now holds their reported item
+ * (EventType FINDER_AGENT_ASSIGNED).
+ *
+ * States only that an agent has been assigned, which is what has actually
+ * happened. It does NOT say the item has been recovered, returned or claimed —
+ * none of those has occurred at this point — and it carries no claimant details.
+ */
+export function renderSendFinderAgentAssignedEmail(
+    itemName: string,
+    dropoffCode: string,
+    agentBusinessName: string,
+    agentLocation: string
+): { subject: string; body: string } {
+    const subject = 'An Agent Has Been Assigned - Return4me';
+
+    const content = [
+        emailKicker('Agent assigned'),
+        emailHeading('An agent has been assigned to the item you reported'),
+        emailParagraph(
+            `Thank you again for reporting <strong>${escapeHtml(itemName)}</strong>. An agent hub has now been assigned to receive it, so the next step is a drop-off.`
+        ),
+        emailDetails([
+            { label: 'Item code', value: dropoffCode, mono: true },
+            { label: 'Agent hub', value: agentBusinessName },
+            { label: 'Hub location', value: agentLocation },
+        ]),
+        emailCallout({
+            tone: 'info',
+            label: 'What happens next',
+            text: 'Take the item to the hub above. The agent will check it in, and the item then becomes visible to its owner through the normal claim and verification process.',
+        }),
+        emailNote('This message confirms an assignment only. It does not mean the item has been claimed or returned.'),
+    ].join('\n');
+
+    const { html } = buildEmailMessage({
+        subject,
+        preheader: `An agent hub has been assigned to receive ${itemName}.`,
+        headerLabel: 'Agent assigned',
+        accent: EMAIL_THEME.info,
+        content,
+        footerNote: `Keep this email. Quote item code ${escapeHtml(dropoffCode)} if you need to contact support.`,
+    });
+
+    return { subject, body: html };
+}
+
+/**
+ * BATCH B — an existing claimant is told an agent has been assigned
+ * (EventType CLAIMANT_AGENT_ASSIGNED).
+ *
+ * Only ever sent when a genuinely live claim exists on the item, so it cannot
+ * tell someone about a journey that has already ended. It names no agent contact
+ * detail, no pickup code and no security answer: the pickup secret continues to
+ * travel only through the existing single-use pickup-code message.
+ */
+export function renderSendClaimantAgentAssignedEmail(
+    itemName: string,
+    dropoffCode: string,
+    agentBusinessName: string
+): { subject: string; body: string } {
+    const subject = 'An Agent Has Been Assigned to Your Claim - Return4me';
+
+    const content = [
+        emailKicker('Recovery update'),
+        emailHeading('An agent has been assigned to your claim'),
+        emailParagraph(
+            `An agent is now handling <strong>${escapeHtml(itemName)}</strong>, the item on your claim. The recovery process can proceed.`
+        ),
+        emailDetails([
+            { label: 'Item code', value: dropoffCode, mono: true },
+            { label: 'Agent hub', value: agentBusinessName },
+        ]),
+        emailCallout({
+            tone: 'info',
+            label: 'What happens next',
+            text: 'The agent will verify the item in person. You will be told when that verification is complete and your claim can move forward.',
+        }),
+        emailNote('This message confirms an assignment only. It does not mean the item has been handed over or that your claim is complete.'),
+    ].join('\n');
+
+    const { html } = buildEmailMessage({
+        subject,
+        preheader: `An agent is now handling ${itemName} on your claim.`,
+        headerLabel: 'Agent assigned',
+        accent: EMAIL_THEME.info,
+        content,
+        footerNote: `Keep this email. Quote item code ${escapeHtml(dropoffCode)} if you need to contact support.`,
+    });
+
+    return { subject, body: html };
+}
+
 /**
  * INTERNAL ledger notification for an admin-visible money event (N8, EventType
  * ADMIN_TRANSACTION_LOG, subtypes PAYMENT_CONFIRMED and

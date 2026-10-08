@@ -162,11 +162,15 @@ describe('Issue 1/6 — the server contract PrivacyView now matches', () => {
 describe('Issue 2 — the no-verified-email refusal names a real recovery path', () => {
   it('keeps the original sentence, adds the path, and never promises SMS', () => {
     expect(EMAIL_VERIFICATION_REQUIRED_MESSAGE).toContain('verified email address first');
-    expect(EMAIL_VERIFICATION_REQUIRED_MESSAGE).toContain('barua pepe iliyothibitishwa kwanza');
+    // BATCH B — the message is English-only now. It used to carry a Swahili half
+    // after a ' / ' separator; that half is gone, and this assertion pins its
+    // absence so the wording cannot silently become bilingual again.
+    expect(EMAIL_VERIFICATION_REQUIRED_MESSAGE).not.toContain('barua pepe iliyothibitishwa kwanza');
+    expect(EMAIL_VERIFICATION_REQUIRED_MESSAGE).not.toContain(' / ');
     // The actionable half — the thing the old one-sentence version lacked.
     expect(EMAIL_VERIFICATION_REQUIRED_MESSAGE).toContain('verify your email address');
     expect(EMAIL_VERIFICATION_REQUIRED_MESSAGE).toContain('support@return4me.co.ke');
-    expect(EMAIL_VERIFICATION_REQUIRED_MESSAGE).toContain('uthibitishe barua pepe yako');
+    expect(EMAIL_VERIFICATION_REQUIRED_MESSAGE).not.toContain('uthibitishe barua pepe yako');
     // No channel other than email is offered, and no SMS is ever implied.
     expect(EMAIL_VERIFICATION_REQUIRED_MESSAGE.toLowerCase()).not.toContain('sms');
     // Nothing account-specific: no phone number, no id, no address of a PERSON

@@ -84,7 +84,7 @@ export async function sendSmsNotification(input: SmsNotificationInput): Promise<
   if (input.seam === 'code' && !input.code) {
     // Reaching here means a caller believed it was sending a code and did not
     // supply one. Failing here is far safer than dispatching the live body
-    // "Msimbo wako wa Return4me ni ." to a paying, real handset.
+    // "Your Return4me code is." to a paying, real handset.
     throw new Error('sendSmsNotification: seam "code" requires a code');
   }
 

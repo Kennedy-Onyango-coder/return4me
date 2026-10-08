@@ -25,7 +25,7 @@ import {
   EMAIL_THEME,
   buildEmailMessage,
   emailButton,
-  emailDivider,
+
   emailHeading,
   emailKicker,
   emailNote,
@@ -60,7 +60,7 @@ export function buildCustomerActivationUrl(rawToken: string): string {
 }
 
 /**
- * The activation email body. Bilingual like every other user-facing string in
+ * The activation email body. English, like every other user-facing string in
  * the product, and it states the validity window so a user who misses the
  * 24h window knows to ask for a new link rather than to keep retrying.
  */
@@ -80,10 +80,6 @@ export function buildCustomerActivationEmailHtml(fullName: string, activationUrl
     emailButton({ href: activationUrl, label: 'Activate my account', fallback: true }),
     emailNote('This link works once and expires in 24 hours. If it expires, request a new activation link from the sign-in page.'),
     emailNote('If you did not create a Return4me account, you can safely ignore this email.'),
-    emailDivider('Kiswahili'),
-    emailParagraph(`<strong>Hai salamu ${safeName},</strong>`),
-    emailParagraph('Asante kwa kujiandikisha. Thibitisha barua pepe yako kuiambisha akaunti yako na kuanza kutumia Return4me.'),
-    emailParagraph('Kiungo hiki kinafanya kazi mara moja tu na kin expires baada ya saa 24. Ukishapokea, omba kiungo kipya kutoka ukurasa wa kuingia.'),
   ].join('\n');
 
   // The subject is duplicated into the document as its <title>; the preheader is
@@ -138,7 +134,7 @@ export function buildAgentActivationUrl(rawToken: string): string {
 }
 
 /**
- * The agent activation email body. Bilingual like every other user-facing
+ * The agent activation email body. English, like every other user-facing
  * string in the product, and it states the two facts an applicant most needs to
  * be true: verifying the address is NOT the same as being approved (an admin
  * still reviews the application), and the link works once and expires in 24h.
@@ -154,10 +150,6 @@ export function buildAgentActivationEmailHtml(businessName: string, activationUr
     // The second sentence is not padding: an applicant who reads verification as
     // approval stops checking their queue and starts waiting to be paid.
     emailNote('This link works once and expires after 24 hours. Verifying your email is not the same as approval &mdash; an administrator still reviews your application before you can start work.'),
-    emailDivider('Kiswahili'),
-    emailParagraph(`<strong>Hai salamu ${safeName},</strong>`),
-    emailParagraph('Asante kwa kujisajili kama Wakala wa Return4me. Tafadhali thibitisha barua pepe hii ili tujue biashara yako inaweza kupokea barua kutoka kwetu.'),
-    emailParagraph('Kiungo hiki kinafanya kazi mara moja tu na kin expires baada ya saa 24. Kuthibitisha barua pepe si sawa na kukubaliwa &mdash; msimamizi bado anapaswa kupitia maombi yako kabla ya kuanza kazi.'),
   ].join('\n');
 
   return buildEmailMessage({
@@ -219,12 +211,12 @@ export function generateSecureId(prefix: string): string {
 export async function requireCustomerAuth(req: any, res: Response, next: NextFunction) {
   try {
     const raw = readCookie(req, CUSTOMER_SESSION_COOKIE);
-    if (!raw) return res.status(401).json({ error: 'Uthibitisho unahitajika. / Authentication required.' });
+    if (!raw) return res.status(401).json({ error: 'Authentication required.' });
     const session = await db.getCustomerSessionByTokenHash(hashCode(raw));
-    if (!session) return res.status(401).json({ error: 'Kipindi hiki si sahihi. / Invalid session.' });
-    if (session.revoked_at) return res.status(401).json({ error: 'Kipindi hiki kimefungwa. / Session has been revoked.' });
+    if (!session) return res.status(401).json({ error: 'Invalid session.' });
+    if (session.revoked_at) return res.status(401).json({ error: 'Session has been revoked.' });
     if (session.expires_at && new Date(session.expires_at).getTime() < Date.now()) {
-      return res.status(401).json({ error: 'Kipindi hiki kimeisha muda. / Session has expired.' });
+      return res.status(401).json({ error: 'Session has expired.' });
     }
     // H10 (BATCH 2) — IDLE-TIME CHECK, enforced here and nowhere else.
     //
@@ -242,9 +234,9 @@ export async function requireCustomerAuth(req: any, res: Response, next: NextFun
       return res.status(401).json({ error: CUSTOMER_ACCOUNT_STRINGS.sessionIdle.en });
     }
     const customer = await db.getCustomerById(session.customer_id);
-    if (!customer) return res.status(401).json({ error: 'Akaunti haipatikani. / Account not available.' });
+    if (!customer) return res.status(401).json({ error: 'Account not available.' });
     if (customer.status !== 'active') {
-      return res.status(403).json({ error: 'Akaunti hii haitumiki kwa sasa. / This account is not active.', status: customer.status });
+      return res.status(403).json({ error: 'This account is not active.', status: customer.status });
     }
     await db.touchCustomerSession(session.id);
     req.customer = customer;
@@ -252,7 +244,7 @@ export async function requireCustomerAuth(req: any, res: Response, next: NextFun
     next();
   } catch (e: any) {
     console.error('[CUSTOMER_AUTH_ERROR]', e);
-    return res.status(500).json({ error: 'Hitilafu imetokea upande wa seva. Tafadhali jaribu tena baadaye.' });
+    return res.status(500).json({ error: 'A server error occurred. Please try again later.' });
   }
 }
 

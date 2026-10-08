@@ -122,7 +122,7 @@ function phoneChange(ip: string, who: { token: string; phone: string }, phone?: 
 }
 
 const RATE_LIMIT_MESSAGE =
-  'Mafti ya maombi ya ujumbe mfupi umefikia kikomo. Tafadhali subiri kidogo kabla ya kujaribu tena. / Too many SMS requests. Please wait before trying again.';
+  'Too many SMS requests. Please wait before trying again.';
 beforeAll(async () => {
   const week = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   for (const who of [A, B, C, D, E]) {

@@ -322,7 +322,7 @@ describe('N4-1..4 — registration requires a normalized, unique email', () => {
   it('rejects a MISSING email and sends no activation email', async () => {
     const { result } = await registerAgent({ contactEmail: undefined });
     expect(result.status).toBe(400);
-    expect(result.body.error).toMatch(/barua pepe/i);
+    expect(result.body.error).toMatch(/valid business email/i);
     expect(emails.sent.filter((e) => e.subject.includes('agent'))).toHaveLength(0);
   });
 

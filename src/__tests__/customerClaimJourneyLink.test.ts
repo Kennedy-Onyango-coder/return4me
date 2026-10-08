@@ -589,7 +589,7 @@ describe('F11 layer 3 — server.ts wiring (source audit)', () => {
   it('the success response keeps its existing fields and adds only `linked`', () => {
     expect(verifyRoute).toContain('linked: journeyLinked');
     expect(verifyRoute).toContain('success: true,');
-    expect(verifyRoute).toContain('Msimbo umethibitishwa kikamilifu!');
+    expect(verifyRoute).toContain('Verification code approved!');
     expect(verifyRoute).not.toContain('customer_id');
   });
 

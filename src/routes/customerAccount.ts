@@ -46,10 +46,10 @@ import {
 } from '../config/customerAccountPolicy.ts';
 
 const SERVER_ERROR = {
-  error: 'Hitilafu imetokea upande wa seva. Tafadhali jaribu tena baadaye.',
+  error: 'A server error occurred. Please try again later.',
 };
-const NOT_FOUND = { error: 'Haijapatikana. / Not found.' };
-const BAD_REQUEST = { error: 'Ombi la awali si sahihi. / Invalid request.' };
+const NOT_FOUND = { error: 'Not found.' };
+const BAD_REQUEST = { error: 'Invalid request.' };
 
 /** Six digits, generated server-side. The plaintext is never stored. */
 function newVerificationCode(): string {
@@ -177,7 +177,7 @@ export function registerCustomerAccountRoutes(app: any, deps: {
       if (fullName === null) return res.status(400).json(BAD_REQUEST);
       if (fullName.length < 2 || fullName.length > 120) {
         return res.status(400).json({
-          error: 'Tafadhali weka jina lako kamili. / Please enter your full name.',
+          error: 'Please enter your full name.',
         });
       }
       const ok = await db.updateCustomerName(req.customer.id, fullName);
@@ -376,10 +376,10 @@ export function registerCustomerAccountRoutes(app: any, deps: {
       const record = await db.getIdentityChangeById(changeId, req.customer.id);
       if (!record) return res.status(404).json(NOT_FOUND);
       if (record.consumed_at != null) {
-        return res.status(400).json({ error: 'Msimbo huu umetumika. / That code has already been used.' });
+        return res.status(400).json({ error: 'That code has already been used.' });
       }
       if (new Date(record.expires_at).getTime() <= Date.now()) {
-        return res.status(400).json({ error: 'Msimbo huu umeisha muda. / That code has expired.' });
+        return res.status(400).json({ error: 'That code has expired.' });
       }
       if (hashCode(code) !== record.code_hash) {
         // BOUNDED GUESSING. A six-digit space is small enough that an attacker
@@ -395,7 +395,7 @@ export function registerCustomerAccountRoutes(app: any, deps: {
         if (attempts >= IDENTITY_CHANGE_MAX_VERIFICATION_ATTEMPTS) {
           await db.consumeCustomerIdentityChange({ id: changeId, customerId: req.customer.id });
         }
-        return res.status(400).json({ error: 'Msimbo si sahihi. / That code is not correct.' });
+        return res.status(400).json({ error: 'That code is not correct.' });
       }
 
       // Burn first. If applying the identifier then failed, the code is spent and
@@ -403,7 +403,7 @@ export function registerCustomerAccountRoutes(app: any, deps: {
       // identifier is still authoritative until applyVerifiedCustomerIdentifier
       // succeeds.
       const burned = await db.consumeCustomerIdentityChange({ id: changeId, customerId: req.customer.id });
-      if (!burned) return res.status(400).json({ error: 'Msimbo huu umetumika. / That code has already been used.' });
+      if (!burned) return res.status(400).json({ error: 'That code has already been used.' });
 
       const applied = await db.applyVerifiedCustomerIdentifier(
         req.customer.id,
@@ -468,7 +468,7 @@ export function registerCustomerAccountRoutes(app: any, deps: {
         new Date(challenge.expires_at).getTime() > Date.now() &&
         challenge.code_hash === hashCode(code);
       if (!valid) {
-        return res.status(400).json({ error: 'Uthibitisho si sahihi. / That confirmation code is not correct.' });
+        return res.status(400).json({ error: 'That confirmation code is not correct.' });
       }
 
       // Burn the proof so one code can never erase twice.
@@ -516,14 +516,14 @@ function normalizeTarget(kind: 'email' | 'phone', value: unknown): string | null
 
 function invalidTargetMessage(kind: 'email' | 'phone'): string {
   return kind === 'email'
-    ? 'Weka barua pepe sahihi. / Enter a valid email address.'
-    : 'Weka nambari sahihi ya simu ya Kenya. / Enter a valid Kenyan phone number.';
+    ? 'Enter a valid email address.'
+    : 'Enter a valid Kenyan phone number.';
 }
 
 function takenMessage(kind: 'email' | 'phone'): string {
   return kind === 'email'
-    ? 'Barua pepe hii tayari imetumika. / This email address is already in use.'
-    : 'Nambari hii tayari imetumika. / This phone number is already in use.';
+    ? 'This email address is already in use.'
+    : 'This phone number is already in use.';
 }
 
 /**

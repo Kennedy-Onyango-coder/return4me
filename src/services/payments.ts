@@ -161,7 +161,7 @@ export const PaymentService = {
         success: true,
         checkoutRequestId: invoiceId,
         mpesaReceiptCode: receiptCode,
-        message: `[SIMULATION] Ombi la malipo ya KES ${amt} limetumwa kwa simu yako (${phoneNumber}). Tafadhali weka PIN ya M-Pesa utakapoulizwa ili kukamilisha simulation ya malipo.`,
+        message: `[SIMULATION] A payment request for KES ${amt} was sent to your phone (${phoneNumber}). Enter your M-Pesa PIN when prompted to complete the simulated payment.`,
       };
     };
 
@@ -219,7 +219,7 @@ export const PaymentService = {
           success: false,
           checkoutRequestId: '',
           mpesaReceiptCode: '',
-          message: `Miamala ya M-Pesa imeshindwa kuwasiliana na mfumo wa malipo. (${response.status}) Tafadhali jaribu tena baadaye.`,
+          message: `The M-Pesa service could not reach the payment system (${response.status}). Please try again later.`,
         };
       }
 
@@ -244,7 +244,7 @@ export const PaymentService = {
         success: true,
         checkoutRequestId: invoiceId,
         mpesaReceiptCode: invoiceId,
-        message: `Ombi la malipo ya KES ${amount} limetumwa kwa simu yako (${phone}). Tafadhali weka PIN ya M-Pesa utakapoulizwa ili kukamilisha malipo.`,
+        message: `A payment request for KES ${amount} was sent to your phone (${phone}). Enter your M-Pesa PIN when prompted to complete the payment.`,
       };
     } catch (error: any) {
       console.warn('[INTASEND GATEWAY] STK Push failed with exception:', error.message);
@@ -252,7 +252,7 @@ export const PaymentService = {
         success: false,
         checkoutRequestId: '',
         mpesaReceiptCode: '',
-        message: `Kuna hitilafu ya mtandao wakati wa kutuma ombi la malipo: ${error.message}. Tafadhali jaribu tena.`,
+        message: `A network error occurred while sending the payment request: ${error.message}. Please try again.`,
       };
     }
   },
@@ -483,7 +483,7 @@ export const PaymentService = {
       }
 
       return {
-        name: `Return4me ${p.recipientType === 'finder' ? 'Mtafutaji' : 'Wakala'}`,
+        name: `Return4me ${p.recipientType === 'finder' ? 'Finder' : 'Agent'}`,
         account: cleanAccount,
         amount: String(p.amount),
         narrative: `R4M-${p.recipientType.toUpperCase()}-${claimId}`,

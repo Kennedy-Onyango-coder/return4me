@@ -58,7 +58,7 @@ export const SMS_RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000; // 10 minutes
  */
 const RATE_LIMIT_BODY = {
   error:
-    'Mafti ya maombi ya ujumbe mfupi umefikia kikomo. Tafadhali subiri kidogo kabla ya kujaribu tena. / Too many SMS requests. Please wait before trying again.',
+    'Too many SMS requests. Please wait before trying again.',
 };
 
 /**

@@ -74,7 +74,7 @@ function singleString(raw: unknown): Parsed<string | undefined> {
   if (raw === undefined) return { value: undefined, error: null };
   if (typeof raw !== 'string') {
     // Express turns a repeated parameter into an array — ambiguous input.
-    return { value: undefined, error: 'Kigezo kimerudiwa au si sahihi. / Duplicate or malformed parameter.' };
+    return { value: undefined, error: 'Duplicate or malformed parameter.' };
   }
   return { value: raw, error: null };
 }
@@ -86,14 +86,14 @@ function boundedInt(raw: unknown, min: number, max: number, fallback: number): P
   if (s.value === undefined) return { value: fallback, error: null };
   // An explicitly empty value (`?limit=`) is malformed, never a default.
   if (!/^\d+$/.test(s.value)) {
-    return { value: fallback, error: 'Thamani lazima iwe nambari kamili. / Value must be a whole number.' };
+    return { value: fallback, error: 'Value must be a whole number.' };
   }
   const n = Number(s.value);
   if (!Number.isSafeInteger(n)) {
-    return { value: fallback, error: 'Thamani ya nambari ni kubwa kupita kiasi. / Numeric value is too large.' };
+    return { value: fallback, error: 'Numeric value is too large.' };
   }
   if (n < min || n > max) {
-    return { value: fallback, error: `Thamani lazima iwe kati ya ${min} na ${max}. / Value must be between ${min} and ${max}.` };
+    return { value: fallback, error: `Value must be between ${min} and ${max}.` };
   }
   return { value: n, error: null };
 }
@@ -105,7 +105,7 @@ function strictBoolean(raw: unknown): Parsed<boolean | undefined> {
   if (s.value === undefined) return { value: undefined, error: null };
   if (s.value === 'true') return { value: true, error: null };
   if (s.value === 'false') return { value: false, error: null };
-  return { value: undefined, error: 'Thamani lazima iwe true au false. / Value must be true or false.' };
+  return { value: undefined, error: 'Value must be true or false.' };
 }
 
 /**
@@ -120,7 +120,7 @@ function repositoryId(raw: unknown, field: string): Parsed<string | undefined> {
   if (s.error) return { value: undefined, error: s.error };
   if (s.value === undefined) return { value: undefined, error: null };
   if (!/^[A-Za-z0-9_.:-]{1,64}$/.test(s.value)) {
-    return { value: undefined, error: `Kitambulisho si sahihi (${field}). / Malformed identifier (${field}).` };
+    return { value: undefined, error: `Malformed identifier (${field}).` };
   }
   return { value: s.value, error: null };
 }
@@ -132,7 +132,7 @@ function parsedDate(raw: unknown, field: string): Parsed<Date | undefined> {
   if (s.value === undefined) return { value: undefined, error: null };
   const d = new Date(s.value);
   if (isNaN(d.getTime())) {
-    return { value: undefined, error: `Tarehe si sahihi (${field}). / Malformed date (${field}).` };
+    return { value: undefined, error: `Malformed date (${field}).` };
   }
   return { value: d, error: null };
 }
@@ -144,7 +144,7 @@ function claimantPhone(raw: unknown): Parsed<string | undefined> {
   if (s.value === undefined) return { value: undefined, error: null };
   const normalized = toE164Kenyan(s.value.replace(/\s+/g, ''));
   if (!/^\+254\d{9}$/.test(normalized)) {
-    return { value: undefined, error: 'Nambari ya simu ya mdai si sahihi. / Malformed claimant phone number.' };
+    return { value: undefined, error: 'Malformed claimant phone number.' };
   }
   return { value: normalized, error: null };
 }
@@ -163,15 +163,15 @@ function statusList(raw: unknown): Parsed<string[] | undefined> {
   };
   if (Array.isArray(raw)) {
     for (const entry of raw) {
-      if (!collect(entry)) return { value: undefined, error: 'Kigezo cha hali si sahihi. / Malformed status parameter.' };
+      if (!collect(entry)) return { value: undefined, error: 'Malformed status parameter.' };
     }
   } else if (!collect(raw)) {
-    return { value: undefined, error: 'Kigezo cha hali si sahihi. / Malformed status parameter.' };
+    return { value: undefined, error: 'Malformed status parameter.' };
   }
   if (parts.length === 0) return { value: undefined, error: null };
   for (const s of parts) {
     if (!CLAIM_STATUS_VALUES.includes(s as any)) {
-      return { value: undefined, error: 'Hali ya claim haijulikani. / Unknown claim status.' };
+      return { value: undefined, error: 'Unknown claim status.' };
     }
   }
   return { value: Array.from(new Set(parts)), error: null };
@@ -184,7 +184,7 @@ function disputeState(raw: unknown): Parsed<'none' | 'open' | 'resolved' | undef
   if (s.error) return { value: undefined, error: s.error };
   if (s.value === undefined) return { value: undefined, error: null };
   if (!(DISPUTE_STATES as readonly string[]).includes(s.value)) {
-    return { value: undefined, error: 'Kigezo cha mzozo si sahihi. / Malformed dispute state.' };
+    return { value: undefined, error: 'Malformed dispute state.' };
   }
   return { value: s.value as 'none' | 'open' | 'resolved', error: null };
 }
@@ -212,7 +212,7 @@ export function registerAdminClaimRoutes(app: Express, deps: AdminClaimRouteDeps
   app.get('/api/admin/claims', authenticateJWT, requireCurrentAdminSession, permissionGuard(ADMIN_PERMISSIONS.CLAIMS_READ), async (req, res) => {
       try {
         if (req.user?.role !== 'admin') {
-          return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
+          return res.status(403).json({ error: 'Access denied.' });
         }
 
         const q = (req.query ?? {}) as Record<string, unknown>;
@@ -291,18 +291,18 @@ export function registerAdminClaimRoutes(app: Express, deps: AdminClaimRouteDeps
   app.get('/api/admin/claims/:claimId', authenticateJWT, requireCurrentAdminSession, permissionGuard(ADMIN_PERMISSIONS.CLAIMS_DETAIL), async (req, res) => {
       try {
         if (req.user?.role !== 'admin') {
-          return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
+          return res.status(403).json({ error: 'Access denied.' });
         }
 
         const claimId = repositoryId(req.params.claimId, 'claimId');
         if (claimId.error) return res.status(400).json({ error: claimId.error });
         if (!claimId.value) {
-          return res.status(400).json({ error: 'Kitambulisho cha claim kinahitajika. / Claim ID is required.' });
+          return res.status(400).json({ error: 'Claim ID is required.' });
         }
 
         const row = await db.getAdminClaimDetail(claimId.value);
         if (!row) {
-          return res.status(404).json({ error: 'Claim haikupatikana. / Claim not found.' });
+          return res.status(404).json({ error: 'Claim not found.' });
         }
 
         // Authenticated identity only — never a body/query/header-supplied actor.

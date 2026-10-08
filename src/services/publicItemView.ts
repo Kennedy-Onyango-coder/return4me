@@ -66,8 +66,8 @@ export function toPublicItemView(item: any, agent?: any | null): any {
     photo_url: isSensitive ? null : (item.photo_url ?? null),
     is_sensitive_document: isSensitive,
     document_name_fuzzy: item.isDescriptionOnly
-      ? 'Bidhaa ya Maelezo'
-      : item.document_name_fuzzy || (isSensitive ? 'Mwenye ID' : 'Bidhaa Bila Hati'),
+      ? 'Described in the report'
+      : item.document_name_fuzzy || (isSensitive ? 'Name held on file' : 'No document name'),
     // PHASE 16.1 (GEO-16-03): the FINER-grain-free canonical county — the
     // county-level fact the Finder selected and the API boundary canonicalised.
     // It is deliberately the county ONLY: no sub-county, no city, no ward, no

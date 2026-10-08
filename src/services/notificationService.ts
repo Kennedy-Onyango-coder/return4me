@@ -86,7 +86,7 @@ export interface NotificationRequest {
    * from the code itself rather than from `render()`.
    *
    * `sendCodeViaSms` ignores the caller's message and builds
-   * "Msimbo wako wa Return4me ni <code>…" — so for those events the code is the
+   * "Your Return4me code is <code>…" — so for those events the code is the
    * only thing that makes the SMS correct, and it has to cross the boundary.
    *
    * This is deliberately a transient dispatch parameter and NOT a field the

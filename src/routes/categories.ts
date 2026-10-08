@@ -62,7 +62,7 @@ export function registerPublicCategoryRoutes(app: Express, deps: PublicCategoryR
       console.error('[API CATEGORIES ENGINE] Failed to fetch categories from database:', e);
       if (isDatabaseConnectionError(e)) {
         return res.status(503).json({
-          error: "Huduma haipatikani kwa sasa. Tafadhali jaribu tena baadaye. / Service temporarily unavailable. Please try again shortly."
+          error: "Service temporarily unavailable. Please try again shortly."
         });
       }
       sendServerError(res, e, 'CATEGORIES_FETCH_ERROR');
@@ -76,7 +76,7 @@ export function registerAdminCategoryRoutes(app: Express, deps: AdminCategoryRou
   app.post('/api/admin/categories', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+        return res.status(403).json({ error: 'Administrator access required.' });
       }
 
       const {
@@ -101,18 +101,18 @@ export function registerAdminCategoryRoutes(app: Express, deps: AdminCategoryRou
       if (public_clue_style !== undefined && public_clue_style !== null && public_clue_style !== '') {
         if (!isPublicClueStyle(public_clue_style)) {
           return res.status(400).json({
-            error: `public_clue_style lazima iwe mojawapo ya: ${PUBLIC_CLUE_STYLES.join(', ')}. / public_clue_style must be one of: ${PUBLIC_CLUE_STYLES.join(', ')}.`
+            error: `public_clue_style must be one of: ${PUBLIC_CLUE_STYLES.join(', ')}.`
           });
         }
       }
 
       if (!name_en || typeof name_en !== 'string' || name_en.trim() === '' || !name_sw || typeof name_sw !== 'string' || name_sw.trim() === '') {
-        return res.status(400).json({ error: 'Majina ya kategoria (English & Swahili) lazima yajazwe.' });
+        return res.status(400).json({ error: 'Both category names (English and Swahili) are required.' });
       }
 
       const existing = await db.getCategory(id);
       if (existing) {
-        return res.status(400).json({ error: 'ID hii ya kategoria tayari ipo. Tafadhali tumia nyingine.' });
+        return res.status(400).json({ error: 'That category ID already exists. Please use another one.' });
       }
 
       const numTotal = Number(total_fee);
@@ -121,7 +121,7 @@ export function registerAdminCategoryRoutes(app: Express, deps: AdminCategoryRou
       const numPlatform = Number(platform_share);
 
       if (isNaN(numTotal) || numTotal < 0 || isNaN(numFinder) || numFinder < 0 || isNaN(numAgent) || numAgent < 0 || isNaN(numPlatform) || numPlatform < 0) {
-        return res.status(400).json({ error: 'Ada na migao yote lazima iwe nambari inayozidi au sawa na sifuri.' });
+        return res.status(400).json({ error: 'The fee and every share must be numbers greater than or equal to zero.' });
       }
 
       // CHECK sum exactly to 2 decimal places to avoid standard JS float issues
@@ -129,7 +129,7 @@ export function registerAdminCategoryRoutes(app: Express, deps: AdminCategoryRou
       const sumShares = parseFloat((numFinder + numAgent + numPlatform).toFixed(2));
       if (total !== sumShares) {
         return res.status(400).json({
-          error: 'Mgao (finder + agent + platform) lazima uwe sawa na jumla ya ada. / Split shares (finder + agent + platform) must sum to total fee exactly.'
+          error: 'Split shares (finder + agent + platform) must sum to total fee exactly.'
         });
       }
 

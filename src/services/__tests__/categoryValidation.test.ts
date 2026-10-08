@@ -181,7 +181,7 @@ describe('CATEGORY_MESSAGES — one rejection phrase, shared with the existing r
     // item review, public search) cannot drift into a second phrasing — this
     // ADDS a guard on top of the existing foundItemCategoryValidation assertion,
     // it does not replace it.
-    const shared = 'Aina ya kitu haikubaliki. / That item category is not valid.';
+    const shared = 'That item category is not valid.';
     expect(CATEGORY_MESSAGES.invalid).toBe(shared);
     expect(read('src/routes/lostReports.ts')).toContain(shared);
   });

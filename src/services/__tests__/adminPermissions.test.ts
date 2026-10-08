@@ -64,7 +64,7 @@ describe('adminPermissions', () => {
       requireAdminPermission(ADMIN_PERMISSIONS.CLAIMS_READ)(req, res, () => { nexted = true; });
       expect(nexted).toBe(false);
       expect(res.state.status).toBe(403);
-      expect(res.state.body).toEqual({ error: 'Ruhusa imekataliwa.' });
+      expect(res.state.body).toEqual({ error: 'Access denied.' });
     }
   });
 

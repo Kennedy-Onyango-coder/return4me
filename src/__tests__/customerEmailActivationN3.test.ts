@@ -85,7 +85,7 @@ describe('N3 - registration contract', () => {
 
   it('keeps the throttle and a generic anti-enumeration shape', () => {
     expect(registerBody).toContain('customerOtpLastSent.get(throttleKey)');
-    expect(registerBody).toContain("message: 'Akaunti imeundwa");
+    expect(registerBody).toContain("message: 'Account created.");
   });
 });
 

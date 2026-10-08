@@ -75,17 +75,17 @@ export interface AdminLostReportRouteDeps {
 function boundedInt(raw: unknown, min: number, max: number, fallback: number): { value: number; error: string | null } {
   if (raw === undefined) return { value: fallback, error: null };
   if (typeof raw !== 'string') {
-    return { value: fallback, error: 'Kigezo kimerudiwa au si sahihi. / Duplicate or malformed parameter.' };
+    return { value: fallback, error: 'Duplicate or malformed parameter.' };
   }
   if (!/^\d+$/.test(raw)) {
-    return { value: fallback, error: 'Thamani lazima iwe nambari kamili. / Value must be a whole number.' };
+    return { value: fallback, error: 'Value must be a whole number.' };
   }
   const n = Number(raw);
   if (!Number.isSafeInteger(n)) {
-    return { value: fallback, error: 'Thamani ya nambari ni kubwa kupita kiasi. / Numeric value is too large.' };
+    return { value: fallback, error: 'Numeric value is too large.' };
   }
   if (n < min || n > max) {
-    return { value: fallback, error: `Thamani lazima iwe kati ya ${min} na ${max}. / Value must be between ${min} and ${max}.` };
+    return { value: fallback, error: `Value must be between ${min} and ${max}.` };
   }
   return { value: n, error: null };
 }
@@ -106,7 +106,7 @@ function boundedInt(raw: unknown, min: number, max: number, fallback: number): {
 function countyFilter(raw: unknown): { value: string | null; error: string | null } {
   if (raw === undefined) return { value: null, error: null };
   if (typeof raw !== 'string') {
-    return { value: null, error: 'Kigezo kimerudiwa au si sahihi. / Duplicate or malformed parameter.' };
+    return { value: null, error: 'Duplicate or malformed parameter.' };
   }
   const canonical = resolveCountyName(raw);
   if (!canonical) {
@@ -127,7 +127,7 @@ export function registerAdminLostReportRoutes(app: Express, deps: AdminLostRepor
   app.get('/api/admin/lost-reports', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
+        return res.status(403).json({ error: 'Access denied.' });
       }
 
       const q = (req.query ?? {}) as Record<string, unknown>;

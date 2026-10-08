@@ -54,7 +54,7 @@ export type NotificationRecipientKind =
 // resend now route over email (Resend-first, SMS_ENABLED=false). The new events
 // it introduced are marked `stage: 'E1'` so their provenance is as auditable as
 // the N-stages before them.
-export type NotificationMigrationStage = 'N5' | 'N6' | 'N7' | 'N8' | 'N9' | 'E1';
+export type NotificationMigrationStage = 'N5' | 'N6' | 'N7' | 'N8' | 'N9' | 'E1' | 'B';
 
 /**
  * N9 — whether a FAILED delivery of this event may be retried later.
@@ -354,6 +354,51 @@ const EVENT_DEFINITIONS: readonly NotificationEventDefinition[] = [
     retryClass: 'reconstructable',
     stage: 'N8',
     origin: 'routes/finderReport.ts sendAdminNewReassignmentRequestEmail (pre-existing)',
+  },
+  // ---------------------------------------------------------------------------
+  // BATCH B — AN ITEM HAS BEEN ASSIGNED TO AN AGENT.
+  //
+  // Before this batch an assignment was silent for everyone except the two
+  // humans in the room: the agent discovered the work only by opening the hub,
+  // the finder and the claimant were never told an agent had been attached. The
+  // three events below close that gap, one per recipient, so each can be
+  // deduplicated, retried and audited independently.
+  //
+  // `reconstructable` on all three is a deliberate, checked claim: none of these
+  // messages carries an OTP, a pickup code, an activation token or a phone
+  // number, so the exact message can be rebuilt from the item row and a failed
+  // delivery is safe to retry. Nothing about the item's value, the finder's
+  // contact details or the claim's security answers is included.
+  // ---------------------------------------------------------------------------
+  {
+    eventType: 'AGENT_ITEM_ASSIGNED',
+    channel: 'email',
+    priority: 'transactional',
+    recipientKind: 'agent',
+    templateId: 'agent_item_assigned',
+    retryClass: 'reconstructable',
+    stage: 'B',
+    origin: 'services/agentAssignmentNotifications.ts (admin manual assignment + newly-operational-agent matcher)',
+  },
+  {
+    eventType: 'FINDER_AGENT_ASSIGNED',
+    channel: 'email',
+    priority: 'transactional',
+    recipientKind: 'finder',
+    templateId: 'finder_agent_assigned',
+    retryClass: 'reconstructable',
+    stage: 'B',
+    origin: 'services/agentAssignmentNotifications.ts (admin manual assignment + newly-operational-agent matcher)',
+  },
+  {
+    eventType: 'CLAIMANT_AGENT_ASSIGNED',
+    channel: 'email',
+    priority: 'transactional',
+    recipientKind: 'owner',
+    templateId: 'claimant_agent_assigned',
+    retryClass: 'reconstructable',
+    stage: 'B',
+    origin: 'services/agentAssignmentNotifications.ts (admin manual assignment + newly-operational-agent matcher)',
   },
 ];
 

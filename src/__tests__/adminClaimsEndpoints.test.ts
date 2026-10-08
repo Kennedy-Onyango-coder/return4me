@@ -98,7 +98,7 @@ beforeAll(async () => {
     requireCurrentAdminSession: passSession,
     sendServerError,
     requireAdminPermission: () => (_req: any, res: any) =>
-      res.status(403).json({ error: 'Ruhusa imekataliwa.' }),
+      res.status(403).json({ error: 'Access denied.' }),
   });
   await new Promise<void>((resolve) => { serverDeny = appDeny.listen(0, '127.0.0.1', () => resolve()); });
   baseDeny = `http://127.0.0.1:${serverDeny.address().port}`;
@@ -152,12 +152,12 @@ describe('6E authorization', () => {
   it('5b. a denied claims permission yields the real 403 from the real route', async () => {
     const list = await api(baseDeny, 'GET', '/api/admin/claims', adminToken);
     expect(list.status).toBe(403);
-    expect(list.json).toEqual({ error: 'Ruhusa imekataliwa.' });
+    expect(list.json).toEqual({ error: 'Access denied.' });
 
     const detail = await api(baseDeny, 'GET', '/api/admin/claims/SOME-CLAIM', adminToken);
     expect(detail.status).toBe(403);
     // An authorization failure must not reveal whether the claim exists.
-    expect(detail.json).toEqual({ error: 'Ruhusa imekataliwa.' });
+    expect(detail.json).toEqual({ error: 'Access denied.' });
   });
 
   it('6. an authorized admin is allowed on list and detail', async () => {

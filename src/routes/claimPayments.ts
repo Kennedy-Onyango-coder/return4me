@@ -115,7 +115,7 @@ export function registerClaimPaymentRoutes(
       const claimId = req.params.id;
       const { phone } = req.body;
       if (!phone) {
-        return res.status(400).json({ error: 'Nambari ya simu inahitajika. / Phone number is required.' });
+        return res.status(400).json({ error: 'Phone number is required.' });
       }
 
       try {
@@ -141,7 +141,7 @@ export function registerClaimPaymentRoutes(
         // Ownership is proven. Only NOW may claim state be consulted.
         if (claim.status !== 'pending_payment') {
           return res.status(400).json({
-            error: 'Lazima kwanza uthibitishwe na wakala kabla ya kuomba idhini ya malipo. / You must be confirmed by the agent in person before requesting payment authorization.'
+            error: 'You must be confirmed by the agent in person before requesting payment authorization.'
           });
         }
 
@@ -165,7 +165,7 @@ export function registerClaimPaymentRoutes(
 
       try {
         if (!phone) {
-          return res.status(400).json({ error: 'Nambari ya simu inahitajika. / Phone number is required.' });
+          return res.status(400).json({ error: 'Phone number is required.' });
         }
 
         const claim = await db.getClaim(claimId);
@@ -190,11 +190,11 @@ export function registerClaimPaymentRoutes(
 
         // Ownership is proven. Only NOW may claim state be consulted.
         if (claim.status !== 'pending_payment') {
-          return res.status(400).json({ error: 'Lazima kwanza uthibitishwe na wakala kabla ya kulipa. / You must be confirmed by the agent in person before you can pay.' });
+          return res.status(400).json({ error: 'You must be confirmed by the agent in person before you can pay.' });
         }
         const freshClaim = await checkClaimExpiry(claim);
         if (!freshClaim || freshClaim.status !== 'pending_payment') {
-          return res.status(410).json({ error: 'Muda wa malipo umeisha. / The payment window has expired.' });
+          return res.status(410).json({ error: 'The payment window has expired.' });
         }
 
         // Payer M-Pesa number — may differ from owner_phone. Must be a valid
@@ -203,14 +203,14 @@ export function registerClaimPaymentRoutes(
         if (payerPhone !== undefined && payerPhone !== null && String(payerPhone).trim() !== '') {
           const candidate = toE164Kenyan(String(payerPhone).replace(/\s+/g, ''));
           if (!/^\+254\d{9}$/.test(candidate)) {
-            return res.status(400).json({ error: 'Nambari ya simu ya M-Pesa sio sahihi. / Enter a valid Kenyan M-Pesa number.' });
+            return res.status(400).json({ error: 'Enter a valid Kenyan M-Pesa number.' });
           }
           normalizedPayer = candidate;
         }
 
         const item = await db.getItem(claim.item_id);
         if (!item) {
-          return res.status(404).json({ error: 'Bidhaa inayodaiwa haikupatikana.' });
+          return res.status(404).json({ error: 'The claimed item could not be found.' });
         }
         const claimability = await canCreateClaim(item);
         if (!claimability.allowed) {
@@ -218,7 +218,7 @@ export function registerClaimPaymentRoutes(
         }
         const category = await db.getCategory(item.category_id);
         if (!category) {
-          return res.status(404).json({ error: 'Ada ya kategoria haikupatikana.' });
+          return res.status(404).json({ error: 'The category fee could not be found.' });
         }
 
         // Authoritative server-side amount — never taken from the client.
@@ -257,7 +257,7 @@ export function registerClaimPaymentRoutes(
           expiresAt,
         });
         if (!created) {
-          return res.status(500).json({ error: 'Kushindwa kuunda session ya malipo. / Failed to create the payment session.' });
+          return res.status(500).json({ error: 'Failed to create the payment session.' });
         }
 
         const session = await db.getPaymentSessionById(sessionId);
@@ -288,11 +288,11 @@ export function registerClaimPaymentRoutes(
         // caller with no token at all could still tell "no such claim" from a
         // real claim in pending_payment / an expired payment window.
         if (!paymentAuthToken) {
-          return res.status(403).json({ error: 'Idhini ya malipo imekosekana. Tafadhali omba idhini mpya kabla ya kulipa. / Payment authorization is missing. Please request authorization before paying.' });
+          return res.status(403).json({ error: 'Payment authorization is missing. Please request authorization before paying.' });
         }
         const authRecord = await db.getClaimPaymentAuthToken(claimId);
         if (!authRecord || authRecord.expires_at.getTime() < Date.now() || !timingSafeEqualHex(hashCode(String(paymentAuthToken)), authRecord.token_hash)) {
-          return res.status(403).json({ error: 'Idhini ya malipo si sahihi au imeisha muda. Tafadhali omba idhini mpya. / Payment authorization is invalid or has expired. Please request a new authorization.' });
+          return res.status(403).json({ error: 'Payment authorization is invalid or has expired. Please request a new authorization.' });
         }
 
         const claim = await db.getClaim(claimId);
@@ -302,33 +302,33 @@ export function registerClaimPaymentRoutes(
 
         // Ownership is proven. Only NOW may claim state be consulted.
         if (claim.status !== 'pending_payment') {
-          return res.status(400).json({ error: 'Lazima kwanza uthibitishwe na wakala kabla ya kulipa. / You must be confirmed by the agent in person before you can pay.' });
+          return res.status(400).json({ error: 'You must be confirmed by the agent in person before you can pay.' });
         }
         const freshClaim = await checkClaimExpiry(claim);
         if (!freshClaim || freshClaim.status !== 'pending_payment') {
-          return res.status(410).json({ error: 'Muda wa malipo umeisha. / The payment window has expired.' });
+          return res.status(410).json({ error: 'The payment window has expired.' });
         }
 
         const session = await db.getPaymentSessionById(sessionId);
         if (!session) {
-          return res.status(404).json({ error: 'Session ya malipo haikupatikana. / Payment session not found.' });
+          return res.status(404).json({ error: 'Payment session not found.' });
         }
         // A payment session is bound to exactly ONE claim. Refuse any attempt to
         // use a session opened for a different claim.
         if (session.claim_id !== claimId) {
-          return res.status(403).json({ error: 'Session ya malipo haihusiani na claim hii. / This payment session does not belong to this claim.' });
+          return res.status(403).json({ error: 'This payment session does not belong to this claim.' });
         }
         if (['confirmed', 'failed', 'cancelled', 'expired'].includes(session.status)) {
-          return res.status(409).json({ error: 'Session ya malipo haitumiki tena. / This payment session is no longer usable.' });
+          return res.status(409).json({ error: 'This payment session is no longer usable.' });
         }
         if (new Date(session.expires_at).getTime() < Date.now()) {
           await db.expirePaymentSession(sessionId);
-          return res.status(410).json({ error: 'Muda wa session ya malipo umeisha. / The payment session has expired.' });
+          return res.status(410).json({ error: 'The payment session has expired.' });
         }
 
         const item = await db.getItem(claim.item_id);
         if (!item) {
-          return res.status(404).json({ error: 'Bidhaa inayodaiwa haikupatikana.' });
+          return res.status(404).json({ error: 'The claimed item could not be found.' });
         }
         const claimability = await canCreateClaim(item);
         if (!claimability.allowed) {
@@ -346,7 +346,7 @@ export function registerClaimPaymentRoutes(
           if (stillActive) {
             return res.json({ success: true, paymentSession: toSafePaymentSession(current), alreadyInitiated: true });
           }
-          return res.status(409).json({ error: 'Session ya malipo haikuweza kuanzishwa. / The payment session could not be initiated.' });
+          return res.status(409).json({ error: 'The payment session could not be initiated.' });
         }
 
         // Authoritative amount and payer phone come from the session, never the body.
@@ -357,7 +357,7 @@ export function registerClaimPaymentRoutes(
         );
         if (!paymentResult.success) {
           await db.markPaymentSessionFailed(sessionId, paymentResult.message || 'STK initiation failed');
-          return res.status(400).json({ error: paymentResult.message || 'Malipo hayakufaulu, jaribu tena.' });
+          return res.status(400).json({ error: paymentResult.message || 'The payment did not go through. Please try again.' });
         }
 
         await db.finalizePaymentSessionInitiated(sessionId, paymentResult.checkoutRequestId, paymentResult.mpesaReceiptCode);
@@ -382,12 +382,12 @@ export function registerClaimPaymentRoutes(
 
         const session = await db.getPaymentSessionById(sessionId);
         if (!session) {
-          return res.status(404).json({ error: 'Session ya malipo haikupatikana. / Payment session not found.' });
+          return res.status(404).json({ error: 'Payment session not found.' });
         }
         // Cross-claim isolation: this session is simply not visible under another
         // claim's URL.
         if (session.claim_id !== claimId) {
-          return res.status(403).json({ error: 'Session ya malipo haihusiani na claim hii. / This payment session does not belong to this claim.' });
+          return res.status(403).json({ error: 'This payment session does not belong to this claim.' });
         }
 
         // ------------------------------------------------------------------
@@ -481,7 +481,7 @@ export function registerClaimPaymentRoutes(
         // /pickup-details already applies.
         if (!phone) {
           return res.status(400).json({
-            error: 'Nambari ya simu inahitajika. / Phone number is required.'
+            error: 'Phone number is required.'
           });
         }
         const claim = await db.getClaim(claimId);
@@ -496,13 +496,13 @@ export function registerClaimPaymentRoutes(
 
         if (!paymentAuthToken) {
           return res.status(403).json({
-            error: 'Idhini ya malipo imekosekana. Tafadhali omba idhini mpya kabla ya kulipa. / Payment authorization is missing. Please request authorization before paying.'
+            error: 'Payment authorization is missing. Please request authorization before paying.'
           });
         }
         const authRecord = await db.getClaimPaymentAuthToken(claimId);
         if (!authRecord || authRecord.expires_at.getTime() < Date.now() || !timingSafeEqualHex(hashCode(String(paymentAuthToken)), authRecord.token_hash)) {
           return res.status(403).json({
-            error: 'Idhini ya malipo si sahihi au imeisha muda. Tafadhali omba idhini mpya. / Payment authorization is invalid or has expired. Please request a new authorization.'
+            error: 'Payment authorization is invalid or has expired. Please request a new authorization.'
           });
         }
 
@@ -510,13 +510,13 @@ export function registerClaimPaymentRoutes(
         // may claim state be consulted.
         if (claim.status !== 'pending_payment') {
           return res.status(400).json({
-            error: "Lazima kwanza uthibitishwe na wakala kabla ya kulipa. / You must be confirmed by the agent in person before you can pay."
+            error: "You must be confirmed by the agent in person before you can pay."
           });
         }
 
         const item = await db.getItem(claim.item_id);
         if (!item) {
-          return res.status(404).json({ error: 'Bidhaa inayodaiwa haikupatikana.' });
+          return res.status(404).json({ error: 'The claimed item could not be found.' });
         }
 
         // Central claimability rule, re-checked here as defense in depth: an
@@ -532,7 +532,7 @@ export function registerClaimPaymentRoutes(
 
         const category = await db.getCategory(item.category_id);
         if (!category) {
-          return res.status(404).json({ error: 'Ada ya kategoria haikupatikana.' });
+          return res.status(404).json({ error: 'The category fee could not be found.' });
         }
 
         // Authoritative server-side amount — never taken from the client, and
@@ -546,7 +546,7 @@ export function registerClaimPaymentRoutes(
         const paymentResult = await PaymentService.triggerMpesaStkPush(phone || claim.owner_phone, resolvedFee, claimId);
 
         if (!paymentResult.success) {
-          return res.status(400).json({ error: paymentResult.message || 'Malipo hayakufaulu, jaribu tena.' });
+          return res.status(400).json({ error: paymentResult.message || 'The payment did not go through. Please try again.' });
         }
 
         // STK push initiated — claim remains in 'pending_payment' while we wait for
@@ -589,7 +589,7 @@ export function registerClaimPaymentRoutes(
             agent_confirmed_at: updatedClaim.agent_confirmed_at,
           } : null,
           agent: toOwnerSafeAgentView(agent),
-          message: 'Malipo yameanzishwa kikamilifu! Tafadhali weka PIN ya M-Pesa kwenye simu yako ili kukamilisha.',
+          message: 'Payment initiated successfully. Please enter your M-Pesa PIN on your phone to complete it.',
         });
       } catch (e: any) {
         sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
@@ -599,7 +599,7 @@ export function registerClaimPaymentRoutes(
     app.post('/api/claims/lookup', requireCustomerAuth, claimGuessLimiter, async (req, res) => {
       const { claimId, phone } = req.body;
       if (!claimId || !phone) {
-        return res.status(400).json({ error: 'Msimbo wa claim (Claim ID) na nambari ya simu zinahitajika.' });
+        return res.status(400).json({ error: 'The claim ID and phone number are required.' });
       }
 
       try {
@@ -610,7 +610,7 @@ export function registerClaimPaymentRoutes(
         // ONE response object for both ownership failures below — a single shared
         // constant so the two branches can never drift apart again.
         const claimUnavailable = {
-          error: 'Claim haikupatikana au nambari ya simu hailingani. / Claim not found, or the phone number does not match.'
+          error: 'Claim not found, or the phone number does not match.'
         };
 
         const claim = await db.getClaim(cleanClaimId);
@@ -664,21 +664,21 @@ export function registerClaimPaymentRoutes(
 
         const handoverHasOccurred = ['pending_settlement', 'releasing', 'released'].includes(claim.status);
         if (!handoverHasOccurred) {
-          return res.status(400).json({ error: 'Huwezi kutoa ukadiriaji kabla ya bidhaa kukabidhiwa. / You can only rate after the item has actually been handed over.' });
+          return res.status(400).json({ error: 'You can only rate after the item has actually been handed over.' });
         }
 
         const item = await db.getItem(claim.item_id);
         if (!item) {
-          return res.status(404).json({ error: 'Bidhaa inayodaiwa haikupatikana.' });
+          return res.status(404).json({ error: 'The claimed item could not be found.' });
         }
 
         if (!item.assigned_agent_id) {
-          return res.status(400).json({ error: 'Hakuna hub/wakala aliyepangiwa bidhaa hii.' });
+          return res.status(400).json({ error: 'No hub or agent has been assigned to this item.' });
         }
 
         const wonRatingSlot = await db.markClaimRatedIfNotAlready(claimId);
         if (!wonRatingSlot) {
-          return res.status(409).json({ error: 'Dai hili tayari limekadiriwa. / This claim has already been rated.' });
+          return res.status(409).json({ error: 'This claim has already been rated.' });
         }
 
         if (userRating) {

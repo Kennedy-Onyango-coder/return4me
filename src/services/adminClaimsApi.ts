@@ -105,12 +105,12 @@ export function buildClaimsListQuery(
  */
 async function readSafeMessage(response: Response, kind: AdminClaimsApiErrorKind): Promise<string> {
   const fallback: Record<AdminClaimsApiErrorKind, string> = {
-    unauthorized: 'Your admin session has ended. Please sign in again. / Kipindi chako kimeisha. Tafadhali ingia tena.',
-    forbidden: 'Your account is not authorized to view claims. / Akaunti yako hairuhusiwi kuona claim.',
-    not_found: 'Claim not found. / Claim haikupatikana.',
-    invalid: 'The request was rejected as invalid. / Ombi lilikataliwa kwa sababu si sahihi.',
-    server: 'The claims service could not complete the request. Please try again. / Huduma imeshindwa kukamilisha ombi. Tafadhali jaribu tena.',
-    network: 'The claims service could not be reached. Check your connection and try again. / Huduma haifikiki. Angalia mtandao na ujaribu tena.',
+    unauthorized: 'Your admin session has ended. Please sign in again.',
+    forbidden: 'Your account is not authorized to view claims.',
+    not_found: 'Claim not found.',
+    invalid: 'The request was rejected as invalid.',
+    server: 'The claims service could not complete the request. Please try again.',
+    network: 'The claims service could not be reached. Check your connection and try again.',
     aborted: 'Request cancelled.',
   };
 

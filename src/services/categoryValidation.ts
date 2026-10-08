@@ -35,9 +35,9 @@ export const CATEGORY_MESSAGES = {
    * asserts this equals the wording those routes use, so the two can never
    * drift apart.
    */
-  invalid: 'Aina ya kitu haikubaliki. / That item category is not valid.',
-  idFormat: 'ID lazima iwe herufi ndogo na kistari (lowercase-kebab-case) pekee, na isikuwe tupu.',
-  idTooLong: 'ID ya kategoria ni ndefu kupita kiasi (herufi 50 kwa juu). / Category ID is too long (50 characters maximum).',
+  invalid: 'That item category is not valid.',
+  idFormat: 'The ID must be lowercase-kebab-case only, and must not be empty.',
+  idTooLong: 'Category ID is too long (50 characters maximum).',
 } as const;
 
 /**
@@ -119,7 +119,7 @@ export interface CategoryNumberRule {
 
 function numberError(field: string, rule: CategoryNumberRule): string {
   const range = rule.max === undefined ? `>= ${rule.min}` : `${rule.min} - ${rule.max}`;
-  return `${field} si sahihi: lazima iwe nambari halisi (${range}). / ${field} is invalid: it must be a real number (${range}).`;
+  return `${field} is invalid: it must be a real number (${range}).`;
 }
 
 /**

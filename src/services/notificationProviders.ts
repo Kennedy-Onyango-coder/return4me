@@ -84,7 +84,7 @@ export interface SmsProvider {
    * differently:
    *
    *   code present  -> sendCodeViaSms(), which builds the live body ITSELF from
-   *                    the code ("Msimbo wako wa Return4me ni <code>…"). The
+   *                    the code ("Your Return4me code is <code>…"). The
    *                    caller's `message` is only a dev/sandbox log line.
    *   code absent   -> AuthService.sendSms(), which sends `message` verbatim as
    *                    the live body. Used by the pickup-code notification,
@@ -92,7 +92,7 @@ export interface SmsProvider {
    *
    * N5's original adapter hard-coded `code: ''`, which is correct only for the
    * second seam. Routing a code-bearing OTP through it would have produced a
-   * live SMS reading "Msimbo wako wa Return4me ni ." — an SMS that costs money,
+   * live SMS reading "Your Return4me code is." — an SMS that costs money,
    * is accepted by the provider, and reaches the handset with no code in it.
    * The distinction has to be carried across the boundary, not guessed at.
    */

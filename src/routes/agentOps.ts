@@ -181,15 +181,15 @@ export function registerAgentOperationalRoutes(
     try {
       const item = await db.getItem(dropoffCode);
       if (!item) {
-        return res.status(404).json({ error: 'Msimbo wa kuwasilisha (Drop-off code) si sahihi.' });
+        return res.status(404).json({ error: 'The drop-off code is not correct.' });
       }
 
       if (item.assigned_agent_id !== req.user.agentId) {
-        return res.status(403).json({ error: 'Bidhaa hii haijapangiwa physical hub yako.' });
+        return res.status(403).json({ error: 'This item is not assigned to your hub.' });
       }
 
       if (item.status !== 'awaiting_dropoff') {
-        return res.status(400).json({ error: `Bidhaa hii tayari imeshughulikiwa. Hali ya sasa: ${item.status}` });
+        return res.status(400).json({ error: `This item has already been handled. Current status: ${item.status}` });
       }
 
       if (!categoryId || !foundArea) {
@@ -249,11 +249,11 @@ export function registerAgentOperationalRoutes(
     try {
       const item = await db.getItem(dropoffCode);
       if (!item) {
-        return res.status(404).json({ error: 'Msimbo wa kuwasilisha (Drop-off code) si sahihi.' });
+        return res.status(404).json({ error: 'The drop-off code is not correct.' });
       }
 
       if (item.assigned_agent_id !== req.user.agentId) {
-        return res.status(403).json({ error: 'Bidhaa hii haijapangiwa physical hub yako.' });
+        return res.status(403).json({ error: 'This item is not assigned to your hub.' });
       }
 
       // The Agent must complete verification (confirm-as-reported or
@@ -261,10 +261,10 @@ export function registerAgentOperationalRoutes(
       // enforced here, server-side, not just by the frontend button
       // sequence, so it can't be bypassed by calling the API directly.
       if (item.verification_status === 'pending') {
-        return res.status(400).json({ error: 'Tafadhali kamilisha uthibitisho wa bidhaa kabla ya kuikubali. / Please complete item verification before approving it.' });
+        return res.status(400).json({ error: 'Please complete item verification before approving it.' });
       }
       if (!item.physically_verified_at) {
-        return res.status(400).json({ error: 'Tafadhali thibitisha kimwili bidhaa hii kabla ya kuikubali. / Please physically verify this item before approving it.' });
+        return res.status(400).json({ error: 'Please physically verify this item before approving it.' });
       }
 
       // SOCIAL MEDIA AUTO-POSTING INTEGRATION POINT:
@@ -311,7 +311,7 @@ export function registerAgentOperationalRoutes(
         console.error('[SOCIAL MEDIA AUTO-POST] Failed to prepare social broadcast details:', e);
       }
 
-      res.json({ success: true, message: 'Uthibitisho umekamilika! Bidhaa sasa ipo salama kwenye hub yako.' });
+      res.json({ success: true, message: 'Verification complete. The item is now safely held at your hub.' });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
@@ -321,24 +321,24 @@ export function registerAgentOperationalRoutes(
     const { dropoffCode, reason } = req.body;
 
     if (!dropoffCode || !reason || !reason.trim() || /^Other:\s*$/i.test(reason.trim())) {
-      return res.status(400).json({ error: 'Msimbo wa drop-off na sababu vinahitajika.' });
+      return res.status(400).json({ error: 'A drop-off code and a reason are required.' });
     }
 
     try {
       const item = await db.getItem(dropoffCode);
       if (!item) {
-        return res.status(404).json({ error: 'Msimbo wa kuwasilisha (Drop-off code) si sahihi.' });
+        return res.status(404).json({ error: 'The drop-off code is not correct.' });
       }
 
       if (item.assigned_agent_id !== req.user.agentId) {
-        return res.status(403).json({ error: 'Bidhaa hii haijapangiwa physical hub yako.' });
+        return res.status(403).json({ error: 'This item is not assigned to your hub.' });
       }
 
       // The rejecting actor is recorded explicitly: this route is an
       // authenticated AGENT action, so it must not be attributed to an
       // administrator nor silently collapsed into "SYSTEM" (see rejectItem).
       await db.rejectItem(dropoffCode, reason, 'AGENT');
-      res.json({ success: true, message: 'Bidhaa imekataliwa na kuondolewa kwenye mfumo.' });
+      res.json({ success: true, message: 'The item was rejected and removed from the queue.' });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
@@ -355,11 +355,11 @@ export function registerAgentOperationalRoutes(
 
       const item = await db.getItem(claim.item_id);
       if (!item || item.assigned_agent_id !== req.user.agentId) {
-        return res.status(403).json({ error: 'Msimbo huu hauhusiani na hub yako.' });
+        return res.status(403).json({ error: 'This code does not belong to your hub.' });
       }
 
       if (claim.status !== 'awaiting_agent_confirmation') {
-        return res.status(400).json({ error: 'Claim lazima iwe kwenye hali ya kusubiri uthibitisho wa wakala kabla ya kuthibitisha.' });
+        return res.status(400).json({ error: 'The claim must be awaiting agent verification before it can be confirmed.' });
       }
 
       // SC-2/SC-8: status change and its audit row now commit together through
@@ -377,7 +377,7 @@ export function registerAgentOperationalRoutes(
       });
       if (!viewingTransition.ok) {
         return res.status(viewingTransition.code === 'NOT_FOUND' ? 404 : 409).json({
-          error: 'Claim hii imeshashughulikiwa hivi punde. Tafadhali pakia upya. / This claim was handled moments ago. Please reload.',
+          error: 'This claim was handled moments ago. Please reload.',
         });
       }
 
@@ -446,12 +446,12 @@ export function registerAgentOperationalRoutes(
 
       const item = await db.getItem(claim.item_id);
       if (!item || item.assigned_agent_id !== req.user.agentId) {
-        return res.status(403).json({ error: 'Msimbo huu hauhusiani na hub yako.' });
+        return res.status(403).json({ error: 'This code does not belong to your hub.' });
       }
 
       const category = await db.getCategory(item.category_id);
       if (!category) {
-        return res.status(404).json({ error: 'Ada ya kategoria haikupatikana.' });
+        return res.status(404).json({ error: 'The category fee could not be found.' });
       }
 
       const agent = await db.getAgent(item.assigned_agent_id);
@@ -460,7 +460,7 @@ export function registerAgentOperationalRoutes(
       }
 
       if (claim.status !== 'escrow_held') {
-        return res.status(400).json({ error: `Huwezi kutoa bidhaa hii. Hali ya sasa ni: ${claim.status}` });
+        return res.status(400).json({ error: `You cannot release this item. Current status: ${claim.status}` });
       }
 
       // Fail-safe: even with money already in escrow, never let the physical
@@ -480,7 +480,7 @@ export function registerAgentOperationalRoutes(
       // SMS/email when payment was confirmed) before releasing any money â€”
       // and, per the fix below, before uploading/storing any photo at all.
       if (!pickupCode || typeof pickupCode !== 'string' || pickupCode.trim() === '') {
-        return res.status(400).json({ error: 'Muulize mmiliki msimbo wake wa siri wa kuchukua bidhaa kabla ya kuendelea. / Ask the owner for their secret pickup code before proceeding.' });
+        return res.status(400).json({ error: 'Ask the owner for their secret pickup code before proceeding.' });
       }
 
       // P0: pickup-code hash verification now happens BEFORE the photo
@@ -495,10 +495,10 @@ export function registerAgentOperationalRoutes(
       // then â€” validate and upload the photo.
       const pickupRecord = await db.getPickupCode(claimId);
       if (!pickupRecord) {
-        return res.status(400).json({ error: 'Msimbo wa kuchukua haujaanzishwa kwa dai hili. / No pickup code has been issued for this claim yet.' });
+        return res.status(400).json({ error: 'No pickup code has been issued for this claim yet.' });
       }
       if (!timingSafeEqualHex(hashCode(pickupCode.trim()), pickupRecord.code_hash)) {
-        return res.status(400).json({ error: 'Msimbo wa siri wa kuchukua si sahihi. Muulize mmiliki tena. / The secret pickup code is incorrect. Ask the owner again.' });
+        return res.status(400).json({ error: 'The secret pickup code is incorrect. Ask the owner again.' });
       }
       await db.markPickupCodeVerified(claimId);
 
@@ -512,14 +512,14 @@ export function registerAgentOperationalRoutes(
       // code has already been confirmed correct â€” see the comment above.
       const { handoverPhotoBase64 } = req.body;
       if (!handoverPhotoBase64 || typeof handoverPhotoBase64 !== 'string' || handoverPhotoBase64.trim() === '') {
-        return res.status(400).json({ error: 'Piga picha ya mdai akiwa na bidhaa kabla ya kutoa. Hii inalinda dhidi ya udanganyifu. / Take a photo of the claimant with the item before handing it over. This protects against fraud.' });
+        return res.status(400).json({ error: 'Take a photo of the claimant with the item before handing it over. This protects against fraud.' });
       }
       let handoverPhotoUrl: string;
       try {
         handoverPhotoUrl = await uploadBase64Image(handoverPhotoBase64, 'handover-evidence');
       } catch (uploadErr: any) {
         console.error('[HANDOVER PHOTO UPLOAD ERROR]:', uploadErr);
-        return res.status(500).json({ error: 'Imeshindikana kupakia picha. Tafadhali jaribu tena. / Failed to upload photo. Please try again.' });
+        return res.status(500).json({ error: 'Failed to upload photo. Please try again.' });
       }
       await db.setHandoverPhoto(claimId, handoverPhotoUrl);
 
@@ -530,7 +530,7 @@ export function registerAgentOperationalRoutes(
       // the rest are rejected here, before anything financial is booked.
       const settlement = await db.enterPendingSettlement(claimId, DISPUTE_WINDOW_MS);
       if (!settlement.success) {
-        return res.status(409).json({ error: settlement.message || 'Dai hili tayari linashughulikiwa au limekwisha kamilika. / This claim is already being processed or has already been completed.' });
+        return res.status(409).json({ error: settlement.message || 'This claim is already being processed or has already been completed.' });
       }
       // BATCH 3 / P6 - customer notification for the completed handover.
       //

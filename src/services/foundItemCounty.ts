@@ -25,8 +25,8 @@ import { resolveCountyName } from '../config/kenyaCounties.ts';
 
 /** Bilingual, user-facing copy. Mirrors the existing route message style. */
 export const FOUND_COUNTY_MESSAGES = {
-  required: 'Tafadhali chagua kaunti ulipopata kitu. / Please choose the county where you found it.',
-  invalid: 'Kaunti haikubaliki. / That county is not a recognised Kenyan county.',
+  required: 'Please choose the county where you found it.',
+  invalid: 'That county is not a recognised Kenyan county.',
 } as const;
 
 export interface FoundCountyResolution {

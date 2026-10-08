@@ -104,7 +104,7 @@ describe('customer registration: validation and hashing', () => {
   });
 
   it('returns a generic success that does not reveal whether the phone or email exists', () => {
-    expect(register).toMatch(/Akaunti imeundwa/);
+    expect(register).toMatch(/Account created/);
     expect(register).not.toMatch(/already registered/i);
   });
 
@@ -152,7 +152,7 @@ describe('customer login: no enumeration, no account creation', () => {
     // "if this account has a verified email, a code went to it; otherwise verify
     // your email first" — which is the same sentence for a registered and an
     // unregistered number.
-    expect(login).toMatch(/Kama akaunti hii ina barua pepe iliyothibitishwa/);
+    expect(login).toMatch(/If this account has a verified email address/);
     expect(login).not.toMatch(/not registered/i);
     expect(login).not.toMatch(/no such account/i);
   });

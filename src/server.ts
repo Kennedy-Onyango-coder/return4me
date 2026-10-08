@@ -16,6 +16,13 @@ import { AuthService, authenticateJWT, generateToken, verifyToken, toE164Kenyan,
 import { encryptTOTPSecret, decryptTOTPSecret, assertTotpEncryptionKeyConfigured } from './services/totpCrypto';
 import { generateRecoveryCodes, hashRecoveryCode, verifyRecoveryCode } from './services/totpRecoveryCodes';
 import { AgentMatchingService, geocodeAddress } from './services/agent';
+// BATCH B — the two halves of the assignment lifecycle that were missing:
+//   matchPendingItemsForOperationalAgent() runs the REAL matcher over the manual
+//   queue at the moment an agent becomes operational,
+//   notifyAgentAssignedToItem() tells the agent, the finder and any live claimant.
+// Both are invoked only from the agent lifecycle points below.
+import { matchPendingItemsForOperationalAgent } from './services/agentAutoAssignment';
+import { notifyAgentAssignedToItem } from './services/agentAssignmentNotifications';
 import { geocodeReverse } from './services/geocoding/index.ts';
 import {
   renderSendPaymentReceivedEmail,
@@ -635,7 +642,7 @@ const adminLoginLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   validate: false,
-  message: { error: 'Jaribio nyingi za kuingia zimefanyika kama msimamizi. Tafadhali subiri dakika 15 kabla ya kujaribu tena.' }
+  message: { error: 'Too many administrator sign-in attempts. Please wait 15 minutes and try again.' }
 });
 
 // Administrative 2FA hardening. Bounded attempts for the security-sensitive 2FA
@@ -651,7 +658,7 @@ const adminTwoFactorLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   validate: false,
-  message: { error: 'Jaribio nyingi za usimamizi wa 2FA zimefanyika. Tafadhali subiri dakika 15 kabla ya kujaribu tena. / Too many 2FA management attempts. Please wait 15 minutes and try again.' }
+  message: { error: 'Too many 2FA management attempts. Please wait 15 minutes and try again.' }
 });
 
 const otpIpLimiter = rateLimit({
@@ -660,7 +667,7 @@ const otpIpLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   validate: false,
-  message: { error: 'Muda mwingi wa maombi ya OTP kutoka kwa anwani hii. Tafadhali subiri kidogo.' }
+  message: { error: 'Too many OTP requests from this address. Please wait a moment.' }
 });
 
 // Defense-in-depth backstop, independent of client IP entirely. The IP-based
@@ -680,7 +687,7 @@ const otpGlobalLimiter = rateLimit({
   legacyHeaders: false,
   validate: false,
   keyGenerator: () => 'global-otp-bucket',
-  message: { error: 'Mfumo umepokea maombi mengi ya OTP kwa sasa. Tafadhali jaribu tena baada ya dakika chache. / The system is currently receiving too many OTP requests. Please try again in a few minutes.' }
+  message: { error: 'The system is currently receiving too many OTP requests. Please try again in a few minutes.' }
 });
 
 const otpPhoneLimiter = rateLimit({
@@ -692,7 +699,7 @@ const otpPhoneLimiter = rateLimit({
   keyGenerator: (req) => {
     return req.body.phone ? String(req.body.phone).trim() : req.ip || 'unknown-ip';
   },
-  message: { error: 'Nambari hii imefikia kikomo cha maombi ya OTP. Tafadhali subiri dakika 5.' }
+  message: { error: 'This number has reached its OTP request limit. Please wait 5 minutes.' }
 });
 
 // P0: POST /api/claims/:id/request-otp used to require only a claim ID â€”
@@ -714,7 +721,7 @@ const otpClaimLimiter = rateLimit({
   legacyHeaders: false,
   validate: false,
   keyGenerator: (req) => `claim-otp:${req.params.id || 'unknown-claim'}`,
-  message: { error: 'Dai hili limefikia kikomo cha maombi ya OTP hivi karibuni. Tafadhali subiri dakika chache. / This claim has reached its OTP request limit recently. Please wait a few minutes.' }
+  message: { error: 'This claim has reached its OTP request limit recently. Please wait a few minutes.' }
 });
 
 const reportLimiter = rateLimit({
@@ -723,7 +730,7 @@ const reportLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   validate: false,
-  message: { error: 'Umekwishatuma ripoti nyingi hivi karibuni. Tafadhali subiri kabla ya kuripoti tena.' }
+  message: { error: 'You have submitted too many reports recently. Please wait before reporting again.' }
 });
 
 // /api/items/analyze triggers a real, paid Gemini/Groq vision-API call per
@@ -740,7 +747,7 @@ const ocrAnalyzeLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   validate: false,
-  message: { error: 'Umekwishajaribu kuchanganua picha mara nyingi mno. Tafadhali subiri kabla ya kujaribu tena. / Too many image analysis attempts. Please wait before trying again.' }
+  message: { error: 'Too many image analysis attempts. Please wait before trying again.' }
 });
 
 const otpVerifyLimiter = rateLimit({
@@ -752,7 +759,7 @@ const otpVerifyLimiter = rateLimit({
   keyGenerator: (req) => {
     return req.body.phone ? String(req.body.phone).trim() : (req.params.id ? String(req.params.id) : req.ip || 'unknown-ip');
   },
-  message: { error: 'Umekwishajaribu msimbo wa OTP mara nyingi mno. Tafadhali subiri kidogo. / Too many OTP verification attempts. Please wait.' }
+  message: { error: 'Too many OTP verification attempts. Please wait.' }
 });
 
 // Claim IDs are 6-digit numeric codes (CLM-100000..CLM-999999 â€” see
@@ -772,7 +779,7 @@ const claimGuessLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   validate: false,
-  message: { error: 'Umejaribu maombi mengi mno ya claim hii hivi karibuni. Tafadhali subiri dakika chache. / Too many claim requests from this connection recently. Please wait a few minutes.' }
+  message: { error: 'Too many claim requests from this connection recently. Please wait a few minutes.' }
 });
 
 // Customer account auth (register/login) is fully unauthenticated and each
@@ -789,7 +796,7 @@ const customerAuthLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   validate: false,
-  message: { error: 'Majaribio mengi ya akaunti kwa sasa. Tafadhali subiri kidogo. / Too many account attempts. Please wait a few minutes.' }
+  message: { error: 'Too many account attempts. Please wait a few minutes.' }
 });
 
 // ACTIVE AGENT AUTHORIZATION: authenticateJWT only proves a token was
@@ -813,19 +820,19 @@ const customerAuthLimiter = rateLimit({
 // re-query.
 function requireActiveAgent(req: Request, res: Response, next: NextFunction) {
   if (req.user?.role !== 'agent' || !req.user.agentId) {
-    return res.status(403).json({ error: 'Ufikiaji umekataliwa. Sio Return4me Agent aliyeidhinishwa.' });
+    return res.status(403).json({ error: 'Access denied. This is not an approved Return4me Agent.' });
   }
   db.getAgent(req.user.agentId)
     .then(agent => {
       if (!isAgentActionable(agent)) {
-        return res.status(403).json({ error: 'Akaunti yako ya Agent bado haijaidhinishwa au imesitishwa.' });
+        return res.status(403).json({ error: 'Your Agent account has not been approved yet, or it has been suspended.' });
       }
       req.activeAgent = agent;
       next();
     })
     .catch(err => {
       console.error('[requireActiveAgent] Failed to verify Agent status:', err);
-      res.status(500).json({ error: 'Imeshindikana kuthibitisha akaunti yako ya Agent.' });
+      res.status(500).json({ error: 'Could not verify your Agent account.' });
     });
 }
 
@@ -864,13 +871,13 @@ function requireCurrentAdminSession(req: Request, res: Response, next: NextFunct
   db.getAdminByUsername(req.user.username)
     .then(admin => {
       if (!isAdminSessionCurrent(admin, req.user!.tokenVersion)) {
-        return res.status(401).json({ error: 'Kikao chako cha msimamizi kimebatilishwa. Tafadhali ingia tena. / Your admin session has been revoked. Please log in again.' });
+        return res.status(401).json({ error: 'Your admin session has been revoked. Please log in again.' });
       }
       next();
     })
     .catch(err => {
       console.error('[requireCurrentAdminSession] Failed to verify admin session:', err);
-      res.status(500).json({ error: 'Imeshindikana kuthibitisha kikao chako.' });
+      res.status(500).json({ error: 'Could not verify your session.' });
     });
 }
 
@@ -894,7 +901,7 @@ function requireCurrentAdminSession(req: Request, res: Response, next: NextFunct
 function sendServerError(res: Response, error: any, context: string) {
   console.error(`[${context}]`, error);
   if (process.env.NODE_ENV === 'production') {
-    res.status(500).json({ error: 'Hitilafu imetokea upande wa seva. Tafadhali jaribu tena baadaye. / A server error occurred. Please try again later.' });
+    res.status(500).json({ error: 'A server error occurred. Please try again later.' });
   } else {
     res.status(500).json({ error: error?.message || String(error) });
   }
@@ -1086,7 +1093,7 @@ async function createApp() {
           if (isDatabaseConnectionError(errorMsg)) {
             originalStatus.call(res, 503);
             return originalJson.call(res, {
-              error: "Huduma haipatikani kwa sasa. Tafadhali jaribu tena baadaye. / Service temporarily unavailable. Please try again shortly."
+              error: "Service temporarily unavailable. Please try again shortly."
             });
           }
           return originalJson.call(res, body);
@@ -1098,7 +1105,7 @@ async function createApp() {
             originalStatus.call(res, 503);
             res.setHeader('Content-Type', 'application/json');
             return originalSend.call(res, JSON.stringify({
-              error: "Huduma haipatikani kwa sasa. Tafadhali jaribu tena baadaye. / Service temporarily unavailable. Please try again shortly."
+              error: "Service temporarily unavailable. Please try again shortly."
             }));
           }
           return originalSend.call(res, body);
@@ -1232,34 +1239,34 @@ async function createApp() {
       const rawEmail = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
 
       if (fullName.length < 2 || fullName.length > 120) {
-        return res.status(400).json({ error: 'Tafadhali weka jina lako kamili. / Please enter your full name.' });
+        return res.status(400).json({ error: 'Please enter your full name.' });
       }
       const phone = toE164Kenyan(rawPhone);
       if (!/^\+254\d{9}$/.test(phone)) {
-        return res.status(400).json({ error: 'Weka nambari sahihi ya simu ya Kenya. / Enter a valid Kenyan phone number.' });
+        return res.status(400).json({ error: 'Enter a valid Kenyan phone number.' });
       }
       // Normalization is deliberately minimal â€” trim + lowercase â€” so the
       // partial unique index compares case-insensitively without inventing
       // canonicalization rules the rest of the product does not share.
       const email = rawEmail.toLowerCase();
       if (rawEmail.length === 0 || rawEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        return res.status(400).json({ error: 'Weka barua pepe sahihi. / Enter a valid email address.' });
+        return res.status(400).json({ error: 'Enter a valid email address.' });
       }
 
       const throttleKey = phone + ':registration';
       if (Date.now() - (customerOtpLastSent.get(throttleKey) || 0) < CUSTOMER_OTP_RESEND_MS) {
-        return res.status(429).json({ error: 'Tafadhali subiri kidogo kabla ya kuomba msimbo mwingine. / Please wait before requesting another code.' });
+        return res.status(429).json({ error: 'Please wait before requesting another code.' });
       }
 
       // A phone that already has an account must not silently attach the new
       // email to it, and must not be distinguishable from any other refusal.
       const existingPhone = await db.getCustomerByPhone(phone);
       if (existingPhone) {
-        return res.status(409).json({ error: 'Akaunti hii tayari ipo. / This account already exists.' });
+        return res.status(409).json({ error: 'This account already exists.' });
       }
       const existingEmail = await db.getCustomerByEmail(email);
       if (existingEmail) {
-        return res.status(409).json({ error: 'Barua pepe hii tayari imetumika. / This email address is already in use.' });
+        return res.status(409).json({ error: 'This email address is already in use.' });
       }
 
       // The account exists but is INACTIVE and unverifiable: it cannot obtain a
@@ -1276,7 +1283,7 @@ async function createApp() {
         // 23505 = the partial unique index rejected a duplicate email. Reported
         // as the same conflict as the pre-check, never as an internal error.
         if (e && (e as any).code === '23505') {
-          return res.status(409).json({ error: 'Barua pepe hii tayari imetumika. / This email address is already in use.' });
+          return res.status(409).json({ error: 'This email address is already in use.' });
         }
         throw e;
       }
@@ -1329,7 +1336,7 @@ async function createApp() {
           `Customer ${customer.id} created pending activation; the activation email was not accepted by the provider. Account remains INACTIVE, no session issued.`
         );
         return res.status(503).json({
-          error: 'Tumaini la barua pepe halikufanikiwa. Tafadhali jaribu tena baadaye. / We could not send the activation email. Please try again later.'
+          error: 'We could not send the activation email. Please try again later.'
         });
       }
 
@@ -1342,7 +1349,7 @@ async function createApp() {
       // Generic on purpose â€” never reveals whether this phone or email exists.
       return res.json({
         success: true,
-        message: 'Akaunti imeundwa. Angalia barua pepe yako kwa kiungo cha kuamilisha. / Account created. Check your email for a link to activate it.'
+        message: 'Account created. Check your email for a link to activate it.'
       });
     } catch (e: any) {
       return sendServerError(res, e, 'CUSTOMER_REGISTER_ERROR');
@@ -1361,14 +1368,14 @@ async function createApp() {
     try {
       const rawToken = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
       if (!rawToken || rawToken.length < 32 || rawToken.length > 128) {
-        return res.status(400).json({ error: 'Kiungo cha kuamilisha si sahihi au kimeisha muda. / The activation link is invalid or has expired.' });
+        return res.status(400).json({ error: 'The activation link is invalid or has expired.' });
       }
 
       const token = await db.getAccountActivationTokenByHash(hashCode(rawToken));
       // ONE generic failure for every reason below â€” unknown hash, wrong
       // account type, wrong purpose, already consumed, expired. The response
       // must not distinguish them, or it becomes a token oracle.
-      const GENERIC = { error: 'Kiungo cha kuamilisha si sahihi au kimeisha muda. / The activation link is invalid or has expired.' };
+      const GENERIC = { error: 'The activation link is invalid or has expired.' };
       if (!token) return res.status(400).json(GENERIC);
       if (token.account_type !== 'customer' || token.purpose !== 'email_activation') {
         return res.status(400).json(GENERIC);
@@ -1438,7 +1445,7 @@ async function createApp() {
       // Length bounds reject obvious garbage before touching the database. The
       // real work is done by the lookup: a 64-hex token cannot be guessed.
       if (!rawToken || rawToken.length < 32 || rawToken.length > 128) {
-        return res.status(400).json({ error: 'Kiungo cha kuamilisha si sahihi au kimeisha muda. / The activation link is invalid or has expired.' });
+        return res.status(400).json({ error: 'The activation link is invalid or has expired.' });
       }
 
       const token = await db.getAccountActivationTokenByHash(hashCode(rawToken));
@@ -1446,7 +1453,7 @@ async function createApp() {
       // type, wrong purpose, already consumed, expired. The response must not
       // distinguish them, or this endpoint becomes a token oracle that can be
       // used to probe which tokens exist.
-      const GENERIC = { error: 'Kiungo cha kuamilisha si sahihi au kimeisha muda. / The activation link is invalid or has expired.' };
+      const GENERIC = { error: 'The activation link is invalid or has expired.' };
       if (!token) return res.status(400).json(GENERIC);
       // ACCOUNT-TYPE AND PURPOSE ISOLATION. A customer token presented here, or
       // a token minted for some other purpose, is refused outright. The check is
@@ -1487,6 +1494,19 @@ async function createApp() {
         `Agent ${updated.id} verified their email. Approval status is unchanged (${updated.status}); no session issued.`
       );
 
+      // BATCH B — PATH 2 OF 3 TO "OPERATIONAL". An already-approved agent whose
+      // new email address was still unverified fails isAgentActionable(), so they
+      // could not be matched to anything. This verification can be the exact
+      // moment they become operational, and the manual queue is re-checked here
+      // for the same reason it is re-checked on approval: the items waiting in it
+      // were waiting for a moment like this one.
+      //
+      // Runs AFTER the audit line, and cannot fail the response: the matcher never
+      // throws and never reports an error to this caller.
+      if (isAgentActionable(updated)) {
+        await matchPendingItemsForOperationalAgent(updated.id);
+      }
+
       // N4 â€” the response reports BOTH axes so the frontend can say something
       // true, and issues NO session. `operational` is exactly the server's own
       // isAgentActionable() verdict, not a client-side guess, so the UI can
@@ -1503,8 +1523,8 @@ async function createApp() {
         // the UI must keep saying so rather than sending them to the Agent Hub.
         operational: isAgentActionable(updated),
         message: updated.status === 'active'
-          ? 'Barua pepe imethibitishwa. Unaweza kuendelea. / Your email is verified. You can continue.'
-          : 'Barua pepe imethibitishwa. Maombi yako bado yasubiri kupitishwa na msimamizi. / Your email is verified. Your application is still awaiting administrator approval.',
+          ? 'Your email is verified. You can continue.'
+          : 'Your email is verified. Your application is still awaiting administrator approval.',
       });
     } catch (e: any) {
       return sendServerError(res, e, 'AGENT_ACTIVATE_ERROR');
@@ -1516,7 +1536,7 @@ async function createApp() {
       const rawPhone = typeof req.body?.phone === 'string' ? req.body.phone.trim() : '';
       const phone = toE164Kenyan(rawPhone);
       if (!/^\+254\d{9}$/.test(phone)) {
-        return res.status(400).json({ error: 'Weka nambari sahihi ya simu ya Kenya. / Enter a valid Kenyan phone number.' });
+        return res.status(400).json({ error: 'Enter a valid Kenyan phone number.' });
       }
 
       const customer = await db.getCustomerByPhone(phone);
@@ -1567,7 +1587,7 @@ async function createApp() {
 
       return res.json({
         success: true,
-        message: 'Kama akaunti hii ina barua pepe iliyothibitishwa, msimbo wa kuingia umetumwa kwake. Vinginevyo, thibitisha barua pepe yako kwanza. / If this account has a verified email address, a sign-in code has been sent to it. Otherwise, verify your email address first.'
+        message: 'If this account has a verified email address, a sign-in code has been sent to it. Otherwise, verify your email address first.'
       });
     } catch (e: any) {
       return sendServerError(res, e, 'CUSTOMER_LOGIN_ERROR');
@@ -1580,37 +1600,37 @@ async function createApp() {
       const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
       const phone = toE164Kenyan(rawPhone);
       if (!/^\+254\d{9}$/.test(phone) || !/^\d{6}$/.test(code)) {
-        return res.status(400).json({ error: 'Msimbo si sahihi au umeisha muda. / The code is invalid or has expired.' });
+        return res.status(400).json({ error: 'The code is invalid or has expired.' });
       }
 
       const otp = await db.getActiveCustomerOtp(phone, 'login');
       if (!otp) {
-        return res.status(400).json({ error: 'Msimbo si sahihi au umeisha muda. / The code is invalid or has expired.' });
+        return res.status(400).json({ error: 'The code is invalid or has expired.' });
       }
       if (new Date(otp.expires_at).getTime() < Date.now()) {
         await db.consumeCustomerOtp(otp.id);
-        return res.status(400).json({ error: 'Msimbo si sahihi au umeisha muda. / The code is invalid or has expired.' });
+        return res.status(400).json({ error: 'The code is invalid or has expired.' });
       }
       if ((otp.attempt_count || 0) >= CUSTOMER_OTP_MAX_ATTEMPTS) {
-        return res.status(429).json({ error: 'Majaribio mengi ya msimbo. Omba msimbo mpya. / Too many attempts. Request a new code.' });
+        return res.status(429).json({ error: 'Too many attempts. Request a new code.' });
       }
       if (!timingSafeEqualHex(otp.code_hash, hashCode(code))) {
         await db.incrementCustomerOtpAttempts(otp.id, CUSTOMER_OTP_MAX_ATTEMPTS);
-        return res.status(400).json({ error: 'Msimbo si sahihi au umeisha muda. / The code is invalid or has expired.' });
+        return res.status(400).json({ error: 'The code is invalid or has expired.' });
       }
       const consumed = await db.consumeCustomerOtp(otp.id);
       if (!consumed) {
-        return res.status(400).json({ error: 'Msimbo si sahihi au umeisha muda. / The code is invalid or has expired.' });
+        return res.status(400).json({ error: 'The code is invalid or has expired.' });
       }
 
       // The server â€” never the browser â€” determines which customer owns this
       // phone. A login code can never create an account.
       const customer = await db.getCustomerByPhone(phone);
       if (!customer) {
-        return res.status(400).json({ error: 'Msimbo si sahihi au umeisha muda. / The code is invalid or has expired.' });
+        return res.status(400).json({ error: 'The code is invalid or has expired.' });
       }
       if (customer.status !== 'active') {
-        return res.status(403).json({ error: 'Akaunti hii haitumiki kwa sasa. / This account is not active.', status: customer.status });
+        return res.status(403).json({ error: 'This account is not active.', status: customer.status });
       }
       // N3 â€” ACTIVATION GATE AT LOGIN.
       //
@@ -1626,7 +1646,7 @@ async function createApp() {
       // requiring legacy users to activate would lock out every existing
       // customer, which is exactly what the grandfathering decision forbids.
       if (customer.email && !customer.email_verified_at) {
-        return res.status(403).json({ error: 'Akaunti yako bado haijasajiliwa. Angalia barua pepe yako. / Your account is not activated yet. Please check your email.' });
+        return res.status(403).json({ error: 'Your account is not activated yet. Please check your email.' });
       }
 
       const rawToken = crypto.randomBytes(32).toString('hex');
@@ -1822,7 +1842,7 @@ async function createApp() {
     try {
       const { phone, purpose, email } = req.body;
       if (!phone) {
-        return res.status(400).json({ error: 'Nambari ya simu inahitajika.' });
+        return res.status(400).json({ error: 'Phone number is required.' });
       }
 
       // E1 — EMAIL DELIVERY. This gateway now serves two journeys with the
@@ -1849,7 +1869,7 @@ async function createApp() {
       const isKenyan = /^(\+254|0)(7|1)[0-9]{8}$/.test(cleanPhone);
       if (!isKenyan) {
         // Same validation message AuthService.requestOTP has always returned.
-        return res.status(400).json({ error: 'Tafadhali weka nambari sahihi ya simu ya Safaricom/Airtel (e.g., 0712345678).' });
+        return res.status(400).json({ error: 'Please enter a valid Safaricom or Airtel phone number (e.g. 0712345678).' });
       }
       const canonicalPhone = toE164Kenyan(cleanPhone);
       const isDeletionPurpose = purpose === 'data_deletion';
@@ -1964,7 +1984,7 @@ async function createApp() {
       // that any number is registered.
       res.json({
         success: true,
-        message: 'Kama akaunti hii ina barua pepe iliyothibitishwa, msimbo wa uthibitisho umetumwa kwake. Vinginevyo, thibitisha barua pepe yako kwanza. / If this account has a verified email address, a verification code has been sent to it. Otherwise, verify your email address first.',
+        message: 'If this account has a verified email address, a verification code has been sent to it. Otherwise, verify your email address first.',
       });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
@@ -1975,7 +1995,7 @@ async function createApp() {
     try {
       const { phone, code, role, businessName, locationAddress, county, administrativeUnitId, latitude, longitude, locationAccuracy, tillNumber, payoutMethodType, nationalId, termsAccepted, contactEmail, shopPhotoBase64, idDocumentPhotoBase64 } = req.body;
       if (!phone || !code) {
-        return res.status(400).json({ error: 'Nambari ya simu na msimbo wa OTP zinahitajika.' });
+        return res.status(400).json({ error: 'A phone number and an OTP code are required.' });
       }
 
       const verification = await AuthService.verifyOTP(phone, code);
@@ -1997,7 +2017,7 @@ async function createApp() {
         } else {
           // Create new agent application
           if (!businessName || !locationAddress || !tillNumber || !nationalId) {
-            return res.status(400).json({ error: 'Tafadhali weka maelezo yote ya biashara ili kujisajili kama Agent.' });
+            return res.status(400).json({ error: 'Please provide all of the business details required to register as an Agent.' });
           }
           const canonicalAgentCounty = resolveCountyName(county);
           const canonicalAgentUnit = canonicalAgentCounty ? resolveAdministrativeUnitId(canonicalAgentCounty, administrativeUnitId) : null;
@@ -2012,7 +2032,7 @@ async function createApp() {
           const safeAccuracy = Number.isFinite(parsedAccuracy) && parsedAccuracy >= 0 ? parsedAccuracy : null;
 
           if (!termsAccepted) {
-            return res.status(400).json({ error: 'Ni lazima ukubali Vigezo na Masharti yetu kabla ya kujisajili.' });
+            return res.status(400).json({ error: 'You must accept our Terms and Conditions before registering.' });
           }
 
           // --- N4: AGENT EMAIL IS REQUIRED FOR NEW REGISTRATIONS ---
@@ -2031,7 +2051,7 @@ async function createApp() {
             rawAgentEmail.length > 254 ||
             !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedAgentEmail)
           ) {
-            return res.status(400).json({ error: 'Weka barua pepe sahihi ya biashara. / Enter a valid business email address.' });
+            return res.status(400).json({ error: 'Enter a valid business email address.' });
           }
 
           // Duplicate check BEFORE the insert, so the common case gets a clean
@@ -2040,7 +2060,7 @@ async function createApp() {
           // below is mandatory, not defensive.
           const emailOwner = await db.getAgentByEmail(normalizedAgentEmail);
           if (emailOwner) {
-            return res.status(409).json({ error: 'Barua pepe hii tayari imetumika. / This email address is already in use.' });
+            return res.status(409).json({ error: 'This email address is already in use.' });
           }
 
           let shopPhotoUrl: string | null = null;
@@ -2048,14 +2068,14 @@ async function createApp() {
 
           if (shopPhotoBase64) {
             if (!isValidImageSignature(shopPhotoBase64)) {
-              return res.status(400).json({ error: 'Aina ya picha ya duka haikubaliki. Pakia picha ya JPEG, PNG, WEBP, au HEIC.' });
+              return res.status(400).json({ error: 'Unsupported shop photo type. Please upload a JPEG, PNG, WEBP or HEIC image.' });
             }
             shopPhotoUrl = await uploadBase64Image(shopPhotoBase64, 'agent-shops');
           }
 
           if (idDocumentPhotoBase64) {
             if (!isValidImageSignature(idDocumentPhotoBase64)) {
-              return res.status(400).json({ error: 'Aina ya picha ya kitambulisho cha wakala haikubaliki. Pakia picha ya JPEG, PNG, WEBP, au HEIC.' });
+              return res.status(400).json({ error: 'Unsupported agent ID image type. Please upload a JPEG, PNG, WEBP or HEIC image.' });
             }
             idPhotoUrl = await uploadBase64Image(idDocumentPhotoBase64, 'agent-ids');
           }
@@ -2111,7 +2131,7 @@ async function createApp() {
             // the same 409 â€” never an internal error, and never a leaked
             // database message.
             if (e && (e as any).code === '23505') {
-              return res.status(409).json({ error: 'Barua pepe hii tayari imetumika. / This email address is already in use.' });
+              return res.status(409).json({ error: 'This email address is already in use.' });
             }
             throw e;
           }
@@ -2190,7 +2210,7 @@ async function createApp() {
               `Agent ${newAgent.id} registered pending approval; the activation email was not accepted by the provider. Email remains UNVERIFIED and no agent session is issued.`
             );
             return res.status(503).json({
-              error: 'Tumaini la barua pepe halikufanikiwa. Tafadhali jaribu tena baadaye. / We could not send the activation email. Please try again later.'
+              error: 'We could not send the activation email. Please try again later.'
             });
           }
 
@@ -2269,21 +2289,21 @@ async function createApp() {
       const password = req.body.password || req.body.passcode;
 
       if (!username || !password) {
-        return res.status(400).json({ error: 'Tafadhali weka jina la mtumiaji na nenosiri.' });
+        return res.status(400).json({ error: 'Please enter your username and password.' });
       }
 
       const admin = await db.getAdminByUsername(username);
       if (!admin) {
-        return res.status(401).json({ error: 'Maelezo yasiyo sahihi ya msimamizi.' });
+        return res.status(401).json({ error: 'Incorrect administrator credentials.' });
       }
 
       if (!admin.is_active) {
-        return res.status(403).json({ error: 'Akaunti hii ya msimamizi imesitishwa.' });
+        return res.status(403).json({ error: 'This administrator account has been suspended.' });
       }
 
       const isMatch = await bcrypt.compare(password, admin.password_hash);
       if (!isMatch) {
-        return res.status(401).json({ error: 'Maelezo yasiyo sahihi ya msimamizi.' });
+        return res.status(401).json({ error: 'Incorrect administrator credentials.' });
       }
 
       // If this admin has 2FA enrolled, password verification alone is not
@@ -2304,7 +2324,7 @@ async function createApp() {
           success: true,
           requiresTwoFactor: true,
           pendingToken,
-          message: 'Weka msimbo wako wa uthibitishaji wa hatua mbili (2FA). / Enter your two-factor authentication code.',
+          message: 'Enter your two-factor authentication code.',
         });
       }
 
@@ -2338,7 +2358,7 @@ async function createApp() {
       });
     } catch (error: any) {
       console.error('[ADMIN LOGIN ERROR]', error);
-      res.status(500).json({ error: 'Hitilafu ya mfumo imetokea wakati wa kuingia.' });
+      res.status(500).json({ error: 'A system error occurred during sign-in.' });
     }
   });
 
@@ -2354,20 +2374,20 @@ async function createApp() {
     try {
       const { pendingToken, code, recoveryCode } = req.body || {};
       if (!pendingToken || (!code && !recoveryCode)) {
-        return res.status(400).json({ error: 'Tokeni na msimbo wa 2FA au msimbo wa akiba zinahitajika. / A pending token plus a 2FA code or recovery code are required.' });
+        return res.status(400).json({ error: 'A pending token plus a 2FA code or recovery code are required.' });
       }
 
       const pendingPayload = verifyToken(pendingToken);
       if (!pendingPayload || pendingPayload.role !== 'admin_pending_2fa') {
-        return res.status(401).json({ error: 'Muda wa kuingia umeisha. Tafadhali anza tena. / Login session expired. Please start over.' });
+        return res.status(401).json({ error: 'Login session expired. Please start over.' });
       }
 
       const admin = await db.getAdminByUsername(pendingPayload.username || '');
       if (!admin || admin.id !== pendingPayload.userId || !admin.is_active) {
-        return res.status(401).json({ error: 'Maelezo yasiyo sahihi ya msimamizi.' });
+        return res.status(401).json({ error: 'Incorrect administrator credentials.' });
       }
       if (!admin.totp_enabled || !admin.totp_secret) {
-        return res.status(400).json({ error: '2FA haijawezeshwa kwa akaunti hii.' });
+        return res.status(400).json({ error: '2FA is not enabled on this account.' });
       }
 
       let verified = false;
@@ -2417,7 +2437,7 @@ async function createApp() {
       if (!verified) {
         // One generic message for every failure mode — never reveals whether a
         // recovery code exists, was already used, or was simply incorrect.
-        return res.status(400).json({ error: 'Msimbo wa uthibitishaji si sahihi. / Incorrect verification code.' });
+        return res.status(400).json({ error: 'Incorrect verification code.' });
       }
 
       await db.updateAdminLastLogin(admin.id);
@@ -2446,7 +2466,7 @@ async function createApp() {
       });
     } catch (error: any) {
       console.error('[ADMIN 2FA VERIFY ERROR]', error);
-      res.status(500).json({ error: 'Hitilafu ya mfumo imetokea wakati wa kuthibitisha 2FA.' });
+      res.status(500).json({ error: 'A system error occurred while verifying 2FA.' });
     }
   });
 
@@ -2463,11 +2483,11 @@ async function createApp() {
   app.post('/api/auth/admin-2fa/setup', authenticateJWT, requireCurrentAdminSession, adminTwoFactorLimiter, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
+        return res.status(403).json({ error: 'Access denied.' });
       }
       const admin = await db.getAdminByUsername(req.user.username || '');
       if (!admin) {
-        return res.status(404).json({ error: 'Msimamizi hakupatikana.' });
+        return res.status(404).json({ error: 'Administrator not found.' });
       }
 
       // Password re-entry. Verified against the existing bcrypt hash. The
@@ -2475,11 +2495,11 @@ async function createApp() {
       // same generic authentication error used elsewhere.
       const { password } = req.body || {};
       if (!password) {
-        return res.status(400).json({ error: 'Nenosiri linahitajika kuanza uwekaji wa 2FA. / Your password is required to begin 2FA enrollment.' });
+        return res.status(400).json({ error: 'Your password is required to begin 2FA enrollment.' });
       }
       const isMatch = await bcrypt.compare(password, admin.password_hash);
       if (!isMatch) {
-        return res.status(401).json({ error: 'Nenosiri si sahihi.' });
+        return res.status(401).json({ error: 'Incorrect password.' });
       }
 
       const secret = new OTPAuth.Secret({ size: 20 });
@@ -2507,7 +2527,7 @@ async function createApp() {
         success: true,
         secret: secret.base32,
         otpauthUrl: totp.toString(),
-        message: 'Skani msimbo wa QR kwa programu yako ya uthibitishaji, kisha thibitisha msimbo ili kuwezesha 2FA. / Scan the QR code with your authenticator app, then confirm a code to enable 2FA.',
+        message: 'Scan the QR code with your authenticator app, then confirm a code to enable 2FA.',
       });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
@@ -2521,22 +2541,22 @@ async function createApp() {
   app.post('/api/auth/admin-2fa/confirm', authenticateJWT, requireCurrentAdminSession, adminTwoFactorLimiter, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
+        return res.status(403).json({ error: 'Access denied.' });
       }
       const { code } = req.body;
       if (!code) {
-        return res.status(400).json({ error: 'Msimbo wa 2FA unahitajika.' });
+        return res.status(400).json({ error: 'A 2FA code is required.' });
       }
       const admin = await db.getAdminByUsername(req.user.username || '');
       if (!admin || !admin.totp_pending_secret) {
-        return res.status(400).json({ error: 'Anza uwekaji wa 2FA kwanza. / Start 2FA setup first.' });
+        return res.status(400).json({ error: 'Start 2FA setup first.' });
       }
 
       let pendingPlaintext: string;
       try {
         pendingPlaintext = decryptTOTPSecret(admin.totp_pending_secret);
       } catch {
-        return res.status(400).json({ error: 'Uwekaji wa 2FA si sahihi. Anza tena. / The 2FA enrollment is invalid. Please start again.' });
+        return res.status(400).json({ error: 'The 2FA enrollment is invalid. Please start again.' });
       }
 
       const totp = new OTPAuth.TOTP({
@@ -2549,7 +2569,7 @@ async function createApp() {
       });
       const delta = totp.validate({ token: String(code).trim(), window: 1 });
       if (delta === null) {
-        return res.status(400).json({ error: 'Msimbo si sahihi. Jaribu tena. / Incorrect code. Please try again.' });
+        return res.status(400).json({ error: 'Incorrect code. Please try again.' });
       }
 
       // Atomically promote the staged secret to active. A false result means a
@@ -2557,7 +2577,7 @@ async function createApp() {
       // read it, so refuse rather than promote a secret we never verified.
       const promoted = await db.promotePendingAdminTotpSecret(admin.id, admin.totp_pending_secret);
       if (!promoted) {
-        return res.status(409).json({ error: 'Uwekaji wa 2FA umebadilika. Tafadhali anza tena. / The 2FA enrollment changed. Please start again.' });
+        return res.status(409).json({ error: 'The 2FA enrollment changed. Please start again.' });
       }
 
       // Issue a fresh set of single-use recovery codes. The PLAINTEXT is returned
@@ -2576,7 +2596,7 @@ async function createApp() {
       res.json({
         success: true,
         recoveryCodes,
-        message: '2FA imewezeshwa kikamilifu kwa akaunti yako. Hifadhi misimbo yako ya akiba sasa; haitaonyeshwa tena. / 2FA has been enabled on your account. Save your recovery codes now; they will not be shown again.',
+        message: '2FA has been enabled on your account. Save your recovery codes now; they will not be shown again.',
       });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
@@ -2591,19 +2611,19 @@ async function createApp() {
   app.post('/api/auth/admin-2fa/disable', authenticateJWT, requireCurrentAdminSession, adminTwoFactorLimiter, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
+        return res.status(403).json({ error: 'Access denied.' });
       }
       const { password } = req.body;
       if (!password) {
-        return res.status(400).json({ error: 'Nenosiri linahitajika kuzima 2FA.' });
+        return res.status(400).json({ error: 'Your password is required to disable 2FA.' });
       }
       const admin = await db.getAdminByUsername(req.user.username || '');
       if (!admin) {
-        return res.status(404).json({ error: 'Msimamizi hakupatikana.' });
+        return res.status(404).json({ error: 'Administrator not found.' });
       }
       const isMatch = await bcrypt.compare(password, admin.password_hash);
       if (!isMatch) {
-        return res.status(401).json({ error: 'Nenosiri si sahihi.' });
+        return res.status(401).json({ error: 'Incorrect password.' });
       }
 
       await db.disableAdminTotp(admin.id);
@@ -2619,7 +2639,7 @@ async function createApp() {
       // removed. No secret, password or recovery code is ever logged here.
       await db.deleteAdminRecoveryCodes(admin.id);
       await db.logAudit(admin.username, 'ADMIN_2FA_DISABLED', 'Admin disabled 2FA on their account.');
-      res.json({ success: true, message: '2FA imezimwa kwa akaunti hii. / 2FA has been disabled on this account.' });
+      res.json({ success: true, message: '2FA has been disabled on this account.' });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
@@ -2629,10 +2649,10 @@ async function createApp() {
   app.post('/api/auth/request-data-deletion', otpVerifyLimiter, async (req, res) => {
     const { phone, code, confirmConsent } = req.body;
     if (!phone || !code) {
-      return res.status(400).json({ error: 'Nambari ya simu na msimbo wa OTP zinahitajika. / Phone number and OTP code are required.' });
+      return res.status(400).json({ error: 'Phone number and OTP code are required.' });
     }
     if (!confirmConsent) {
-      return res.status(400).json({ error: 'Ni lazima uthibitishe idhini ya kufuta data yako ya kibinafsi. / You must confirm consent to delete your personal data.' });
+      return res.status(400).json({ error: 'You must confirm consent to delete your personal data.' });
     }
 
     try {
@@ -2652,7 +2672,7 @@ async function createApp() {
 
       res.json({
         success: true,
-        message: 'Ombi lako la kufuta data limetekelezwa kikamilifu. Data yako yote ya kibinafsi imeondolewa au kufutwa jina (anonymized) kwenye mifumo yetu kwa mujibu wa Sheria ya Ulinzi wa Data ya Kenya, 2019. / Your data erasure request has been executed successfully. All your personal data has been completely removed or anonymized in our systems in accordance with the Kenya Data Protection Act, 2019.'
+        message: 'Your data erasure request has been executed successfully. All your personal data has been completely removed or anonymized in our systems in accordance with the Kenya Data Protection Act, 2019.'
       });
     } catch (e: any) {
       console.error('[DATA DELETION ERROR]', e);
@@ -3389,7 +3409,7 @@ async function createApp() {
   app.get('/api/admin/dashboard', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+        return res.status(403).json({ error: 'Administrator access required.' });
       }
 
       const agents = await db.getAgents();
@@ -3548,11 +3568,25 @@ async function createApp() {
     const agentId = req.params.id;
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
+        return res.status(403).json({ error: 'Access denied.' });
       }
       const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
       await db.approveAgent(agentId, adminIdentifier);
-      res.json({ success: true, message: 'Return4me Agent amethibitishwa na kuruhusiwa kuanza kazi.' });
+
+      // BATCH B — PATH 1 OF 3 TO "OPERATIONAL", and the primary one: an
+      // administrator has just approved this agent (or re-activated a suspended
+      // one). Everything now decided by isAgentActionable() is true, so the items
+      // that have been sitting in the manual-assignment queue because no eligible
+      // agent existed can finally be matched — without an admin having to revisit
+      // each one.
+      //
+      // Placed after approveAgent() so it can only ever act on an approval that has
+      // already committed, and before the response so the call is not cut short by
+      // the request ending. It never throws, so it cannot turn a successful
+      // approval into an error.
+      await matchPendingItemsForOperationalAgent(agentId);
+
+      res.json({ success: true, message: 'The Return4me Agent has been approved and may begin work.' });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
@@ -3567,7 +3601,7 @@ async function createApp() {
     const { latitude, longitude } = req.body;
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
+        return res.status(403).json({ error: 'Access denied.' });
       }
       // PHASE 9D (F3) â€” the SAME shared validator every other coordinate input
       // goes through. Previously this route used a local, lenient numeric
@@ -3578,11 +3612,11 @@ async function createApp() {
       // the same bilingual message.
       const coordinates = normalizeCoordinateInput(latitude, longitude);
       if (!coordinates) {
-        return res.status(400).json({ error: 'Latitude/longitude si sahihi. / Invalid latitude/longitude.' });
+        return res.status(400).json({ error: 'Invalid latitude/longitude.' });
       }
       const agent = await db.getAgent(agentId);
       if (!agent) {
-        return res.status(404).json({ error: 'Agent haikupatikana.' });
+        return res.status(404).json({ error: 'Agent not found.' });
       }
       const updated = await db.updateAgentLocation(agentId, coordinates.latitude, coordinates.longitude);
       await db.logAudit(
@@ -3590,7 +3624,20 @@ async function createApp() {
         'AGENT_LOCATION_MANUALLY_SET',
         `Admin manually set coordinates for agent ${agent.business_name} (${agentId}) to ${coordinates.latitude}, ${coordinates.longitude}`
       );
-      res.json({ success: true, agent: updated, message: 'Mahali pa Agent pamesasishwa. / Agent location updated.' });
+
+      // BATCH B — PATH 3 OF 3 TO "OPERATIONAL". An agent can be fully approved and
+      // email-verified yet still unmatched, because the assignment algorithm has
+      // nothing to measure distance to — which is precisely the gap this route
+      // exists to close. Re-running the matcher here is what keeps "an agent who
+      // gains coverage gets the waiting work" true for the COVERAGE axis as well
+      // as the approval axis.
+      //
+      // Runs after the audit line and before the response, and cannot fail the
+      // response: the matcher never throws. Correcting a coordinate is a normal
+      // admin action, so the manual queue is re-checked whenever it happens.
+      await matchPendingItemsForOperationalAgent(agentId);
+
+      res.json({ success: true, agent: updated, message: 'Agent location updated.' });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
@@ -3607,11 +3654,11 @@ async function createApp() {
   app.get('/api/admin/agents/:id/documents', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
+        return res.status(403).json({ error: 'Access denied.' });
       }
       const agent = await db.getAgent(req.params.id);
       if (!agent) {
-        return res.status(404).json({ error: 'Agent haikupatikana.' });
+        return res.status(404).json({ error: 'Agent not found.' });
       }
       return res.json({ success: true, documents: toAdminSafeAgentDocumentsView(agent) });
     } catch (e: any) {
@@ -3623,11 +3670,11 @@ async function createApp() {
     const agentId = req.params.id;
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
+        return res.status(403).json({ error: 'Access denied.' });
       }
       const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
       await db.suspendAgent(agentId, adminIdentifier);
-      res.json({ success: true, message: 'Return4me Agent amesimamishwa kazi kwa muda.' });
+      res.json({ success: true, message: 'The Return4me Agent has been suspended.' });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
@@ -3638,14 +3685,14 @@ async function createApp() {
     const { reason } = req.body;
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
+        return res.status(403).json({ error: 'Access denied.' });
       }
       if (!reason || typeof reason !== 'string' || reason.trim() === '') {
-        return res.status(400).json({ error: 'Tafadhali weka sababu ya kumpa wakala onyo.' });
+        return res.status(400).json({ error: 'Please provide a reason for warning this Agent.' });
       }
       const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
       const updatedAgent = await db.warnAgent(agentId, reason, adminIdentifier);
-      res.json({ success: true, message: 'Onyo limetumwa kwa wakala kikamilifu.', agent: updatedAgent });
+      res.json({ success: true, message: 'The warning was sent to the Agent successfully.', agent: updatedAgent });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
@@ -3663,22 +3710,22 @@ async function createApp() {
     const { claimId, phone, evidenceText, evidencePhotoBase64 } = req.body;
 
     if (!claimId || !phone) {
-      return res.status(400).json({ error: 'Claim ID na nambari ya simu zinahitajika.' });
+      return res.status(400).json({ error: 'The claim ID and phone number are required.' });
     }
     if ((!evidenceText || !evidenceText.trim()) && !evidencePhotoBase64) {
-      return res.status(400).json({ error: 'Tafadhali toa maelezo au picha kama ushahidi.' });
+      return res.status(400).json({ error: 'Please provide a description or a photo as evidence.' });
     }
 
     try {
       const dispute = await db.getDispute(disputeId);
       if (!dispute) {
-        return res.status(404).json({ error: 'Mzozo haukupatikana.' });
+        return res.status(404).json({ error: 'Dispute not found.' });
       }
       if (dispute.resolved_by || dispute.resolved_at) {
-        return res.status(400).json({ error: 'Mzozo huu tayari umetatuliwa.' });
+        return res.status(400).json({ error: 'This dispute has already been resolved.' });
       }
       if (claimId !== dispute.claimant_1_claim_id && claimId !== dispute.claimant_2_claim_id) {
-        return res.status(403).json({ error: 'Claim hii haihusiani na mzozo huu.' });
+        return res.status(403).json({ error: 'That claim does not belong to this dispute.' });
       }
 
       const claim = await db.getClaim(claimId);
@@ -3692,13 +3739,13 @@ async function createApp() {
       const normalizedInput = toE164Kenyan(String(phone).replace(/\s+/g, ''));
       const normalizedOwner = toE164Kenyan(String(claim.owner_phone || '').replace(/\s+/g, ''));
       if (normalizedInput !== normalizedOwner) {
-        return res.status(403).json({ error: 'Nambari ya simu haiendani na hii claim.' });
+        return res.status(403).json({ error: 'That phone number does not match this claim.' });
       }
 
       let evidencePhotoUrl: string | null = null;
       if (evidencePhotoBase64) {
         if (!isValidImageSignature(evidencePhotoBase64)) {
-          return res.status(400).json({ error: 'Aina ya picha haikubaliki. Pakia JPEG, PNG, WEBP, au HEIC.' });
+          return res.status(400).json({ error: 'Unsupported image type. Please upload a JPEG, PNG, WEBP or HEIC image.' });
         }
         evidencePhotoUrl = await uploadBase64Image(evidencePhotoBase64, 'dispute-evidence');
       }
@@ -3713,7 +3760,7 @@ async function createApp() {
         evidence_photo_url: evidencePhotoUrl,
       });
 
-      res.json({ success: true, evidence, message: 'Ushahidi wako umewasilishwa kwa mafanikio. Msimamizi atauzingatia wakati wa kutatua mzozo.' });
+      res.json({ success: true, evidence, message: 'Your evidence was submitted successfully. An administrator will consider it when resolving the dispute.' });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
@@ -3776,7 +3823,7 @@ async function createApp() {
   app.get('/api/admin/refund-reconciliation', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+        return res.status(403).json({ error: 'Administrator access required.' });
       }
       const claims = await db.getRefundReconciliationClaims();
       const items = claims.map((c) => ({
@@ -3797,21 +3844,21 @@ async function createApp() {
   app.post('/api/admin/refund-reconciliation/:claimId/finalize', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+        return res.status(403).json({ error: 'Administrator access required.' });
       }
       const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
       const claimId = req.params.claimId;
       // Re-derive amount/recipient from the DB â€” never trust the client.
       const found = (await db.getRefundReconciliationClaims()).find((c) => c.claimId === claimId);
       if (!found || !found.ownerPhone) {
-        return res.status(409).json({ error: 'Dai hili halipo katika hali ya refunding. / This claim is not awaiting refund reconciliation.' });
+        return res.status(409).json({ error: 'This claim is not awaiting refund reconciliation.' });
       }
       if (parseFloat(found.refundAmount) <= 0) {
-        return res.status(409).json({ error: 'Kiasi cha kurejesha hakijaweza kubainishwa. / The refund amount could not be resolved.' });
+        return res.status(409).json({ error: 'The refund amount could not be resolved.' });
       }
       const finalized = await db.finalizeClaimRefund(claimId, found.refundAmount, found.ownerPhone, adminIdentifier);
       if (!finalized) {
-        return res.status(409).json({ error: 'Dai hili halikuwa tena katika hali ya refunding. / This claim is no longer in the refunding state.' });
+        return res.status(409).json({ error: 'This claim is no longer in the refunding state.' });
       // BATCH 3 / P9 - customer notification for the completed refund.
       //
       // After the `if (!finalized)` early return, so it runs only where
@@ -3822,7 +3869,7 @@ async function createApp() {
       await produceRefundComplete(claimId);
 
       }
-      res.json({ success: true, message: 'Refund imethibitishwa kuwa imefanyika na dai limekamilishwa. / Refund confirmed executed and claim finalized.' });
+      res.json({ success: true, message: 'Refund confirmed executed and claim finalized.' });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
@@ -3831,7 +3878,7 @@ async function createApp() {
   app.post('/api/admin/refund-reconciliation/:claimId/revert', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+        return res.status(403).json({ error: 'Administrator access required.' });
       }
       const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
       const claimId = req.params.claimId;
@@ -3840,9 +3887,9 @@ async function createApp() {
         : 'Admin confirmed with the provider that the refund was NOT executed';
       const reverted = await db.revertClaimRefundLock(claimId, reason, adminIdentifier);
       if (!reverted) {
-        return res.status(409).json({ error: 'Dai hili halikuwa katika hali ya refunding. / This claim was not in the refunding state.' });
+        return res.status(409).json({ error: 'This claim was not in the refunding state.' });
       }
-      res.json({ success: true, message: 'Urejeshaji umehakikiwa kuwa haukufanyika na dai limefungwa. / Refund confirmed NOT executed and claim closed.' });
+      res.json({ success: true, message: 'Refund confirmed NOT executed and claim closed.' });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
@@ -3862,7 +3909,7 @@ async function createApp() {
 
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
+        return res.status(403).json({ error: 'Access denied.' });
       }
 
       // -----------------------------------------------------------------------
@@ -3897,7 +3944,7 @@ async function createApp() {
       // same accountability standard already applied to stolen-property
       // flags and legal holds elsewhere in the admin API.
       if (assignedAgentId && (!reason || typeof reason !== 'string' || !reason.trim())) {
-        return res.status(400).json({ error: 'Toa sababu ya kupanga Agent huyu. / A reason is required to assign an Agent.' });
+        return res.status(400).json({ error: 'A reason is required to assign an Agent.' });
       }
 
       const existingItem = assignedAgentId ? await db.getItem(itemId) : null;
@@ -3943,6 +3990,36 @@ async function createApp() {
           'MANUAL_AGENT_ASSIGNMENT',
           `Item ${itemId}: agent changed from ${oldAgentId || '(none)'} to ${assignedAgentId} by ${adminIdentifier}. Reason: ${reason.trim()}`
         );
+
+        // BATCH B — THE NOTIFICATION GAP THIS ROUTE HAD.
+        //
+        // A successful manual assignment used to be silent: the values changed
+        // and an audit line was written, but the agent was not told they had work,
+        // the finder was not told their item had a drop-off point, and a claimant
+        // was not told the recovery had an agent. All three had to discover it
+        // themselves.
+        //
+        // Runs strictly AFTER the assignment has committed, and after the audit
+        // line, so the accountable record exists even if a message cannot be
+        // queued. `notifyAgentAssignedToItem` never throws, so this cannot turn a
+        // saved assignment into an error response, and its item/claim-derived
+        // idempotency keys mean re-saving the same assignment (or a retried
+        // request) does not send the messages twice.
+        //
+        // The item and agent are re-read rather than reusing `existingItem`: that
+        // row was fetched BEFORE the update, so it does not yet reflect the
+        // assignment being announced.
+        const [assignedAgent, assignedItem] = await Promise.all([
+          db.getAgent(assignedAgentId),
+          db.getItem(itemId),
+        ]);
+        if (assignedAgent && assignedItem) {
+          await notifyAgentAssignedToItem({
+            item: assignedItem,
+            agent: assignedAgent,
+            trigger: 'admin_manual',
+          });
+        }
       }
 
       res.json({ success: true, message: 'Item manual review completed and saved.' });
@@ -3964,7 +4041,7 @@ async function createApp() {
   app.post('/api/admin/settings/social-publishing-pause', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+        return res.status(403).json({ error: 'Administrator access required.' });
       }
       const { paused } = req.body;
       if (typeof paused !== 'boolean') {
@@ -4022,7 +4099,7 @@ async function createApp() {
       // the notification failure log. This is the same check every other
       // /api/admin route in this file performs.
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
+        return res.status(403).json({ error: 'Access denied.' });
       }
       const statusFilter = String(req.query?.status || '').trim();
       const eventTypeFilter = String(req.query?.eventType || '').trim();
@@ -4078,7 +4155,7 @@ async function createApp() {
     try {
       // REQUIRED inline â€” see the note on the list route above.
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
+        return res.status(403).json({ error: 'Access denied.' });
       }
       const id = String(req.params?.id || '').trim();
       if (!id) return res.status(400).json({ error: 'Notification id is required.' });
@@ -4118,7 +4195,7 @@ async function createApp() {
   app.post('/api/admin/social/:id/retry', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+        return res.status(403).json({ error: 'Administrator access required.' });
       }
       const publicationId = req.params.id;
       const reset = await db.resetSocialPublicationForManualRetry(publicationId);
@@ -4149,7 +4226,7 @@ async function createApp() {
   app.post('/api/admin/settings/pause', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+        return res.status(403).json({ error: 'Administrator access required.' });
       }
       const { scope, paused } = req.body;
       if (typeof paused !== 'boolean') {
@@ -4172,7 +4249,7 @@ async function createApp() {
   app.get('/api/admin/settings/pause-status', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+        return res.status(403).json({ error: 'Administrator access required.' });
       }
       const statuses = await Promise.all(
         PAUSABLE_SCOPES.map(async scope => [scope, await isPlatformOperationPaused(pauseSettingKey(scope))] as const)
@@ -4187,12 +4264,12 @@ async function createApp() {
     const claimId = req.params.id;
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+        return res.status(403).json({ error: 'Administrator access required.' });
       }
       const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
       const won = await db.attemptSettlementRelease(claimId, true);
       if (!won) {
-        return res.status(409).json({ error: 'Dai hili si tayari kwa kuachiliwa (labda tayari limekwisha au lina mzozo). / This claim is not eligible for release (it may already be settled or under dispute).' });
+        return res.status(409).json({ error: 'This claim is not eligible for release (it may already be settled or under dispute).' });
       }
       await db.logAudit(adminIdentifier, 'ADMIN_FORCE_RELEASE_SETTLEMENT', `Admin ${adminIdentifier} force-released settlement for claim ${claimId} ahead of the dispute window.`);
       const result = await executeClaimSettlement(claimId);
@@ -4215,13 +4292,13 @@ async function createApp() {
     const { reason } = req.body;
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+        return res.status(403).json({ error: 'Administrator access required.' });
       }
       if (!reason || typeof reason !== 'string' || !reason.trim()) {
-        return res.status(400).json({ error: 'Toa sababu ya kuweka alama ya wizi. / A reason is required to flag an item as suspected stolen.' });
+        return res.status(400).json({ error: 'A reason is required to flag an item as suspected stolen.' });
       }
       const item = await db.getItem(itemId);
-      if (!item) return res.status(404).json({ error: 'Bidhaa haikupatikana.' });
+      if (!item) return res.status(404).json({ error: 'Item not found.' });
       const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
       await db.setItemReviewStatus(itemId, 'suspected_stolen', reason.trim(), adminIdentifier);
       res.json({ success: true, message: 'Item flagged as suspected stolen. The claim flow is now blocked pending review.' });
@@ -4235,13 +4312,13 @@ async function createApp() {
     const { reason } = req.body;
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+        return res.status(403).json({ error: 'Administrator access required.' });
       }
       if (!reason || typeof reason !== 'string' || !reason.trim()) {
-        return res.status(400).json({ error: 'Toa sababu ya kuweka item hii chini ya uangalizi wa kisheria. / A reason is required to place an item under legal hold.' });
+        return res.status(400).json({ error: 'A reason is required to place an item under legal hold.' });
       }
       const item = await db.getItem(itemId);
-      if (!item) return res.status(404).json({ error: 'Bidhaa haikupatikana.' });
+      if (!item) return res.status(404).json({ error: 'Item not found.' });
       const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
       await db.setItemReviewStatus(itemId, 'legal_hold', reason.trim(), adminIdentifier);
       res.json({ success: true, message: 'Item placed under legal hold. No claim, payment, or handover can proceed while this is active.' });
@@ -4255,12 +4332,12 @@ async function createApp() {
     const { reason } = req.body;
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+        return res.status(403).json({ error: 'Administrator access required.' });
       }
       const item = await db.getItem(itemId);
-      if (!item) return res.status(404).json({ error: 'Bidhaa haikupatikana.' });
+      if (!item) return res.status(404).json({ error: 'Item not found.' });
       if (item.status !== 'suspected_stolen' && item.status !== 'legal_hold') {
-        return res.status(400).json({ error: `Item si chini ya uangalizi. Hali ya sasa: ${item.status}` });
+        return res.status(400).json({ error: `This item is not under legal hold. Current status: ${item.status}` });
       }
       const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
       await db.setItemReviewStatus(itemId, 'at_agent', reason && reason.trim() ? reason.trim() : 'Hold cleared after review.', adminIdentifier);
@@ -4276,12 +4353,12 @@ async function createApp() {
 
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
+        return res.status(403).json({ error: 'Access denied.' });
       }
 
       const item = await db.getItem(itemId);
       if (!item) {
-        return res.status(404).json({ error: 'Bidhaa haikupatikana.' });
+        return res.status(404).json({ error: 'Item not found.' });
       }
 
       // The rejecting administrator is recorded explicitly, so the audit trail
@@ -4299,7 +4376,7 @@ async function createApp() {
 
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
+        return res.status(403).json({ error: 'Access denied.' });
       }
 
       // Record the acting administrator rather than the old hard-coded "ADMIN".
@@ -4314,7 +4391,7 @@ async function createApp() {
   app.get('/api/admin/payment-strikes', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
+        return res.status(403).json({ error: 'Access denied.' });
       }
 
       const strikes = await db.getAllPaymentStrikes();
@@ -4329,7 +4406,7 @@ async function createApp() {
 
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
+        return res.status(403).json({ error: 'Access denied.' });
       }
 
       await db.clearPaymentStrikes(phone, req.user?.username || req.user?.userId || 'admin');
@@ -4349,7 +4426,7 @@ async function createApp() {
   app.get('/api/admin/categories', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+        return res.status(403).json({ error: 'Administrator access required.' });
       }
       const categories = await db.getCategoriesWithUsage();
       res.json(categories);
@@ -4369,7 +4446,7 @@ async function createApp() {
     const { id } = req.params;
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+        return res.status(403).json({ error: 'Administrator access required.' });
       }
 
       const existing = await db.getCategory(id);
@@ -4389,13 +4466,13 @@ async function createApp() {
       if (public_clue_style !== undefined && public_clue_style !== null && public_clue_style !== '') {
         if (!isPublicClueStyle(public_clue_style)) {
           return res.status(400).json({
-            error: `public_clue_style lazima iwe mojawapo ya: ${PUBLIC_CLUE_STYLES.join(', ')}. / public_clue_style must be one of: ${PUBLIC_CLUE_STYLES.join(', ')}.`
+            error: `public_clue_style must be one of: ${PUBLIC_CLUE_STYLES.join(', ')}.`
           });
         }
       }
 
       if (!name_en || typeof name_en !== 'string' || name_en.trim() === '' || !name_sw || typeof name_sw !== 'string' || name_sw.trim() === '') {
-        return res.status(400).json({ error: 'Majina ya kategoria (English & Swahili) lazima yajazwe.' });
+        return res.status(400).json({ error: 'Both category names (English and Swahili) are required.' });
       }
 
       const numTotal = Number(total_fee);
@@ -4404,14 +4481,14 @@ async function createApp() {
       const numPlatform = Number(platform_share);
 
       if (isNaN(numTotal) || numTotal < 0 || isNaN(numFinder) || numFinder < 0 || isNaN(numAgent) || numAgent < 0 || isNaN(numPlatform) || numPlatform < 0) {
-        return res.status(400).json({ error: 'Ada na migao yote lazima iwe nambari inayozidi au sawa na sifuri.' });
+        return res.status(400).json({ error: 'The fee and every share must be numbers greater than or equal to zero.' });
       }
 
       const total = parseFloat(numTotal.toFixed(2));
       const sumShares = parseFloat((numFinder + numAgent + numPlatform).toFixed(2));
       if (total !== sumShares) {
         return res.status(400).json({
-          error: 'Mgao (finder + agent + platform) lazima uwe sawa na jumla ya ada. / Split shares (finder + agent + platform) must sum to total fee exactly.'
+          error: 'Split shares (finder + agent + platform) must sum to total fee exactly.'
         });
       }
 
@@ -4451,7 +4528,7 @@ async function createApp() {
       const pricingModeWasStated = typeof is_admin_modified === 'boolean';
       if (!pricingModeWasStated && flatPricingFieldsChanged) {
         return res.status(400).json({
-          error: 'Umebadilisha ada ya kawaida (Total / Finder / Agent / Platform) bila kutaja mtindo wa bei. / You changed the flat pricing values without stating the pricing mode. Send is_admin_modified: true to make these flat prices authoritative for new items (FLAT / ADMIN OVERRIDE), or is_admin_modified: false to keep pricing computed by the Recovery Fee Engine (in which case these flat values will NOT be used to price anything).'
+          error: 'You changed the flat pricing values without stating the pricing mode. Send is_admin_modified: true to make these flat prices authoritative for new items (FLAT / ADMIN OVERRIDE), or is_admin_modified: false to keep pricing computed by the Recovery Fee Engine (in which case these flat values will NOT be used to price anything).'
         });
       }
 
@@ -4622,13 +4699,13 @@ async function createApp() {
     const { id } = req.params;
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+        return res.status(403).json({ error: 'Administrator access required.' });
       }
 
       const is_active = req.body?.is_active;
       if (typeof is_active !== 'boolean') {
         return res.status(400).json({
-          error: 'is_active lazima iwe true au false. / is_active must be a boolean (true or false).'
+          error: 'is_active must be a boolean (true or false).'
         });
       }
 
@@ -4654,7 +4731,7 @@ async function createApp() {
     const { id } = req.params;
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa hii ni ya Wasimamizi (Admins) tu.' });
+        return res.status(403).json({ error: 'Administrator access required.' });
       }
 
       const existing = await db.getCategory(id);
@@ -4676,7 +4753,7 @@ async function createApp() {
       // is no second list (see isCanonicalCategoryId in db/database.ts).
       if (db.isCanonicalCategoryId(id)) {
         return res.status(409).json({
-          error: 'Kategoria hii ni ya msingi (canonical) na haiwezi kufutwa. Imezimwa (deactivate) badala yake. / This is a canonical category and cannot be deleted. Deactivate it instead.'
+          error: 'This is a canonical category and cannot be deleted. Deactivate it instead.'
         });
       }
 
@@ -4694,11 +4771,11 @@ async function createApp() {
       const references = await db.getCategoryReferenceCounts(id);
       if (references.total > 0) {
         const parts: string[] = [];
-        if (references.items > 0) parts.push(`bidhaa ${references.items}`);
-        if (references.verifiedItems > 0) parts.push(`bidhaa zilizothibitishwa ${references.verifiedItems}`);
-        if (references.lostReports > 0) parts.push(`ripoti za upotevu ${references.lostReports}`);
+        if (references.items > 0) parts.push(`${references.items} report(s)`);
+        if (references.verifiedItems > 0) parts.push(`${references.verifiedItems} verified report(s)`);
+        if (references.lostReports > 0) parts.push(`${references.lostReports} lost report(s)`);
         return res.status(409).json({
-          error: `Haiwezi kufutwa: rekodi ${references.total} zinatumia kategoria hii (${parts.join(', ')}). / Cannot delete: ${references.total} records are using this category (${parts.join(', ')}).`
+          error: `Cannot delete: ${references.total} records are using this category (${parts.join(', ')}).`
         });
       }
 
@@ -4875,10 +4952,10 @@ async function createApp() {
     }
 
     const message =
-      status === 400 ? 'Ombi lako halikuweza kusomwa. Tafadhali angalia muundo wa data. / Your request could not be read. Please check the data format.'
-      : status === 413 ? 'Ombi lako ni kubwa kupita kiasi. / Your request is too large.'
-      : status === 415 ? 'Muundo wa data hautumiki. / Unsupported data format.'
-      : 'Hitilafu imetokea upande wa seva. Tafadhali jaribu tena baadaye. / A server error occurred. Please try again later.';
+      status === 400 ? 'Your request could not be read. Please check the data format.'
+      : status === 413 ? 'Your request is too large.'
+      : status === 415 ? 'Unsupported data format.'
+      : 'A server error occurred. Please try again later.';
 
     return res.status(status).json({ error: message });
   });
@@ -5339,16 +5416,16 @@ async function canCreateClaim(item: FoundItem, preFetchedDisputes?: Dispute[]): 
 // between call sites.
 function claimabilityErrorMessage(reason: string): string {
   const messages: Record<string, string> = {
-    not_physically_verified: 'Bidhaa hii bado haijathibitishwa kimwili na Agent. Tafadhali subiri uthibitisho kabla ya kudai. / This item has not yet been physically verified by an Agent. Please wait for verification before claiming.',
-    suspected_stolen: 'Bidhaa hii inahitaji uthibitisho wa ziada kabla ya kudai. Tafadhali wasiliana na usaidizi. / This item requires additional verification before it can be claimed. Please contact support.',
-    legal_hold: 'Bidhaa hii inahitaji uthibitisho wa ziada kabla ya kudai. Tafadhali wasiliana na usaidizi. / This item requires additional verification before it can be claimed. Please contact support.',
-    flagged_for_review: 'Bidhaa hii bado iko chini ya ukaguzi. Tafadhali jaribu tena baadaye. / This item is still under review. Please try again later.',
-    already_recovered: 'Bidhaa hii tayari imedaiwa na kurejeshwa. / This item has already been claimed and recovered.',
-    no_longer_available: 'Bidhaa hii haipatikani tena. / This item is no longer available.',
-    unresolved_dispute: 'Bidhaa hii ina mzozo wa umiliki ambao bado haujatatuliwa. Hakuna hatua zaidi zinazokubaliwa hadi utatuzi ukamilike. / This item has an unresolved ownership dispute. No further action is accepted until it is resolved.',
-    not_found: 'Bidhaa inayotafutwa haikupatikana.',
+    not_physically_verified: 'This item has not yet been physically verified by an Agent. Please wait for verification before claiming.',
+    suspected_stolen: 'This item requires additional verification before it can be claimed. Please contact support.',
+    legal_hold: 'This item requires additional verification before it can be claimed. Please contact support.',
+    flagged_for_review: 'This item is still under review. Please try again later.',
+    already_recovered: 'This item has already been claimed and recovered.',
+    no_longer_available: 'This item is no longer available.',
+    unresolved_dispute: 'This item has an unresolved ownership dispute. No further action is accepted until it is resolved.',
+    not_found: 'The reported item could not be found.',
   };
-  return messages[reason] || 'Bidhaa hii haiwezi kudaiwa kwa sasa.';
+  return messages[reason] || 'This item cannot be claimed right now.';
 }
 
 async function isSocialPublishingPaused(): Promise<boolean> {
@@ -5388,12 +5465,12 @@ async function isPlatformOperationPaused(settingKey: string): Promise<boolean> {
 }
 
 const PAUSED_MESSAGES: Record<PausableScope, string> = {
-  reports: 'Uwasilishaji wa ripoti mpya umesimamishwa kwa muda na msimamizi. / New item reports are temporarily paused by an administrator. Please try again shortly.',
-  claims: 'Uwasilishaji wa madai mapya umesimamishwa kwa muda na msimamizi. / New claims are temporarily paused by an administrator. Please try again shortly.',
-  payments: 'Malipo yamesimamishwa kwa muda na msimamizi. / Payments are temporarily paused by an administrator. Please try again shortly.',
-  payouts: 'Malipo ya wakala/mtafutaji yamesimamishwa kwa muda na msimamizi. / Agent/Finder payouts are temporarily paused by an administrator.',
-  handovers: 'Ukabidhi wa bidhaa umesimamishwa kwa muda na msimamizi. / Item handovers are temporarily paused by an administrator. Please try again shortly.',
-  social_publishing: 'Uchapishaji wa mitandao ya kijamii umesimamishwa kwa muda na msimamizi. / Social publishing is temporarily paused by an administrator.',
+  reports: 'New item reports are temporarily paused by an administrator. Please try again shortly.',
+  claims: 'New claims are temporarily paused by an administrator. Please try again shortly.',
+  payments: 'Payments are temporarily paused by an administrator. Please try again shortly.',
+  payouts: 'Agent/Finder payouts are temporarily paused by an administrator.',
+  handovers: 'Item handovers are temporarily paused by an administrator. Please try again shortly.',
+  social_publishing: 'Social publishing is temporarily paused by an administrator.',
 };
 
 

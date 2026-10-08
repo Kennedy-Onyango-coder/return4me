@@ -492,12 +492,12 @@ describe('N7-D ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢�
     // THE fidelity trap. sendCodeViaSms composes the live SMS from the code and
     // ignores the caller's message; N5's adapter originally passed code: ''.
     // Routing a code-bearing OTP through it would send a real, billable SMS
-    // reading "Msimbo wako wa Return4me ni ." ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â accepted by the provider,
+    // reading "Your Return4me code is." ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â accepted by the provider,
     // delivered to the handset, and completely useless.
     await sendSmsNotification({
       eventType: 'OWNER_CLAIM_VERIFICATION_CODE', recipient: PHONE,
       issuanceId: nextIssuance(), seam: 'code', code: '8412',
-      message: 'Msimbo mpya wa thibitisho la claim umetumwa.',
+      message: 'A new claim verification code has been sent.',
     });
     expect(smsSent).toHaveLength(1);
     expect(smsSent[0].code).toBe('8412');

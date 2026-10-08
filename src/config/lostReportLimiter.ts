@@ -49,7 +49,7 @@ export function createLostReportIpLimiter(
     overrides?.max ?? LOST_REPORT_IP_MAX,
     overrides?.windowMs ?? LOST_REPORT_WINDOW_MS,
     undefined,
-    'Maombi mengi ya kuripoti bidhaa iliyopotea. Tafadhali subiri dakika chache. / Too many lost-item report attempts. Please wait a few minutes.',
+    'Too many lost-item report attempts. Please wait a few minutes.',
     false
   );
 }
@@ -64,7 +64,7 @@ export function createLostReportCustomerLimiter(
     // before this limiter, so the bucket follows the authenticated account —
     // never a value the caller could choose.
     (req: any) => `lost-report-customer:${req?.customer?.id || req.ip || 'unknown'}`,
-    'Umeripoti bidhaa zilizopotea mara nyingi mno hivi karibuni. Tafadhali subiri dakika chache. / You have filed too many lost-item reports recently. Please wait a few minutes.',
+    'You have filed too many lost-item reports recently. Please wait a few minutes.',
     true
   );
 }
@@ -99,7 +99,7 @@ export function createLostReportMatchIpLimiter(
     overrides?.max ?? LOST_REPORT_MATCH_IP_MAX,
     overrides?.windowMs ?? LOST_REPORT_MATCH_WINDOW_MS,
     undefined,
-    'Maombi mengi ya kutafuta mechi. Tafadhali subiri dakika chache. / Too many match lookups. Please wait a few minutes.',
+    'Too many match lookups. Please wait a few minutes.',
     false
   );
 }
@@ -113,7 +113,7 @@ export function createLostReportMatchCustomerLimiter(
     // req.customer is set by requireCustomerAuth, mounted immediately before
     // this limiter, so the bucket follows the authenticated account.
     (req: any) => `lost-report-match:${req?.customer?.id || req.ip || 'unknown'}`,
-    'Umetafuta mechi mara nyingi mno hivi karibuni. Tafadhali subiri dakika chache. / You have looked up matches too many times recently. Please wait a few minutes.',
+    'You have looked up matches too many times recently. Please wait a few minutes.',
     true
   );
 }

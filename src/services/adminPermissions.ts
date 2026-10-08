@@ -64,7 +64,7 @@ export function adminHasPermission(user: any, permission: string): boolean {
 
 /**
  * Express middleware factory. Denies with 403 using the repository's existing
- * 403 body (`{ error: 'Ruhusa imekataliwa.' }`, identical to every other admin
+ * 403 body (`{ error: 'Access denied.' }`, identical to every other admin
  * route) so the console's error handling needs no special case.
  *
  * Checks `role === 'admin'` as well: a token whose role is not `admin` (e.g.
@@ -77,7 +77,7 @@ export function adminHasPermission(user: any, permission: string): boolean {
 export function requireAdminPermission(permission: string) {
   return function adminPermissionGuard(req: any, res: any, next: any) {
     if (req.user?.role !== 'admin' || !adminHasPermission(req.user, permission)) {
-      return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
+      return res.status(403).json({ error: 'Access denied.' });
     }
     return next();
   };

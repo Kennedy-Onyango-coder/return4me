@@ -203,7 +203,7 @@ export function verifyToken(token: string): SessionPayload | null {
 // --- AUTH SERVICES ---
 
 export const SMS_UNAVAILABLE_MESSAGE =
-  'Imeshindwa kutuma SMS. Tafadhali jaribu tena au tumia njia nyingine. / SMS delivery is temporarily unavailable. Please try again or use another method.';
+  'SMS delivery is temporarily unavailable. Please try again or use another method.';
 
 /**
  * EMAIL-FIRST LAUNCH — the message for the OTHER reason a code cannot be sent.
@@ -230,7 +230,7 @@ export const SMS_UNAVAILABLE_MESSAGE =
  * with the sender's own gate.
  */
 export const SMS_NOT_ENABLED_MESSAGE =
-  'Huduma ya msimbo kwa SMS haijawashwa kwenye mfumo huu, kwa hivyo hatukuweza kutuma msimbo. Tafadhali wasiliana na msaada wa Return4me. / SMS code delivery is not switched on for this service, so we could not send a code. Please contact Return4me support.';
+  'SMS code delivery is not switched on for this service, so we could not send a code. Please contact Return4me support.';
 
 /**
  * The ONE predicate that answers "is live SMS switched on?".
@@ -356,7 +356,7 @@ export async function sendCodeViaSms(cleanPhone: string, code: string, label: st
   console.log(`[SMS ${label} GATEWAY] Sending live SMS via Africa's Talking to ${maskPhoneForLog(cleanPhone)}`);
   const options: any = {
     to: [toE164Kenyan(cleanPhone)],
-    message: `Msimbo wako wa Return4me ni ${code}. Tafadhali usimshirikishe mtu yeyote. Muda wake unaisha baada ya dakika 5.`,
+    message: `Your Return4me code is ${code}. Do not share it with anyone. It expires after 5 minutes.`,
   };
   if (atSenderId && !atSenderId.includes('REPLACE_WITH') && atSenderId.trim() !== '') {
     options.from = atSenderId;
@@ -417,7 +417,7 @@ export const AuthService = {
     const cleanPhone = phone.replace(/\s+/g, '');
     const isKenyan = /^(\+254|0)(7|1)[0-9]{8}$/.test(cleanPhone);
     if (!isKenyan) {
-      return { success: false, message: 'Tafadhali weka nambari sahihi ya simu ya Safaricom/Airtel (e.g., 0712345678).' };
+      return { success: false, message: 'Please enter a valid Safaricom or Airtel phone number (e.g. 0712345678).' };
     }
 
     // Canonicalize to a single E.164 form once, at the store boundary, so the
@@ -436,7 +436,7 @@ export const AuthService = {
     // N7: the delivery seam is injected. Code generation, the 5-minute expiry,
     // the canonical E.164 store key and the persist-then-send ordering above are
     // untouched — the migration changes transport, not business logic.
-    return dispatch(canonicalPhone, code, 'OTP', `Msimbo wa OTP umetumwa kwa nambari yako ya simu ya ${canonicalPhone}.`);
+    return dispatch(canonicalPhone, code, 'OTP', `An OTP code has been sent to your phone number ${canonicalPhone}.`);
   },
 
   // Verify OTP code with automatic brute-force invalidation after 5 attempts.
@@ -449,12 +449,12 @@ export const AuthService = {
     const record = await db.getOtp(canonicalPhone);
 
     if (!record) {
-      return { success: false, message: 'Hakuna OTP iliyoombwa kwa nambari hii au muda wake umeisha. / No OTP requested for this phone or it has expired.' };
+      return { success: false, message: 'No OTP requested for this phone or it has expired.' };
     }
 
     if (record.expires_at.getTime() < Date.now()) {
       await db.deleteOtp(canonicalPhone);
-      return { success: false, message: 'Muda wa OTP umeisha. Tafadhali omba msimbo mpya. / OTP has expired. Please request a new code.' };
+      return { success: false, message: 'OTP has expired. Please request a new code.' };
     }
 
     const isMockBypass = (
@@ -469,18 +469,18 @@ export const AuthService = {
         await db.deleteOtp(canonicalPhone);
         return {
           success: false,
-          message: 'Umekosea msimbo wa OTP mara 5. OTP hii imefutwa kwa usalama wako. Tafadhali omba msimbo mpya. / You have entered the wrong OTP 5 times. This OTP has been invalidated for security. Please request a new code.'
+          message: 'You have entered the wrong OTP 5 times. This OTP has been invalidated for security. Please request a new code.'
         };
       }
       return {
         success: false,
-        message: `Msimbo wa OTP si sahihi. Una fursa ${5 - attempts} zilizobaki. / Incorrect OTP code. You have ${5 - attempts} attempts remaining.`
+        message: `Incorrect OTP code. You have ${5 - attempts} attempts remaining.`
       };
     }
 
     // Success! Clear OTP
     await db.deleteOtp(canonicalPhone);
-    return { success: true, message: 'Msimbo umethibitishwa kikamilifu! / Code successfully verified!' };
+    return { success: true, message: 'Code successfully verified!' };
   },
 
   // Reusable low-level SMS sender (falls back to console logging in sandbox
@@ -595,14 +595,14 @@ export function isAdminSessionCurrent(
 export function authenticateJWT(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Ufikiaji umekataliwa. Tafadhali ingia katika akaunti yako.' });
+    return res.status(401).json({ error: 'Access denied. Please sign in to your account.' });
   }
 
   const token = authHeader.split(' ')[1];
   const payload = verifyToken(token);
 
   if (!payload) {
-    return res.status(403).json({ error: 'Muda wako wa kuingia umeisha. Tafadhali ingia tena.' });
+    return res.status(403).json({ error: 'Your session has expired. Please sign in again.' });
   }
 
   req.user = payload; // Inject verified user session data

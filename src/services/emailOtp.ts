@@ -39,7 +39,7 @@ import {
   emailCallout,
   emailCodeBlock,
   emailDetails,
-  emailDivider,
+
   emailHeading,
   emailKicker,
   emailNote,
@@ -57,7 +57,7 @@ export function newEmailOtpIssuanceId(prefix: string): EmailOtpIssuanceId {
 }
 
 /**
- * Which journey the code belongs to. Chooses the bilingual copy ONLY - never
+ * Which journey the code belongs to. Chooses the copy ONLY - never
  * the destination, the event type or the policy, all of which are decided by
  * the caller and the catalogue respectively.
  */
@@ -73,14 +73,14 @@ export type EmailOtpPurpose =
 
 /**
  * Channel-neutral failure wording for routes to surface on a provider refusal.
- * Bilingual, never names internal policy (duplicate / rate-limited / provider).
+ * English only, and never names internal policy (duplicate / rate-limited / provider).
  */
 export const EMAIL_OTP_UNAVAILABLE_MESSAGE =
-  'Imeshindwa kutuma msimbo kwa barua pepe kwa sasa. Tafadhali jaribu tena baadaye. / The code could not be emailed right now. Please try again later.';
+  'The code could not be emailed right now. Please try again later.';
 
 /**
  * Fail-closed wording for a caller that proved everything it could prove but
- * whose account has no verified email address to send to. Bilingual, generic,
+ * whose account has no verified email address to send to. English, generic,
  * and deliberately does not say WHICH account it is about.
  *
  * WHY IT NAMES A RECOVERY PATH (final review, Issue 2)
@@ -105,7 +105,7 @@ export const EMAIL_OTP_UNAVAILABLE_MESSAGE =
  *   the same kind of untruth as SMS_NOT_ENABLED_MESSAGE above exists to avoid.
  */
 export const EMAIL_VERIFICATION_REQUIRED_MESSAGE =
-  'Akaunti hii inahitaji barua pepe iliyothibitishwa kwanza. Ingia kwenye akaunti yako ya Return4me na uthibitishe barua pepe yako, au wasiliana na support@return4me.co.ke kwa msaada. / This account needs a verified email address first. Sign in to your Return4me account and verify your email address, or contact support@return4me.co.ke for help.';
+  'This account needs a verified email address first. Sign in to your Return4me account and verify your email address, or contact support@return4me.co.ke for help.';
 
 /** Shape check. Deliberately stricter than "contains an @". */
 const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -127,20 +127,16 @@ interface EmailOtpCopy {
   preheader: string;
   kicker: string;
   headingEn: string;
-  headingSw: string;
   introEn: string;
-  introSw: string;
   codeLabelEn: string;
-  codeLabelSw: string;
   hintEn: string;
-  hintSw: string;
   /** null => the code does not age out on a timer (pickup code). */
   expiresInMinutes: number | null;
   footerNote: string;
 }
 
 /**
- * Per-journey copy. Every string is bilingual (English, divider, Kiswahili) and
+ * Per-journey copy. Every string is English and
  * says only what is true: where the code went ("your verified email address" -
  * never the address itself, which the durable record must not echo), how long
  * it lasts, and that staff will never ask for it.
@@ -149,129 +145,97 @@ function copyFor(purpose: EmailOtpPurpose): EmailOtpCopy {
   switch (purpose) {
     case 'customer_login':
       return {
-        subject: 'Your Return4me sign-in code / Msimbo wako wa kuingia - Return4me',
+        subject: 'Your Return4me sign-in code - Return4me',
         preheader: 'Use this one-time code to sign in to your Return4me account.',
         kicker: 'Sign-in code',
         headingEn: 'Your sign-in code',
-        headingSw: 'Msimbo wako wa kuingia',
         introEn: 'Use the code below to sign in to your Return4me account. It was sent to your verified email address, which is where your account is verified.',
-        introSw: 'Tumia msimbo hapa chini kuingia kwenye akaunti yako ya Return4me. Umetumwa kwenye barua pepe iliyothibitishwa, ambapo akaunti yako iliyothibitishwa.',
         codeLabelEn: 'Sign-in code',
-        codeLabelSw: 'Msimbo wa kuingia',
         hintEn: 'Valid for 5 minutes. If you did not ask for this, ignore this email - nobody can sign in without the code.',
-        hintSw: 'Halali kwa dakika 5. Hukuomba wewe, kupuuza barua pepe hii - mtu hawezi kuingia bila msimbo.',
         expiresInMinutes: 5,
         footerNote: 'Return4me never asks for a sign-in code by phone, SMS or social media.',
       };
     case 'agent_login':
       return {
-        subject: 'Your Return4me verification code / Msimbo wako wa uthibitisho - Return4me',
+        subject: 'Your Return4me verification code - Return4me',
         preheader: 'Use this one-time code to continue to the Return4me Agent Hub.',
         kicker: 'Agent verification',
         headingEn: 'Your verification code',
-        headingSw: 'Msimbo wako wa uthibitisho',
         introEn: 'Use the code below to continue signing in, or to finish creating your Return4me agent account. It was sent to the verified email address on the account.',
-        introSw: 'Tumia msimbo hapa chini kuendelea kuingia, au kumaliza kuunda akaunti yako ya wakala wa Return4me. Umetumwa kwenye barua pepe iliyothibitishwa kwenye akaunti.',
         codeLabelEn: 'Verification code',
-        codeLabelSw: 'Msimbo wa uthibitisho',
         hintEn: 'Valid for 5 minutes. Return4me staff will never ask you for this code.',
-        hintSw: 'Halali kwa dakika 5. Wafanyakazi wa Return4me hawatawahi kuomba msimbo huu.',
         expiresInMinutes: 5,
         footerNote: 'Return4me never asks for a verification code by phone call or social media.',
       };
     case 'account_deletion':
       return {
-        subject: 'Confirm your data deletion / Thibitisha ufutaji wa data yako - Return4me',
+        subject: 'Confirm your data deletion - Return4me',
         preheader: 'This one-time code confirms it is really you requesting erasure.',
         kicker: 'Data erasure',
         headingEn: 'Confirm your data deletion',
-        headingSw: 'Thibitisha ufutaji wa data yako',
         introEn: 'The code below confirms that you - and only you - asked Return4me to delete your personal data. It was sent to your verified email address.',
-        introSw: 'Msimbo hapa chini unathibitisha kwamba wewe - na wewe pekee - uliomba Return4me ifute data yako ya binafsi. Umetumwa kwenye barua pepe iliyothibitishwa.',
         codeLabelEn: 'Deletion confirmation code',
-        codeLabelSw: 'Msimbo wa uthibitisho wa ufutaji',
         hintEn: 'Valid for 5 minutes. If you did not request deletion, ignore this email and nothing will be deleted.',
-        hintSw: 'Halali kwa dakika 5. Hukuomba ufutaji, kupuuza barua pepe hii na hakutafutwa kitu.',
         expiresInMinutes: 5,
-        footerNote: 'Erasure is permanent once confirmed. / Ufutaji ni wa kudumu ukithibitishwa.',
+        footerNote: 'Erasure is permanent once confirmed.',
       };
     case 'claim_verification':
       return {
-        subject: 'Your Return4me claim code / Msimbo wako wa claim - Return4me',
+        subject: 'Your Return4me claim code - Return4me',
         preheader: 'Use this one-time code to verify ownership of your claim.',
         kicker: 'Claim verification',
         headingEn: 'Your claim verification code',
-        headingSw: 'Msimbo wako wa uthibitisho wa claim',
         introEn: 'Use the code below to verify that you own the claim you are tracking. It was sent to the verified email address registered on the owner account.',
-        introSw: 'Tumia msimbo hapa chini kuthibitisha kwamba wewe ni mmiliki wa claim unayofuatilia. Umetumwa kwenye barua pepe iliyothibitishwa iliyosajiliwa kwenye akaunti ya mmiliki.',
         codeLabelEn: 'Claim verification code',
-        codeLabelSw: 'Msimbo wa uthibitisho wa claim',
         hintEn: 'Valid for 5 minutes. Never share this code - it moves the claim to the next stage.',
-        hintSw: 'Halali kwa dakika 5. Usishiriki msimbo huu - husogeza claim hatua inayofuata.',
         expiresInMinutes: 5,
         footerNote: 'Return4me never asks for a claim code before you are physically at the agent hub.',
       };
     case 'claim_link':
       return {
-        subject: 'Link this claim to your account / Unganisha claim na akaunti yako - Return4me',
+        subject: 'Link this claim to your account - Return4me',
         preheader: 'This one-time code links the claim to your Return4me account.',
         kicker: 'Claim linking',
         headingEn: 'Your claim-linking code',
-        headingSw: 'Msimbo wa kuunganisha claim',
         introEn: 'Use the code below to link this claim to your Return4me account. It was sent to your verified email address.',
-        introSw: 'Tumia msimbo hapa chini kuunganisha claim hii na akaunti yako ya Return4me. Umetumwa kwenye barua pepe iliyothibitishwa.',
         codeLabelEn: 'Linking code',
-        codeLabelSw: 'Msimbo wa kuunganisha',
         hintEn: 'Valid for 5 minutes and usable once.',
-        hintSw: 'Halali kwa dakika 5 na inatumika mara moja.',
         expiresInMinutes: 5,
         footerNote: 'Linking is optional and can be undone from your dashboard.',
       };
     case 'identity_change_phone':
       return {
-        subject: 'Authorize your phone change / Idhini ya kubadilisha simu yako - Return4me',
+        subject: 'Authorize your phone change - Return4me',
         preheader: 'This one-time code authorizes the phone number change on your account.',
         kicker: 'Account security',
         headingEn: 'Authorize the phone change',
-        headingSw: 'Idhini ya kubadilisha simu',
         introEn: 'The code below authorizes changing the phone number on your Return4me account. It was sent to your verified email address. This code does NOT prove the new number works - it proves that you, the account holder, approved the change.',
-        introSw: 'Msimbo hapa chini huruhusu kubadilisha nambari ya simu kwenye akaunti yako ya Return4me. Umetumwa kwenye barua pepe iliyothibitishwa. Msimbo huu HAUUTHIBITISHI kwamba nambari mpya inafanya kazi - unathibitisha kwamba wewe, mmiliki wa akaunti, umeidhinisha mabadiliko.',
         codeLabelEn: 'Phone-change authorization code',
-        codeLabelSw: 'Msimbo wa idhini ya kubadilisha simu',
         hintEn: 'Valid for 30 minutes. If you did not ask to change your phone number, ignore this email - nothing has changed.',
-        hintSw: 'Halali kwa dakika 30. Hukuomba kubadilisha nambari yako ya simu, kupuuza barua pepe hii - hakijabadilika kitu.',
         expiresInMinutes: 30,
         footerNote: 'Your current details stay unchanged until this code is entered.',
       };
     case 'identity_change_email':
       return {
-        subject: 'Confirm your new email address / Thibitisha barua pepe mpya - Return4me',
+        subject: 'Confirm your new email address - Return4me',
         preheader: 'This one-time code confirms the new email address for your account.',
         kicker: 'Account security',
         headingEn: 'Confirm your new email address',
-        headingSw: 'Thibitisha barua pepe mpya',
         introEn: 'The code below confirms the new email address you asked to add to your Return4me account. It was sent to that address so only its owner can confirm it.',
-        introSw: 'Msimbo hapa chini unathibitisha barua pepe mpya uliyoomba kuongeza kwenye akaunti yako ya Return4me. Umetumwa kwenye anwani hiyo ili mmiliki wake pekee aweze kuthibitisha.',
         codeLabelEn: 'Email confirmation code',
-        codeLabelSw: 'Msimbo wa uthibitisho wa barua pepe',
         hintEn: 'Valid for 30 minutes. Your current email address keeps working until this code is entered.',
-        hintSw: 'Halali kwa dakika 30. Barua pepe yako ya sasa inaendelea kufanya kazi hadi msimbo huu utapigwa.',
         expiresInMinutes: 30,
         footerNote: 'If you did not ask for this change, ignore this email.',
       };
     case 'pickup_code':
       return {
-        subject: 'Your secret pickup code / Msimbo wako wa siri wa kuchukua - Return4me',
+        subject: 'Your secret pickup code - Return4me',
         preheader: 'Read this code to the agent when collecting your item.',
         kicker: 'Item pickup',
         headingEn: 'Your secret pickup code',
-        headingSw: 'Msimbo wako wa siri wa kuchukua',
         introEn: 'Use the code below when collecting your item. It was sent to your verified email address. Any previous pickup code for this claim is no longer valid.',
-        introSw: 'Tumia msimbo hapa chini unapochukua bidhaa yako. Umetumwa kwenye barua pepe iliyothibitishwa. Msimbo wowote wa awali wa claim hii haubadiliki tena.',
         codeLabelEn: 'Secret pickup code',
-        codeLabelSw: 'Msimbo wa siri wa kuchukua',
         hintEn: 'Read this code to the agent only when you are standing at the counter. It is single use. It is NOT the public item reference.',
-        hintSw: 'Mpe msimbo huu wakala tu wakati umesimama kaunta. Unatumika mara moja tu. SI nambari ya rejea ya bidhaa.',
         expiresInMinutes: null,
         footerNote: 'Return4me staff or agents will never ask you for this code before you are at the counter.',
       };
@@ -301,23 +265,6 @@ function renderEmailOtp(purpose: EmailOtpPurpose, code: string): { subject: stri
       text: 'Never share a Return4me code. Our staff and agents will never ask you for one by phone, SMS, WhatsApp or social media.',
     }),
     emailNote(copy.footerNote),
-    emailDivider('Kiswahili'),
-    emailHeading(copy.headingSw),
-    emailParagraph(copy.introSw),
-    emailCodeBlock({
-      label: copy.codeLabelSw,
-      code,
-      tone: purpose === 'pickup_code' ? 'success' : 'brand',
-      hint: copy.hintSw,
-    }),
-    ...(expiresIn !== null
-      ? [emailDetails([{ label: 'Inaisha baada ya', value: `dakika ${expiresIn}` }])]
-      : []),
-    emailCallout({
-      tone: 'warning',
-      label: 'Usishiriki msimbo huu',
-      text: 'Usishiriki msimbo wa Return4me. Wafanyakazi na mawakala wetu hawatawahi kuomba kwa simu, SMS, WhatsApp au mitandao ya kijamii.',
-    }),
   ].join('\n');
 
   const { html } = buildEmailMessage({
@@ -349,7 +296,7 @@ export interface EmailOtpInput {
   issuanceId: EmailOtpIssuanceId;
   /** The OTP / pickup code. Required. Never persisted by anything below. */
   code: string;
-  /** Chooses the bilingual copy. */
+  /** Chooses the copy for a journey. */
   purpose: EmailOtpPurpose;
   /** Authenticated actor, when the flow has one, for the durable record. */
   actorUserId?: string | null;

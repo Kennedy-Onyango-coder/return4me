@@ -89,22 +89,22 @@ const LOST_AT_MAX_WINDOW_MS = 31 * 24 * 60 * 60 * 1000;
 const DISALLOWED_CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 
 const MESSAGES = {
-  malformed: 'Ombi si sahihi. Tafadhali tuma taarifa kamili. / The request is malformed. Please send a complete payload.',
-  clientIdentityRejected: 'Hauwezi kubainisha akaunti kwenye ombi. / You cannot specify an account in the request.',
-  categoryRequired: 'Tafadhali chagua aina ya kitu. / Please choose an item category.',
-  categoryInvalid: 'Aina ya kitu haikubaliki. / That item category is not valid.',
-  countyRequired: 'Tafadhali chagua kaunti. / Please choose a county.',
-  countyInvalid: 'Kaunti haikubaliki. / That county is not a recognised Kenyan county.',
-  administrativeUnitRequired: 'Tafadhali chagua kaunti ndogo. / Please choose a sub-county.',
-  administrativeUnitInvalid: 'Kaunti ndogo haikubaliki kwa kaunti hiyo. / That sub-county does not belong to the selected county.',
-  lostAtFromRequired: 'Tafadhali weka wakati uliopotea. / Please provide when the item was lost.',
-  lostAtFromInvalid: 'Wakati uliopotea si sahihi. / The lost time is not a valid date.',
-  lostAtRangeInvalid: 'Kipindi cha muda si sahihi. / The lost time window is not valid.',
-  notFound: 'Ripoti haipatikani kwenye akaunti yako. / That lost report is not on your account.',
-  tooLong: (max: number, label: string) => `${label} ni ndefu mno (kikomo ${max} herufi). / ${label} is too long (limit ${max} characters).`,
-  tooShort: (min: number, label: string) => `${label} ni fupi mno (angalau ${min} herufi). / ${label} is too short (at least ${min} characters).`,
-  wrongType: (label: string) => `${label} si sahihi. / ${label} is invalid.`,
-  invalidChars: (label: string) => `${label} ina herufi zisizoruhusiwa. / ${label} contains disallowed characters.`,
+  malformed: 'The request is malformed. Please send a complete payload.',
+  clientIdentityRejected: 'You cannot specify an account in the request.',
+  categoryRequired: 'Please choose an item category.',
+  categoryInvalid: 'That item category is not valid.',
+  countyRequired: 'Please choose a county.',
+  countyInvalid: 'That county is not a recognised Kenyan county.',
+  administrativeUnitRequired: 'Please choose a sub-county.',
+  administrativeUnitInvalid: 'That sub-county does not belong to the selected county.',
+  lostAtFromRequired: 'Please provide when the item was lost.',
+  lostAtFromInvalid: 'The lost time is not a valid date.',
+  lostAtRangeInvalid: 'The lost time window is not valid.',
+  notFound: 'That lost report is not on your account.',
+  tooLong: (max: number, label: string) => `${label} is too long (limit ${max} characters).`,
+  tooShort: (min: number, label: string) => `${label} is too short (at least ${min} characters).`,
+  wrongType: (label: string) => `${label} is invalid.`,
+  invalidChars: (label: string) => `${label} contains disallowed characters.`,
 };
 
 // Result of a single text-field check. Deliberately a single shape with

@@ -140,8 +140,10 @@ describe('the failure message matches the actual reason', () => {
     expect(notice).not.toContain('try again');
     expect(notice).not.toContain('jaribu tena');
     expect(notice).not.toContain('temporarily unavailable');
-    // Bilingual, like every other user-facing string in the product.
-    expect(mod.SMS_NOT_ENABLED_MESSAGE).toContain(' / ');
+    // BATCH B — English only. The message used to be bilingual (a Swahili half
+    // after a ' / ' separator); that half is gone, so this pins the ABSENCE of the
+    // separator rather than its presence.
+    expect(mod.SMS_NOT_ENABLED_MESSAGE).not.toContain(' / ');
   });
 
   it('the configuration notice does not promise a channel that carries no code', async () => {
@@ -220,7 +222,10 @@ describe('every user-facing call site reports the failure it actually hit', () =
     expect(unavailable).not.toBe('');
     expect(verify).not.toBe('');
     for (const message of [unavailable, verify]) {
-      expect(message).toContain(' / '); // bilingual
+      // BATCH B — these messages are ENGLISH ONLY now. They used to be bilingual
+      // with a ' / ' separator; the batch removed the Kiswahili half, so the
+      // invariant this loop guards is inverted rather than deleted.
+      expect(message).not.toContain(' / ');
     }
     // A missing verified address is not fixed by retrying: nothing the customer
     // repeats makes an account verified, so that message must not say "try again".

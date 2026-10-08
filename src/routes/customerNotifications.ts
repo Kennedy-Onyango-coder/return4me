@@ -34,7 +34,7 @@ import {
 import { CUSTOMER_NOTIFICATION_CHANNELS } from '../config/customerNotifications.ts';
 
 const SERVER_ERROR = {
-  error: 'Hitilafu imetokea upande wa seva. Tafadhali jaribu tena baadaye.',
+  error: 'A server error occurred. Please try again later.',
 };
 
 export function registerCustomerNotificationRoutes(app: any) {
@@ -92,7 +92,7 @@ export function registerCustomerNotificationRoutes(app: any) {
     try {
       const notification = await openCustomerNotification(req.customer.id, req.params.id);
       if (!notification) {
-        return res.status(404).json({ error: 'Taarifa haikupatikana. / Notification not found.' });
+        return res.status(404).json({ error: 'Notification not found.' });
       }
       return res.json({ notification });
     } catch (e) {
@@ -130,7 +130,7 @@ export function registerCustomerNotificationRoutes(app: any) {
     try {
       const { category, channel, enabled } = req.body ?? {};
       if (typeof category !== 'string' || typeof channel !== 'string' || typeof enabled !== 'boolean') {
-        return res.status(400).json({ error: 'Ombi la awali si sahihi. / Invalid request.' });
+        return res.status(400).json({ error: 'Invalid request.' });
       }
       const result = await setCustomerPreference(req.customer.id, category, channel, enabled);
       // A refusal is a 200 with applied = false, not an error: the request was
@@ -139,7 +139,7 @@ export function registerCustomerNotificationRoutes(app: any) {
       return res.json({ ...result, preferences: await getCustomerPreferences(req.customer.id) });
     } catch (e) {
       if (e instanceof Error && e.message.startsWith('Unknown notification')) {
-        return res.status(400).json({ error: 'Ombi la awali si sahihi. / Invalid request.' });
+        return res.status(400).json({ error: 'Invalid request.' });
       }
       console.error('[CUSTOMER_NOTIFICATION_PREFS_SET_ERROR]', e);
       return res.status(500).json(SERVER_ERROR);

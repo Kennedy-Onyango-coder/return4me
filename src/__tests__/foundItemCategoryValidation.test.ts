@@ -88,7 +88,7 @@ describe('POST /api/items/report rejects an unknown category before any side eff
   it('uses the SAME wording as the lost-report route for an invalid category', () => {
     // Consistency: one phrase for "that category is not valid" across surfaces.
     const lostReportsTs = fs.readFileSync(path.resolve(__dirname, '../routes/lostReports.ts'), 'utf8');
-    const shared = 'Aina ya kitu haikubaliki. / That item category is not valid.';
+    const shared = 'That item category is not valid.';
     expect(lostReportsTs).toContain(shared);
     expect(reportHandler()).toContain(shared);
   });

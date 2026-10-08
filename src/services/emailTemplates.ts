@@ -94,8 +94,8 @@ export const EMAIL_THEME = {
   supportEmail: 'support@return4me.co.ke',
   /** Public site, used for the footer link. */
   siteUrl: 'https://return4me.co.ke',
-  /** The platform's one-line identity, bilingual like every user-facing string. */
-  tagline: 'Lost-and-found help for Kenya / Huduma ya kurudisha vitu vilivyopotea',
+  /** The platform's one-line identity, used in every email footer. */
+  tagline: 'Lost-and-found help for Kenya',
 } as const;
 
 export type EmailTone = 'brand' | 'success' | 'warning' | 'danger' | 'info';
@@ -215,7 +215,7 @@ ${footerNote}
 <p style="margin:0 0 6px 0;font-size:13px;line-height:1.6;color:${t.muted};">${escapeHtml(t.tagline)}</p>
 <p style="margin:0;font-size:13px;line-height:1.6;color:${t.muted};">Questions? <a href="mailto:${escapeHtml(t.supportEmail)}" style="color:${t.green};text-decoration:underline;">${escapeHtml(t.supportEmail)}</a> &middot; <a href="${escapeUrl(t.siteUrl)}" style="color:${t.green};text-decoration:underline;">return4me.co.ke</a></p>
 <p style="margin:10px 0 0 0;font-size:12px;line-height:1.6;color:#8A857A;">&copy; ${new Date().getFullYear()} Return4me. Nairobi, Kenya.</p>
-<p style="margin:6px 0 0 0;font-size:12px;line-height:1.6;color:#8A857A;">Automated message: never reply with your ID number, M-Pesa PIN or password. / Ujumbe wa kiotomatiki: usijibu ukiweka kitambulisho, PIN ya M-Pesa au neno la siri.</p>
+<p style="margin:6px 0 0 0;font-size:12px;line-height:1.6;color:#8A857A;">Automated message: never reply with your ID number, M-Pesa PIN or password.</p>
 </td></tr>
 </table>
 </td></tr>
@@ -360,20 +360,14 @@ ${label}<p style="margin:0;font-family:${t.fontSans};font-size:14px;line-height:
 }
 
 /**
- * The English/Swahili splitter.
+ * REMOVED IN BATCH B — the English/Swahili splitter (`emailDivider`).
  *
- * Every user-facing message on this platform is bilingual, and the email is
- * often the only place a customer who chose Swahili in the app can be reached.
- * The divider carries the language name so a reader knows why the text changes
- * script, which is exactly what the previous templates left out.
+ * It existed solely to introduce the second, Kiswahili-only half of a message.
+ * The product is English-only, every one of those halves has been deleted, and
+ * the function's DEFAULT argument was the word "Kiswahili" — so keeping it would
+ * have left a helper whose only remaining behaviour was to print a language
+ * header for text that no longer exists. No caller remains.
  */
-export function emailDivider(label = 'Kiswahili'): string {
-  const t = EMAIL_THEME;
-  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;margin:22px 0 14px 0;">
-<tr><td style="border-top:1px solid ${t.border};font-size:0;line-height:0;">&nbsp;</td></tr>
-</table>
-<p style="margin:0 0 10px 0;font-family:${t.fontSans};font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:#8A857A;">${escapeHtml(label)}</p>`;
-}
 
 // ===========================================================================
 // PLAIN-TEXT ALTERNATIVE

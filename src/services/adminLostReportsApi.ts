@@ -125,7 +125,7 @@ export async function fetchAdminLostReports(
       errorKindForStatus(res.status),
       res.status,
       res.status === 403
-        ? 'Ruhusa imekataliwa.'
+        ? 'Access denied.'
         : res.status === 401
           ? 'Your admin session has ended. Please sign in again.'
           : 'The lost-report list could not be loaded.',

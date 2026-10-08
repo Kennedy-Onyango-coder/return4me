@@ -73,11 +73,11 @@ export async function uploadBase64Image(base64Data: string, prefix: string): Pro
 
   // Enforce decoded size limit (8MB)
   if (buffer.length > 8 * 1024 * 1024) {
-    throw new Error('Maudhui ya picha yamezidi kikomo cha MB 8. / Image size exceeds the 8MB limit.');
+    throw new Error('Image size exceeds the 8MB limit.');
   }
 
   if (buffer.length < 4) {
-    throw new Error('Faili batili au tupu. / Invalid or empty file.');
+    throw new Error('Invalid or empty file.');
   }
 
   // Verify magic bytes
@@ -97,7 +97,7 @@ export async function uploadBase64Image(base64Data: string, prefix: string): Pro
   }
 
   if (!verifiedMime) {
-    throw new Error('Aina ya faili haikubaliki. Tafadhali pakia picha ya JPG, PNG, GIF, au WEBP pekee. / Unsupported file type. Please upload a JPG, PNG, GIF, or WEBP image only.');
+    throw new Error('Unsupported file type. Please upload a JPG, PNG, GIF, or WEBP image only.');
   }
 
   const extension = verifiedMime.split('/')[1] || 'jpg';

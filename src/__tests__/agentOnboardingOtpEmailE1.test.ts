@@ -65,7 +65,7 @@ const COUNTY = resolveCountyName('Nairobi')!;
 const UNIT_ID = administrativeUnitsForCounty(COUNTY)[0]?.id;
 
 // The exact subjects the two SEQUENTIAL agent messages carry.
-const LOGIN_SUBJECT = 'Your Return4me verification code / Msimbo wako wa uthibitisho - Return4me';
+const LOGIN_SUBJECT = 'Your Return4me verification code - Return4me';
 const ACTIVATION_SUBJECT = 'Verify your Return4me agent email';
 
 let app: any;

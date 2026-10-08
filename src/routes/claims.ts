@@ -114,7 +114,7 @@ async function sendClaimVerificationEmail(params: {
     return { success: false, message: EMAIL_VERIFICATION_REQUIRED_MESSAGE, noVerifiedEmail: true };
   }
   const message =
-    'Msimbo mpya wa thibitisho la claim umetumwa kwenye barua pepe yako iliyothibitishwa. / A new claim verification code has been sent to your verified email address.';
+    'A new claim verification code has been sent to your verified email address.';
   try {
     const outcome = await sendEmailOtp({
       eventType: 'OWNER_CLAIM_VERIFICATION_CODE_EMAIL',
@@ -230,11 +230,11 @@ export function registerClaimRoutes(
     }
 
     if (!itemId || !ownerPhone || !securityAnswers) {
-      return res.status(400).json({ error: 'Tafadhali jaza maelezo yote ya usajili wa claim.' });
+      return res.status(400).json({ error: 'Please complete all claim registration details.' });
     }
 
     if (!termsAccepted) {
-      return res.status(400).json({ error: 'Ni lazima ukubali Vigezo na Masharti yetu kabla ya kuendelea (You must agree to our Terms and Privacy Policy).' });
+      return res.status(400).json({ error: 'You must accept our Terms and Privacy Policy before continuing.' });
     }
 
     // The frontend previously fell back to a hardcoded sandbox number when a
@@ -243,16 +243,16 @@ export function registerClaimRoutes(
     // delivery and claimant lookup, so the server now requires a real value.
     const normalizedOwnerPhone = toE164Kenyan(String(ownerPhone).replace(/\s+/g, ''));
     if (!/^\+254\d{9}$/.test(normalizedOwnerPhone)) {
-      return res.status(400).json({ error: 'Nambari ya simu halali ya Kenya inahitajika. / A valid Kenyan phone number is required.' });
+      return res.status(400).json({ error: 'A valid Kenyan phone number is required.' });
     }
 
     const ownerIdentifyingDetailValue =
       typeof ownerIdentifyingDetails === 'string' ? ownerIdentifyingDetails.trim() : '';
     if (!ownerIdentifyingDetailValue) {
-      return res.status(400).json({ error: 'Maelezo ya kitambulisho yanahitajika. / An identifying detail is required.' });
+      return res.status(400).json({ error: 'An identifying detail is required.' });
     }
     if (ownerIdentifyingDetailValue.length > 300) {
-      return res.status(400).json({ error: 'Maelezo ya kitambulisho ni marefu kupita kiasi. / Identifying detail is too long.' });
+      return res.status(400).json({ error: 'Identifying detail is too long.' });
     }
 
     try {
@@ -267,13 +267,13 @@ export function registerClaimRoutes(
       const strikeCount = await db.getActivePaymentStrikeCount(ownerPhone);
       if (strikeCount >= PAYMENT_STRIKE_RESTRICTION_THRESHOLD) {
         return res.status(403).json({
-          error: "Akaunti yako imezuiliwa kwa muda kwa sababu ya kutolipa baada ya kuthibitisha mara kwa mara. Tafadhali wasiliana na usaidizi. / Your account is temporarily restricted due to repeated unpaid confirmations. Please contact support or administrator."
+          error: "Your account is temporarily restricted due to repeated unpaid confirmations. Please contact support or administrator."
         });
       }
 
       const item = await db.getItem(itemId);
       if (!item) {
-        return res.status(404).json({ error: 'Bidhaa inayotafutwa haikupatikana.' });
+        return res.status(404).json({ error: 'The reported item could not be found.' });
       }
 
       // Central claimability rule — see canCreateClaim(). Independently
@@ -294,7 +294,7 @@ export function registerClaimRoutes(
       const validation = validateVerificationAnswers(categoryId, securityAnswers);
       if (isAnswerValidationFailure(validation)) {
         return res.status(400).json({
-          error: `Majibu ya usalama si sahihi. ${validation.error} / Verification answers are invalid. ${validation.error}`,
+          error: `Verification answers are invalid. ${validation.error}`,
         });
       }
       const sanitizedAnswers = validation.sanitized;
@@ -303,7 +303,7 @@ export function registerClaimRoutes(
       let idProofUrl: string | null = null;
       if (idProofBase64 && item.is_sensitive_document !== false) {
         if (!isValidImageSignature(idProofBase64)) {
-          return res.status(400).json({ error: 'Aina ya picha ya kitambulisho haikubaliki. Pakia picha ya JPEG, PNG, WEBP, au HEIC.' });
+          return res.status(400).json({ error: 'Unsupported ID image type. Please upload a JPEG, PNG, WEBP or HEIC image.' });
         }
         idProofUrl = await uploadBase64Image(idProofBase64, 'id-proofs');
       }
@@ -396,7 +396,7 @@ export function registerClaimRoutes(
           }
 
           return res.status(409).json({
-            error: 'Bidhaa hii tayari inadaiwa na mtu mwingine. Mzozo (Dispute) umefunguliwa na utachunguzwa na wasimamizi wetu.',
+            error: 'This item has already been claimed by someone else. A dispute has been opened and will be reviewed by our administrators.',
             claim: toOwnerSafeClaimView(newClaim),
             isDisputed: true
           });
@@ -430,7 +430,7 @@ export function registerClaimRoutes(
 
       if (!tierPassed) {
         return res.status(400).json({
-          error: 'Majibu ya usalama hayajalingana na maelezo ya hati hii. Tafadhali thibitisha na ujaribu tena.',
+          error: 'The security answers did not match the details on this document. Please check them and try again.',
         });
       }
 
@@ -439,7 +439,7 @@ export function registerClaimRoutes(
       const isTier3 = item.is_sensitive_document !== false && (verificationTier === 3 || !!idProofBase64);
       if (isTier3) {
         if (!idProofUrl) {
-          return res.status(400).json({ error: 'Uthibitisho wa Kitambulisho (ID Proof upload) unahitajika kwa Tier 3.' });
+          return res.status(400).json({ error: 'An ID proof upload is required for Tier 3.' });
         }
       }
 
@@ -471,7 +471,7 @@ export function registerClaimRoutes(
         const isUniqueViolation = raceErr?.code === '23505' || String(raceErr?.cause?.code) === '23505' || /uq_claims_one_active_per_item/.test(String(raceErr?.message || raceErr?.cause?.message || ''));
         if (isUniqueViolation) {
           return res.status(409).json({
-            error: 'Mtu mwingine ameshadai bidhaa hii sekunde chache zilizopita. Tafadhali onyesha usaidizi ikiwa unaamini hii ni makosa. / Someone else just claimed this item moments ago. Please contact support if you believe this is a mistake.',
+            error: 'Someone else just claimed this item moments ago. Please contact support if you believe this is a mistake.',
           });
         }
         throw raceErr;
@@ -486,7 +486,7 @@ export function registerClaimRoutes(
 
       let warning: string | null = null;
       if (strikeCount === 1 || strikeCount === 2) {
-        warning = "Kumbuka: Uliwahi kuthibitisha kuwa bidhaa ni yako physically lakini hukulipia. Uthibitishaji unaorudiwa bila malipo unaweza kuzuia akaunti yako. / Note: you previously confirmed an item was yours in person but did not complete payment. Repeated occurrences may restrict your access to Return4me.";
+        warning = "Note: you previously confirmed an item was yours in person but did not complete payment. Repeated occurrences may restrict your access to Return4me.";
       }
 
       res.json({
@@ -494,10 +494,10 @@ export function registerClaimRoutes(
         claim: toOwnerSafeClaimView(claim),
         warning,
         message: isTier3
-          ? 'Thibitisho la Tier 1 na Tier 3 limepita! Tafadhali thibitisha OTP yako ili uendelee kwenye malipo.'
+          ? 'Tier 1 and Tier 3 verification passed. Please verify your OTP to continue to payment.'
           : (item.is_sensitive_document !== false 
-            ? 'Thibitisho la utambulisho (Tier 1) limepita! Tafadhali thibitisha OTP ili uendelee kwenye malipo.'
-            : 'Ombi lako limepokelewa! Tafadhali thibitisha OTP yako ili uendelee kwenye malipo.'),
+            ? 'Identity verification (Tier 1) passed. Please verify your OTP to continue to payment.'
+            : 'Your claim has been received. Please verify your OTP to continue to payment.'),
       });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
@@ -509,7 +509,7 @@ export function registerClaimRoutes(
     const { phone } = req.body;
 
     if (!phone) {
-      return res.status(400).json({ error: 'Nambari ya simu inahitajika. / Phone number is required.' });
+      return res.status(400).json({ error: 'Phone number is required.' });
     }
 
     try {
@@ -550,7 +550,7 @@ export function registerClaimRoutes(
       // claim is in — a status oracle for a non-owner.
       if (claim.status !== 'pending_verification') {
         return res.status(409).json({
-          error: 'Claim hii imeshapitia uthibitisho. Hakuna OTP mpya inayohitajika. / This claim has already passed verification. No new OTP is required.',
+          error: 'This claim has already passed verification. No new OTP is required.',
         });
       }
 
@@ -601,7 +601,7 @@ export function registerClaimRoutes(
     const claimId = req.params.id;
     const { code } = req.body;
     if (!code) {
-      return res.status(400).json({ error: 'Msimbo wa OTP unahitajika.' });
+      return res.status(400).json({ error: 'An OTP code is required.' });
     }
 
     try {
@@ -612,12 +612,12 @@ export function registerClaimRoutes(
 
       const record = await db.getClaimOtp(claimId);
       if (!record) {
-        return res.status(400).json({ error: 'Hakuna OTP iliyoombwa kwa claim hii au muda wake umeisha.' });
+        return res.status(400).json({ error: 'No OTP was requested for this claim, or it has expired.' });
       }
 
       if (record.expires_at.getTime() < Date.now()) {
         await db.deleteClaimOtp(claimId);
-        return res.status(400).json({ error: 'Muda wa OTP umeisha. Tafadhali omba msimbo mpya.' });
+        return res.status(400).json({ error: 'The OTP has expired. Please request a new code.' });
       }
 
       const isMockBypass = (
@@ -630,9 +630,9 @@ export function registerClaimRoutes(
         const attempts = await db.incrementClaimOtpAttempts(claimId);
         if (attempts >= 5) {
           await db.deleteClaimOtp(claimId);
-          return res.status(400).json({ error: 'Umekosea msimbo wa OTP mara 5. OTP hii imefutwa kwa usalama wako. Tafadhali omba msimbo mpya. / You have entered the wrong OTP 5 times. For your security, this OTP has been invalidated. Please request a new code.' });
+          return res.status(400).json({ error: 'You have entered the wrong OTP 5 times. For your security, this OTP has been invalidated. Please request a new code.' });
         }
-        return res.status(400).json({ error: `Msimbo wa OTP si sahihi. Una fursa ${5 - attempts} zilizobaki. / Incorrect OTP code. You have ${5 - attempts} attempts remaining.` });
+        return res.status(400).json({ error: `Incorrect OTP code. You have ${5 - attempts} attempts remaining.` });
       }
 
       // SC-1 — LIFECYCLE GUARD. This route used to write
@@ -644,7 +644,7 @@ export function registerClaimRoutes(
       // refused attempt does not destroy the caller's still-valid code.
       if (claim.status !== 'pending_verification') {
         return res.status(409).json({
-          error: 'Claim hii haiwezi kuthibitishwa kwa OTP katika hali yake ya sasa. / This claim cannot be OTP-verified from its current state.',
+          error: 'This claim cannot be OTP-verified from its current state.',
         });
       }
 
@@ -664,7 +664,7 @@ export function registerClaimRoutes(
         // completeness; STATE_CONFLICT means another request moved the claim
         // first — a 409, never a 500. The OTP is still NOT consumed here.
         return res.status(otpTransition.code === 'NOT_FOUND' ? 404 : 409).json({
-          error: 'Claim hii imeshabadilika hivi punde. Tafadhali pakia upya. / This claim changed moments ago. Please reload.',
+          error: 'This claim changed moments ago. Please reload.',
         });
       }
 
@@ -714,7 +714,7 @@ export function registerClaimRoutes(
 
       res.json({
         success: true,
-        message: 'Msimbo umethibitishwa kikamilifu! Tafadhali nenda kwa wakala physically ili athibitishe kuwa bidhaa hii ni yako kabla ya kulipa. / Verification code approved! Please visit the agent physically to verify the item belongs to you before initiating payment.',
+        message: 'Verification code approved! Please visit the agent physically to verify the item belongs to you before initiating payment.',
         linked: journeyLinked,
       });
     } catch (e: any) {

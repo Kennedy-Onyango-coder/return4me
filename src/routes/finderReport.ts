@@ -82,7 +82,7 @@ export function registerFinderReportRoutes(
       return res.status(400).json({ error: 'Picha inahitajika kufanya OCR.' });
     }
     if (!isValidImageSignature(photoBase64)) {
-      return res.status(400).json({ error: 'Aina ya picha haikubaliki. Tafadhali pakia picha halisi ya JPEG, PNG, WEBP, au HEIC.' });
+      return res.status(400).json({ error: 'Unsupported image type. Please upload a real JPEG, PNG, WEBP or HEIC image.' });
     }
 
     try {
@@ -117,7 +117,7 @@ export function registerFinderReportRoutes(
     }
 
     if (!categoryId || !photoBase64 || !locationDescription || !finderPhone) {
-      return res.status(400).json({ error: 'Tafadhali jaza sehemu zote zinazohitajika.' });
+      return res.status(400).json({ error: 'Please complete all required fields.' });
     }
 
     // -----------------------------------------------------------------------
@@ -149,7 +149,7 @@ export function registerFinderReportRoutes(
     const canonicalFoundCounty = foundCountyResolution.county;
     const canonicalFoundAdministrativeUnit = resolveAdministrativeUnitId(canonicalFoundCounty, administrativeUnitId);
     if (!canonicalFoundAdministrativeUnit) {
-      return res.status(400).json({ error: 'Tafadhali chagua kaunti ndogo inayohusiana na kaunti uliyochagua. / Please choose a sub-county belonging to the selected county.' });
+      return res.status(400).json({ error: 'Please choose a sub-county belonging to the selected county.' });
     }
 
     // Declared value is an OPTIONAL, unverified estimate the finder can give
@@ -167,11 +167,11 @@ export function registerFinderReportRoutes(
     }
 
     if (createAccount && !termsAccepted) {
-      return res.status(400).json({ error: 'Ni lazima ukubali Vigezo na Masharti ili kufungua akaunti.' });
+      return res.status(400).json({ error: 'You must accept the Terms and Conditions to create an account.' });
     }
 
     if (!isValidImageSignature(photoBase64)) {
-      return res.status(400).json({ error: 'Aina ya picha haikubaliki. Tafadhali pakia picha halisi ya JPEG, PNG, WEBP, au HEIC.' });
+      return res.status(400).json({ error: 'Unsupported image type. Please upload a real JPEG, PNG, WEBP or HEIC image.' });
     }
 
     try {
@@ -203,7 +203,7 @@ export function registerFinderReportRoutes(
       // -----------------------------------------------------------------------
       const cat = categories.find(c => c.id === categoryId);
       if (!cat) {
-        return res.status(400).json({ error: 'Aina ya kitu haikubaliki. / That item category is not valid.' });
+        return res.status(400).json({ error: 'That item category is not valid.' });
       }
       const isSensitive = cat.is_sensitive_document !== false;
 
@@ -373,8 +373,8 @@ if (matchingResult.method === 'manual_required') {
           assignedAgent,
         },
         message: assignedAgent
-          ? 'Ripoti yako imepokelewa kikamilifu! Msimbo wako wa kuwasilisha bidhaa kwa Agent umezalishwa.'
-          : 'Ripoti yako imepokelewa! Tunatafuta Agent anayefaa karibu nawe na tutakujulisha hivi karibuni. / Your report has been received! We\'re finding the right Agent near you and will notify you shortly.',
+          ? 'Your report has been received. Your drop-off code for handing the item to an Agent has been issued.'
+          : 'Your report has been received! We\'re finding the right Agent near you and will notify you shortly.',
       });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');

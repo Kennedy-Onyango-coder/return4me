@@ -50,15 +50,15 @@ export function registerAdminDisputeRoutes(app: Express, deps: AdminDisputeRoute
   app.get('/api/admin/disputes/:disputeId/evidence', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
+        return res.status(403).json({ error: 'Access denied.' });
       }
       const disputeId = String(req.params.disputeId || '').trim();
       if (!disputeId) {
-        return res.status(400).json({ error: 'Kitambulisho cha mzozo kinahitajika. / Dispute ID is required.' });
+        return res.status(400).json({ error: 'Dispute ID is required.' });
       }
       const dispute = await db.getDispute(disputeId);
       if (!dispute) {
-        return res.status(404).json({ error: 'Mzozo haukupatikana. / Dispute not found.' });
+        return res.status(404).json({ error: 'Dispute not found.' });
       }
       const evidence = await db.getDisputeEvidenceForDispute(disputeId);
       res.json({ success: true, evidence });
@@ -70,7 +70,7 @@ export function registerAdminDisputeRoutes(app: Express, deps: AdminDisputeRoute
   app.post('/api/admin/disputes/resolve', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
     try {
       if (req.user?.role !== 'admin') {
-        return res.status(403).json({ error: 'Ruhusa imekataliwa.' });
+        return res.status(403).json({ error: 'Access denied.' });
       }
 
       // Validate BEFORE touching any state. resolveDispute() keeps its own
@@ -84,21 +84,21 @@ export function registerAdminDisputeRoutes(app: Express, deps: AdminDisputeRoute
       const adminNotes = typeof req.body?.adminNotes === 'string' ? req.body.adminNotes.trim() : '';
 
       if (!disputeId) {
-        return res.status(400).json({ error: 'Kitambulisho cha mzozo kinahitajika. / Dispute ID is required.' });
+        return res.status(400).json({ error: 'Dispute ID is required.' });
       }
       if (!winningClaimId) {
-        return res.status(400).json({ error: 'Chagua mdai atakayeshinda kabla ya kusuluhisha. / Select the winning claimant before resolving.' });
+        return res.status(400).json({ error: 'Select the winning claimant before resolving.' });
       }
 
       const dispute = await db.getDispute(disputeId);
       if (!dispute) {
-        return res.status(404).json({ error: 'Mzozo haukupatikana. / Dispute not found.' });
+        return res.status(404).json({ error: 'Dispute not found.' });
       }
       if (dispute.resolved_by || dispute.resolved_at) {
-        return res.status(409).json({ error: 'Mzozo huu tayari umetatuliwa. / This dispute has already been resolved.' });
+        return res.status(409).json({ error: 'This dispute has already been resolved.' });
       }
       if (winningClaimId !== dispute.claimant_1_claim_id && winningClaimId !== dispute.claimant_2_claim_id) {
-        return res.status(400).json({ error: 'Claim hii haihusiani na mzozo huu. / That claim does not belong to this dispute.' });
+        return res.status(400).json({ error: 'That claim does not belong to this dispute.' });
       }
 
       const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
@@ -115,12 +115,12 @@ export function registerAdminDisputeRoutes(app: Express, deps: AdminDisputeRoute
       } catch (resolveErr: any) {
         if (resolveErr?.conflictCode === 'STATE_CONFLICT') {
           return res.status(409).json({
-            error: 'Mzozo huu umetatuliwa na msimamizi mwingine hivi punde. Pakia upya. / This dispute was just resolved by another admin. Please refresh.',
+            error: 'This dispute was just resolved by another admin. Please refresh.',
           });
         }
         if (resolveErr?.conflictCode === 'INVALID_TRANSITION') {
           return res.status(409).json({
-            error: 'Hali ya claim haikubali hatua hii. / The claim state does not permit this action.',
+            error: 'The claim state does not permit this action.',
           });
         }
         throw resolveErr;
@@ -197,7 +197,7 @@ export function registerAdminDisputeRoutes(app: Express, deps: AdminDisputeRoute
           );
           return res.status(207).json({
             success: true,
-            message: 'Mzozo umetatuliwa, lakini hali ya urejeshaji wa fedha wa mdai aliyeshindwa haijathibitishwa (hitilafu ya mtandao). Msimamizi anahitaji kuthibitisha na IntaSend kabla ya hatua nyingine. / Dispute resolved, but the losing claimant\'s refund outcome is unverified (network error). The claim remains in refunding — confirm with IntaSend before any further action.',
+            message: 'Dispute resolved, but the losing claimant\'s refund outcome is unverified (network error). The claim remains in refunding — confirm with IntaSend before any further action.',
             refundUnknown: true,
           });
         } else {
@@ -207,13 +207,13 @@ export function registerAdminDisputeRoutes(app: Express, deps: AdminDisputeRoute
           await db.revertClaimRefundLock(result.refundNeededForClaimId, 'IntaSend refund disbursement rejected by provider', adminIdentifier);
           return res.status(207).json({
             success: true,
-            message: 'Mzozo umetatuliwa, lakini urejeshaji wa fedha wa mdai aliyeshindwa umeshindwa kufaulu. Msimamizi anahitaji kufuatilia kwa mkono. / Dispute resolved, but the losing claimant\'s refund failed to go through. Manual admin follow-up is required.',
+            message: 'Dispute resolved, but the losing claimant\'s refund failed to go through. Manual admin follow-up is required.',
             refundFailed: true,
           });
         }
       }
 
-      res.json({ success: true, message: 'Mzozo umetatuliwa kikamilifu kulingana na ushahidi uliowasilishwa.' });
+      res.json({ success: true, message: 'The dispute was resolved successfully based on the evidence submitted.' });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }

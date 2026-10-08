@@ -130,20 +130,20 @@ const PICKUP_CODE_RESEND_COOLDOWN_MS = 2 * 60 * 1000;
 const PAYMENT_WINDOW_MS = CLAIM_PAYMENT_WINDOW_MS;
 
 const MESSAGES = {
-  notLinked: 'Claim hii haipo kwenye akaunti yako. / This claim is not linked to your account.',
-  codeInvalid: 'Msimbo si sahihi au umeisha muda. / The code is invalid or has expired.',
-  answersInvalid: 'Taarifa ulizotoa hazilingani na claim hii. / The details provided do not match this claim.',
-  alreadyLinkedOther: 'Claim hii imeunganishwa na akaunti nyingine. / This claim is already linked to another account.',
-  claimIdRequired: 'Weka msimbo wa claim. / Enter the claim ID.',
+  notLinked: 'This claim is not linked to your account.',
+  codeInvalid: 'The code is invalid or has expired.',
+  answersInvalid: 'The details provided do not match this claim.',
+  alreadyLinkedOther: 'This claim is already linked to another account.',
+  claimIdRequired: 'Enter the claim ID.',
   // E1 renamed from `smsFailed`: the code no longer travels by SMS, and the
   // wording itself was always channel-neutral ("could not send the code"). The
   // route uses it for the unexpected-error path; a provider REFUSAL is a 503
   // carrying EMAIL_OTP_UNAVAILABLE_MESSAGE instead.
-  codeSendFailed: 'Imeshindwa kutuma msimbo kwa sasa. Tafadhali jaribu tena. / Could not send the code right now. Please try again.',
+  codeSendFailed: 'Could not send the code right now. Please try again.',
   // P1 (B-2). Reuses the SAME message as every other "not your claim" refusal in
   // this file so the recovery endpoint cannot become an existence oracle.
-  pickupNotAvailable: 'Msimbo wa kuchukua bidhaa haupatikani kwa claim hii kwa sasa. / A pickup code is not available for this claim at this stage.',
-  pickupCooldown: 'Tafadhali subiri kidogo kabla ya kuomba msimbo mwingine. / Please wait a moment before requesting another pickup code.',
+  pickupNotAvailable: 'A pickup code is not available for this claim at this stage.',
+  pickupCooldown: 'Please wait a moment before requesting another pickup code.',
 };
 
 // P1 (B-2). Rate limit for pickup-code regeneration. Bounded on the CLAIM (the
@@ -158,7 +158,7 @@ const pickupCodeResendLimiter = rateLimit({
   legacyHeaders: false,
   validate: false,
   keyGenerator: (req: any) => String(req.params?.claimId || req.body?.claimId || req.ip || 'unknown'),
-  message: { error: 'Majaribio mengi ya kupata msimbo wa kuchukua bidhaa. Tafadhali subiri kidogo. / Too many pickup code requests. Please wait before trying again.' },
+  message: { error: 'Too many pickup code requests. Please wait before trying again.' },
 });
 
 // Every regeneration costs a real email dispatch, so — exactly as with the
@@ -171,7 +171,7 @@ const pickupCodeResendGlobalLimiter = rateLimit({
   legacyHeaders: false,
   validate: false,
   keyGenerator: () => 'global-pickup-code-resend-bucket',
-  message: { error: 'Mfumo umepokea maombi mengi ya misimbo kwa sasa. Tafadhali jaribu tena baadaye. / The system is receiving too many code requests right now. Please try again shortly.' },
+  message: { error: 'The system is receiving too many code requests right now. Please try again shortly.' },
 });
 
 // Per-connection cap on the two linking endpoints.
@@ -181,7 +181,7 @@ const claimLinkLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   validate: false,
-  message: { error: 'Majaribio mengi ya kuunganisha claim. Tafadhali subiri kidogo. / Too many claim-linking attempts. Please wait a few minutes.' },
+  message: { error: 'Too many claim-linking attempts. Please wait a few minutes.' },
 });
 
 // IP-independent platform-wide ceiling on claim-link OTP sends. Mirrors
@@ -195,7 +195,7 @@ const claimLinkGlobalOtpLimiter = rateLimit({
   legacyHeaders: false,
   validate: false,
   keyGenerator: () => 'global-claim-link-otp-bucket',
-  message: { error: 'Mfumo umepokea maombi mengi ya msimbo kwa sasa. Tafadhali jaribu tena baadaye. / The system is receiving too many code requests right now. Please try again shortly.' },
+  message: { error: 'The system is receiving too many code requests right now. Please try again shortly.' },
 });
 
 // Verification attempts bounded per CLAIM (the thing being attacked), so the
@@ -207,7 +207,7 @@ const claimLinkVerifyLimiter = rateLimit({
   legacyHeaders: false,
   validate: false,
   keyGenerator: (req: any) => String(req.params?.id || req.body?.claimId || req.ip || 'unknown'),
-  message: { error: 'Majaribio mengi ya msimbo kwa claim hii. Tafadhali subiri kidogo. / Too many code attempts for this claim. Please wait a few minutes.' },
+  message: { error: 'Too many code attempts for this claim. Please wait a few minutes.' },
 });
 
 function toIso(value: any): string | null {
@@ -449,7 +449,7 @@ export function registerCustomerClaimRoutes(
 
         const throttleKey = claimId + ':link';
         if (Date.now() - (customerOtpLastSent.get(throttleKey) || 0) < CLAIM_LINK_RESEND_MS) {
-          return res.status(429).json({ error: 'Tafadhali subiri kidogo kabla ya kuomba msimbo mwingine. / Please wait before requesting another code.' });
+          return res.status(429).json({ error: 'Please wait before requesting another code.' });
         }
 
         // Identical generation/hashing/expiry to the Track Claim OTP.
@@ -468,10 +468,10 @@ export function registerCustomerClaimRoutes(
           return res.status(503).json({ error: EMAIL_OTP_UNAVAILABLE_MESSAGE });
         }
 
-        return res.json({ success: true, categoryId, message: 'Msimbo umetumwa kwenye barua pepe yako iliyothibitishwa. / A code has been sent to your verified email address.' });
+        return res.json({ success: true, categoryId, message: 'A code has been sent to your verified email address.' });
       } catch (e) {
         console.error('[CUSTOMER_CLAIM_LINK_OTP_ERROR]', e);
-        return res.status(500).json({ error: 'Hitilafu imetokea upande wa seva. Tafadhali jaribu tena baadaye.' });
+        return res.status(500).json({ error: 'A server error occurred. Please try again later.' });
       }
     }
   );
@@ -575,7 +575,7 @@ export function registerCustomerClaimRoutes(
         return res.json({ success: true, linked: true, claimId });
       } catch (e) {
         console.error('[CUSTOMER_CLAIM_LINK_VERIFY_ERROR]', e);
-        return res.status(500).json({ error: 'Hitilafu imetokea upande wa seva. Tafadhali jaribu tena baadaye.' });
+        return res.status(500).json({ error: 'A server error occurred. Please try again later.' });
       }
     }
   );
@@ -608,7 +608,7 @@ export function registerCustomerClaimRoutes(
       return res.json({ claims });
     } catch (e) {
       console.error('[CUSTOMER_CLAIMS_LIST_ERROR]', e);
-      return res.status(500).json({ error: 'Hitilafu imetokea upande wa seva. Tafadhali jaribu tena baadaye.' });
+      return res.status(500).json({ error: 'A server error occurred. Please try again later.' });
     }
   });
 
@@ -629,7 +629,7 @@ export function registerCustomerClaimRoutes(
       return res.json({ claim: toCustomerSafeClaimView(row, await resolveDisplayStatus(row)) });
     } catch (e) {
       console.error('[CUSTOMER_CLAIM_DETAIL_ERROR]', e);
-      return res.status(500).json({ error: 'Hitilafu imetokea upande wa seva. Tafadhali jaribu tena baadaye.' });
+      return res.status(500).json({ error: 'A server error occurred. Please try again later.' });
     }
   });
 
@@ -656,7 +656,7 @@ export function registerCustomerClaimRoutes(
       return res.json({ success: true });
     } catch (e) {
       console.error('[CUSTOMER_CLAIM_UNLINK_ERROR]', e);
-      return res.status(500).json({ error: 'Hitilafu imetokea upande wa seva. Tafadhali jaribu tena baadaye.' });
+      return res.status(500).json({ error: 'A server error occurred. Please try again later.' });
     }
   });
 }

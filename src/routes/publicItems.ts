@@ -50,18 +50,18 @@ const MESSAGES = {
   // "disputed", "flagged stolen" and "not yet agent-verified". A caller must
   // not be able to use this public endpoint to learn whether a private or
   // withdrawn item record exists.
-  itemNotPublic: 'Bidhaa hii haipatikani kwa umma kwa sasa. / This item is not publicly available right now.',
+  itemNotPublic: 'This item is not publicly available right now.',
   // Deliberately ONE message for BOTH "no such claim" and "the phone does not
   // match this claim" (F4). Distinguishing them made the endpoint an existence
   // oracle: a caller who knew nothing but a candidate claim ID could tell a
   // real claim (403) from an invented one (404) without proving any ownership.
-  claimUnavailable: 'Claim haikupatikana au nambari ya simu hailingani. / Claim not found, or the phone number does not match.',
-  phoneRequired: 'Nambari ya simu inahitajika. / Phone number is required.',
+  claimUnavailable: 'Claim not found, or the phone number does not match.',
+  phoneRequired: 'Phone number is required.',
   // F9: the claim exists and the caller proved ownership, but the claim's own
   // status no longer entitles it to active pickup instructions. The body
   // carries no status, item, agent, dispute or refund detail — the caller is
   // told the details are unavailable and nothing else.
-  claimNotEligible: 'Maelezo ya kuchukua bidhaa hayapatikani kwa dai hili. / Pickup details are no longer available for this claim.',
+  claimNotEligible: 'Pickup details are no longer available for this claim.',
 };
 
 // Mirrors the claimGuessLimiter thresholds in server.ts: a real owner needs a
@@ -75,7 +75,7 @@ const pickupDetailsLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   validate: false,
-  message: { error: 'Umejaribu maombi mengi mno ya claim hii hivi karibuni. Tafadhali subiri dakika chache. / Too many claim requests from this connection recently. Please wait a few minutes.' },
+  message: { error: 'Too many claim requests from this connection recently. Please wait a few minutes.' },
 });
 
 export function registerPublicItemRoutes(

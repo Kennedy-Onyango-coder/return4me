@@ -179,7 +179,7 @@ describe('the claim-ownership oracle is closed on every phone-ownership claim ro
     // One literal, imported by server.ts — so these routes cannot drift apart
     // again into two subtly different answers.
     expect(CLAIM_UNAVAILABLE_MESSAGE).toBe(
-      'Claim haikupatikana au nambari ya simu hailingani. / Claim not found, or the phone number does not match.'
+      'Claim not found, or the phone number does not match.'
     );
     expect(serverTs).toMatch(
       /import \{[^}]*\bCLAIM_UNAVAILABLE_MESSAGE\b[^}]*\} from '\.\/config\/claimStatuses'/

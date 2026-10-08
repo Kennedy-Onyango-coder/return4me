@@ -311,4 +311,4 @@ export function canRecoverExpiredClaimPayment(facts: ExpiredClaimPaymentRecovery
  * changing this shared value.
  */
 export const CLAIM_UNAVAILABLE_MESSAGE =
-  'Claim haikupatikana au nambari ya simu hailingani. / Claim not found, or the phone number does not match.';
+  'Claim not found, or the phone number does not match.';
