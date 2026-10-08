@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { isPlaceholderKey } from '../payments';
 import { PaymentService } from '../payments';
 import { db } from '../../db/database';
@@ -154,5 +154,83 @@ describe('payment simulation production fail-closed guarantee', () => {
     ]);
     expect(result.results.every(r => r.status === 'success')).toBe(true);
     expect(result.batchId).toMatch(/^SIM-/);
+  });
+});
+
+// ===========================================================================
+// E3A — A NON-2xx PROVIDER RESPONSE IS NOT ONE FACT.
+// ===========================================================================
+// The payout path used to report 'failed' for EVERY non-ok status, and the
+// caller recorded that as a definitive provider rejection. That is only
+// supportable for a status that proves the request was refused BEFORE
+// execution:
+//
+//   4xx (except 408) — the provider rejected the request itself.
+//   5xx / 408        — the provider failed while handling a request it may
+//                      already have executed, so the outcome is UNKNOWN.
+//
+// Reporting the second as the first is precisely how a possibly-executed
+// transfer becomes eligible for a resubmission that moves the same money twice.
+//
+// These tests drive the REAL HTTP branch of triggerIntasendPayout against a
+// stubbed global fetch: no network, no wallet, and a key that works nowhere.
+// ===========================================================================
+describe('E3A — payout provider failure classification (stubbed fetch, no network)', () => {
+  const ORIGINAL_ENV = { ...process.env };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  const withProviderStatus = (status: number) => {
+    vi.stubGlobal('fetch', async () => ({
+      ok: false,
+      status,
+      text: async () => 'simulated provider error',
+      json: async () => ({}),
+    }));
+  };
+
+  const oneFinderPayout = () => PaymentService.triggerIntasendPayout('TEST-CLAIM-E3A-CLASSIFY', [
+    { destination: '+254712345678', amount: 100, recipientType: 'finder' },
+  ]);
+
+  it('reports a 4xx refusal as a definitive failure (no transfer executed)', async () => {
+    process.env.NODE_ENV = 'development';
+    process.env.INTASEND_SECRET_KEY = 'MY_TEST_ONLY_E3A_KEY_4xx';
+    for (const status of [400, 401, 403, 404, 409, 422, 429]) {
+      withProviderStatus(status);
+      const result = await oneFinderPayout();
+      expect(result.results.every(r => r.status === 'failed'), `HTTP ${status}`).toBe(true);
+      expect(result.batchId, `HTTP ${status} must not invent a batch id`).toBeNull();
+    }
+  });
+
+  it('reports a 5xx or 408 as UNKNOWN — the request may already have executed', async () => {
+    process.env.NODE_ENV = 'development';
+    process.env.INTASEND_SECRET_KEY = 'MY_TEST_ONLY_E3A_KEY_5xx';
+    for (const status of [500, 502, 503, 504, 408]) {
+      withProviderStatus(status);
+      const result = await oneFinderPayout();
+      expect(result.results.every(r => r.status === 'unknown'), `HTTP ${status}`).toBe(true);
+      expect(result.batchId).toBeNull();
+    }
+
+    // A transport-level failure is equally ambiguous.
+    vi.stubGlobal('fetch', async () => { throw new Error('simulated timeout'); });
+    const timedOut = await oneFinderPayout();
+    expect(timedOut.results.every(r => r.status === 'unknown')).toBe(true);
+  });
+
+  it('keeps the non-production simulation path intact and makes no HTTP call at all', async () => {
+    process.env.NODE_ENV = 'development';
+    process.env.INTASEND_SECRET_KEY = '';
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await oneFinderPayout();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result.results.every(r => r.status === 'success')).toBe(true);
   });
 });

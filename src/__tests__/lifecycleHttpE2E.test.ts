@@ -1688,23 +1688,35 @@ describe('stage 7 â€” pickup-code handover to pending_settlement', () => {
 //    item.locked_finder_share / locked_agent_share (falling back to the
 //    category's shares). The route reads NO amount from the request.
 //
-// 5. IDEMPOTENCY â€” two independent mechanisms, both asserted below:
+// 5. IDEMPOTENCY - three independent mechanisms, all asserted below:
 //      a) attemptSettlementRelease()'s CAS pending_settlement -> releasing.
-//      b) per-recipient ledger rows: only rows still 'pending' are ever sent,
-//         so a retry can never re-pay a recipient that already succeeded.
+//      b) per-recipient ledger rows: only rows whose payout_outcome is
+//         'not_submitted' are ever sent, so a retry can never re-pay a
+//         recipient that already succeeded (E3A).
+//      c) the durable pre-submission marker
+//         (db.markPayoutSubmissionStarted) - a compare-and-swap written BEFORE
+//         the provider is called, so a competing worker cannot submit the same
+//         attempt and a process death mid-call cannot re-authorize a
+//         resubmission.
 //
 // 6. FINAL STATE â€” claims.status='released' via finalizeSettlement()'s own
 //    releasing -> released CAS, plus ledger rows flipped to 'completed' and a
 //    FINALIZE_SETTLEMENT audit row. The schema has no settled_at / released_at
 //    columns, so none is asserted.
 //
-// 7. PROVIDER OUTCOMES â€” 'failed' (non-2xx), 'pending' (batch accepted, the
-//    individual B2C transfer not yet confirmed) and 'unknown' (network or
-//    timeout: the outcome is genuinely not known). Only 'success' finalises.
-//    'unknown' is the mode used for the failure/retry cycle because
-//    recordPayoutAttempt() maps 'unknown' back to a 'pending' ledger row â€” it
-//    is the one provider failure the application itself treats as safely
-//    retryable.
+// 7. PROVIDER OUTCOMES (E3A) - the service returns four of them, and the ledger
+//    records each as its own durable payout_outcome:
+//      'success' -> status 'completed', outcome 'completed'   (authoritative)
+//      'pending' -> status 'pending',   outcome 'accepted'    (the batch was
+//                   accepted; the individual B2C transfer is NOT confirmed)
+//      'unknown' -> status 'pending',   outcome 'unknown'     (timeout,
+//                   transport failure, or a provider 5xx: the request may
+//                   already have been executed)
+//      'failed'  -> status 'failed',    outcome 'rejected'    (a 4xx refusal:
+//                   the request itself was rejected before execution)
+//    Only 'completed' finalises a claim. 'accepted', 'unknown' and 'rejected'
+//    are all UNRESOLVED, and the assertions below prove they are NOT resubmitted
+//    by a later sweep or a repeated administrator release.
 // ===========================================================================
 
 const RELEASE = (id: string) => `/api/admin/claims/${id}/release-settlement`;
@@ -1718,14 +1730,29 @@ const FAKE_INTASEND_KEY = 'MY_TEST_ONLY_INTASEND_KEY_e2e_stage8';
 let adminToken = '';
 let revokedAdminToken = '';
 let prevIntaKey: string | undefined;
+// E3A: the claim that genuinely reaches `released` in stage 8. The other claims
+// in this stage deliberately do NOT: their payouts end in an accepted, unknown
+// or refused state, which is exactly what must never be resubmitted.
+let releasedClaimId = '';
 
 // The controlled payout provider. `mode` is swapped per test; `calls` records
 // the exact batch payload the application SENT, so the amount invariant is
 // proven against what the PROVIDER received rather than a ledger read-back.
 const payout = {
   mode: 'accept' as 'accept' | 'network-error' | 'reject',
+  // The HTTP status the provider answers with in 'reject' mode. 4xx means the
+  // request ITSELF was refused, with no transfer executed; 5xx means the
+  // provider (or its gateway) failed while handling a request it may already
+  // have executed. E3A must classify those two differently, so the seam has to
+  // be able to produce both.
+  rejectStatus: 500,
   calls: [] as Array<{ url: string; payload: any }>,
-  reset() { this.calls = []; this.mode = 'accept'; },
+  // EVERY narrative ever sent to the provider, accumulated across the whole
+  // stage and deliberately NOT cleared by reset(). The duplicate-submission
+  // guarantee is a property of the entire run, not of one phase of it, so a
+  // per-phase view cannot prove it.
+  seenNarratives: [] as string[],
+  reset() { this.calls = []; this.mode = 'accept'; this.rejectStatus = 500; },
 };
 
 const realFetch = globalThis.fetch;
@@ -1738,6 +1765,8 @@ const installPayoutProviderSeam = () => {
     let body: any = null;
     try { body = JSON.parse(String(init?.body ?? '{}')); } catch { /* not json */ }
     payout.calls.push({ url, payload: body });
+    // Accumulated separately and never reset: see seenNarratives above.
+    for (const t of (body?.transactions ?? [])) payout.seenNarratives.push(String(t?.narrative));
 
     if (payout.mode === 'network-error') {
       // A genuine timeout/connection failure: the application cannot know
@@ -1746,7 +1775,7 @@ const installPayoutProviderSeam = () => {
     }
     if (payout.mode === 'reject') {
       return Promise.resolve({
-        ok: false, status: 500,
+        ok: false, status: payout.rejectStatus,
         text: async () => 'simulated provider rejection',
         json: async () => ({}),
       } as any);
@@ -1772,6 +1801,9 @@ const financialSnapshot = async (id: string) => {
     provider_batch_id: l.provider_batch_id ?? null,
     provider_transaction_id: l.provider_transaction_id ?? null,
     failure_reason: l.failure_reason ?? null,
+    // E3A: what the PROVIDER did with this row's payout attempt. NULL means no
+    // submission history is recorded at all.
+    payout_outcome: l.payout_outcome ?? null,
   })).sort((a, b) => a.type.localeCompare(b.type));
   return {
     status: c?.status ?? null,
@@ -1784,6 +1816,61 @@ const financialSnapshot = async (id: string) => {
 
 const auditFor = async (action: string, needle: string) =>
   (await db.getAuditLogs()).filter((l: any) => l.action === action && String(l.details).includes(needle));
+
+/**
+ * E3A fixture: a genuinely releasable claim — item assigned to the real E2E
+ * agent, an escrow_held claim, and the payout booked through the REAL
+ * enterPendingSettlement path (so the three ledger rows carry the real
+ * 'not_submitted' booking state). The dispute window is already elapsed, which
+ * is what the ADMIN route ignores anyway (force=true) but which keeps this
+ * fixture identical in shape to what the automatic sweep would act on.
+ *
+ * Each provider outcome in this stage gets its OWN claim: a payout row's
+ * submission state is one-way by design (that is the whole point of E3A), so a
+ * single claim cannot be reused to exercise two different outcomes.
+ */
+const makeReleasableClaim = async (suffix: string) => {
+  const newClaimId = `E2E-E3A-CLAIM-${RUN}-${suffix}`;
+  const newItemId = `E2E-E3A-ITEM-${RUN}-${suffix}`;
+  await db.createItem({
+    id: newItemId,
+    category_id: CATEGORY,
+    photo_url: 'e2e-photo.jpg',
+    ocr_extracted_number: null,
+    ocr_extracted_name: null,
+    document_number_hash: null,
+    document_name_fuzzy: null,
+    location_description: 'E2E E3A fixture',
+    latitude: null,
+    longitude: null,
+    finder_phone: e164(20),
+    assigned_agent_id: AGENT_ID,
+    status: 'at_agent',
+    flaggedForReview: false,
+    isDescriptionOnly: false,
+    description: null,
+    is_sensitive_document: false,
+    rejection_reason: null,
+    locked_total_fee: TOTAL_FEE,
+    locked_finder_share: 100,
+    locked_agent_share: 150,
+    locked_platform_share: 250,
+  } as any);
+  await db.createClaim({
+    id: newClaimId,
+    item_id: newItemId,
+    owner_phone: OWNER_PHONE,
+    security_answers: { lastDigits: '0000', color: 'black', lostDetails: 'E3A fixture' },
+    verification_tier: 1,
+    status: 'escrow_held',
+    owner_id_proof_url: null,
+    payment_reference: `E2E-E3A-PAYREF-${suffix}`,
+    owner_identifying_details: null,
+  } as any);
+  const booked = await db.enterPendingSettlement(newClaimId, -1000);
+  expect(booked.success, booked.message).toBe(true);
+  return { claimId: newClaimId, itemId: newItemId };
+};
 
 describe('stage 8 â€” settlement release to `released` over real HTTP', () => {
   beforeAll(async () => {
@@ -1832,6 +1919,12 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     expect(s.ledger.map((l) => l.type)).toEqual(['agent_payout', 'finder_payout', 'platform_fee']);
     expect(s.ledger.every((l) => l.status === 'pending')).toBe(true);
     expect(s.ledger.every((l) => l.provider_transaction_id === null)).toBe(true);
+    // E3A: the two recipient payout rows are POSITIVELY recorded as never
+    // submitted, which is what makes their first legitimate submission possible.
+    // The platform's own retained fee never touches a provider, so it stays NULL
+    // (no submission history exists, and none can).
+    expect(s.ledger.filter((l) => l.type !== 'platform_fee').every((l) => l.payout_outcome === 'not_submitted')).toBe(true);
+    expect(s.ledger.find((l) => l.type === 'platform_fee')!.payout_outcome).toBeNull();
     // No provider call has been made at all.
     expect(payout.calls.length).toBe(0);
     // The sweep's own work queue (a read-only query) excludes this claim.
@@ -1957,24 +2050,61 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
 
     // No secret leaked into the provider payload captured into test memory.
     expect(JSON.stringify(payout.calls[0].payload)).not.toContain(ADMIN_PASSWORD);
+
+    // E3A - an ACCEPTED batch is NOT a completed transfer. Both recipient rows
+    // are recorded as 'accepted', the legacy status stays 'pending', the claim
+    // is NOT released, and no provider identifier is invented.
+    const accepted = await financialSnapshot(claimId);
+    expect(accepted.status).toBe('pending_settlement');
+    expect(accepted.ledger.filter((l) => l.type !== 'platform_fee').every((l) => l.payout_outcome === 'accepted')).toBe(true);
+    expect(accepted.ledger.filter((l) => l.type !== 'platform_fee').every((l) => l.status === 'pending')).toBe(true);
+    // The batch reference the provider DID return is retained, because it is
+    // the only handle for reconciling this submission.
+    expect(accepted.ledger.find((l) => l.type === 'finder_payout')!.provider_batch_id).toBe('E2E-BATCH-1');
   });
 
-  it('8.6 an UNREACHABLE provider never produces `released` â€” the claim reverts and stays retryable', async () => {
-    // The provider is unreachable, so the application genuinely does not know
-    // whether the disbursement was accepted: this is the 'unknown' outcome,
-    // which recordPayoutAttempt() maps back to a 'pending' ledger row â€” the
-    // one provider failure the application itself treats as safely retryable.
-    payout.reset();
-    payout.mode = 'network-error';
+  it('8.5b an ACCEPTED but unconfirmed payout is never resubmitted (no duplicate transfer)', async () => {
+    // The defect this pins: the row is 'pending' on the ledger, and the NEXT
+    // release used to treat that as "outstanding, send it again" - a second
+    // transfer for money the provider had already accepted.
     const before = await financialSnapshot(claimId);
+    const callsBefore = payout.calls.length;
 
     const r = await http(RELEASE(claimId), { token: adminToken, body: {} });
-    // executeClaimSettlement() found an outstanding payout, reverted the
+
+    // The claim is still releasable (it is back in pending_settlement, so the
+    // release CAS succeeds) but the executor finds NOTHING eligible to submit,
+    // so it reports an unresolved payout rather than moving money.
+    expect(r.status).toBe(500);
+    expect(payout.calls.length, 'the provider must not be called a second time').toBe(callsBefore);
+
+    const after = await financialSnapshot(claimId);
+    expect(after.ledger, 'the ledger is byte-identical: nothing was submitted').toEqual(before.ledger);
+    expect(after.status).toBe('pending_settlement');
+    // ...and the unresolved state is explicitly recorded for the operator.
+    expect((await auditFor('PAYOUT_RECONCILIATION_REQUIRED', claimId)).length).toBeGreaterThan(0);
+  });
+
+  it('8.6 an UNREACHABLE provider is recorded as UNKNOWN and is never resubmitted', async () => {
+    // A fresh claim: an accepted/uncertain row is never reopened, so each
+    // provider outcome needs its own payout attempt (that is the point of E3A).
+    const { claimId: c } = await makeReleasableClaim('UNKNOWN');
+
+    // The provider is unreachable, so the application genuinely does not know
+    // whether the disbursement was accepted: this is the 'unknown' outcome.
+    // E3A: 'unknown' means the request MAY have been executed, so it is
+    // UNRESOLVED - never silently resendable.
+    payout.reset();
+    payout.mode = 'network-error';
+
+    const before = await financialSnapshot(c);
+    const r = await http(RELEASE(c), { token: adminToken, body: {} });
+    // executeClaimSettlement() found an unresolved payout, reverted the
     // releasing lock and returned a non-success result, surfaced as 500.
     expect(r.status).toBe(500);
     expect(payout.calls.length).toBe(1);
 
-    const after = await financialSnapshot(claimId);
+    const after = await financialSnapshot(c);
     // The revert really happened: back to pending_settlement, NOT released and
     // not left stuck in the transient 'releasing' lock.
     expect(after.status).toBe('pending_settlement');
@@ -1986,67 +2116,120 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     // reference that does not exist.
     expect(after.ledger.every((l) => l.status === 'pending')).toBe(true);
     expect(after.ledger.every((l) => l.provider_transaction_id === null)).toBe(true);
-    expect((await auditFor('FINALIZE_SETTLEMENT', claimId)).length).toBe(0);
-    // The genuine failure IS recorded, for manual reconciliation.
-    expect((await auditFor('PAYOUT_NOT_CONFIRMED', claimId)).length).toBeGreaterThan(0);
+    expect(after.ledger.filter((l) => l.type !== 'platform_fee').every((l) => l.payout_outcome === 'unknown')).toBe(true);
+    expect((await auditFor('FINALIZE_SETTLEMENT', c)).length).toBe(0);
+    // The genuine ambiguity IS recorded, for manual reconciliation.
+    expect((await auditFor('PAYOUT_NOT_CONFIRMED', c)).length).toBeGreaterThan(0);
+
+    // E3A - and the next attempt does NOT resend it: a timeout is not proof
+    // that nothing executed.
+    const callsBefore = payout.calls.length;
+    const again = await http(RELEASE(c), { token: adminToken, body: {} });
+    expect(again.status).toBe(500);
+    expect(payout.calls.length, 'an ambiguous outcome must never be resubmitted').toBe(callsBefore);
+    expect((await financialSnapshot(c)).ledger).toEqual(after.ledger);
   });
 
-  it('8.7 the retry reaches `released` exactly once', async () => {
-    // A provider that CONFIRMS each transfer. Under a real key the app
-    // deliberately never reports 'success' for an accepted batch (that is its
-    // 'pending until reconciled' model), so a confirmed payout is produced by
-    // the application's own documented non-production disbursement branch â€”
-    // the same path every other test in this repository exercises. The
-    // release lock, the ledger writes and the finalisation CAS all stay real.
+  it('8.6b a provider 4xx is a REFUSAL while a 5xx is AMBIGUOUS - they are not the same thing', async () => {
+    // 4xx: the provider rejected the REQUEST, so no transfer was executed and
+    // recording a rejection is accurate.
+    const refused = await makeReleasableClaim('REFUSED-4XX');
+    payout.reset();
+    payout.mode = 'reject';
+    payout.rejectStatus = 422;
+
+    const r4 = await http(RELEASE(refused.claimId), { token: adminToken, body: {} });
+    expect(r4.status).toBe(500);
+    const after4 = await financialSnapshot(refused.claimId);
+    expect(after4.status).toBe('pending_settlement');
+    expect(after4.ledger.filter((l) => l.type !== 'platform_fee').every((l) => l.payout_outcome === 'rejected')).toBe(true);
+    expect(after4.ledger.filter((l) => l.type !== 'platform_fee').every((l) => l.status === 'failed')).toBe(true);
+
+    // 5xx: the provider failed while handling a request it may ALREADY have
+    // executed. Recording that as a definitive rejection would make a retry
+    // look safe, so it must be 'unknown'.
+    const ambiguous = await makeReleasableClaim('AMBIGUOUS-5XX');
+    payout.reset();
+    payout.mode = 'reject';
+    payout.rejectStatus = 503;
+
+    const r5 = await http(RELEASE(ambiguous.claimId), { token: adminToken, body: {} });
+    expect(r5.status).toBe(500);
+    const after5 = await financialSnapshot(ambiguous.claimId);
+    expect(after5.status).toBe('pending_settlement');
+    expect(after5.ledger.filter((l) => l.type !== 'platform_fee').every((l) => l.payout_outcome === 'unknown')).toBe(true);
+    expect(after5.ledger.filter((l) => l.type !== 'platform_fee').every((l) => l.status === 'pending')).toBe(true);
+
+    // Neither state is eligible for another automatic submission: one more
+    // release makes no provider call at all.
+    const callsBefore = payout.calls.length;
+    expect((await http(RELEASE(ambiguous.claimId), { token: adminToken, body: {} })).status).toBe(500);
+    expect((await http(RELEASE(refused.claimId), { token: adminToken, body: {} })).status).toBe(500);
+    expect(payout.calls.length, 'a refusal and an ambiguity are both resolved by an operator, not by a retry').toBe(callsBefore);
+  });
+
+  it('8.7 a confirmed payout reaches `released` exactly once', async () => {
+    // A fresh claim whose payout has never been submitted: this is the path that
+    // legitimately completes. The provider is made to CONFIRM each transfer by
+    // using the application's own documented non-production disbursement branch
+    // - it is the only path that reports 'success' for a BRAND-NEW payout
+    // without a verified provider status API, which is exactly why the
+    // accepted/unknown/refused outcomes above can never finalise a claim
+    // (asserted in 8.5b, 8.6 and 8.6b).
+    const { claimId: c } = await makeReleasableClaim('CONFIRMED');
+    releasedClaimId = c;
     process.env.INTASEND_SECRET_KEY = '';
     payout.reset();
-    const before = await financialSnapshot(claimId);
+    const before = await financialSnapshot(c);
 
-    const r = await http(RELEASE(claimId), { token: adminToken, body: {} });
+    const r = await http(RELEASE(c), { token: adminToken, body: {} });
     expect(r.status).toBe(200);
     expect(r.body?.success).toBe(true);
     // Nothing reached the controlled provider: the app took its simulated
     // disbursement branch rather than the HTTP one.
     expect(payout.calls.length).toBe(0);
 
-    const after = await financialSnapshot(claimId);
+    const after = await financialSnapshot(c);
     expect(after.status).toBe('released');
-    // Collection evidence survives the payout untouched â€” a payout is a
+    // Collection evidence survives the payout untouched - a payout is a
     // SEPARATE financial event from the collection.
     expect(after.paid_at).toBe(before.paid_at);
     expect(after.payment_reference).toBe(before.payment_reference);
-    // Every ledger row is now settled. The earlier failure_reason is RETAINED
-    // on the rows the retry rescued: finalizeSettlement() only flips the
-    // status, so the reconciliation history of a retried payout survives
-    // rather than being laundered away. platform_fee never touched a provider.
+    // Every ledger row is now settled, and the two provider-facing rows carry
+    // the authoritative 'completed' outcome - never 'accepted' or 'unknown'.
     expect(after.ledger.every((l) => l.status === 'completed')).toBe(true);
+    expect(after.ledger.filter((l) => l.type !== 'platform_fee').every((l) => l.payout_outcome === 'completed')).toBe(true);
+    expect(after.ledger.filter((l) => l.type !== 'platform_fee').every((l) => l.provider_transaction_id !== null)).toBe(true);
     const platformFee = after.ledger.find((l) => l.type === 'platform_fee')!;
     expect(platformFee.failure_reason).toBeNull();
     expect(platformFee.provider_transaction_id).toBeNull();
+    // platform_fee never touches a provider, so it keeps no submission history.
+    expect(platformFee.payout_outcome).toBeNull();
     // FINALIZE_SETTLEMENT is the money-moving event and must exist EXACTLY
     // once. ADMIN_FORCE_RELEASE_SETTLEMENT is written per release-LOCK
     // acquisition, so it legitimately has one row per attempt that won the
-    // CAS (the amount probe, the provider failure and the successful retry) â€”
-    // each is a distinct operator action, not a duplicate disbursement.
-    expect((await auditFor('FINALIZE_SETTLEMENT', claimId)).length).toBe(1);
-    expect((await auditFor('ADMIN_FORCE_RELEASE_SETTLEMENT', claimId)).length).toBeGreaterThanOrEqual(1);
+    // CAS - each is a distinct operator action, not a duplicate disbursement.
+    expect((await auditFor('FINALIZE_SETTLEMENT', c)).length).toBe(1);
+    expect((await auditFor('ADMIN_FORCE_RELEASE_SETTLEMENT', c)).length).toBeGreaterThanOrEqual(1);
+    // Restore the real key so the remaining tests use the HTTP branch again.
+    process.env.INTASEND_SECRET_KEY = FAKE_INTASEND_KEY;
   });
 
   it('8.8 replaying the identical settlement request is a no-op (409), never a second payout', async () => {
-    const before = await financialSnapshot(claimId);
+    const before = await financialSnapshot(releasedClaimId);
     const callsBefore = payout.calls.length;
-    const auditsBefore = (await auditFor('FINALIZE_SETTLEMENT', claimId)).length;
+    const auditsBefore = (await auditFor('FINALIZE_SETTLEMENT', releasedClaimId)).length;
 
-    const r = await http(RELEASE(claimId), { token: adminToken, body: {} });
+    const r = await http(RELEASE(releasedClaimId), { token: adminToken, body: {} });
     // The CAS requires status==='pending_settlement'; a released claim matches
     // nothing, so the lock is never won and the route answers 409.
     expect(r.status).toBe(409);
     // No provider call, no ledger change, no state regression, no new audit.
     expect(payout.calls.length).toBe(callsBefore);
-    expect(await financialSnapshot(claimId)).toEqual(before);
-    expect((await auditFor('FINALIZE_SETTLEMENT', claimId)).length).toBe(auditsBefore);
+    expect(await financialSnapshot(releasedClaimId)).toEqual(before);
+    expect((await auditFor('FINALIZE_SETTLEMENT', releasedClaimId)).length).toBe(auditsBefore);
     // The collection evidence is still exactly what it always was.
-    expect((await financialSnapshot(claimId)).status).toBe('released');
+    expect((await financialSnapshot(releasedClaimId)).status).toBe('released');
   });
 
   it('8.9 claim-1 settlement credentials cannot be used against claim-2', async () => {
@@ -2066,30 +2249,71 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     // claim-2 is byte-identical and no new money moved for it.
     expect(payout.calls.length).toBe(callsBefore);
     expect(await financialSnapshot(secondClaimId)).toEqual(before);
-    // claim-1 itself is untouched by the cross-claim attempt.
-    expect((await financialSnapshot(claimId)).status).toBe('released');
+    // The released claim itself is untouched by the cross-claim attempt.
+    expect((await financialSnapshot(releasedClaimId)).status).toBe('released');
   });
 
   it('8.10 final financial invariant: one collection, one release, nothing double-booked', async () => {
-    const claim: any = await db.getClaim(claimId);
-    const s = await financialSnapshot(claimId);
+    // The COLLECTION half belongs to claim-1, which was created and paid
+    // through the real public/claim lifecycle in the earlier stages.
+    const collected: any = await db.getClaim(claimId);
+    expect(collected.paid_at).toBeTruthy();
+    expect(collected.payment_reference).toBeTruthy();
 
-    // One canonical terminal state, reached once.
+    // The RELEASE half belongs to the claim that actually reached it.
+    const claim: any = await db.getClaim(releasedClaimId);
+    const s = await financialSnapshot(releasedClaimId);
     expect(claim.status).toBe('released');
-    // The owner's money was collected exactly once and is never re-asserted.
-    expect(claim.paid_at).toBeTruthy();
-    expect(claim.payment_reference).toBeTruthy();
     // The payout is a separate, single, fully-booked financial event.
     const payouts = s.ledger.filter((l) => l.type === 'finder_payout' || l.type === 'agent_payout');
     expect(payouts.length).toBe(2);
     expect(payouts.every((l) => l.status === 'completed')).toBe(true);
     // The split is conserved against the fee actually charged.
-    const item: any = await db.getItem(itemId);
+    const item: any = await db.getItem(`E2E-E3A-ITEM-${RUN}-CONFIRMED`);
     const disbursed = payouts.reduce((n: number, l: any) => n + Number(l.amount), 0);
     expect(disbursed + Number(item.locked_platform_share)).toBe(Number(item.locked_total_fee));
     // The money-moving settlement event was never duplicated. The force-release
     // audit row is per lock acquisition, so it is only required to exist.
-    expect((await auditFor('FINALIZE_SETTLEMENT', claimId)).length).toBe(1);
-    expect((await auditFor('ADMIN_FORCE_RELEASE_SETTLEMENT', claimId)).length).toBeGreaterThanOrEqual(1);
+    expect((await auditFor('FINALIZE_SETTLEMENT', releasedClaimId)).length).toBe(1);
+    expect((await auditFor('ADMIN_FORCE_RELEASE_SETTLEMENT', releasedClaimId)).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('8.11 E3A: unresolved payouts are never paid, never resubmitted, and never invisible', async () => {
+    // claim-1's payout was accepted by the provider and never confirmed. E3A
+    // leaves it exactly there: not completed, not resubmitted, and listed for
+    // provider reconciliation.
+    const s1 = await financialSnapshot(claimId);
+    expect(s1.status).toBe('pending_settlement');
+    expect(s1.status).not.toBe('released');
+    const unresolvedOnes = s1.ledger.filter((l) => l.type !== 'platform_fee');
+    expect(unresolvedOnes.every((l) => l.payout_outcome === 'accepted')).toBe(true);
+    expect(unresolvedOnes.every((l) => l.status === 'pending')).toBe(true);
+    // No completion, no claim of completion, and no invented reference: the
+    // transaction ids that ARE recorded came from the provider's own response.
+    expect((await auditFor('FINALIZE_SETTLEMENT', claimId)).length).toBe(0);
+    expect(unresolvedOnes.every((l) => typeof l.provider_transaction_id === 'string' && l.provider_transaction_id!.startsWith('E2E-TXN-'))).toBe(true);
+
+    // The unresolved row is visible through the new read-only reconciliation
+    // surface, with the evidence an operator needs to check it with IntaSend.
+    const rows = await db.getUnresolvedPayouts();
+    const mine = rows.filter((r: any) => r.claim_id === claimId);
+    expect(mine.length).toBe(2);
+    for (const row of mine) {
+      expect(row.status).toBe('pending');
+      expect(row.payout_outcome).toBe('accepted');
+      expect(row.provider_batch_id).toBe('E2E-BATCH-1');
+    }
+
+    // The confirmed claim is NOT in that queue: it is genuinely paid.
+    expect(rows.some((r: any) => r.claim_id === releasedClaimId)).toBe(false);
+
+    // And the provider was never asked to move claim-1's money a second time:
+    // each recipient appears in exactly ONE submitted batch across the whole
+    // stage, even though the claim was released repeatedly afterwards.
+    const claim1Narratives = payout.seenNarratives.filter((n) => n.includes(claimId));
+    expect(claim1Narratives.length).toBe(2); // finder + agent, once each
+    expect(new Set(claim1Narratives).size).toBe(2);
+    expect(claim1Narratives.filter((n) => n.includes('FINDER')).length).toBe(1);
+    expect(claim1Narratives.filter((n) => n.includes('AGENT')).length).toBe(1);
   });
 });

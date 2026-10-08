@@ -514,9 +514,33 @@ export const PaymentService = {
       if (!response.ok) {
         const errorText = await response.text();
         console.warn(`[INTASEND DISBURSEMENT] API error (${response.status}): ${errorText.substring(0, 200)}.`);
+        // E3A — A NON-2xx RESPONSE IS NOT ONE FACT. Earlier this path reported
+        // 'failed' for every non-ok status, and the caller recorded that as a
+        // definitive provider rejection. That is only supportable for a status
+        // that PROVES the request was refused before execution:
+        //
+        //   * 5xx — the provider (or its gateway) failed while handling an
+        //     already-transmitted request. It may have accepted and executed the
+        //     batch before the error surfaced, so this is 'unknown'.
+        //   * 408 Request Timeout — same ambiguity: the request may have been
+        //     received and processed.
+        //   * every other non-ok status (400/401/403/404/409/422/429/… and an
+        //     unexpected 3xx surfaced by fetch) means the provider refused the
+        //     request itself, with no transfer executed, so 'failed' is safe.
+        //
+        // The distinction matters because 'failed' is recorded as a REJECTION
+        // while 'unknown' is recorded as unresolved — treating a 5xx as a
+        // rejection would have let a possibly-executed transfer be re-sent on
+        // the next attempt.
+        const mayHaveBeenProcessed = response.status === 408 || response.status >= 500;
         return {
           batchId: null,
-          results: payouts.map(p => ({ recipientType: p.recipientType, destination: p.destination, providerTransactionId: null, status: 'failed' as const })),
+          results: payouts.map(p => ({
+            recipientType: p.recipientType,
+            destination: p.destination,
+            providerTransactionId: null,
+            status: mayHaveBeenProcessed ? ('unknown' as const) : ('failed' as const),
+          })),
         };
       }
 
@@ -563,8 +587,10 @@ export const PaymentService = {
       // genuinely don't know whether IntaSend received and is processing
       // the request. Treating this as definitively failed risks a
       // duplicate disbursement if a retry fires while the original request
-      // actually went through; leaving it 'unknown' routes it to manual
-      // admin reconciliation instead of an automatic retry.
+      // actually went through; 'unknown' is recorded as an unresolved outcome
+      // that is never resubmitted automatically (E3A — see
+      // src/config/payoutOutcomes.ts), and is surfaced for provider
+      // reconciliation instead.
       return {
         batchId: null,
         results: payouts.map(p => ({ recipientType: p.recipientType, destination: p.destination, providerTransactionId: null, status: 'unknown' as const })),

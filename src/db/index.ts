@@ -1108,6 +1108,21 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     `ALTER TABLE ledger ADD COLUMN IF NOT EXISTS provider_batch_id VARCHAR(100)`,
     `ALTER TABLE ledger ADD COLUMN IF NOT EXISTS provider_transaction_id VARCHAR(100)`,
     `ALTER TABLE ledger ADD COLUMN IF NOT EXISTS failure_reason TEXT`,
+    // PAYOUT SUBMISSION OUTCOME (E3A) — see the matching comment in schema.ts
+    // and src/config/payoutOutcomes.ts. Additive, nullable, NO backfill: every
+    // existing row keeps payout_outcome = NULL, which the settlement executor
+    // reads as "submission history unknown" and therefore never re-sends. That
+    // is the fail-closed default; guessing "not_submitted" here would re-issue
+    // transfers that may already have been executed.
+    `ALTER TABLE ledger ADD COLUMN IF NOT EXISTS payout_outcome VARCHAR(20)`,
+    // The vocabulary constraint, re-asserted with the repository's established
+    // DROP-IF-EXISTS-then-ADD pairing (Postgres has no ADD CONSTRAINT IF NOT
+    // EXISTS, so a bare ADD aborts on a database that already has it — the
+    // exact class of startup failure schemaSyncIdempotency.test.ts pins).
+    // sql/schema.sql declares the identical predicate as an unnamed inline
+    // column CHECK, which Postgres names ledger_payout_outcome_check.
+    `ALTER TABLE ledger DROP CONSTRAINT IF EXISTS ledger_payout_outcome_check`,
+    `ALTER TABLE ledger ADD CONSTRAINT ledger_payout_outcome_check CHECK (payout_outcome IS NULL OR payout_outcome IN ('not_submitted', 'submitting', 'accepted', 'unknown', 'rejected', 'completed'))`,
     // At most one unresolved dispute per item — see matching comment in schema.ts.
     `CREATE UNIQUE INDEX IF NOT EXISTS uq_disputes_one_unresolved_per_item ON disputes(item_id) WHERE resolved_at IS NULL`,
     // Durable, idempotent social publication tracking — see matching

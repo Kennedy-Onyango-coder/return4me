@@ -35,11 +35,21 @@ The sweep selects claims due for settlement, then uses the CAS-guarded
 `attemptSettlementRelease`, which asserts the `pending_settlement → releasing`
 edge and conditionally updates. Only the instance that wins performs the payout.
 
-Settlement is partial-tolerant. If one leg of the disbursement split fails, the
-claim returns to `pending_settlement` and a message records which payout is
-outstanding; the next sweep retries only that leg. A permanently failing leg
-therefore does not block the other payouts, and an administrator can settle
-manually through `POST /api/admin/claims/:id/release-settlement`.
+A recipient is submitted to the provider only when its ledger row positively
+records that it has never been submitted (`ledger.payout_outcome =
+'not_submitted'`). Before the provider is called, each row is marked
+`submitting` by a compare-and-swap, so two workers cannot submit the same payout
+attempt and a process that dies mid-call cannot cause a duplicate on restart.
+See [claims-and-payments.md](claims-and-payments.md) for the outcome model.
+
+Settlement is partial-tolerant, but only for payouts that were never submitted.
+If one leg succeeds and the other is accepted by the provider but not confirmed,
+or its outcome is unknown, or the provider refuses it, the claim returns to
+`pending_settlement` and the unresolved leg is **not** resubmitted
+automatically. An administrator can retry a manual settlement through
+`POST /api/admin/claims/:id/release-settlement`, but that re-runs the same
+eligibility rule: a payout that may already have moved money is never re-sent.
+Unresolved payouts are listed by `GET /api/admin/payout-reconciliation`.
 
 ### Notification retry
 
@@ -101,9 +111,44 @@ endpoint rather than retrying the notification.
 
 A settlement that died mid-flight can leave the claim in `releasing`. The release
 operation is re-entrant from `releasing` back to `pending_settlement`, so the
-next sweep pass picks it up and retries the outstanding payout. If it does not
-clear, settle it manually through the admin route and check the settlement sweep
-logs for the specific payout that is failing.
+next sweep pass picks it up and re-evaluates the payouts. If it does not clear,
+settle it manually through the admin route and check the settlement sweep logs
+for the specific payout that is failing.
+
+Releasing the claim does **not** re-authorize a payout. Eligibility is decided by
+the payout row's own outcome, so a row that may already have moved money
+(`submitting`, `accepted`, `unknown`) or was refused (`rejected`) is never sent
+again, however many times the claim is released. Those rows are the ones listed
+by `GET /api/admin/payout-reconciliation`, and the `[SETTLEMENT SWEEP]` line plus
+the `PAYOUT_NOT_CONFIRMED` / `PAYOUT_RECONCILIATION_REQUIRED` audit rows name
+them.
+
+### A payout is unresolved (accepted, unknown or refused)
+
+`GET /api/admin/payout-reconciliation` lists every finder/agent payout that is
+not confirmed complete and is not eligible for another automatic submission. For
+each row it returns the claim, the type, the amount, the recorded
+`payoutOutcome`, and any provider batch/transaction reference captured from the
+provider's own response. Check those references against the IntaSend dashboard:
+
+- `accepted` — the provider took the batch; the transfer itself was not
+  confirmed. If IntaSend shows the transfer completed, the claim can be settled
+  once a confirmation path exists (see below); if it did not, the row needs a
+  human decision.
+- `unknown` — the request may or may not have been executed. Do not re-send
+  until IntaSend says which.
+- `rejected` — the provider refused the request before execution, so no money
+  moved. Re-issuing it is a policy decision, and no automatic retry exists.
+- `No submission history recorded` (no outcome value) — a row written before the
+  outcome column existed. It is deliberately treated as unresolved rather than
+  re-sent, because whether it was ever submitted cannot be proven from the data.
+
+There is currently no endpoint that marks a payout completed or re-issues one:
+both need evidence this system does not yet obtain on its own, and neither is
+automatic. A payout an operator has verified as completed therefore cannot yet
+be closed out from the console — that reconciliation workflow is the next piece
+of work, and until it exists these rows stay visible and unresent rather than
+being guessed either way.
 
 ### A webhook reports a payment but the claim did not move
 

@@ -287,6 +287,16 @@ CREATE TABLE ledger (
     provider_batch_id VARCHAR(100),
     provider_transaction_id VARCHAR(100),
     failure_reason TEXT,
+    -- PAYOUT SUBMISSION OUTCOME (E3A) — see src/config/payoutOutcomes.ts and the
+    -- matching comment in schema.ts. NULL means "no submission history is
+    -- recorded" (every pre-existing row) and is treated as UNRESOLVED, never as
+    -- "never submitted". New payout rows are booked as 'not_submitted'.
+    --
+    -- Declared as an UNNAMED inline column CHECK on purpose: Postgres then names
+    -- it ledger_payout_outcome_check, which is exactly the name the incremental
+    -- migration in src/db/index.ts drops and re-adds (the same pattern as
+    -- claims_status_check — see schemaSyncIdempotency.test.ts).
+    payout_outcome VARCHAR(20) CHECK (payout_outcome IS NULL OR payout_outcome IN ('not_submitted', 'submitting', 'accepted', 'unknown', 'rejected', 'completed')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 

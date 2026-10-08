@@ -1,6 +1,7 @@
 import { pgTable, varchar, text, numeric, integer, timestamp, jsonb, boolean, index, uniqueIndex, check } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { CLAIM_SLOT_EXCLUDED_SQL_LIST } from "../config/claimStatuses";
+import { PAYOUT_OUTCOME_SQL_LIST } from "../config/payoutOutcomes";
 
 // 1. CATEGORIES TABLE
 export const categories = pgTable("categories", {
@@ -495,7 +496,29 @@ export const ledger = pgTable("ledger", {
   provider_batch_id: varchar("provider_batch_id", { length: 100 }),
   provider_transaction_id: varchar("provider_transaction_id", { length: 100 }),
   failure_reason: text("failure_reason"),
+  // PAYOUT SUBMISSION OUTCOME (E3A) — the durable record of what happened at
+  // the provider boundary for THIS row, independent of the internal `status`
+  // above. Vocabulary and retry rules live in src/config/payoutOutcomes.ts.
+  //
+  // Nullable with NO default and NO backfill: NULL means "no submission
+  // history is recorded", which is the state of every row written before this
+  // column existed. That reading is deliberate — an ambiguous historical row
+  // must never be silently reinterpreted as "never submitted" and re-sent.
+  // New payout rows are booked as 'not_submitted' explicitly (see
+  // enterPendingSettlement), so "never submitted" is always a positive,
+  // recorded statement rather than an inference from a missing value.
+  payout_outcome: varchar("payout_outcome", { length: 20 }),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
+}, (table) => {
+  return {
+    // Same single-source pattern as claims_status_check: the predicate is
+    // generated from PAYOUT_OUTCOME_VALUES so this definition, sql/schema.sql
+    // and the runtime DDL in src/db/index.ts cannot drift apart.
+    ledger_payout_outcome_check: check(
+      "ledger_payout_outcome_check",
+      sql`${table.payout_outcome} IS NULL OR ${table.payout_outcome} IN (${sql.raw(PAYOUT_OUTCOME_SQL_LIST)})`
+    ),
+  };
 });
 
 // 7. AUDIT LOG TABLE

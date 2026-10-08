@@ -3,6 +3,9 @@ import fs from 'fs';
 import path from 'path';
 import { db } from '../database';
 import { testRunId } from './ensureTestCategory';
+// E3A — the shared retry-eligibility predicate, imported rather than restated
+// so these tests assert the SAME rule the settlement executor applies.
+import { isPayoutSubmittable } from '../../config/payoutOutcomes';
 
 // =============================================================================
 // ISSUE B — SETTLEMENT / PAYOUT VISIBILITY (and a verification of the sweep)
@@ -203,9 +206,14 @@ describe('TEST 4 — the Agent sees pending settlement separately from paid earn
       providerTransactionId: null,
       failureReason: 'Network/timeout error contacting IntaSend — outcome unconfirmed.',
     });
-    // recordPayoutAttempt maps 'unknown' to a PENDING row: the one provider
-    // failure the application treats as safely retryable.
+    // recordPayoutAttempt maps 'unknown' to a PENDING row: the money may be on
+    // its way, and it is certainly not paid.
     expect((await ledgerRow(claimId, 'agent_payout'))?.status).toBe('pending');
+    // E3A — the provider outcome is recorded alongside it, and that is what
+    // makes the row NOT eligible for another automatic submission: it is
+    // unresolved work for provider reconciliation, not retry work.
+    expect((await ledgerRow(claimId, 'agent_payout'))?.payout_outcome).toBe('unknown');
+    expect(isPayoutSubmittable((await ledgerRow(claimId, 'agent_payout'))!)).toBe(false);
 
     const after = await db.getAgentEarnings(agentId);
     expect(after.totalEarned, 'an unconfirmed outcome must never read as completed').toBe(0);
@@ -264,6 +272,35 @@ describe('TEST 5 — a claim inside its dispute window is never paid out', () =>
     expect((await db.getClaimsDueForSettlement()).some((c) => c.id === claimId)).toBe(true);
     expect(await db.attemptSettlementRelease(claimId, false), 'the sweep must be able to take the lock').toBe(true);
     expect((await db.getClaim(claimId))?.status).toBe('releasing');
+  });
+
+  it('E3A — a newly booked payout is recorded as never submitted, so it can be sent exactly once', async () => {
+    const { claimId } = await makeEscrowHeldClaim('K');
+    expect((await db.enterPendingSettlement(claimId, DISPUTE_WINDOW_MS)).success).toBe(true);
+
+    const finder = (await ledgerRow(claimId, 'finder_payout'))!;
+    const agent = (await ledgerRow(claimId, 'agent_payout'))!;
+    const platformFee = (await ledgerRow(claimId, 'platform_fee'))!;
+
+    // The BOOKING path states the fact instead of leaving it to inference:
+    // "booked, never submitted" is written down.
+    expect(finder.payout_outcome).toBe('not_submitted');
+    expect(agent.payout_outcome).toBe('not_submitted');
+    // The platform's own retained fee never touches a provider, so it stays
+    // NULL — there is no submission history because none can exist.
+    expect(platformFee.payout_outcome ?? null).toBeNull();
+
+    // ...which is exactly what keeps the FIRST legitimate submission possible.
+    expect(isPayoutSubmittable(finder)).toBe(true);
+    expect(isPayoutSubmittable(agent)).toBe(true);
+
+    // Once the pre-submission marker is taken the row is no longer submittable,
+    // so the same attempt cannot be issued twice...
+    expect(await db.markPayoutSubmissionStarted(finder.id)).toBe(true);
+    expect(isPayoutSubmittable((await ledgerRow(claimId, 'finder_payout'))!)).toBe(false);
+    // ...and the sibling leg is untouched by it: the two recipients'
+    // submission states are independent.
+    expect(isPayoutSubmittable((await ledgerRow(claimId, 'agent_payout'))!)).toBe(true);
   });
 
   it('the 48-hour default dispute window is untouched by this batch', () => {
@@ -351,7 +388,7 @@ describe('TEST 6 — settlement execution is idempotent', () => {
 // be mounted. The behavioural halves are asserted above against the REAL database
 // functions the sweep calls; the wiring is pinned here, exactly as the repo already
 // does for other inline code in server.ts.
-describe('the settlement sweep is correct and was NOT modified by this batch', () => {
+describe('the settlement sweep and its executor keep their safety guarantees (E3A reviewed them)', () => {
   it('B — the sweep takes its queue from the due-settlement query, not from all pending claims', () => {
     const sweep = SERVER_TS.slice(SERVER_TS.indexOf('async function releaseDueSettlements()'));
     expect(sweep).toContain('const due = await db.getClaimsDueForSettlement();');
@@ -371,18 +408,60 @@ describe('the settlement sweep is correct and was NOT modified by this batch', (
     expect(body).not.toMatch(/\.update\(|\.insert\(|\.delete\(/);
   });
 
-  it('D — only recipients whose ledger row is still pending are ever sent money', () => {
-    expect(SERVER_TS).toContain("if (finderRow && finderRow.status === 'pending') {");
-    expect(SERVER_TS).toContain("if (agentRow && agentRow.status === 'pending') {");
+  it('D — only recipients whose payout was NEVER SUBMITTED are ever sent money (E3A)', () => {
+    // Eligibility is no longer inferred from 'pending' alone: the executor asks
+    // the ONE shared predicate, so an accepted/uncertain row cannot be re-sent.
+    expect(SERVER_TS).toContain('const submittable = candidates.filter(c => isPayoutSubmittable(c.row));');
+    expect(SERVER_TS).toContain("import { isPayoutSubmittable } from './config/payoutOutcomes';");
+    // The old status-only gate must NOT come back.
+    expect(SERVER_TS).not.toContain("if (finderRow && finderRow.status === 'pending') {");
+    expect(SERVER_TS).not.toContain("if (agentRow && agentRow.status === 'pending') {");
+
+    // Every row enters the provider batch only after winning its durable
+    // pre-submission marker, and the marker is written BEFORE the call.
+    expect(SERVER_TS).toContain('if (await db.markPayoutSubmissionStarted(candidate.row.id)) {');
+    const markerIdx = SERVER_TS.indexOf('markPayoutSubmissionStarted(candidate.row.id)');
+    const callIdx = SERVER_TS.indexOf('await PaymentService.triggerIntasendPayout(claimId, claimed.map(c => c.payload))');
+    expect(markerIdx).toBeGreaterThan(-1);
+    expect(callIdx, 'the durable marker must precede the provider call').toBeGreaterThan(markerIdx);
+
     // And the outcome is re-read rather than assumed.
-    expect(SERVER_TS).toContain('const stillOutstanding = refreshedLedgerRows.find(');
+    expect(SERVER_TS).toContain('const unresolvedPayout = refreshedLedgerRows.find(');
     expect(SERVER_TS).toContain("r => (r.type === 'finder_payout' || r.type === 'agent_payout') && r.status !== 'completed'");
   });
 
-  it('F — a non-completed recipient reverts the lock so a later sweep can retry it', () => {
-    const stillIdx = SERVER_TS.indexOf('if (stillOutstanding) {');
-    expect(stillIdx).toBeGreaterThan(-1);
-    expect(SERVER_TS.slice(stillIdx, stillIdx + 400)).toContain('await db.revertSettlementRelease(claimId);');
+  it('F — a non-completed recipient reverts the lock, and is never auto-resubmitted', () => {
+    const unresolvedIdx = SERVER_TS.indexOf('if (unresolvedPayout) {');
+    const finalizedIdx = SERVER_TS.indexOf('const finalized = await db.finalizeSettlement', unresolvedIdx);
+    expect(unresolvedIdx).toBeGreaterThan(-1);
+    expect(finalizedIdx, 'the unresolved branch must end before finalization').toBeGreaterThan(unresolvedIdx);
+    const branch = SERVER_TS.slice(unresolvedIdx, finalizedIdx);
+    // The lock is given back so the claim cannot stay parked in 'releasing'.
+    expect(branch).toContain('await db.revertSettlementRelease(claimId);');
+    // ...but the PAYOUT is not re-queued: the operator-facing message says so
+    // explicitly, and eligibility is re-decided from payout_outcome, not from
+    // claim state.
+    expect(branch).toContain('will NOT be resubmitted automatically');
+    expect(branch).toContain("'PAYOUT_RECONCILIATION_REQUIRED'");
+  });
+
+  it('F2 (E3A) — every LOCAL failure path returns the release lock instead of stranding the claim', () => {
+    const start = SERVER_TS.indexOf('async function executeClaimSettlement');
+    const end = SERVER_TS.indexOf('const claimLedgerRows = await db.getLedgerEntriesForClaim(claimId);', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const head = SERVER_TS.slice(start, end);
+
+    // The lock is given back on every one of them (this function runs only
+    // after the lock was already won, so a bare early return would park the
+    // claim in 'releasing' with nothing able to reach it).
+    expect(head).toContain('const abandonRelease = async (reason: string) => {');
+    expect(head).toContain('await db.revertSettlementRelease(claimId);');
+    expect(head).toContain("'SETTLEMENT_RELEASE_ABANDONED'");
+    // No un-reverted early return may come back.
+    expect(head).not.toMatch(/return \{ success: false, message: '(Claim|Item|Agent|Category) not found/);
+    // ...and every one of the four lookups uses it.
+    expect((head.match(/return await abandonRelease\(/g) ?? []).length).toBe(4);
   });
 
   it('G — finalizeSettlement refuses while any finder/agent payout is not genuinely completed', () => {

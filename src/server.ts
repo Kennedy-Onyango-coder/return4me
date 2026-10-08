@@ -8,7 +8,7 @@ import type { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import rateLimit from 'express-rate-limit';
 import { createServer as createViteServer } from 'vite';
-import { db, FoundItem, Claim, Agent, Dispute } from './db/database';
+import { db, FoundItem, Claim, Agent, Dispute, LedgerEntry } from './db/database';
 import { pool, ensureSchemaUpToDate, isDatabaseConnectionError } from './db/index';
 import { AuthService, authenticateJWT, generateToken, verifyToken, toE164Kenyan, hashCode, timingSafeEqualHex, maskPhoneForLog, isAgentActionable, isAdminSessionCurrent } from './services/auth';
 // Administrative 2FA hardening — authenticated encryption of the admin TOTP
@@ -92,6 +92,10 @@ import {
 // predicate introduced by Phase 7C.5. /api/claims/lookup now gates its agent
 // disclosure with it so that route cannot drift from routes/publicItems.ts.
 import { INACTIVE_CLAIM_STATUSES, isPickupEligibleClaimStatus, CLAIM_UNAVAILABLE_MESSAGE, canRecoverExpiredClaimPayment } from './config/claimStatuses';
+// E3A - the ONE payout retry-eligibility rule. The settlement executor must not
+// re-derive "is this payout safe to send?" locally: it asks this predicate,
+// which is also what the data layer's unresolved-payout query uses.
+import { isPayoutSubmittable } from './config/payoutOutcomes';
 import { toOwnerSafeAgentView, toOwnerSafeClaimView, toOwnerSafeItemView } from './services/ownerSafeViews';
 // Phase 7B: the shared public (unauthenticated) item read model. getRoughArea
 // moved here from this file so the public search route and the new public
@@ -3816,6 +3820,53 @@ async function createApp() {
 
 
   // ============================================================
+  // PAYOUT RECONCILIATION (E3A unresolved-outcome visibility)
+  // ============================================================
+  // A finder/agent payout whose provider outcome is unknown, accepted-but-not-
+  // confirmed, or refused is deliberately NEVER resubmitted automatically (see
+  // src/config/payoutOutcomes.ts), and the claim that owns it returns to
+  // pending_settlement. Those rows are safe from duplication but were
+  // operationally invisible: nothing surfaced them for the manual provider
+  // check that discipline requires. This route lists them.
+  //
+  // READ-ONLY, on purpose. There is deliberately NO endpoint here that marks a
+  // payout completed, and none that re-issues one: completion needs
+  // authoritative evidence that the transfer happened, which this batch does
+  // not fabricate, and re-issuing needs the verification this list exists to
+  // support. Closing these rows out is the follow-up reconciliation workflow.
+  app.get('/api/admin/payout-reconciliation', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
+    try {
+      if (req.user?.role !== 'admin') {
+        return res.status(403).json({ error: 'Administrator access required.' });
+      }
+      const rows = await db.getUnresolvedPayouts();
+      const items = rows.map((row) => ({
+        ledgerEntryId: row.id,
+        claimId: row.claim_id,
+        itemId: row.item_id,
+        type: row.type,
+        amount: row.amount,
+        status: row.status,
+        // null means NO submission history is recorded (a row written before
+        // the outcome column existed). It is NOT "never submitted": we cannot
+        // prove that, so the row must be verified with the provider rather
+        // than re-sent.
+        payoutOutcome: row.payout_outcome ?? null,
+        providerBatchId: row.provider_batch_id ?? null,
+        providerTransactionId: row.provider_transaction_id ?? null,
+        // Masked: an operator needs to identify the row, not to read customer
+        // PII off a reconciliation list.
+        recipient: maskPhoneForLog(row.phone_or_till),
+        reason: row.failure_reason ?? null,
+        createdAt: row.created_at,
+      }));
+      res.json({ success: true, items });
+    } catch (e: any) {
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
+    }
+  });
+
+  // ============================================================
   // REFUND RECONCILIATION (A1 unknown-outcome operational workflow)
   // ============================================================
   // A refund whose real provider outcome is UNKNOWN (network/timeout during the
@@ -5257,25 +5308,46 @@ async function expireStaleClaims() {
 async function executeClaimSettlement(claimId: string): Promise<{ success: boolean; message: string }> {
   if (await isPlatformOperationPaused(pauseSettingKey('payouts'))) {
     // The claim has already won the attemptSettlementRelease() lock
-    // (status='releasing') by the time this function is called â€” reverting
+    // (status='releasing') by the time this function is called - reverting
     // it back to 'pending_settlement' here (the same mechanism already used
-    // below for "still outstanding, retry later") is what keeps this safe
-    // to call from both the automatic sweep and the admin manual-release
-    // endpoint: neither path moves any real money while paused, and the
-    // claim isn't left stuck in 'releasing' with nothing to unstick it.
+    // below for an unresolved payout) is what keeps this safe to call from
+    // both the automatic sweep and the admin manual-release endpoint: neither
+    // path moves any real money while paused, and the claim is not left stuck
+    // in 'releasing' with nothing to unstick it. Reverting cannot resubmit a
+    // payout: eligibility is per row (payout_outcome), never claim state.
     await db.revertSettlementRelease(claimId);
     await db.logAudit('SYSTEM', 'SETTLEMENT_SKIPPED_PAYOUTS_PAUSED', `Claim ${claimId}: settlement release skipped â€” payouts are paused platform-wide. Reverted to pending_settlement for retry once resumed.`);
     return { success: false, message: 'Payouts are currently paused platform-wide by an administrator. This claim remains in pending_settlement and will be retried automatically once resumed.' };
   }
 
+  // E3A - A LOCAL FAILURE MUST NOT STRAND THE CLAIM.
+  //
+  // This function is only ever called AFTER attemptSettlementRelease() won the
+  // lock, so the claim is already in the transient 'releasing' state. Returning
+  // early here (missing item/agent/category - a data-integrity failure, not a
+  // provider one) used to leave the claim in 'releasing' forever: the sweep's
+  // work queue only selects 'pending_settlement', so nothing would ever look at
+  // it again, and the payout rows were not even inspected.
+  //
+  // Giving the lock back is safe BECAUSE retry eligibility is decided per payout
+  // ROW and never by claim state: the next attempt re-reads the rows and may
+  // only submit ones that positively record 'not_submitted', and each of those
+  // must first win its own pre-submission compare-and-swap. Reverting a claim
+  // therefore cannot re-send a row that may already have moved money.
+  const abandonRelease = async (reason: string) => {
+    await db.revertSettlementRelease(claimId);
+    await db.logAudit('SYSTEM', 'SETTLEMENT_RELEASE_ABANDONED', `Claim ${claimId}: settlement could not proceed (${reason}). Release lock returned to pending_settlement; no payout was submitted by this attempt and eligibility is re-decided per row.`);
+    return { success: false, message: `Settlement could not proceed: ${reason} The claim was returned to pending_settlement.` };
+  };
+
   const claim = await db.getClaim(claimId);
-  if (!claim) return { success: false, message: 'Claim not found.' };
+  if (!claim) return await abandonRelease('claim not found.');
   const item = await db.getItem(claim.item_id);
-  if (!item) return { success: false, message: 'Item not found.' };
+  if (!item) return await abandonRelease('the item for this claim no longer exists.');
   const agent = item.assigned_agent_id ? await db.getAgent(item.assigned_agent_id) : null;
-  if (!agent) return { success: false, message: 'Agent not found.' };
+  if (!agent) return await abandonRelease('the agent assigned to this item could not be resolved.');
   const category = item.category_id ? await db.getCategory(item.category_id) : null;
-  if (!category) return { success: false, message: 'Category not found.' };
+  if (!category) return await abandonRelease('the category for this item could not be resolved.');
 
   let finderShare = parseFloat(String(category.finder_share));
   let agentShare = parseFloat(String(category.agent_share));
@@ -5288,53 +5360,118 @@ async function executeClaimSettlement(claimId: string): Promise<{ success: boole
     }
   }
 
-  // Only pay recipients whose ledger row is still 'pending'. This is what
-  // makes a retry safe: if the finder's payout already succeeded on a
-  // previous attempt but the agent's failed, this run sends money to the
-  // agent ONLY â€” never re-sending to the finder, which would be a
-  // duplicate payment.
+  // E3A - SUBMISSION ELIGIBILITY.
+  //
+  // A recipient is only sent to the provider when its ledger row is still
+  // bookable AND its recorded submission history says "never submitted" (see
+  // isPayoutSubmittable in src/config/payoutOutcomes.ts). 'pending' on its own
+  // is NOT sufficient any more, because it also covers:
+  //   * a row the provider already ACCEPTED (the individual transfer is not
+  //     confirmed yet), and
+  //   * a row whose outcome is UNKNOWN (timeout / transport / provider 5xx),
+  //     where the request may already have been executed,
+  // and re-sending either of those can move the same money twice.
+  //
+  // A row that is not eligible is never silently dropped: it is reported below
+  // as unresolved, the claim is returned to pending_settlement, and the row is
+  // recorded for provider reconciliation.
   const claimLedgerRows = await db.getLedgerEntriesForClaim(claimId);
   const finderRow = claimLedgerRows.find(r => r.type === 'finder_payout');
   const agentRow = claimLedgerRows.find(r => r.type === 'agent_payout');
 
-  const outstanding: Array<{ destination: string; amount: number; payoutMethodType?: string; recipientType: 'finder' | 'agent' }> = [];
-  if (finderRow && finderRow.status === 'pending') {
-    outstanding.push({ destination: item.finder_phone, payoutMethodType: 'Personal M-Pesa', amount: finderShare, recipientType: 'finder' });
+  const candidates: Array<{
+    row: LedgerEntry;
+    payload: { destination: string; amount: number; payoutMethodType?: string; recipientType: 'finder' | 'agent' };
+  }> = [];
+  if (finderRow) {
+    candidates.push({
+      row: finderRow,
+      payload: { destination: item.finder_phone, payoutMethodType: 'Personal M-Pesa', amount: finderShare, recipientType: 'finder' },
+    });
   }
-  if (agentRow && agentRow.status === 'pending') {
-    outstanding.push({ destination: agent.mpesa_till_or_paybill, payoutMethodType: agent.payout_method_type || 'Till Number', amount: agentShare, recipientType: 'agent' });
+  if (agentRow) {
+    candidates.push({
+      row: agentRow,
+      payload: { destination: agent.mpesa_till_or_paybill, payoutMethodType: agent.payout_method_type || 'Till Number', amount: agentShare, recipientType: 'agent' },
+    });
   }
 
-  if (outstanding.length > 0) {
-    const payoutResult = await PaymentService.triggerIntasendPayout(claimId, outstanding);
+  const submittable = candidates.filter(c => isPayoutSubmittable(c.row));
 
-    for (const result of payoutResult.results) {
-      const row = result.recipientType === 'finder' ? finderRow : agentRow;
-      if (!row) continue; // shouldn't happen â€” outstanding was built from these same rows
-      await db.recordPayoutAttempt(row.id, {
-        status: result.status,
-        providerBatchId: payoutResult.batchId,
-        providerTransactionId: result.providerTransactionId,
-        failureReason: result.status === 'failed' ? 'IntaSend reported this transaction as failed.' : result.status === 'unknown' ? 'Network/timeout error contacting IntaSend â€” outcome unconfirmed.' : null,
-      });
-      if (result.status === 'failed' || result.status === 'unknown') {
-        await db.logAudit('SYSTEM', 'PAYOUT_NOT_CONFIRMED', `Claim ${claimId}: ${result.recipientType} payout status '${result.status}'. Ledger row ${row.id} left pending for retry/reconciliation.`);
+  if (submittable.length > 0) {
+    // DURABLE PRE-SUBMISSION MARKERS - persisted BEFORE any network call, one
+    // compare-and-swap per row. A row enters the provider batch only if THIS
+    // call won its marker, so a competing worker (the sweep racing an
+    // administrator's manual release, or two instances) can never submit the
+    // same payout attempt independently. If the process dies right after this
+    // point the row is left in 'submitting', which is UNRESOLVED and is never
+    // re-sent automatically - the window that previously allowed a
+    // possibly-executed transfer to be resubmitted is closed.
+    const claimed: typeof submittable = [];
+    for (const candidate of submittable) {
+      if (await db.markPayoutSubmissionStarted(candidate.row.id)) {
+        claimed.push(candidate);
+      } else {
+        await db.logAudit('SYSTEM', 'PAYOUT_ATTEMPT_ALREADY_IN_FLIGHT', `Claim ${claimId}: ${candidate.payload.recipientType} payout row ${candidate.row.id} was already marked as in-flight by another worker - skipped instead of being sent a second time.`);
+      }
+    }
+
+    if (claimed.length > 0) {
+      const payoutResult = await PaymentService.triggerIntasendPayout(claimId, claimed.map(c => c.payload));
+
+      for (const result of payoutResult.results) {
+        const candidate = claimed.find(c => c.payload.recipientType === result.recipientType);
+        if (!candidate) continue; // shouldn't happen - the batch was built from these same rows
+        // Provider identifiers are threaded through explicitly. A later
+        // uncertain or refused result carries none of its own, and
+        // recordPayoutAttempt() additionally preserves whatever is already on
+        // the row, so an earlier batch/transaction reference survives for
+        // reconciliation instead of being overwritten with null.
+        await db.recordPayoutAttempt(candidate.row.id, {
+          status: result.status,
+          providerBatchId: payoutResult.batchId ?? candidate.row.provider_batch_id ?? null,
+          providerTransactionId: result.providerTransactionId ?? candidate.row.provider_transaction_id ?? null,
+          failureReason:
+            result.status === 'failed'
+              ? 'IntaSend refused this transaction (provider rejection - the transfer was not executed).'
+              : result.status === 'pending'
+                ? 'IntaSend accepted the batch; the individual transfer is not confirmed complete.'
+                : result.status === 'unknown'
+                  ? 'IntaSend response was ambiguous (timeout, transport failure or provider error) - the transfer may already have been executed.'
+                  : null,
+        });
+        if (result.status !== 'success') {
+          // Never a false completion, and never a promise of an automatic
+          // retry: acceptance and ambiguity are both INCONCLUSIVE, so the row
+          // is left unresolved and surfaced for provider reconciliation.
+          await db.logAudit('SYSTEM', 'PAYOUT_NOT_CONFIRMED', `Claim ${claimId}: ${result.recipientType} payout outcome '${result.status}'. Ledger row ${candidate.row.id} recorded as unresolved - it will NOT be resubmitted automatically.`);
+        }
       }
     }
   }
 
-  // Re-check actual state after recording results â€” never assume the
+  // Re-check the real state after recording results - never assume the
   // outcome, re-fetch it.
   const refreshedLedgerRows = await db.getLedgerEntriesForClaim(claimId);
-  const stillOutstanding = refreshedLedgerRows.find(
+  const unresolvedPayout = refreshedLedgerRows.find(
     r => (r.type === 'finder_payout' || r.type === 'agent_payout') && r.status !== 'completed'
   );
 
-  if (stillOutstanding) {
+  if (unresolvedPayout) {
+    // The RELEASE LOCK is given back so the claim is not parked in the
+    // transient 'releasing' state - but the payout is NOT re-queued: the next
+    // sweep re-reads eligibility from the ledger row and finds it ineligible.
+    // Reverting the CLAIM can never resubmit a PAYOUT, because retry
+    // eligibility is decided by payout_outcome, never by claim state.
     await db.revertSettlementRelease(claimId);
+    // Named explicitly so an operator does not have to guess whether money
+    // moved: 'no submission history recorded' is the fail-closed reading of a
+    // legacy row whose outcome column is NULL.
+    const outcomeLabel = unresolvedPayout.payout_outcome ?? 'no submission history recorded';
+    await db.logAudit('SYSTEM', 'PAYOUT_RECONCILIATION_REQUIRED', `Claim ${claimId}: ${unresolvedPayout.type} payout row ${unresolvedPayout.id} is unresolved (outcome: ${outcomeLabel}). Claim returned to pending_settlement. No automatic resubmission - verify with IntaSend before reissuing.`);
     return {
       success: false,
-      message: `Settlement partially processed â€” ${stillOutstanding.type} is '${stillOutstanding.status}'. Claim reverted to pending_settlement; the next sweep will retry only the outstanding payout(s).`,
+      message: `Settlement not completed - ${unresolvedPayout.type} is unresolved (${outcomeLabel}). The claim was returned to pending_settlement and this payout will NOT be resubmitted automatically; it needs provider reconciliation.`,
     };
   }
 

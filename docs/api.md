@@ -160,6 +160,7 @@ applicable a named permission.
 | GET | `/api/admin/claims` | List claims (`claims.read`) |
 | GET | `/api/admin/claims/:claimId` | Claim detail (`claims.detail`) |
 | POST | `/api/admin/claims/:id/release-settlement` | Manual settlement |
+| GET | `/api/admin/payout-reconciliation` | Finder/agent payouts whose provider outcome is unresolved (read-only) |
 | GET | `/api/admin/disputes/:disputeId/evidence` | Evidence view |
 | POST | `/api/admin/disputes/resolve` | Resolve a dispute |
 | GET | `/api/admin/payment-strikes` | Payment strikes |

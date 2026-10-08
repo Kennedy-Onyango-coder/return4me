@@ -104,6 +104,24 @@ legal. Both are needed: the constraint stops an undefined status being stored,
 and the table stops an illegal move — neither alone is sufficient, and a
 concurrent writer can defeat an application check that the database would catch.
 
+### Payout submission outcome
+
+`ledger_payout_outcome_check` restricts `ledger.payout_outcome` to the payout
+submission vocabulary listed in
+[claims-and-payments.md](claims-and-payments.md). The predicate is generated from
+`PAYOUT_OUTCOME_VALUES`, so the Drizzle definition, `sql/schema.sql` and the
+runtime DDL cannot drift apart.
+
+The column is nullable with no default, and every pre-existing row is left NULL.
+NULL means "no submission history is recorded", which the settlement executor
+treats as unresolved and never re-sends. That is deliberately different from
+`not_submitted`, which is written positively when a payout is booked: "never
+submitted" has to be a recorded fact, not an inference from a missing value,
+because the two readings authorize opposite actions (send vs. do not send).
+New payout rows are booked as `not_submitted`; the runtime migration adds the
+column with `ADD COLUMN IF NOT EXISTS`, re-asserts the constraint by drop-then-add,
+and performs no backfill.
+
 ### Social publication uniqueness
 
 `uq_social_pub_item_platform_type` is a unique index on `item_id`, `platform` and

@@ -55,6 +55,11 @@ import {
 } from "./schema.ts";
 import { eq, and, or, isNull, isNotNull, inArray, notInArray, lt, lte, gte, ne, desc, asc, sql } from "drizzle-orm";
 import { isAllowedClaimTransition, TERMINAL_CLAIM_STATUSES } from "../config/claimStatuses";
+// E3A — the single source of truth for the payout submission-outcome
+// vocabulary and the retry-eligibility rule. Imported here (not re-derived) so
+// the data layer, the settlement executor and the schema definitions cannot
+// disagree about what is safe to submit.
+import { isPayoutOutcome, isUnresolvedPayoutRow, type PayoutOutcome } from "../config/payoutOutcomes";
 // A1 (Batch 0A) — the single definition of the 5-day strike window, plus the
 // repository's EXISTING canonical phone normalization (re-exported, never
 // reimplemented) so every strike path resolves to one identity.
@@ -547,6 +552,13 @@ export interface LedgerEntry {
   provider_batch_id?: string | null;
   provider_transaction_id?: string | null;
   failure_reason?: string | null;
+  /**
+   * E3A — what the PROVIDER did with this row's payout attempt, recorded
+   * independently of `status` above. NULL means no submission history is
+   * recorded (every pre-existing row) and is treated as unresolved, never as
+   * "never submitted". See src/config/payoutOutcomes.ts.
+   */
+  payout_outcome?: PayoutOutcome | null;
   created_at: string;
 }
 
@@ -838,6 +850,11 @@ function parseLedgerEntry(row: any): LedgerEntry {
     provider_batch_id: row.provider_batch_id || null,
     provider_transaction_id: row.provider_transaction_id || null,
     failure_reason: row.failure_reason || null,
+    // E3A — normalized to a real vocabulary value or null. An unrecognized
+    // stored value (impossible through this codebase, but not through a manual
+    // SQL edit) reads as null = "unknown history" = fail closed, never as
+    // "safe to submit".
+    payout_outcome: isPayoutOutcome(row.payout_outcome) ? row.payout_outcome : null,
     created_at: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
   };
 }
@@ -1947,10 +1964,15 @@ class DatabaseEngine {
   }
 
   // Used by executeClaimSettlement to find which finder/agent payout rows
-  // for this claim are still outstanding — the actual mechanism that makes
-  // a settlement retry safe. Only rows still 'pending' get included in the
-  // next payout attempt; a row already 'completed' is never re-sent to,
-  // even if its sibling row for the same claim failed and needs a retry.
+  // for this claim are still outstanding.
+  //
+  // E3A: the retry-safety decision is NO LONGER made from `status` alone. A row
+  // is only ever sent to the provider when it is 'pending' AND its
+  // payout_outcome says 'not_submitted' (see isPayoutSubmittable in
+  // src/config/payoutOutcomes.ts) — a 'pending' row that was accepted by the
+  // provider, or whose outcome is unknown, must never be re-sent. This method
+  // stays a plain read of every row for the claim; the rule lives in one place
+  // and is applied by the caller.
   public async getLedgerEntriesForClaim(claimId: string): Promise<LedgerEntry[]> {
     try {
       const rows = await drizzleDb.select().from(ledgerTable).where(eq(ledgerTable.claim_id, claimId));
@@ -1989,31 +2011,154 @@ class DatabaseEngine {
     }
   }
 
-  // Records the outcome of one payout attempt against a specific ledger
-  // row. 'success' marks it 'completed' (money genuinely confirmed sent —
-  // never set this from a bare HTTP 200, only from an actual provider
-  // confirmation); 'failed' marks it 'failed' with a reason for admin
-  // visibility; 'pending'/'unknown' leave the row 'pending' so the next
-  // settlement sweep attempt picks it up again, but now carrying the
-  // provider's batch/transaction id for reconciliation.
+  // Records the outcome of one payout attempt against a specific ledger row.
+  //
+  // TWO INDEPENDENT THINGS ARE WRITTEN, ON PURPOSE:
+  //
+  //   1. `status` — unchanged legacy meaning, read by the admin dashboard, the
+  //      agent-earnings figures, finalizeSettlement()'s "still outstanding?"
+  //      guard and existing tests:
+  //        'success' -> 'completed'         (authoritative completion accepted)
+  //        'failed'  -> 'failed'            (provider rejected before execution)
+  //        'pending' / 'unknown' -> 'pending'
+  //   2. `payout_outcome` (E3A) — what actually happened at the provider
+  //      boundary, so the settlement executor can tell a never-submitted row
+  //      apart from one that may already have moved money:
+  //        'success' -> 'completed'
+  //        'pending' -> 'accepted'   (batch accepted, transfer NOT confirmed)
+  //        'unknown' -> 'unknown'    (timeout / transport / provider 5xx)
+  //        'failed'  -> 'rejected'   (4xx provider refusal)
+  //      Only 'completed' is treated as paid; the other three are unresolved
+  //      and are never resubmitted automatically.
+  //
+  // PROVIDER IDENTITY IS PRESERVED, NOT OVERWRITTEN (E3A). A later uncertain or
+  // failed result carries no batch/transaction id, and nulling the column would
+  // destroy the only handle an operator has for reconciling the earlier
+  // submission with the provider. A non-null identifier already on the row is
+  // therefore retained whenever the new result does not supply one. The row is
+  // read first because a COALESCE write is opaque to the in-memory test double,
+  // which would make the guarantee untestable.
   public async recordPayoutAttempt(
     ledgerEntryId: string,
     result: { status: 'success' | 'pending' | 'failed' | 'unknown'; providerBatchId: string | null; providerTransactionId: string | null; failureReason?: string | null }
   ): Promise<void> {
     try {
-      const newStatus = result.status === 'success' ? 'completed' : result.status === 'failed' ? 'failed' : 'pending';
+      const newStatus: "pending" | "completed" | "failed" =
+        result.status === 'success' ? 'completed' : result.status === 'failed' ? 'failed' : 'pending';
+      const newOutcome: PayoutOutcome =
+        result.status === 'success' ? 'completed'
+          : result.status === 'failed' ? 'rejected'
+            : result.status === 'pending' ? 'accepted'
+              : 'unknown';
+
+      const existingRows = await drizzleDb.select().from(ledgerTable).where(eq(ledgerTable.id, ledgerEntryId));
+      const existing = existingRows[0];
+
       await drizzleDb
         .update(ledgerTable)
         .set({
           status: newStatus,
-          provider_batch_id: result.providerBatchId,
-          provider_transaction_id: result.providerTransactionId,
+          payout_outcome: newOutcome,
+          provider_batch_id: result.providerBatchId ?? existing?.provider_batch_id ?? null,
+          provider_transaction_id: result.providerTransactionId ?? existing?.provider_transaction_id ?? null,
           failure_reason: result.failureReason ?? null,
         })
         .where(eq(ledgerTable.id, ledgerEntryId));
     } catch (error) {
       console.error("Database update failed:", error);
       throw new Error("Failed to record payout attempt.", { cause: error });
+    }
+  }
+
+  /**
+   * E3A — THE DURABLE PRE-SUBMISSION MARKER, and the crash-safety mechanism for
+   * payout submission.
+   *
+   * Called BEFORE the provider request is issued. It is a compare-and-swap
+   * moving the row from 'not_submitted' to 'submitting', guarded on BOTH
+   * (`status = 'pending'`) and (`payout_outcome = 'not_submitted'`), so it can
+   * only ever claim a row that positively records "never submitted" AND has not
+   * already been claimed. Only the caller that wins the CAS may send that row to
+   * the provider, so two workers (the settlement sweep and an administrator's
+   * manual release, or two instances of either) can never independently submit
+   * the same payout attempt. A row in any other state — including NULL, i.e. no
+   * recorded submission history — is not claimable at all.
+   *
+   * WHAT THIS FIXES: the obvious ordering — call the provider, then record the
+   * result — leaves a window in which the process can die after the provider
+   * ACCEPTED the request but before anything was persisted. The row still read
+   * as "never submitted", so the next sweep re-sent a transfer that may already
+   * have been executed. Marking first closes that window: a row marked
+   * 'submitting' with no result recorded stays UNRESOLVED and is never
+   * resubmitted automatically.
+   *
+   * WHAT THIS DOES NOT DO: it does not make money movement exactly-once. If the
+   * process dies between the marker and the provider call the transfer simply
+   * never happens (a stuck row an operator must reconcile), and if it dies
+   * after the provider accepted, the transfer happened and there is no local
+   * completion record. Without provider-side idempotency keys or a verified
+   * status API, exactly-once cannot be guaranteed from this side alone; the
+   * guarantee here is the weaker, honest one: NO AUTOMATIC DUPLICATE
+   * SUBMISSION.
+   *
+   * Returns whether THIS caller claimed the row.
+   */
+  public async markPayoutSubmissionStarted(ledgerEntryId: string): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(ledgerTable)
+        .set({ payout_outcome: 'submitting' })
+        .where(and(
+          eq(ledgerTable.id, ledgerEntryId),
+          eq(ledgerTable.status, 'pending'),
+          eq(ledgerTable.payout_outcome, 'not_submitted'),
+        ))
+        .returning({ id: ledgerTable.id });
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Database update failed:", error);
+      throw new Error("Failed to mark payout submission started.", { cause: error });
+    }
+  }
+
+  /**
+   * E3A — the unresolved-payout work queue for provider reconciliation.
+   *
+   * Returns every finder/agent payout row that is NOT confirmed completed and
+   * is NOT eligible for another automatic submission, i.e.:
+   *   * rows whose submission outcome is recorded but not final
+   *     ('submitting' | 'accepted' | 'unknown' — the transfer may already have
+   *     happened), and
+   *   * rows with NO recorded submission history at all (payout_outcome NULL —
+   *     every row written before this column existed, plus anything a manual
+   *     SQL edit produced).
+   *
+   * This is a READ-ONLY query. It deliberately excludes 'not_submitted' rows
+   * (those are simply awaiting their first, legitimate settlement attempt), and
+   * it never mutates anything: reconciling a payout needs authoritative
+   * evidence from the provider, which this batch does not attempt to fabricate.
+   * Rows in 'rejected' are included too — a provider refusal is not money that
+   * moved, but it is unresolved work an operator still has to close out.
+   */
+  public async getUnresolvedPayouts(): Promise<LedgerEntry[]> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(ledgerTable)
+        .where(and(
+          inArray(ledgerTable.type, ["finder_payout", "agent_payout"]),
+          ne(ledgerTable.status, "completed"),
+        ));
+      // The rule itself is applied in-application rather than as a second SQL
+      // predicate, so it lives in exactly one place
+      // (src/config/payoutOutcomes.ts) and cannot drift from what the
+      // settlement executor uses to decide eligibility.
+      return rows
+        .map(parseLedgerEntry)
+        .filter((entry) => isUnresolvedPayoutRow(entry));
+    } catch (error) {
+      console.error("Database query failed:", error);
+      throw new Error("Failed to query unresolved payouts.", { cause: error });
     }
   }
 
@@ -2038,10 +2183,18 @@ class DatabaseEngine {
   // 'failed' rows are deliberately in NEITHER figure: a failed disbursement is
   // not money the agent has been paid, and it is not money currently on its way
   // either — it is an outstanding operational problem, and it must not inflate
-  // either number. 'unknown' provider outcomes are stored by
-  // recordPayoutAttempt() as 'pending' (the one provider failure this codebase
-  // treats as safely retryable), so they land in the PENDING figure and can
-  // never be mistaken for completed earnings.
+  // either number.
+  //
+  // E3A UPDATE — what an accepted-or-uncertain payout counts as. Provider
+  // outcomes 'accepted' and 'unknown' are stored by recordPayoutAttempt() as a
+  // 'pending' ledger status (the money may already be on its way, and it is
+  // certainly not paid), so they land in the PENDING figure and can never be
+  // mistaken for completed earnings. They used to be described here as "the one
+  // provider failure this codebase treats as safely retryable"; that is no
+  // longer true — a 'pending' row that carries a submission outcome is never
+  // resubmitted automatically (see src/config/payoutOutcomes.ts). The
+  // agent-facing figure is unchanged by that: it was, and remains, money that
+  // has NOT been confirmed as paid.
   //
   // PAYMENT TIMING IS UNCHANGED BY ANY OF THIS: 'completed' still means a real
   // provider confirmation was recorded, nothing is disbursed earlier, and the
@@ -3455,6 +3608,13 @@ class DatabaseEngine {
           amount: String(entry.amount),
           phone_or_till: entry.phone_or_till,
           status: entry.status,
+          // E3A — the caller states the payout submission history when it has
+          // one. Anything that does NOT pass a value is written as NULL, which
+          // the settlement executor reads as "unknown history" and never
+          // resubmits. That default is deliberate: a row booked by a path that
+          // does not know whether a provider submission was made must fail
+          // closed rather than be assumed payable.
+          payout_outcome: entry.payout_outcome ?? null,
         })
         .returning();
 
@@ -4150,6 +4310,12 @@ class DatabaseEngine {
           amount: String(finderShare),
           phone_or_till: item.finder_phone,
           status: "pending",
+          // E3A — this row has been booked and NOTHING has been sent to a
+          // provider yet. Recording that fact explicitly (rather than leaving
+          // the column NULL) is what lets the settlement executor distinguish a
+          // brand-new payable row from a historical row whose submission
+          // history is unknown. See src/config/payoutOutcomes.ts.
+          payout_outcome: "not_submitted",
         });
         await tx.insert(ledgerTable).values({
           id: "TXN-" + Math.random().toString(36).substr(2, 9).toUpperCase(),
@@ -4159,6 +4325,7 @@ class DatabaseEngine {
           amount: String(agentShare),
           phone_or_till: agent.mpesa_till_or_paybill,
           status: "pending",
+          payout_outcome: "not_submitted",
         });
         await tx.insert(ledgerTable).values({
           id: "TXN-" + Math.random().toString(36).substr(2, 9).toUpperCase(),

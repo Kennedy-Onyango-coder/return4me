@@ -300,11 +300,35 @@ Settlement is a compare-and-swap, `attemptSettlementRelease`, which asserts the
 `pending_settlement → releasing` edge before executing. It exists so that the
 automatic sweep and an administrator's manual release cannot both pay out.
 
-Settlement is not all-or-nothing. If part of the split fails, the claim returns to
-`pending_settlement` and a message records which payout is still outstanding; the
-next sweep retries only that payout rather than the whole split. An
-administrator can also settle manually through
-`POST /api/admin/claims/:id/release-settlement`.
+### Payout submission outcome
+
+Every payout row carries its own `payout_outcome`, the durable record of what the
+provider did with that attempt. It is written before the provider is called
+(`submitting`) and again from the response:
+
+| Outcome | Meaning | Resubmitted automatically? |
+|---|---|---|
+| `not_submitted` | Booked, never sent to a provider | Yes — this is the normal first attempt |
+| `submitting` | A pre-submission marker was written; no result was recorded (the process may have died mid-call) | No |
+| `accepted` | The provider took the batch; the individual transfer is not confirmed | No |
+| `unknown` | Timeout, transport failure or provider 5xx — the request may have been executed | No |
+| `rejected` | The provider refused the request before execution (a 4xx, not 408) | No |
+| `completed` | Authoritative confirmation that the transfer completed | No — already paid |
+| no value (NULL) | No submission history is recorded at all (every row written before this column existed) | No — fail closed |
+
+Only a row that positively says `not_submitted` is ever sent, so an ambiguous
+row can never be re-sent merely because a claim was retried. A non-2xx provider
+response is not treated as one fact either: a 4xx refusal is recorded as
+`rejected`, while a 5xx or a 408 is recorded as `unknown`, because the provider
+may already have executed the transfer. Unresolved rows stay visible through
+`GET /api/admin/payout-reconciliation`.
+
+Settlement is not all-or-nothing, but "partially processed" no longer means
+"retry the rest". If a leg is unresolved, the claim returns to
+`pending_settlement` and the unresolved leg is recorded for provider
+reconciliation instead of being resent; an administrator can still settle
+manually through `POST /api/admin/claims/:id/release-settlement`, which applies
+the same eligibility rule.
 
 ### Payment window expiry
 
