@@ -117,6 +117,12 @@ import { registerAdminDisputeRoutes } from './routes/adminDisputes';
 // can be exercised over real HTTP (same pattern as routes/adminDisputes.ts).
 import { registerPublicCategoryRoutes, registerAdminCategoryRoutes } from './routes/categories';
 import { registerAdminClaimRoutes } from './routes/adminClaims';
+// D-2B-B — the settlement approval/initiation endpoints live here (not in the
+// deliberately read-only routes/adminClaims.ts) because they are mutations and
+// because their executor, executeClaimSettlement(), is defined in this module.
+// The permission guard is reused so the actions are permissioned exactly like
+// the claims read routes.
+import { ADMIN_PERMISSIONS, requireAdminPermission } from './services/adminPermissions';
 import { registerAdminLostReportRoutes } from './routes/adminLostReports';
 import { registerPublicItemRoutes } from './routes/publicItems';
 // Phase 9A: the customer lost-item reporting routes. Registered the same way as
@@ -3549,6 +3555,21 @@ async function createApp() {
             settleAt: c.settle_at,
             itemCategoryId: item?.category_id || null,
             lockedTotalFee: item?.locked_total_fee ?? null,
+            // D-2B-B - durable manual settlement approval fields.
+            // Approval does not change claim status; it is a separate,
+            // queryable fact stored in settlement_approved_at /
+            // settlement_approved_by. The dashboard can show approved by
+            // <admin> at <timestamp> without re-querying, and can gate the
+            // Initiate button on hasSettlementApproval + (now >= settle_at).
+            //
+            // Derived here from the PERSISTED column, never exposed as a raw
+            // database field: a claim counts as approved for settlement
+            // exactly when a non-null settlement_approved_at has been
+            // recorded. A NULL (every pre-existing row) reads as "not
+            // approved", which is the fail-closed default.
+            hasSettlementApproval: c.settlement_approved_at != null,
+            settlementApprovedBy: c.settlement_approved_by ?? null,
+            settlementApprovedAt: c.settlement_approved_at ?? null,
           };
         });
 
@@ -4317,18 +4338,46 @@ async function createApp() {
     }
   });
 
-  app.post('/api/admin/claims/:id/release-settlement', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
+  // D-2B-B-E — LEGACY COMPATIBILITY, NOT AN OVERRIDE.
+  //
+  // This route used to call attemptSettlementRelease(claimId, /*force*/ true),
+  // a documented admin override that skipped the settle_at deadline. That made
+  // it a second payout entry point that contradicted the product rule "no new
+  // payout may be submitted without durable administrator approval" — and, for
+  // a claim with no settle_at at all, it released money with no review window
+  // whatsoever.
+  //
+  // It can no longer bypass anything. The `force` parameter no longer exists in
+  // the data layer, so this route follows exactly the same path as the
+  // supported workflow:
+  //   * a durable settlement_approved_at is required (recorded through
+  //     POST /api/admin/claims/:id/settlement/approve);
+  //   * the settle_at review window must have elapsed;
+  //   * the claim must still be 'pending_settlement';
+  //   * payout pause, item legal-hold/suspected-stolen and every per-row payout
+  //     outcome guard are enforced downstream by executeClaimSettlement() on
+  //     freshly re-read state.
+  // A caller that has not recorded an approval therefore gets a clear,
+  // non-success response pointing at the supported workflow instead of a
+  // payout.
+  app.post('/api/admin/claims/:id/release-settlement', authenticateJWT, requireCurrentAdminSession, requireAdminPermission(ADMIN_PERMISSIONS.CLAIMS_SETTLEMENT_INITIATE), async (req, res) => {
     const claimId = req.params.id;
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'Administrator access required.' });
       }
       const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
-      const won = await db.attemptSettlementRelease(claimId, true);
+      const won = await db.attemptSettlementRelease(claimId);
       if (!won) {
-        return res.status(409).json({ error: 'This claim is not eligible for release (it may already be settled or under dispute).' });
+        return res.status(409).json({
+          error: 'This claim cannot be released: settlement requires a durable administrator approval and an elapsed settle_at review window. Record the approval first, then initiate the payout.',
+          next: {
+            approve: `/api/admin/claims/${claimId}/settlement/approve`,
+            initiate: `/api/admin/claims/${claimId}/settlement/initiate`,
+          },
+        });
       }
-      await db.logAudit(adminIdentifier, 'ADMIN_FORCE_RELEASE_SETTLEMENT', `Admin ${adminIdentifier} force-released settlement for claim ${claimId} ahead of the dispute window.`);
+      await db.logAudit(adminIdentifier, 'ADMIN_RELEASE_SETTLEMENT', `Admin ${adminIdentifier} released settlement for claim ${claimId} through the legacy release route (durable approval on file; settle_at deadline enforced - nothing is force-released).`);
       const result = await executeClaimSettlement(claimId);
       if (!result.success) {
         return res.status(500).json({ error: result.message });
@@ -4338,6 +4387,155 @@ async function createApp() {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
   });
+
+  // -------------------------------------------------------------------------
+  // D-2B-B - MANUAL SETTLEMENT: DURABLE APPROVAL, THEN A SEPARATE INITIATION.
+  //
+  // These two mutations live HERE, beside release-settlement, NOT in the
+  // deliberately read-only routes/adminClaims.ts: that module's architecture
+  // test fails if any app.post/put/patch/delete route appears in it, and its
+  // two GET routes are the only endpoints it may ever own. They are also here
+  // because the payout executor, executeClaimSettlement(), is defined in this
+  // module - importing it into a route module would be a circular dependency.
+  //
+  // The two actions are deliberately SEPARATE:
+  //   * approve  - records the human sign-off only. It never changes claim
+  //                status and never touches the provider.
+  //   * initiate - moves money, and only for a claim that already carries the
+  //                durable approval and whose settle_at deadline has elapsed.
+  // Both are permissioned (claims.settlement_approve / claims.settlement_initiate)
+  // on top of authenticateJWT + requireCurrentAdminSession + role==='admin'.
+  // -------------------------------------------------------------------------
+  app.post('/api/admin/claims/:id/settlement/approve', authenticateJWT, requireCurrentAdminSession, requireAdminPermission(ADMIN_PERMISSIONS.CLAIMS_SETTLEMENT_APPROVE), async (req, res) => {
+      const claimId = req.params.id;
+      try {
+        if (req.user?.role !== 'admin') {
+          return res.status(403).json({ error: 'Administrator access required.' });
+        }
+        if (!claimId) {
+          return res.status(400).json({ error: 'Claim ID is required.' });
+        }
+        const { reason } = req.body ?? {};
+        if (typeof reason !== 'string' || !reason.trim()) {
+          return res.status(400).json({ error: 'A reason is required to record the approval.' });
+        }
+        const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
+        // D-2B-B-E — the durable, CAS-guarded write records the approval AND its
+        // CLAIM_SETTLEMENT_APPROVED audit row (carrying this reason) in ONE
+        // transaction, and reports ok:true ONLY when the database genuinely
+        // updated a row. This route therefore writes no audit row of its own: a
+        // success audit record can exist only for an approval that was actually
+        // persisted, never for a zero-row update that changed nothing.
+        const result = await db.approveSettlement(claimId, adminIdentifier, reason.trim());
+        if (!result.ok) {
+          // Each cause is reported as what it actually is - no invented status.
+          if (result.code === 'claim_not_found') {
+            return res.status(404).json({ error: 'Claim not found.' });
+          }
+          if (result.code === 'reason_required') {
+            return res.status(400).json({ error: 'A reason is required to record the approval.' });
+          }
+          if (result.code === 'already_approved') {
+            return res.status(409).json({
+              error: 'This claim has already been approved for settlement.',
+              approved_by: result.claim?.settlement_approved_by ?? null,
+              approved_at: result.claim?.settlement_approved_at ?? null,
+            });
+          }
+          if (result.code === 'not_pending_settlement') {
+            return res.status(409).json({
+              error: `Claim is not eligible for settlement review: currently in status '${result.claim?.status ?? 'unknown'}'.`,
+            });
+          }
+          if (result.code === 'outside_review_window') {
+            return res.status(409).json({
+              error: 'Claim is not eligible for settlement review: its settle_at review window has not elapsed yet.',
+            });
+          }
+          if (result.code === 'no_review_window') {
+            return res.status(409).json({
+              error: 'Claim is not eligible for settlement review: its settle_at review window was never set, so there is nothing to review.',
+            });
+          }
+          return res.status(500).json({ error: 'Could not record the settlement approval.' });
+        }
+        res.json({
+          success: true,
+          approved_by: result.claim?.settlement_approved_by ?? null,
+          approved_at: result.claim?.settlement_approved_at ?? null,
+          message: 'Settlement approval recorded.',
+        });
+      } catch (e: any) {
+        sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
+      }
+    }
+  );
+
+  // Initiate the actual payout for a claim that already carries the durable
+  // approval and whose settle_at deadline has elapsed.
+  //
+  // D-2B-B-E: eligibility is decided by the DATABASE, not by this route.
+  // db.attemptSettlementRelease() is one conditional UPDATE requiring
+  // status='pending_settlement' AND a non-NULL settlement_approved_at AND an
+  // elapsed settle_at, and there is no longer any flag that can waive any of
+  // them. If the claim cannot win that compare-and-swap, nothing is sent to the
+  // provider. On success the claim moves to 'released' and the ledger rows are
+  // completed; on failure the lock is reverted and the claim returns to
+  // 'pending_settlement'.
+  app.post('/api/admin/claims/:id/settlement/initiate', authenticateJWT, requireCurrentAdminSession, requireAdminPermission(ADMIN_PERMISSIONS.CLAIMS_SETTLEMENT_INITIATE), async (req, res) => {
+      const claimId = req.params.id;
+      try {
+        if (req.user?.role !== 'admin') {
+          return res.status(403).json({ error: 'Administrator access required.' });
+        }
+        if (!claimId) {
+          return res.status(400).json({ error: 'Claim ID is required.' });
+        }
+        const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
+        // D-2B-B-E — the CAS is the entire decision (status + durable approval +
+        // elapsed settle_at), so a failure here has one of a small, CLOSED set of
+        // causes, derived below from the durable state rather than hard-coded.
+        // Payout pause, item holds and payout-row submission state are NOT
+        // causes of this method failing - they are enforced later, inside
+        // executeClaimSettlement(), and answer with their own message - so this
+        // response must not claim them.
+        const won = await db.attemptSettlementRelease(claimId);
+        if (!won) {
+          const claim = await db.getClaim(claimId);
+          const reasons: string[] = [];
+          if (!claim) {
+            reasons.push('claim_not_found');
+          } else if (claim.status === 'releasing') {
+            reasons.push('settlement_already_in_flight');
+          } else if (claim.status !== 'pending_settlement') {
+            reasons.push(`not_in_pending_settlement:${claim.status}`);
+          } else {
+            if (claim.settlement_approved_at == null) reasons.push('no_durable_approval');
+            if (!claim.settle_at || new Date(claim.settle_at).getTime() > Date.now()) {
+              reasons.push('settle_at_not_elapsed');
+            }
+            if (reasons.length === 0) reasons.push('release_lock_lost');
+          }
+          return res.status(409).json({
+            error: 'This claim is not eligible for payout initiation.',
+            reasons,
+          });
+        }
+        await db.logAudit(
+          adminIdentifier,
+          'CLAIM_SETTLEMENT_INITIATED',
+          `Admin ${adminIdentifier} initiated payout for claim ${claimId}.`
+        );
+        const result = await executeClaimSettlement(claimId);
+        if (!result.success) {
+          return res.status(500).json({ error: result.message });
+        }
+        res.json({ success: true, message: result.message });
+      } catch (e: any) {
+        sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
+      }
+    }
+  );
 
   // --- STOLEN-PROPERTY STATE MACHINE (admin-only) ---
   // The platform does not adjudicate criminal guilt. These endpoints only
@@ -5300,24 +5498,32 @@ async function expireStaleClaims() {
  * Actually moves money for a claim that has already won the
  * attemptSettlementRelease() lock (status='releasing'): sends the real
  * IntaSend split disbursement, then finalizes the ledger/claim on success,
- * or reverts the lock on failure so a later sweep/retry can try again. Used
- * by both the automatic settlement sweep and the admin manual-release
- * endpoint, so both paths share one, single source of truth for how a
- * settlement is actually executed.
+ * or reverts the lock on failure so an explicitly-approved retry can try again.
+ *
+ * D-2B-B-E — this is the ONLY function that submits a settlement payout, and it
+ * is reached only after attemptSettlementRelease() has proven, in the database,
+ * that a durable administrator approval exists and the review window has
+ * elapsed. It is called by the two admin routes (the supported
+ * POST /api/admin/claims/:id/settlement/initiate and the legacy
+ * POST /api/admin/claims/:id/release-settlement, which delegates to the same
+ * rule); the periodic releaseDueSettlements sweep no longer calls it at all.
+ * It re-checks the claim's approval and lock state, and the item's hold state,
+ * from the database immediately before the provider call.
  */
 async function executeClaimSettlement(claimId: string): Promise<{ success: boolean; message: string }> {
   if (await isPlatformOperationPaused(pauseSettingKey('payouts'))) {
     // The claim has already won the attemptSettlementRelease() lock
     // (status='releasing') by the time this function is called - reverting
     // it back to 'pending_settlement' here (the same mechanism already used
-    // below for an unresolved payout) is what keeps this safe to call from
-    // both the automatic sweep and the admin manual-release endpoint: neither
-    // path moves any real money while paused, and the claim is not left stuck
-    // in 'releasing' with nothing to unstick it. Reverting cannot resubmit a
-    // payout: eligibility is per row (payout_outcome), never claim state.
+    // below for an unresolved payout) is what keeps this safe for every caller
+    // (the initiate route and the legacy release route): no path moves any real
+    // money while paused, and the claim is not left stuck in 'releasing' with
+    // nothing to unstick it. Reverting cannot resubmit a payout: eligibility is
+    // per row (payout_outcome), never claim state. Nothing retries it on a
+    // timer - resuming payouts and initiating again is an operator action.
     await db.revertSettlementRelease(claimId);
-    await db.logAudit('SYSTEM', 'SETTLEMENT_SKIPPED_PAYOUTS_PAUSED', `Claim ${claimId}: settlement release skipped â€” payouts are paused platform-wide. Reverted to pending_settlement for retry once resumed.`);
-    return { success: false, message: 'Payouts are currently paused platform-wide by an administrator. This claim remains in pending_settlement and will be retried automatically once resumed.' };
+    await db.logAudit('SYSTEM', 'SETTLEMENT_SKIPPED_PAYOUTS_PAUSED', `Claim ${claimId}: settlement release skipped â€” payouts are paused platform-wide. Reverted to pending_settlement; it is NOT retried automatically, so the approved payout must be initiated again once payouts resume.`);
+    return { success: false, message: 'Payouts are currently paused platform-wide by an administrator. This claim remains in pending_settlement; nothing is retried automatically, so initiate the approved payout again once payouts resume.' };
   }
 
   // E3A - A LOCAL FAILURE MUST NOT STRAND THE CLAIM.
@@ -5399,6 +5605,43 @@ async function executeClaimSettlement(claimId: string): Promise<{ success: boole
   const submittable = candidates.filter(c => isPayoutSubmittable(c.row));
 
   if (submittable.length > 0) {
+    // D-2B-B-E — RE-READ THE DECIDING STATE IMMEDIATELY BEFORE SUBMITTING.
+    //
+    // Everything above was read at the start of this call. Between that read and
+    // the provider call a dispute can be filed, a court/legal hold or a
+    // suspected-theft flag can be placed on the item, a competing worker can win
+    // the release lock, or an operator can revert it. The provider is the one
+    // place where a stale decision is irreversible, so the two facts that
+    // authorize a payout are re-checked HERE, from the database, rather than
+    // trusted from the earlier values:
+    //   * the claim is still in the transient 'releasing' lock this attempt took
+    //     (a released, disputed, frozen or reverted claim must not be paid), and
+    //     it still carries the durable administrator approval that authorized it
+    //     — a missing approval is a hard stop, never an inference;
+    //   * the item it belongs to is not under 'suspected_stolen'/'legal_hold'
+    //     review (items.status). A hold is a legal/operational stop, not a UI
+    //     hint, and it must fail closed even if it lands after approval.
+    // Any failure gives the release lock back through abandonRelease(), which
+    // never re-sends a payout row (retry eligibility is per ledger row and per
+    // payout_outcome, never claim state).
+    const preSubmitClaim = await db.getClaim(claimId);
+    if (!preSubmitClaim) {
+      return await abandonRelease('the claim could not be re-read before payout submission.');
+    }
+    if (preSubmitClaim.status !== 'releasing') {
+      return await abandonRelease(`the claim is no longer in the 'releasing' state (it is '${preSubmitClaim.status}').`);
+    }
+    if (preSubmitClaim.settlement_approved_at == null) {
+      return await abandonRelease('the durable administrator approval required to submit a payout is missing.');
+    }
+    const preSubmitItem = await db.getItem(preSubmitClaim.item_id);
+    if (!preSubmitItem) {
+      return await abandonRelease('the item for this claim could not be re-read before payout submission.');
+    }
+    if (preSubmitItem.status === 'suspected_stolen' || preSubmitItem.status === 'legal_hold') {
+      return await abandonRelease(`the item is under '${preSubmitItem.status}' review.`);
+    }
+
     // DURABLE PRE-SUBMISSION MARKERS - persisted BEFORE any network call, one
     // compare-and-swap per row. A row enters the provider batch only if THIS
     // call won its marker, so a competing worker (the sweep racing an
@@ -5490,37 +5733,54 @@ async function executeClaimSettlement(claimId: string): Promise<{ success: boole
   // Placed here, AFTER the `if (!finalized.success)` early return, so it runs
   // only on the branch where finalizeSettlement actually performed the
   // releasing -> released CAS. `success` is the idempotency guard, so a repeated
-  // sweep or an admin re-release that finds the claim already released returns
-  // early and never notifies twice. This is also the single choke point that
-  // covers BOTH execution paths: the periodic releaseDueSettlements sweep and
-  // the admin release-settlement route both reach the claim through here.
+  // initiation or a legacy release that finds the claim already released returns
+  // early and never notifies twice. This is the single choke point every payout
+  // path reaches the claim through: the supported initiate route and the legacy
+  // release route (the periodic sweep no longer executes settlement at all).
   await produceClaimComplete(claimId);
   return finalized;
 
 }
 
-// Runs periodically: finds every claim whose dispute window has closed
-// (status='pending_settlement' and settle_at <= now) and, one at a time,
-// atomically claims the release lock and executes the real payout. A claim
-// that was disputed or admin-frozen during its window is no longer in
-// 'pending_settlement' by the time this runs, so it's simply never selected
-// â€” no special-case skip logic needed.
+// Runs periodically, and SUBMITS NO PAYOUT. D-2B-B-E: the clock is not a payer.
+//
+// This used to take the release lock and call executeClaimSettlement() for every
+// claim whose dispute window had closed, which made a timer - not a person - the
+// authority that moved money, and left the durable-approval rule bypassable by
+// simply waiting. The product rule is explicit: no new payout may be submitted
+// without durable administrator approval. The scheduler therefore performs safe
+// REPORTING only:
+//   * it counts the claims past their settle_at deadline, split into "approved
+//     and awaiting an explicit initiation" and "still awaiting review";
+//   * it flags any claim stranded in 'releasing' (a crashed or partially
+//     completed payout) for manual reconciliation.
+// It writes no claim status, no ledger row and no audit row, and it never calls
+// the provider, so it cannot authorize or submit anything. Returning a stranded
+// 'releasing' claim to 'pending_settlement' automatically is deliberately NOT
+// done: its provider outcome may be unknown, so that is an operator decision
+// taken with GET /api/admin/payout-reconciliation in hand, not a sweep's guess.
 async function releaseDueSettlements() {
   try {
     const due = await db.getClaimsDueForSettlement();
-    for (const claim of due) {
-      try {
-        const won = await db.attemptSettlementRelease(claim.id, false);
-        if (!won) continue; // lost the CAS race (e.g. an admin already force-released it) â€” fine, skip
-        const result = await executeClaimSettlement(claim.id);
-        if (!result.success) {
-          console.error(`[SETTLEMENT SWEEP] Claim ${claim.id} settlement failed: ${result.message}`);
-        } else {
-          console.log(`[SETTLEMENT SWEEP] Claim ${claim.id} settled successfully.`);
-        }
-      } catch (err) {
-        console.error(`[SETTLEMENT SWEEP] Error settling claim ${claim.id}:`, err);
+    if (due.length > 0) {
+      const approved = due.filter((c) => c.settlement_approved_at != null);
+      const awaitingReview = due.filter((c) => c.settlement_approved_at == null);
+      console.log(
+        `[SETTLEMENT SWEEP] ${due.length} claim(s) past their settle_at deadline: ` +
+        `${approved.length} approved and awaiting explicit initiation, ` +
+        `${awaitingReview.length} awaiting administrator review. No payout is ` +
+        `submitted by this sweep - POST /api/admin/claims/:id/settlement/initiate is the payout entry point.`
+      );
+      if (awaitingReview.length > 0) {
+        console.log(`[SETTLEMENT SWEEP] Awaiting review: ${awaitingReview.map((c) => c.id).join(', ')}`);
       }
+    }
+    const stranded = (await db.getClaims()).filter((c) => c.status === 'releasing');
+    if (stranded.length > 0) {
+      console.warn(
+        `[SETTLEMENT SWEEP] ${stranded.length} claim(s) locked in 'releasing' need manual reconciliation: ` +
+        `${stranded.map((c) => c.id).join(', ')}`
+      );
     }
   } catch (err) {
     console.error('Error in releaseDueSettlements sweep:', err);

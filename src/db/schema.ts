@@ -385,9 +385,38 @@ export const claims = pgTable("claims", {
   // funds once now() >= settle_at, giving a dispute window during which a
   // second claimant or an admin can freeze the payout before money moves.
   settle_at: timestamp("settle_at", { withTimezone: true }),
+  // ==========================================================================
+  // D-2B-B - settlement review/approval + durable manual payout initiation
+  // ==========================================================================
+  // When a claim enters pending_settlement, the money is frozen until the
+  // dispute window (settle_at) has elapsed. A human administrator must first
+  // record a durable, queryable, CAS-guarded approval (settlement_approved_at
+  // + settlement_approved_by), and then a SEPARATE, explicitly-authorized
+  // initiation decides whether the payout actually fires (the settle_at
+  // deadline still gates it - the timer never authorizes this, and there is
+  // no shared escrow that a second button can release).
+  //
+  // These two columns are additive-only: a null settlement_approved_at means
+  // "no human approval has been recorded for this claim". Every read path
+  // treats NULL exactly this way, and every write is CAS-guarded, so an old
+  // row without history is never misread as approved. There is no
+  // down-migration and no backfill: an admin who approved before this column
+  // existed is not distinguishable from one who never approved, which is the
+  // safe default. There is deliberately NO CHECK constraint on these columns
+  // (and none that a comment can point at): NULL is a legal, meaningful value
+  // here, and the contract is enforced by the CAS-guarded writers in
+  // database.ts - isNull()/isNotNull() predicates on the one conditional
+  // UPDATE - rather than by DDL that would have to be added to the idempotent
+  // migration list to be real.
+  // ==========================================================================
+  settlement_approved_at: timestamp("settlement_approved_at", { withTimezone: true }),
+  settlement_approved_by: varchar("settlement_approved_by", { length: 100 }),
+  // End D-2B-B
+
   // Set the first time POST /api/claims/:id/rate succeeds for this claim —
-  // see the comment on the Claim interface field of the same name in
-  // database.ts.
+  // dedup guard so the same claim can't be rated twice. Mirrors the Claim
+  // interface field of the same name in database.ts and the matching ALTER
+  // statement in db/index.ts.
   agent_rated_at: timestamp("agent_rated_at", { withTimezone: true }),
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow(),

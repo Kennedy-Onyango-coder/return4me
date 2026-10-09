@@ -38,6 +38,14 @@ export const ADMIN_PERMISSIONS = {
   CLAIMS_READ: 'claims.read',
   /** Read one claim's operational detail record. */
   CLAIMS_DETAIL: 'claims.detail',
+  /** Record a durable, queryable administrator approval for a claim in the
+   *  settlement review window. Approval does not change claim status and is a
+   *  separate, explicitly-authorized decision from payout initiation. */
+  CLAIMS_SETTLEMENT_APPROVE: 'claims.settlement_approve',
+  /** Initiate the actual payout for a claim that has durable approval, is
+   *  inside its settle_at deadline, and is not payout-paused or on hold.
+   *  Requires durable approval already recorded in the database. */
+  CLAIMS_SETTLEMENT_INITIATE: 'claims.settlement_initiate',
 } as const;
 
 export type AdminPermission = (typeof ADMIN_PERMISSIONS)[keyof typeof ADMIN_PERMISSIONS];
@@ -49,7 +57,7 @@ export type AdminPermission = (typeof ADMIN_PERMISSIONS)[keyof typeof ADMIN_PERM
  * construction, so they grant nothing.
  */
 const ADMIN_ROLE_GRANTS: Record<string, readonly string[]> = {
-  admin: [ADMIN_PERMISSIONS.CLAIMS_READ, ADMIN_PERMISSIONS.CLAIMS_DETAIL],
+  admin: [ADMIN_PERMISSIONS.CLAIMS_READ, ADMIN_PERMISSIONS.CLAIMS_DETAIL, ADMIN_PERMISSIONS.CLAIMS_SETTLEMENT_APPROVE, ADMIN_PERMISSIONS.CLAIMS_SETTLEMENT_INITIATE],
 };
 
 /** Permissions held by this authenticated principal. Unknown roles hold none. */

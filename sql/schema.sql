@@ -226,6 +226,17 @@ CREATE TABLE claims (
     -- Set when the claim enters 'pending_settlement'; the settlement sweep
     -- only disburses once now() >= settle_at.
     settle_at TIMESTAMP WITH TIME ZONE,
+    -- D-2B-B — durable, CAS-guarded human settlement approval. NULL means no
+    -- administrator has approved this claim for payout (the safe default for
+    -- every pre-existing row: no approval is ever invented or backfilled).
+    -- Approval never changes claim status; it is a separate, queryable fact
+    -- that a distinct, permissioned initiation action requires before any
+    -- money moves. The legacy POST /api/admin/claims/:id/release-settlement
+    -- route delegates to that same rule and cannot bypass it, and the
+    -- settlement sweep submits no payout at all. Mirrors src/db/schema.ts and
+    -- the matching idempotent ALTER statements in src/db/index.ts.
+    settlement_approved_at TIMESTAMP WITH TIME ZONE,
+    settlement_approved_by VARCHAR(100),
     -- Set the first time POST /api/claims/:id/rate succeeds for this claim —
     -- dedup guard so the same claim can't be rated twice. Mirrors
     -- src/db/schema.ts (agent_rated_at) and the matching ALTER statement in

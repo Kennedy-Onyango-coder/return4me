@@ -298,6 +298,14 @@ export interface Claim {
   agent_confirmed_at?: string | null;
   handover_photo_url?: string | null;
   settle_at?: string | null;
+  // D-2B-B — durable, queryable human sign-off that a claim's payout may be
+  // *initiated*. NULL = no administrator has approved this claim. Approval
+  // never changes claim status and is a strictly separate decision from the
+  // payout initiation action; `settle_at` still gates the actual money moving.
+  // Additive-only: a NULL is read as "never approved", so a row that predates
+  // this column is never misread as approved. See schema.ts / adminSettlements.
+  settlement_approved_at?: string | null;
+  settlement_approved_by?: string | null;
   // Set the first (and only) time POST /api/claims/:id/rate succeeds for
   // this claim — see the comment on that route. Without this, the same
   // guessable claim ID could be POSTed to repeatedly to arbitrarily
@@ -800,6 +808,8 @@ function parseClaim(row: any): Claim {
     agent_confirmed_at: row.agent_confirmed_at ? new Date(row.agent_confirmed_at).toISOString() : null,
     handover_photo_url: row.handover_photo_url || null,
     settle_at: row.settle_at ? new Date(row.settle_at).toISOString() : null,
+    settlement_approved_at: row.settlement_approved_at ? new Date(row.settlement_approved_at).toISOString() : null,
+    settlement_approved_by: row.settlement_approved_by ?? null,
     agent_rated_at: row.agent_rated_at ? new Date(row.agent_rated_at).toISOString() : null,
     created_at: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
     updated_at: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString(),
@@ -4374,27 +4384,51 @@ class DatabaseEngine {
 
   /**
    * STAGE 2 of settlement, part A: atomically claims the exclusive right to
-   * actually disburse a claim's payout. force=true (admin override) skips
-   * the settle_at check — used for a manual "release now" action — but
-   * still requires the claim to genuinely be in 'pending_settlement', so it
-   * can never be used to release something that's disputed, already
-   * released, or never reached handover.
+   * actually disburse a claim's payout.
+   *
+   * D-2B-B-E — THE STATUS, THE DURABLE APPROVAL AND THE DEADLINE ARE DECIDED BY
+   * ONE CONDITIONAL UPDATE, AND ADMINISTRATOR APPROVAL IS UNCONDITIONAL.
+   *
+   * There is deliberately no `force` parameter any more. The previous
+   * `force: boolean` let a caller (the legacy POST .../release-settlement route)
+   * skip the settle_at deadline — and would also have released a claim whose
+   * settle_at had never been set at all — so "no money moves outside the review
+   * window" was bypassable from the HTTP surface. Removing the parameter
+   * removes that bypass by construction; removing it rather than defaulting it
+   * means a stale two-argument call is a COMPILE error instead of a silent
+   * behaviour change.
+   *
+   * The WHERE clause is the single source of truth, evaluated by the database at
+   * write time (not read-then-write by a caller):
+   *   * the claim exists and is still 'pending_settlement' — so a disputed,
+   *     frozen, already-released or never-handed-over claim can never be moved;
+   *   * `settlement_approved_at IS NOT NULL` — a durable, human, queryable
+   *     approval is on file. It is never inferred from a timer, a UI action or a
+   *     caller's judgement;
+   *   * `settle_at` IS set AND has elapsed — the review window has genuinely
+   *     closed as of THIS write, so a claim that enters the window's edge
+   *     between a caller's read and this update still cannot be released.
+   * Because it is a single statement, two concurrent initiations cannot both
+   * win, and an unapproved claim can never be released by any caller.
+   *
+   * Returns true ONLY if this call performed the transition.
    */
-  public async attemptSettlementRelease(claimId: string, force: boolean = false): Promise<boolean> {
+  public async attemptSettlementRelease(claimId: string): Promise<boolean> {
     this.assertClaimTransitionAllowed('pending_settlement', 'releasing');
     try {
-      const claimRows = await drizzleDb.select().from(claimsTable).where(eq(claimsTable.id, claimId));
-      if (claimRows.length === 0) return false;
-      const claim = claimRows[0];
-      if (claim.status !== "pending_settlement") return false;
-      if (!force) {
-        if (!claim.settle_at || new Date(claim.settle_at).getTime() > Date.now()) return false;
-      }
       const rows = await drizzleDb
         .update(claimsTable)
         .set({ status: "releasing", updated_at: new Date() })
-        .where(and(eq(claimsTable.id, claimId), eq(claimsTable.status, "pending_settlement")))
-        .returning();
+        .where(and(
+          eq(claimsTable.id, claimId),
+          eq(claimsTable.status, "pending_settlement"),
+          // isNotNull, not `ne(col, null)`: any comparison against NULL is
+          // UNKNOWN in SQL and would match nothing (see approveSettlement).
+          isNotNull(claimsTable.settlement_approved_at),
+          isNotNull(claimsTable.settle_at),
+          lte(claimsTable.settle_at, new Date())
+        ))
+        .returning({ id: claimsTable.id });
       return rows.length > 0;
     } catch (error) {
       console.error("Failed to atomically claim settlement release lock:", error);
@@ -4402,10 +4436,161 @@ class DatabaseEngine {
     }
   }
 
+  /** D-2B-B — record a durable, queryable, CAS-guarded administrator approval
+   *  for a claim that is in the review window (pending_settlement with
+   *  settle_at <= now). Approval never changes claim status and never touches
+   *  the provider: it is purely the human sign-off that the payout may be
+   *  *initiated* on a separate, explicitly-authorized action.
+   *
+   *  D-2B-B-E — THE WRITE IS THE DECISION. Every precondition lives in ONE
+   *  conditional UPDATE's WHERE clause, so it is enforced by the database at
+   *  write time rather than read-then-written by this method:
+   *    * the claim exists;
+   *    * it is still 'pending_settlement' (not disputed, released or frozen);
+   *    * `settlement_approved_at IS NULL` — no approval on file yet. This is
+   *      `isNull()`, which compiles to `IS NULL`. The previous
+   *      `eq(claimsTable.settlement_approved_at, null)` compiled to `= NULL`,
+   *      which is UNKNOWN in SQL and therefore matches NOTHING in Postgres:
+   *      a second concurrent approver could not be stopped by the database at
+   *      all, and the method then reported success unconditionally;
+   *    * `settle_at` IS set AND has elapsed — the review window is checked as of
+   *      the write, so a claim that leaves the window between the caller's read
+   *      and this update cannot be approved.
+   *
+   *  `.returning()` is required: ok:true is returned ONLY when a row was
+   *  genuinely updated, and the CLAIM_SETTLEMENT_APPROVED audit record (which
+   *  carries the required reason) is written in the SAME transaction — so no
+   *  false success response and no success audit row can ever exist for an
+   *  approval that was not persisted. Two concurrent approvals therefore
+   *  produce exactly one ok:true; the loser reports alreadyApproved.
+   *
+   *  The approval is written into the two nullable columns; reading them
+   *  (e.g. getClaimsEligibleForSettlementReview) returns them exactly, so an
+   *  admin can see who approved and when, without treating NULL as obsolete.
+   */
+  public async approveSettlement(
+    claimId: string,
+    adminUser: string,
+    reason: string
+  ): Promise<{
+    ok: boolean;
+    alreadyApproved: boolean;
+    code:
+      | 'approved'
+      | 'already_approved'
+      | 'claim_not_found'
+      | 'not_pending_settlement'
+      | 'no_review_window'
+      | 'outside_review_window'
+      | 'reason_required'
+      | 'error';
+    claim: Claim | null;
+  }> {
+    // The reason is part of the durable record, not decoration: an approval with
+    // no reason is not recorded at all rather than silently dropping it. The
+    // route validates this too (400), so this is the defence-in-depth half.
+    const trimmedReason = typeof reason === 'string' ? reason.trim() : '';
+    if (!trimmedReason) {
+      return { ok: false, alreadyApproved: false, code: 'reason_required', claim: null };
+    }
+    const adminIdentifier = adminUser && adminUser !== 'admin' ? adminUser : 'admin';
+    try {
+      return await drizzleDb.transaction(async (tx) => {
+        const approvedAt = new Date();
+        const rows = await tx
+          .update(claimsTable)
+          .set({
+            settlement_approved_at: approvedAt,
+            settlement_approved_by: adminIdentifier,
+          })
+          .where(and(
+            eq(claimsTable.id, claimId),
+            eq(claimsTable.status, "pending_settlement"),
+            isNull(claimsTable.settlement_approved_at),
+            isNotNull(claimsTable.settle_at),
+            lte(claimsTable.settle_at, approvedAt)
+          ))
+          .returning();
+
+        if (rows.length > 0) {
+          await this.logAuditInTx(
+            tx,
+            adminIdentifier,
+            "CLAIM_SETTLEMENT_APPROVED",
+            `Admin ${adminIdentifier} approved settlement for claim ${claimId}. Reason: ${trimmedReason}`
+          );
+          return { ok: true, alreadyApproved: false, code: 'approved' as const, claim: parseClaim(rows[0]) };
+        }
+
+        // Zero rows were affected: NO approval was written, so report why using
+        // a read only. There is no write on this path, so nothing can be
+        // half-recorded and no success audit row can exist for it.
+        const claimRows = await tx.select().from(claimsTable).where(eq(claimsTable.id, claimId));
+        if (claimRows.length === 0) {
+          return { ok: false, alreadyApproved: false, code: 'claim_not_found' as const, claim: null };
+        }
+        const claim = claimRows[0];
+        const alreadyApproved = claim.settlement_approved_at != null;
+        const code = claim.status !== "pending_settlement"
+          ? ('not_pending_settlement' as const)
+          : alreadyApproved
+            ? ('already_approved' as const)
+            // A claim whose settle_at was never set has NO review window at all;
+            // that is a different fact from a window that has not elapsed yet and
+            // is reported as such.
+            : (!claim.settle_at ? ('no_review_window' as const) : ('outside_review_window' as const));
+        return { ok: false, alreadyApproved, code, claim: parseClaim(claim) };
+      });
+    } catch (error) {
+      console.error("Failed to record settlement approval:", error);
+      return { ok: false, alreadyApproved: false, code: 'error', claim: null };
+    }
+  }
+
+  /**
+   * D-2B-B — the review window that the manual initiation action is scoped to.
+   * Returns every claim that is still pending human approval and still inside
+   * its settle_at review window (pending_settlement, settle_at set and already
+   * elapsed, no approval on file). Approval is per-claim and does NOT change
+   * claim status; it is a separate, queryable fact stored in
+   * `settlement_approved_at`/`settlement_approved_by`.
+   *
+   * D-2B-B-E — the NULL test is `isNull()`. It used to be
+   * `eq(claimsTable.settlement_approved_at, null)`, which compiles to `= NULL`:
+   * UNKNOWN in SQL, so this queue returned NO rows in PostgreSQL at all (a
+   * silently empty review queue) — and, because the in-memory test double
+   * coerced both sides with String(), the same predicate matched NULL rows there
+   * and looked correct. isNull() is the only correct predicate for both.
+   *
+   * There is no `recoverSettlementState` and no timer-driven recovery here: the
+   * settlement sweep (releaseDueSettlements in src/server.ts) submits no payout
+   * and writes no claim state at all — it reports the review-queue counts and
+   * flags claims stuck in 'releasing' for manual reconciliation. Nothing about
+   * a payout is ever decided by a clock; only attemptSettlementRelease(), which
+   * requires a durable approval, moves a claim out of this queue.
+   */
+  public async getClaimsEligibleForSettlementReview(): Promise<Claim[]> {
+    try {
+      const rows = await drizzleDb.select().from(claimsTable).where(
+        and(
+          isNull(claimsTable.settlement_approved_at),
+          eq(claimsTable.status, "pending_settlement"),
+          isNotNull(claimsTable.settle_at),
+          lte(claimsTable.settle_at, new Date())
+        )
+      );
+      return rows.map(parseClaim);
+    } catch (error) {
+      console.error("Failed to query settlement review queue:", error);
+      return [];
+    }
+  }
+
   // Rolls a claim back from 'releasing' to 'pending_settlement' if the real
-  // M-Pesa disbursement attempt failed, so the next settlement sweep (or a
-  // retried admin override) can safely try again with the same booked
-  // pending ledger rows.
+  // M-Pesa disbursement attempt failed, so a later, explicitly-approved
+  // administrator initiation can safely try again with the same booked
+  // pending ledger rows. (The settlement sweep no longer pays anything, so
+  // there is no timer-driven retry: retry is an operator decision.)
   public async revertSettlementRelease(claimId: string): Promise<void> {
     this.assertClaimTransitionAllowed('releasing', 'pending_settlement');
     try {

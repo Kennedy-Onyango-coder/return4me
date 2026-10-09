@@ -935,6 +935,15 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     `ALTER TABLE items ADD COLUMN IF NOT EXISTS fee_ceiling_applied BOOLEAN NOT NULL DEFAULT false`,
     // Settlement dispute-window timestamp on claims — same gap.
     `ALTER TABLE claims ADD COLUMN IF NOT EXISTS settle_at TIMESTAMPTZ`,
+    // D-2B-B - settlement review/approval + durable manual payout initiation.
+    // Additive and idempotent. NULL settlement_approved_at means no human
+    // approval recorded for this claim. Nothing else in the migration or the
+    // application treats a NULL as "never approved": every read path checks
+    // for NULL explicitly, and every write is CAS-guarded, so a legacy row
+    // (or a row in a database bootstrapped from schema.sql on an older host)
+    // is never misread as approved.
+    `ALTER TABLE claims ADD COLUMN IF NOT EXISTS settlement_approved_at TIMESTAMPTZ`,
+    `ALTER TABLE claims ADD COLUMN IF NOT EXISTS settlement_approved_by VARCHAR(100)`,
     // Platform-wide admin toggles (currently just the social publishing
     // emergency stop) — same gap, this table didn't exist in the
     // incremental path at all.
