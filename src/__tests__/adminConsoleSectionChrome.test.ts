@@ -107,7 +107,16 @@ describe('Batch 2: legacy status pills use the shared design system', () => {
 
 describe('Batch 2: the actions those sections drive are still wired', () => {
   it('keeps the ledger / strikes / review / category action handlers', () => {
-    expect(code).toContain('onClick={() => handleReleaseSettlementNow(ps.claimId)}');
+    // BATCH 3 — the legacy release CONTROL is gone from the console, but its
+    // HANDLER stays declared because adminConsoleUx15CDE.test.ts uses that
+    // declaration as the end marker of its UX-15E review-flow slice. This pins
+    // the declaration (and the console's current payout control) only: that the
+    // endpoint itself still works is proved by the server/API compatibility
+    // tests (lifecycleHttpE2E.test.ts), never by a handler being declared.
+    expect(code).toContain('const handleReleaseSettlementNow = async (claimId: string)');
+    expect(code).not.toContain('onClick={() => handleReleaseSettlementNow(ps.claimId)}');
+    // The ledger's CURRENT action — the confirmed payout step — is still wired.
+    expect(code).toContain('onClick={() => promptSettlementPayoutConfirmation(ps.claimId)}');
     expect(code).toContain('onClick={() => handleClearStrikes(strike.phone)}');
     expect(code).toContain('onClick={() => handleDeleteCategory(cat.id, cat.name_en)}');
     expect(code).toContain("onClick={() => resetCategoryForm('edit', cat)}");

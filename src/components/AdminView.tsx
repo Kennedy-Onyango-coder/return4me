@@ -51,6 +51,26 @@ import { PUBLIC_CLUE_STYLES } from '../services/publicRecognition';
 // external request, no tracking — so the provisioning secret never leaves this
 // component's memory.
 import { QRCodeSVG } from 'qrcode.react';
+// D-2B-B BATCH 2 — the console's in-flight action state is ONE pure, React-free
+// value (components/admin/consoleActionState.ts), so several actions can be in
+// flight at once without one clearing another's marker — and starting the same
+// action twice is refused rather than sent twice. The payout confirmation it
+// drives is ONE presentational component, so the step an administrator actually
+// sees can be rendered and asserted, not merely pattern-matched.
+import {
+  NO_CONSOLE_ACTIONS,
+  isActionInFlight,
+  isPayoutConfirmationOpenFor,
+  pauseScopeActionKey,
+  itemReviewActionKey,
+  SOCIAL_PUBLISHING_PAUSE_ACTION_KEY,
+  settlementApprovalActionKey,
+  settlementInitiateActionKey,
+  legacySettlementReleaseActionKey,
+  reduceConsoleActions,
+} from './admin/consoleActionState';
+import type { ConsoleActions, ConsoleActionEvent } from './admin/consoleActionState';
+import SettlementPayoutConfirmation from './admin/settlement/SettlementPayoutConfirmation';
 
 // P14A (P14-05) — human-readable labels for the canonical masking styles. Keyed
 // by the values in PUBLIC_CLUE_STYLES (the single source); an unmapped value
@@ -235,6 +255,26 @@ const CONSOLE_SECTIONS: Record<ConsoleSectionKey, ConsoleSectionCopy> = {
   categories: { title: 'Categories & Fees', description: 'Configure recovery categories, fees, and finder/agent/platform allocation.' },
   strikes: { title: 'Payment Strikes', description: 'Review agent strikes and enforcement history.' },
 };
+
+// ---------------------------------------------------------------------------
+// D-2B-B — A REFUSED PAYOUT INITIATION IS EXPLAINED BY THE SERVER, NOT GUESSED.
+//
+// POST /api/admin/claims/:id/settlement/initiate decides eligibility itself and
+// answers a refusal with 409 { error, reasons: string[] }, where each entry names
+// the durable condition that was not met ('no_durable_approval',
+// 'settle_at_not_elapsed', 'not_in_pending_settlement:<status>', …). Those
+// reasons ARE the server's account of its own decision, so they are surfaced
+// verbatim next to its message: the browser must never translate a refusal into
+// a plausible-sounding sentence of its own. A body without `reasons`
+// (400 / 403 / 404 / 500) falls back to the server's own message, unchanged.
+// ---------------------------------------------------------------------------
+function settlementRefusalMessage(data: any, fallback: string): string {
+  const message = typeof data?.error === 'string' && data.error ? data.error : fallback;
+  const reasons: string[] = Array.isArray(data?.reasons)
+    ? data.reasons.filter((reason: any) => typeof reason === 'string' && reason.length > 0)
+    : [];
+  return reasons.length > 0 ? `${message} (${reasons.join('; ')})` : message;
+}
 
 export default function AdminView({ token, setToken, onCategoriesChanged }: AdminViewProps) {
   const t = translations.en;
@@ -647,7 +687,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
     setActionSuccess('');
     setActionWarning('');
     setDataError('');
-    setItemActionProcessing('pause:' + scope);
+    applyConsoleAction({ type: 'begin', key: pauseScopeActionKey(scope) });
     try {
       const response = await fetch('/api/admin/settings/pause', {
         method: 'POST',
@@ -666,7 +706,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
     } catch (e: any) {
       setDataError(e.message);
     } finally {
-      setItemActionProcessing(null);
+      applyConsoleAction({ type: 'finish', key: pauseScopeActionKey(scope) });
     }
   };
 
@@ -1862,13 +1902,40 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
   // The platform never adjudicates the underlying accusation — these calls
   // only ever change an item's claimability, and every reason given here is
   // recorded server-side in the audit log against the acting admin.
-  const [itemActionProcessing, setItemActionProcessing] = useState<string | null>(null);
+  //
+  // D-2B-B BATCH 2 — WHY THIS IS ONE OBJECT AND NOT A `string | null`:
+  //   The marker used to be a single scalar, so starting an action on claim B
+  //   overwrote claim A's marker (A's control re-enabled while A's request was
+  //   still running) and finishing B cleared A's marker outright. It is now a set
+  //   of action keys, owned by the pure reducer below, plus the settlement whose
+  //   payout-confirmation step is open. `reduceConsoleActions` is the ONLY place
+  //   that decides anything; this component performs what it decides.
+  const [consoleActions, setConsoleActions] = useState<ConsoleActions>(NO_CONSOLE_ACTIONS);
+  /**
+   * The SAME value, readable synchronously. React state is not readable until the
+   * next render, and two clicks inside one tick must see each other's key —
+   * otherwise a double submission would be judged twice against the same stale
+   * value and both would be sent.
+   */
+  const consoleActionsRef = useRef<ConsoleActions>(NO_CONSOLE_ACTIONS);
+
+  /** Applies ONE action event and returns the claim whose payout initiation must
+   *  now be sent, or null — which is every event except 'confirm-payout'. */
+  const applyConsoleAction = (event: ConsoleActionEvent): string | null => {
+    const { actions, payoutClaimIdToInitiate } = reduceConsoleActions(consoleActionsRef.current, event);
+    if (actions !== consoleActionsRef.current) {
+      consoleActionsRef.current = actions;
+      setConsoleActions(actions);
+    }
+    return payoutClaimIdToInitiate;
+  };
+
 
   const handleItemReviewStatusChange = async (itemId: string, action: 'flag-stolen' | 'legal-hold' | 'clear-hold', reason: string) => {
     setActionSuccess('');
     setActionWarning('');
     setDataError('');
-    setItemActionProcessing(itemId + action);
+    applyConsoleAction({ type: 'begin', key: itemReviewActionKey(itemId, action) });
     try {
       const response = await fetch(`/api/admin/items/${itemId}/${action}`, {
         method: 'POST',
@@ -1887,7 +1954,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
     } catch (e: any) {
       setDataError(e.message);
     } finally {
-      setItemActionProcessing(null);
+      applyConsoleAction({ type: 'finish', key: itemReviewActionKey(itemId, action) });
     }
   };
 
@@ -1964,7 +2031,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
     setActionSuccess('');
     setActionWarning('');
     setDataError('');
-    setItemActionProcessing('settlement:' + claimId);
+    applyConsoleAction({ type: 'begin', key: legacySettlementReleaseActionKey(claimId) });
     try {
       const response = await fetch(`/api/admin/claims/${claimId}/release-settlement`, {
         method: 'POST',
@@ -1979,15 +2046,194 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
     } catch (e: any) {
       setDataError(e.message);
     } finally {
-      setItemActionProcessing(null);
+      applyConsoleAction({ type: 'finish', key: legacySettlementReleaseActionKey(claimId) });
     }
+  };
+
+  // ---------------------------------------------------------------------------
+  // D-2B-B — MANUAL SETTLEMENT IS TWO SEPARATE, DELIBERATE STEPS.
+  //
+  // WHY THIS EXISTS
+  //   The console offered ONE control per pending settlement, "Release Now",
+  //   wired to the retained release route. Since D-2B-B the server will only move
+  //   money for a claim that ALREADY carries a durable administrator approval
+  //   (`settlement_approved_at`) whose `settle_at` review window has elapsed, and
+  //   no flag can waive either — so that control could not do what its copy
+  //   promised ("released automatically once settleAt passes, or immediately here
+  //   via admin override"): nothing ever auto-releases and there is no override,
+  //   so an elapsed but unapproved claim is simply never paid.
+  //
+  //   The two supported actions are now offered as two:
+  //     * "Approve settlement" records the human sign-off and its REQUIRED,
+  //       audit-logged reason. It moves no money, changes no claim status and
+  //       never reaches the provider.
+  //     * "Initiate payout" moves the money, and the server accepts it only for a
+  //       claim that already carries that durable approval once `settle_at` has
+  //       elapsed.
+  //   Approving cannot initiate and initiating cannot approve: there is no
+  //   chaining in either direction, so an approval recorded early disburses
+  //   nothing, and an initiation can never stand in for a missing approval.
+  //
+  //   The route is the authority in every case. The Initiate control is DISABLED
+  //   while the dashboard reports that either precondition is unmet — a missing
+  //   or unparseable `settleAt` counts as unmet, which is the fail-closed default
+  //   the server applies to the same field — and if the server still refuses, the
+  //   409 `reasons[]` it returns are surfaced verbatim rather than replaced by a
+  //   guess (see settlementRefusalMessage).
+  //
+  // WHAT DID NOT CHANGE
+  //   The legacy release HANDLER and its route stay
+  //   (handleReleaseSettlementNow => the release route), which the server applies
+  //   the same durable-approval + elapsed-window checks to. What D-2B-B Batch 3
+  //   removed is its last UI call site: the pending-settlement interface renders
+  //   no second money-moving action, so the endpoint is retained for
+  //   compatibility (docs/api.md) while the console offers ONE current path.
+  // ---------------------------------------------------------------------------
+  const [settlementApprovalPrompt, setSettlementApprovalPrompt] = useState<{ claimId: string } | null>(null);
+  const [settlementApprovalReason, setSettlementApprovalReason] = useState('');
+  const [settlementApprovalReasonError, setSettlementApprovalReasonError] = useState('');
+
+  /** Cancel / dismiss: closes the reason step with no request, no mutation and no
+   *  approval recorded — an abandoned approval records nothing at all. */
+  const closeSettlementApprovalPrompt = () => {
+    setSettlementApprovalPrompt(null);
+    setSettlementApprovalReason('');
+    setSettlementApprovalReasonError('');
+  };
+
+  /** Opens the reason step for ONE claim. Records the target only: no request and
+   *  no approval until the administrator submits. */
+  const promptSettlementApproval = (claimId: string) => {
+    setSettlementApprovalReason('');
+    setSettlementApprovalReasonError('');
+    setSettlementApprovalPrompt({ claimId });
+  };
+
+  /**
+   * D-2B-B — records the sign-off only. Nothing here pays anything: the route
+   * persists the approval with its reason and its audit row, and the payout stays
+   * a separate, later action.
+   */
+  const handleApproveSettlement = async (claimId: string, reason: string) => {
+    setActionSuccess('');
+    setActionWarning('');
+    setDataError('');
+    applyConsoleAction({ type: 'begin', key: settlementApprovalActionKey(claimId) });
+    try {
+      const response = await fetch(`/api/admin/claims/${claimId}/settlement/approve`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ reason }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to record the settlement approval.');
+      }
+      setActionSuccess(data.message || 'Settlement approval recorded.');
+      fetchDashboardData();
+    } catch (e: any) {
+      setDataError(e.message);
+    } finally {
+      applyConsoleAction({ type: 'finish', key: settlementApprovalActionKey(claimId) });
+    }
+  };
+
+  /**
+   * Submits the collected reason. A missing or whitespace-only reason is rejected
+   * IN PLACE — the mutation is never reached, exactly as the route would refuse it
+   * ('A reason is required to record the approval.') — and the step stays open so
+   * the reason can be filled in. On a valid reason the step closes and the TRIMMED
+   * reason is submitted, which is the value the route stores. It reaches the
+   * approval mutation ONLY: submitting a reason never initiates a payout.
+   */
+  const confirmSettlementApproval = () => {
+    if (!settlementApprovalPrompt) return;
+    const { claimId } = settlementApprovalPrompt;
+    const reason = settlementApprovalReason;
+    if (!reason.trim()) {
+      setSettlementApprovalReasonError('A reason is required.');
+      return;
+    }
+    closeSettlementApprovalPrompt();
+    handleApproveSettlement(claimId, reason.trim());
+  };
+
+  /**
+   * D-2B-B — initiates the payout, and only that. The route re-decides
+   * eligibility itself (status + durable approval + elapsed settle_at), so the
+   * control's disabled state is a courtesy and the server is what refuses; a
+   * refusal's `reasons[]` are surfaced verbatim (see settlementRefusalMessage).
+   * No body is sent: the request carries no approval, because the approval is the
+   * claim's own persisted state and never a value the browser can supply.
+   */
+  const handleInitiateSettlementPayout = async (claimId: string) => {
+    setActionSuccess('');
+    setActionWarning('');
+    setDataError('');
+    try {
+      const response = await fetch(`/api/admin/claims/${claimId}/settlement/initiate`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(settlementRefusalMessage(data, 'Failed to initiate payout.'));
+      }
+      // The banner states what was SUBMITTED, never that money has arrived: the
+      // provider's outcome is unresolved until reconciliation reports it, so a
+      // submitted request is not reported as a completed payout.
+      setActionSuccess(data.message || 'Payout initiation submitted — the provider result is not yet confirmed.');
+      fetchDashboardData();
+    } catch (e: any) {
+      setDataError(e.message);
+    } finally {
+      // ONLY this claim's initiation key is cleared. A completion here can never
+      // clear another claim's in-flight payout, or any other action's marker.
+      applyConsoleAction({ type: 'finish', key: settlementInitiateActionKey(claimId) });
+    }
+  };
+
+  /**
+   * D-2B-B BATCH 2 — THE IRREVERSIBLE STEP IS CONFIRMED, NOT CLICKED ONCE.
+   *
+   * "Initiate payout" moves money, so a single click on the settlement row must
+   * not be enough. These three handlers are the whole two-step:
+   *   * promptSettlementPayoutConfirmation opens the confirmation for ONE claim
+   *     — no request, no status change, no audit row;
+   *   * cancelSettlementPayoutConfirmation closes it — still no request;
+   *   * confirmSettlementPayout hands the claim to the existing handler, and ONLY
+   *     when the reducer grants it, so a second confirmation (or a click while the
+   *     first request is still in flight) sends nothing at all.
+   * The server remains the authority throughout: it re-decides status, durable
+   * approval and the elapsed review window, and its refusal reasons are surfaced
+   * verbatim rather than replaced by a sentence the browser invents.
+   */
+  const promptSettlementPayoutConfirmation = (claimId: string) => {
+    applyConsoleAction({ type: 'open-payout-confirmation', claimId });
+  };
+
+  /** Cancel / dismiss: the step closes. No request is sent and no settlement
+   *  state changes — an abandoned confirmation records nothing at all. */
+  const cancelSettlementPayoutConfirmation = () => {
+    applyConsoleAction({ type: 'cancel-payout-confirmation' });
+  };
+
+  /** Confirms the step that is open FOR THIS CLAIM. The reducer refuses a
+   *  confirmation for any other claim, and refuses a duplicate while a payout
+   *  request for this claim is in flight, so this can never send two requests. */
+  const confirmSettlementPayout = (claimId: string) => {
+    const requested = applyConsoleAction({ type: 'confirm-payout', claimId });
+    if (requested) void handleInitiateSettlementPayout(requested);
   };
 
   const handleToggleSocialPause = async (paused: boolean) => {
     setActionSuccess('');
     setActionWarning('');
     setDataError('');
-    setItemActionProcessing('social-pause');
+    applyConsoleAction({ type: 'begin', key: SOCIAL_PUBLISHING_PAUSE_ACTION_KEY });
     try {
       const response = await fetch('/api/admin/settings/social-publishing-pause', {
         method: 'POST',
@@ -2006,7 +2252,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
     } catch (e: any) {
       setDataError(e.message);
     } finally {
-      setItemActionProcessing(null);
+      applyConsoleAction({ type: 'finish', key: SOCIAL_PUBLISHING_PAUSE_ACTION_KEY });
     }
   };
 
@@ -2392,7 +2638,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
             <Button
               variant={dashboardData.socialPublishingPaused ? 'secondary' : 'danger'}
               size="sm"
-              loading={itemActionProcessing === 'social-pause'}
+              loading={isActionInFlight(consoleActions.inFlight, SOCIAL_PUBLISHING_PAUSE_ACTION_KEY)}
               onClick={() => handleToggleSocialPause(!dashboardData.socialPublishingPaused)}
             >
               {dashboardData.socialPublishingPaused ? 'Resume Publishing' : 'Pause All Publishing'}
@@ -2414,7 +2660,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                 ['handovers', 'Handovers'],
               ] as const).map(([scope, label]) => {
                 const isPaused = !!pauseStatuses[scope];
-                const isBusy = itemActionProcessing === 'pause:' + scope;
+                const isBusy = isActionInFlight(consoleActions.inFlight, pauseScopeActionKey(scope));
                 return (
                   <div
                     key={scope}
@@ -3599,7 +3845,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                                 <Button
                                   variant="secondary"
                                   size="sm"
-                                  disabled={itemActionProcessing === item.id + 'clear-hold'}
+                                  disabled={isActionInFlight(consoleActions.inFlight, itemReviewActionKey(item.id, 'clear-hold'))}
                                   onClick={() => promptItemReviewStatusChange(item.id, 'clear-hold', 'Reason for clearing this hold (optional):')}
                                 >
                                   Clear Hold
@@ -3609,7 +3855,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                                   <Button
                                     variant="outline"
                                     size="sm"
-                                    disabled={itemActionProcessing === item.id + 'flag-stolen'}
+                                    disabled={isActionInFlight(consoleActions.inFlight, itemReviewActionKey(item.id, 'flag-stolen'))}
                                     onClick={() => promptItemReviewStatusChange(item.id, 'flag-stolen', 'Reason for flagging this item as suspected stolen (required, audit-logged):')}
                                   >
                                     Flag Suspected Stolen
@@ -3617,7 +3863,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                                   <Button
                                     variant="danger"
                                     size="sm"
-                                    disabled={itemActionProcessing === item.id + 'legal-hold'}
+                                    disabled={isActionInFlight(consoleActions.inFlight, itemReviewActionKey(item.id, 'legal-hold'))}
                                     onClick={() => promptItemReviewStatusChange(item.id, 'legal-hold', 'Reason for placing this item under legal hold (required, audit-logged):')}
                                   >
                                     Place Legal Hold
@@ -3834,13 +4080,17 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
             <div className="space-y-4">
               {/* Pending Settlements — claims that have physically handed over
                   the item but whose real M-Pesa payout is still inside the
-                  dispute window. Released automatically once settleAt passes,
-                  or immediately here via admin override (audit-logged). */}
+                  dispute window. Since D-2B-B a payout is TWO deliberate steps:
+                  recording the approval (a reason is required and is
+                  audit-logged) and then initiating the payout, which the server
+                  accepts only for a claim that already carries that durable
+                  approval once settle_at has elapsed. Nothing auto-releases, and
+                  neither step triggers the other. */}
               <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl shadow-sm p-5 space-y-3">
                 <div>
                   <h3 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">Pending Settlements</h3>
                   <p className="text-caption text-[var(--appearance-text-muted)]">
-                    Handover confirmed, payout booked, dispute window still open. Settles automatically, or release now to override.
+                    Handover confirmed, payout booked, dispute window still open. Settlement is two separate steps: record the approval (a reason is required and audit-logged), then initiate the payout, which the server accepts only once the review window has elapsed and the approval is on file. Neither step triggers the other, no payout is automatic, and initiating a payout asks you to confirm the exact settlement first — a submitted request is not reported as a completed payout.
                   </p>
                 </div>
                 {(!dashboardData.pendingSettlements || dashboardData.pendingSettlements.length === 0) ? (
@@ -3849,29 +4099,139 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                   <div className="space-y-2">
                     {dashboardData.pendingSettlements.map((ps: any) => {
                       const settleAtDate = ps.settleAt ? new Date(ps.settleAt) : null;
-                      const isDue = settleAtDate ? settleAtDate.getTime() <= Date.now() : false;
+                      // A missing or unparseable settle_at is NOT due — both read
+                      // as "the review window has not elapsed", the fail-closed
+                      // default the server applies to the same field.
+                      const isDue = settleAtDate !== null && !Number.isNaN(settleAtDate.getTime()) && settleAtDate.getTime() <= Date.now();
+                      // Fail closed on the approval too: only the persisted
+                      // column counts, so a payload that omits the field can
+                      // never read as approved.
+                      const hasApproval = ps.hasSettlementApproval === true;
+                      const isApproving = isActionInFlight(consoleActions.inFlight, settlementApprovalActionKey(ps.claimId));
+                      const isInitiating = isActionInFlight(consoleActions.inFlight, settlementInitiateActionKey(ps.claimId));
+                      const isReleasing = isActionInFlight(consoleActions.inFlight, legacySettlementReleaseActionKey(ps.claimId));
+                      // The payout confirmation is PER CLAIM: it is open for this
+                      // row only while this row is the settlement being confirmed.
+                      const payoutConfirmOpen = isPayoutConfirmationOpenFor(consoleActions, ps.claimId);
+                      const reasonStepOpen = settlementApprovalPrompt?.claimId === ps.claimId;
                       return (
-                        <div key={ps.claimId} className="flex flex-wrap items-center justify-between gap-2 border border-[var(--appearance-border)] rounded-xl p-3 bg-[var(--appearance-surface-muted)]/40">
-                          <div className="text-caption">
-                            <span className="font-mono font-bold text-[var(--appearance-text-primary)]">{ps.claimId}</span>
-                            <span className="text-[var(--appearance-text-muted)]/60 mx-1.5">·</span>
-                            <span className="text-[var(--appearance-text-muted)]">Item {ps.itemId}</span>
-                            <span className="text-[var(--appearance-text-muted)]/60 mx-1.5">·</span>
-                            <span className={`font-bold ${isDue ? 'text-status-success' : 'text-status-warning'}`}>
-                              {settleAtDate ? (isDue ? 'Due now' : `Settles ${settleAtDate.toLocaleString()}`) : 'No settle time set'}
-                            </span>
-                            {ps.lockedTotalFee !== null && (
-                              <span className="text-[var(--appearance-text-muted)]"> · KES {ps.lockedTotalFee}</span>
-                            )}
+                        <div key={ps.claimId} className="border border-[var(--appearance-border)] rounded-xl p-3 bg-[var(--appearance-surface-muted)]/40 space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="text-caption">
+                              <span className="font-mono font-bold text-[var(--appearance-text-primary)]">{ps.claimId}</span>
+                              <span className="text-[var(--appearance-text-muted)]/60 mx-1.5">·</span>
+                              <span className="text-[var(--appearance-text-muted)]">Item {ps.itemId}</span>
+                              <span className="text-[var(--appearance-text-muted)]/60 mx-1.5">·</span>
+                              <span className={`font-bold ${isDue ? 'text-status-success' : 'text-status-warning'}`}>
+                                {settleAtDate ? (isDue ? 'Due now' : `Settles ${settleAtDate.toLocaleString()}`) : 'No settle time set'}
+                              </span>
+                              {ps.lockedTotalFee !== null && (
+                                <span className="text-[var(--appearance-text-muted)]"> · KES {ps.lockedTotalFee}</span>
+                              )}
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              {/* Step 1 — records the sign-off and its reason. It
+                                  moves no money and never initiates. */}
+                              <Button
+                                variant="primary"
+                                size="sm"
+                                loading={isApproving}
+                                disabled={hasApproval || reasonStepOpen || isInitiating || isReleasing}
+                                onClick={() => promptSettlementApproval(ps.claimId)}
+                              >
+                                {'Approve settlement'}
+                              </Button>
+                              {/* Step 2 — the money. Offered only once the
+                                  dashboard reports a durable approval AND an
+                                  elapsed review window; the server still decides,
+                                  and its refusal reasons are shown verbatim.
+                                  D-2B-B BATCH 2 — this control no longer pays on
+                                  the first click: it OPENS the confirmation step
+                                  rendered below this row's reason step, and only
+                                  an explicit confirmation there reaches the route.
+                                  The disabled expression is deliberately unchanged:
+                                  the two preconditions and the sibling in-flight
+                                  actions still gate it exactly as before. */}
+                              <Button
+                                variant="accent"
+                                size="sm"
+                                loading={isInitiating}
+                                disabled={!hasApproval || !isDue || isApproving || isReleasing}
+                                onClick={() => promptSettlementPayoutConfirmation(ps.claimId)}
+                              >
+                                {'Initiate payout'}
+                              </Button>
+                            </div>
                           </div>
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            loading={itemActionProcessing === 'settlement:' + ps.claimId}
-                            onClick={() => handleReleaseSettlementNow(ps.claimId)}
-                          >
-                            Release Now
-                          </Button>
+
+                          {/* The approval fact is read from the persisted column,
+                              never inferred from the presence of a control. */}
+                          <p className="text-caption text-[var(--appearance-text-muted)]">
+                            {hasApproval
+                              ? `Settlement approved by ${ps.settlementApprovedBy || 'an administrator'}${ps.settlementApprovedAt ? ` at ${new Date(ps.settlementApprovedAt).toLocaleString()}` : ''}. Payout initiation is a separate step.`
+                              : 'No settlement approval recorded. Payout initiation is refused until one is on file.'}
+                          </p>
+
+                          {/* The reason step, inline in this row and NOT a new
+                              dialog: it collects the REQUIRED reason the approval
+                              mutation is unreachable without, and cancelling it
+                              sends nothing and records nothing. */}
+                          {reasonStepOpen && (
+                            <div className="space-y-3 border-t border-[var(--appearance-border)] pt-3">
+                              <Textarea
+                                label={'Reason (recorded in the audit log)'}
+                                id={'settlement-approval-reason-' + ps.claimId}
+                                rows={3}
+                                value={settlementApprovalReason}
+                                onChange={(e) => {
+                                  setSettlementApprovalReason(e.target.value);
+                                  if (settlementApprovalReasonError) setSettlementApprovalReasonError('');
+                                }}
+                                required
+                                error={settlementApprovalReasonError || undefined}
+                                hint={'Required. Recording the approval does not pay the claim: the payout is a separate step and is refused until an approval is on file.'}
+                              />
+                              <div className="flex flex-wrap justify-end gap-2">
+                                <Button variant="secondary" size="sm" onClick={closeSettlementApprovalPrompt}>
+                                  {'Cancel'}
+                                </Button>
+                                <Button variant="primary" size="sm" loading={isApproving} onClick={confirmSettlementApproval}>
+                                  {'Record approval'}
+                                </Button>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* D-2B-B BATCH 2 — THE IRREVERSIBLE STEP IS CONFIRMED,
+                              NOT CLICKED ONCE. Clicking "Initiate payout" only opens
+                              this step (no request, no state change); this is where
+                              the payout is actually confirmed. The step is INLINE,
+                              in the same row, exactly like the reason step above,
+                              so the panel still introduces no new dialog. */}
+                          {payoutConfirmOpen && (
+                            <SettlementPayoutConfirmation
+                              claimId={ps.claimId}
+                              itemId={ps.itemId}
+                              lockedTotalFee={typeof ps.lockedTotalFee === 'number' ? ps.lockedTotalFee : null}
+                              onCancel={cancelSettlementPayoutConfirmation}
+                              onConfirm={() => confirmSettlementPayout(ps.claimId)}
+                            />
+                          )}
+
+                          {/* D-2B-B BATCH 3 — NO SECOND MONEY-MOVING CONTROL AT
+                              ALL. Batch 2 kept the legacy manual release behind a
+                              closed disclosure, which still left a second,
+                              misleading affordance one keystroke away from the
+                              supported action. The pending-settlement interface now
+                              offers exactly ONE current path — record the approval,
+                              then confirm the due-checked payout initiation — and
+                              renders no legacy release control anywhere.
+                              NOTHING SERVER-SIDE CHANGED: the legacy endpoint, its
+                              durable-approval + elapsed-window checks and the
+                              handler that reaches it all stay (see docs/api.md and
+                              docs/claims-and-payments.md), and `isReleasing` above
+                              still makes an in-flight legacy release gate the
+                              supported controls. */}
                         </div>
                       );
                     })}
