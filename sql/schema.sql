@@ -311,6 +311,21 @@ CREATE TABLE ledger (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- BATCH 1B — the reconciliation access path for provider evidence.
+-- getPayoutLegsByProviderBatchId() resolves a provider batch tracking id back to
+-- THIS application's payout legs on every payout status event, so without this
+-- index each lookup is a sequential scan of the entire ledger.
+-- PARTIAL on purpose: only provider-submitted disbursement rows carry a non-NULL
+-- batch id, so the predicate keeps the index small and mirrors the query's own
+-- access pattern (it supplies a non-blank id, never NULL).
+-- Declared with IF NOT EXISTS (rather than the bare form used by the sibling
+-- indexes in this file) so re-running the bootstrap script is a no-op — the same
+-- idempotency guarantee the incremental statement in src/db/index.ts carries.
+-- The Drizzle definition in src/db/schema.ts declares the identical name, column
+-- and predicate; all three must be changed together.
+CREATE INDEX IF NOT EXISTS idx_ledger_provider_batch_id ON ledger(provider_batch_id)
+    WHERE provider_batch_id IS NOT NULL;
+
 -- 7. AUDIT LOG OF SENSITIVE ACTIONS
 CREATE TABLE audit_log (
     id VARCHAR(50) PRIMARY KEY,

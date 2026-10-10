@@ -195,6 +195,29 @@ const PROVIDER_TRANSACTION_STATUS_VERDICTS: Readonly<Record<string, PayoutTransa
 };
 
 /**
+ * BATCH 1B — the SUFFIXED forms of the NON-COMPLETING families.
+ *
+ * IntaSend writes a code as a two-letter family + a three-digit reason
+ * (`TS100`, `TP101`, `TF103`, `TC108`) and sometimes emits the bare family
+ * token (`TP`). Before Batch 1B only the bare tokens were recognised, so the
+ * provider's actual pending code `TP101` fell through to 'unknown'.
+ *
+ * WHY BROADENING HERE IS SAFE AND NOT A WEAKENING
+ *
+ * This pattern matches ONLY the pending / on-hold / retrying families, whose
+ * verdict is 'in_progress' — a "do not confirm" answer. Every code it can ever
+ * match is therefore forced DOWN in severity, never up; there is no input for
+ * which it returns 'completed'. The fail-closed property this module exists to
+ * provide ("an unrecognised code never completes a payout") is untouched.
+ *
+ * The SUCCESS family is deliberately excluded from the pattern. `TS100` is the
+ * single code that may complete a payout, so it is only ever recognised as the
+ * exact literal above — a truncated code (`TS10`), a typo (`TS100X`) or an
+ * unknown sibling (`TS101`) all remain 'unknown' and confirm nothing.
+ */
+const NON_COMPLETING_FAMILY_CODE = /^(TP|TH|TR)\d{3}$/;
+
+/**
  * Normalise ONE provider status value into a verdict. FAIL-CLOSED: anything
  * that is not a recognised code — including a missing value, a number, an
  * object, or a future code this build does not know — becomes 'unknown'.
@@ -208,7 +231,71 @@ export function classifyPayoutTransactionStatus(rawStatus: unknown): PayoutTrans
   const normalized = rawStatus.trim().toUpperCase();
   if (!normalized) return 'unknown';
   const code = normalized.split(/[\s\-–—:]+/)[0];
-  return PROVIDER_TRANSACTION_STATUS_VERDICTS[code] ?? 'unknown';
+  const known = PROVIDER_TRANSACTION_STATUS_VERDICTS[code];
+  if (known) return known;
+  // The only permitted fallback: the suffixed NON-COMPLETING families, whose
+  // verdict is 'in_progress'. `TS` is not among them, so no code can reach
+  // 'completed' through this branch.
+  return NON_COMPLETING_FAMILY_CODE.test(code) ? 'in_progress' : 'unknown';
+}
+
+/**
+ * BATCH 1B — WHICH PROVIDER FIELD IS THE STATUS AUTHORITY, AND WHAT IT MEANS.
+ *
+ * IntaSend returns BOTH a machine-readable code and a human-readable label:
+ *
+ *   { "status_code": "TS100", "status": "Successful" }
+ *
+ * The CODE is the contract; the label is presentation, and the provider is free
+ * to reword it. Reading the label first — which is what this build did before
+ * Batch 1B — meant `TS100` was never seen at all, so a transfer the provider had
+ * genuinely completed classified as 'unknown' and its payout leg stayed
+ * unresolved forever (and the settlement that depended on it never released).
+ * The code therefore WINS whenever it is present and usable.
+ *
+ * THE FALLBACK, AND WHY IT IS STILL FAIL-CLOSED
+ *
+ * `status` is read only when `status_code` is absent, blank, or not a string.
+ * That covers a provider revision that renames or omits the code field — and,
+ * because classification matches the CODE SHAPE rather than the field name, a
+ * response that puts `"TS100"` in `status` still classifies correctly.
+ *
+ * The case worth stating explicitly is a HUMAN-READABLE-ONLY response, e.g.
+ * `{ "status": "Successful" }`. "Successful" is not in the code table, so it
+ * resolves to 'unknown' and CANNOT complete a payout. That is the intended safe
+ * fallback: a rewordable label is not authoritative evidence that money moved,
+ * and no reworded label may ever be turned into a completion here.
+ *
+ * Returns the chosen raw string alongside the verdict so both come from ONE
+ * read. A missing or malformed pair yields `{ providerStatus: null, verdict:
+ * 'unknown' }`.
+ */
+export function readProviderTransactionStatus(
+  entry: unknown,
+): { providerStatus: string | null; verdict: PayoutTransactionVerdict } {
+  const providerStatus = pickProviderStatusField(entry);
+  return { providerStatus, verdict: classifyPayoutTransactionStatus(providerStatus) };
+}
+
+/** A non-blank string, trimmed. Anything else (absent, blank, non-string) counts as "no status". */
+function usableProviderStatusString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+/**
+ * The status FIELD precedence rule, in exactly one place: `status_code` first,
+ * `status` only as the documented fallback. Not exported — it exists so the
+ * precedence cannot be re-implemented (and drift) at a call site.
+ */
+function pickProviderStatusField(entry: unknown): string | null {
+  if (entry === null || typeof entry !== 'object') return null;
+  const record = entry as Record<string, unknown>;
+  return (
+    usableProviderStatusString(record.status_code) ??
+    usableProviderStatusString(record.status)
+  );
 }
 
 /**

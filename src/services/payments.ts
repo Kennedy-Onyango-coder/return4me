@@ -1,7 +1,7 @@
 import { db } from '../db/database';
 // BATCH 1 — the ONE place a provider payout status code becomes a decision.
 // payoutOutcomes.ts has no imports of its own, so this cannot create a cycle.
-import { classifyPayoutTransactionStatus, type PayoutTransactionVerdict } from '../config/payoutOutcomes';
+import { readProviderTransactionStatus, type PayoutTransactionVerdict } from '../config/payoutOutcomes';
 
 // Local copy of the phone-masking helper (also in services/auth.ts as
 // maskPhoneForLog, and database.ts) — duplicated rather than imported to
@@ -558,10 +558,15 @@ export const PaymentService = {
     }
 
     const transactions = rawTransactions.map((entry: any) => {
-      const providerStatus =
-        entry?.status != null ? String(entry.status)
-          : entry?.status_code != null ? String(entry.status_code)
-            : null;
+      // BATCH 1B — the MACHINE-READABLE `status_code` is the authority; the
+      // human-readable `status` label is only a documented fallback. This
+      // response carries BOTH (e.g. { status: "Successful", status_code:
+      // "TS100" }); reading the label first left `TS100` unrecognised, so a
+      // transfer the provider had genuinely completed classified as 'unknown'
+      // and its payout leg — and the settlement behind it — stayed unresolved
+      // forever. See readProviderTransactionStatus() in config/payoutOutcomes.ts
+      // for the precedence rule and the fail-closed label-only behaviour.
+      const { providerStatus, verdict } = readProviderTransactionStatus(entry);
       const transactionId =
         entry?.transaction_id != null ? String(entry.transaction_id)
           : entry?.id != null ? String(entry.id)
@@ -569,7 +574,7 @@ export const PaymentService = {
       return {
         transactionId,
         providerStatus,
-        verdict: classifyPayoutTransactionStatus(providerStatus),
+        verdict,
       };
     });
 

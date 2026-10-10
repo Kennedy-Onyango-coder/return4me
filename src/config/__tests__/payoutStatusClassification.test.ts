@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   classifyPayoutTransactionStatus,
+  readProviderTransactionStatus,
   matchPayoutTransactionToLegs,
   isPayoutConfirmable,
   CONFIRMABLE_PAYOUT_OUTCOMES,
@@ -70,6 +71,112 @@ describe('BATCH 1 — provider transaction status classification', () => {
     for (const raw of [null, undefined, '', '   ', 42, 0, {}, [], true]) {
       expect(classifyPayoutTransactionStatus(raw), String(raw)).toBe('unknown');
     }
+  });
+});
+
+// =============================================================================
+// BATCH 1B — WHICH FIELD THE PROVIDER STATUS IS READ FROM.
+// =============================================================================
+// The provider returns BOTH a machine-readable code and a human-readable label:
+//
+//     { "status_code": "TS100", "status": "Successful" }
+//
+// The CODE is the contract; the label is presentation. Reading the label first
+// (which this build did before Batch 1B) meant `TS100` was never seen at all, so
+// a transfer the provider had genuinely completed classified as 'unknown' and its
+// payout leg — and the settlement behind it — stayed unresolved forever.
+//
+// readProviderTransactionStatus() is the ONE place that precedence lives, and it
+// is pure, so every assertion below is a real statement about production
+// behaviour rather than about a mock.
+// =============================================================================
+describe('BATCH 1B — the machine-readable status code outranks the human-readable label', () => {
+  it('{ status: "Successful", status_code: "TS100" } completes', () => {
+    expect(readProviderTransactionStatus({ status: 'Successful', status_code: 'TS100' }))
+      .toEqual({ providerStatus: 'TS100', verdict: 'completed' });
+  });
+
+  it('{ status: "Pending", status_code: "TP101" } is in_progress, not unknown', () => {
+    // The regression this batch exists for: the provider\'s real in-flight code
+    // is SUFFIXED, and the label ("Pending") is not a code at all. Reading the
+    // label first classified this as 'unknown' and stalled reconciliation.
+    expect(readProviderTransactionStatus({ status: 'Pending', status_code: 'TP101' }))
+      .toEqual({ providerStatus: 'TP101', verdict: 'in_progress' });
+  });
+
+  it('classifies a code-only response correctly', () => {
+    for (const [code, verdict] of [
+      ['TS100', 'completed'],
+      ['TP101', 'in_progress'],
+      ['TP', 'in_progress'],
+      ['TH', 'in_progress'],
+      ['TF103', 'failed'],
+      ['TF105', 'failed'],
+      ['TC108', 'cancelled'],
+    ] as const) {
+      expect(readProviderTransactionStatus({ status_code: code }), code)
+        .toEqual({ providerStatus: code, verdict });
+    }
+  });
+
+  it('a human-readable-only response falls back to `status` and CANNOT complete a payout', () => {
+    // THE DOCUMENTED SAFE FALLBACK. `status` is read only when the code is
+    // absent/unusable, and a label is not a code — "Successful" is rewordable
+    // presentation, so it resolves to 'unknown'. A provider revision that drops
+    // `status_code` therefore degrades to "nothing can be confirmed", never to
+    // "everything is completed".
+    expect(readProviderTransactionStatus({ status: 'Successful' }))
+      .toEqual({ providerStatus: 'Successful', verdict: 'unknown' });
+    expect(readProviderTransactionStatus({ status: 'Pending' }))
+      .toEqual({ providerStatus: 'Pending', verdict: 'unknown' });
+    expect(readProviderTransactionStatus({ status: 'Transaction complete' }))
+      .toEqual({ providerStatus: 'Transaction complete', verdict: 'unknown' });
+    // ...and the fallback is still USEFUL when the CODE arrives in that field,
+    // because classification matches the code SHAPE and not the field name.
+    expect(readProviderTransactionStatus({ status: 'TS100' }))
+      .toEqual({ providerStatus: 'TS100', verdict: 'completed' });
+  });
+
+  it('falls back to `status` when status_code is unusable (blank or not a string)', () => {
+    for (const unusable of [null, undefined, '', '   ', 42, 0, true, {}, ['TS100']]) {
+      expect(readProviderTransactionStatus({ status: 'TS100', status_code: unusable }), String(unusable))
+        .toEqual({ providerStatus: 'TS100', verdict: 'completed' });
+    }
+  });
+
+  it('an unknown or malformed status is unknown, never completed', () => {
+    for (const malformed of [
+      { status_code: 'ZZ999' },
+      { status_code: 'TS10' },
+      { status_code: 'TS100X' },
+      { status_code: 'SUCCESS' },
+      { status_code: 'TS101' },                          // unknown sibling of the one success code
+      { status: 'Successful', status_code: 'TS101' },     // the label must not rescue it
+      { status_code: 42 },
+      { status_code: '' },
+      {},
+      null,
+      undefined,
+      'TS100',                                            // not an entry object at all
+    ]) {
+      const { verdict } = readProviderTransactionStatus(malformed);
+      expect(verdict, JSON.stringify(malformed) ?? String(malformed)).toBe('unknown');
+    }
+
+    // When there is NO usable field at all, the status is reported as null —
+    // never as '' and never as undefined — so a caller logging it sees an
+    // explicit absence rather than an empty string it might treat as a code.
+    for (const nothing of [{}, { status_code: '' }, { status_code: '   ' }, { status_code: 42 }, null, undefined, 'TS100']) {
+      expect(readProviderTransactionStatus(nothing).providerStatus, String(nothing)).toBeNull();
+    }
+  });
+
+  it('a padded or differently-cased code still beats the label', () => {
+    // The precedence is about WHICH FIELD is read, not about how it is written:
+    // the raw string is reported verbatim (useful for logging) while the verdict
+    // comes from the classifier\'s own normalisation.
+    expect(readProviderTransactionStatus({ status: 'Pending', status_code: '  tp101 ' }))
+      .toEqual({ providerStatus: 'tp101', verdict: 'in_progress' });
   });
 });
 

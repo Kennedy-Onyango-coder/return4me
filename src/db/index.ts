@@ -1160,6 +1160,16 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     // column CHECK, which Postgres names ledger_payout_outcome_check.
     `ALTER TABLE ledger DROP CONSTRAINT IF EXISTS ledger_payout_outcome_check`,
     `ALTER TABLE ledger ADD CONSTRAINT ledger_payout_outcome_check CHECK (payout_outcome IS NULL OR payout_outcome IN ('not_submitted', 'submitting', 'accepted', 'unknown', 'rejected', 'completed'))`,
+    // BATCH 1B — the reconciliation access path for provider evidence. Placed
+    // AFTER the provider_batch_id column is added above, so the column exists on
+    // every database this runs against (the ordering rule migrationOrder.test.ts
+    // pins for tables applies equally to a column an index depends on).
+    // getPayoutLegsByProviderBatchId() runs this lookup on every payout status
+    // event; without the index it is a sequential scan of the whole ledger.
+    // PARTIAL so it indexes only the rows that can actually be looked up.
+    // Mirrored verbatim (name, column, predicate) in sql/schema.sql's bootstrap
+    // block and as a Drizzle index in src/db/schema.ts; all three move together.
+    `CREATE INDEX IF NOT EXISTS idx_ledger_provider_batch_id ON ledger(provider_batch_id) WHERE provider_batch_id IS NOT NULL`,
     // At most one unresolved dispute per item — see matching comment in schema.ts.
     `CREATE UNIQUE INDEX IF NOT EXISTS uq_disputes_one_unresolved_per_item ON disputes(item_id) WHERE resolved_at IS NULL`,
     // Durable, idempotent social publication tracking — see matching

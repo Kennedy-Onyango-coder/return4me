@@ -540,6 +540,16 @@ export const ledger = pgTable("ledger", {
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
 }, (table) => {
   return {
+    // BATCH 1B — the reconciliation access path for provider evidence.
+    // getPayoutLegsByProviderBatchId() resolves a provider batch tracking id back
+    // to this application's payout legs on every payout status event, so without
+    // this index each lookup is a sequential scan of the entire ledger. PARTIAL,
+    // because only provider-submitted disbursement rows carry a non-NULL batch
+    // id. The identical name/column/predicate is declared in sql/schema.sql's
+    // bootstrap block and as an incremental statement in src/db/index.ts.
+    idx_ledger_provider_batch_id: index("idx_ledger_provider_batch_id")
+      .on(table.provider_batch_id)
+      .where(sql`${table.provider_batch_id} IS NOT NULL`),
     // Same single-source pattern as claims_status_check: the predicate is
     // generated from PAYOUT_OUTCOME_VALUES so this definition, sql/schema.sql
     // and the runtime DDL in src/db/index.ts cannot drift apart.

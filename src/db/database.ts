@@ -869,6 +869,36 @@ function parseLedgerEntry(row: any): LedgerEntry {
   };
 }
 
+/**
+ * BATCH 1B — THE FAILURE REASON A CONFIRMED PAYOUT MUST KEEP.
+ *
+ * confirmPayoutVerified() completes a leg from provider evidence. Doing so used
+ * to null the row's `failure_reason` whenever the caller supplied none — and the
+ * caller normally supplies none, because "the transfer completed" needs no
+ * excuse. That silently destroyed evidence the row already carried, most
+ * importantly the diagnostic src/server.ts records on a row whose submission
+ * outcome was INCONCLUSIVE ('accepted' / 'unknown'), which are precisely the
+ * rows this method exists to resolve.
+ *
+ * The rule:
+ *   * a NEW non-blank string REPLACES the stored reason — the only case in which
+ *     this application holds positive, later evidence to record;
+ *   * null / undefined / blank / non-string is "no new evidence" and RETAINS the
+ *     existing value, however old;
+ *   * a row that never had one still ends up with null (never '').
+ *
+ * The caller's original string is returned untouched when it is used:
+ * `failure_reason` is human-readable audit text, and trimming it here would
+ * silently rewrite evidence. Only the emptiness TEST trims.
+ */
+function failureReasonAfterCompletion(
+  supplied: string | null | undefined,
+  existing: string | null | undefined,
+): string | null {
+  if (typeof supplied === 'string' && supplied.trim() !== '') return supplied;
+  return existing ?? null;
+}
+
 function parseAuditLog(row: any): AuditLog {
   return {
     id: row.id,
@@ -2234,6 +2264,26 @@ class DatabaseEngine {
    * already had. The row is read first because a COALESCE write is opaque to the
    * in-memory test double, which would make the guarantee untestable.
    *
+   * FAILURE EVIDENCE IS PRESERVED TOO (BATCH 1B). This method used to write
+   * `failure_reason: confirmation.failureReason ?? null`, which meant the normal
+   * completion call — one that supplies no reason, or an explicit null — ERASED
+   * any failure evidence already on the row. That is a real, reachable loss of
+   * evidence, not a hypothetical: the production submission path
+   * (src/server.ts) records a diagnostic on a row that is INCONCLUSIVE and
+   * therefore still confirmable —
+   *
+   *   'pending' -> payout_outcome 'accepted'  + "...the individual transfer is
+   *                not confirmed complete."
+   *   'unknown' -> payout_outcome 'unknown'   + "...the transfer may already
+   *                have been executed."
+   *
+   * — and a later provider verification of exactly such a row is the whole point
+   * of this method. A completion is not evidence that the earlier ambiguity never
+   * happened, so the stored reason is now retained unless the caller supplies a
+   * genuine replacement (a non-blank string), which is the only case in which
+   * this application has positive, later evidence to record. See
+   * failureReasonAfterCompletion().
+   *
    * This method does NOT: change statuses other than pending -> completed, move
    * a row to failed/rejected, touch any other row, release a claim, finalise a
    * settlement, or make a row eligible for resubmission. It completes ONE leg.
@@ -2260,7 +2310,10 @@ class DatabaseEngine {
           payout_outcome: "completed",
           provider_batch_id: confirmation.providerBatchId ?? existing.provider_batch_id ?? null,
           provider_transaction_id: confirmation.providerTransactionId ?? existing.provider_transaction_id ?? null,
-          failure_reason: confirmation.failureReason ?? null,
+          // BATCH 1B — see failureReasonAfterCompletion(). A completion that
+          // supplies no new reason must NOT erase the failure evidence already on
+          // the row (which is exactly what `?? null` used to do).
+          failure_reason: failureReasonAfterCompletion(confirmation.failureReason, existing.failure_reason),
         })
         .where(and(
           eq(ledgerTable.id, ledgerEntryId),
