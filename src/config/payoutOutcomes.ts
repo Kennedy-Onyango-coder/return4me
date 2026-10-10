@@ -140,3 +140,181 @@ export function isUnresolvedPayoutRow(row: PayoutSubmissionState | null | undefi
   if (row.status === 'completed') return false;
   return !isPayoutSubmittable(row);
 }
+
+// ===========================================================================
+// BATCH 1 — PROVIDER-SIDE PAYOUT VERIFICATION (read-only evidence)
+// ===========================================================================
+//
+// Everything below answers ONE question, using the PROVIDER as the authority:
+// "may this specific local payout leg be marked completed, because IntaSend
+// authoritatively reports that ITS transfer completed?"
+//
+// It is deliberately pure data + pure functions, and it is deliberately
+// SEPARATE from the submission vocabulary above. Nothing here can submit,
+// resubmit, approve or cancel anything: the retry rules in
+// isPayoutSubmittable() are not modified, relaxed or bypassed by any of it.
+//
+// WHY A "VERDICT" AND NOT THE RAW PROVIDER STATUS
+// ----------------------------------------------
+// IntaSend reports a per-transaction status code. Trusting the raw string at
+// each call site would spread an unknown-but-incomplete status across the
+// codebase and invite a caller to treat "not TF-something" as success. The
+// mapping below is therefore the ONE place a provider status code becomes a
+// decision, and anything it does not recognize maps to 'unknown' — which every
+// caller must read as "do not confirm", never as success.
+
+/**
+ * The complete provider-transaction verdict vocabulary. Only 'completed' may
+ * ever be treated as money having moved; 'failed'/'cancelled' describe a
+ * transfer the provider says did NOT happen (and are deliberately NOT turned
+ * into a local retry here); 'in_progress' and 'unknown' are both "not yet
+ * knowable" and must never complete a payout.
+ */
+export type PayoutTransactionVerdict = 'completed' | 'failed' | 'cancelled' | 'in_progress' | 'unknown';
+
+/**
+ * IntaSend per-transaction status codes, mapped to a verdict.
+ *
+ *   TS100         — transaction success.
+ *   TF103/105/106 — transaction failed (provider-side failure / rejected).
+ *   TC108         — transaction cancelled.
+ *   TP / TH / TR  — pending / on hold / retrying: the transfer has NOT settled.
+ *
+ * Keys are the CODE TOKEN only (see classifyPayoutTransactionStatus, which
+ * strips any human-readable suffix such as "TS100 - Success").
+ */
+const PROVIDER_TRANSACTION_STATUS_VERDICTS: Readonly<Record<string, PayoutTransactionVerdict>> = {
+  TS100: 'completed',
+  TF103: 'failed',
+  TF105: 'failed',
+  TF106: 'failed',
+  TC108: 'cancelled',
+  TP: 'in_progress',
+  TH: 'in_progress',
+  TR: 'in_progress',
+};
+
+/**
+ * Normalise ONE provider status value into a verdict. FAIL-CLOSED: anything
+ * that is not a recognised code — including a missing value, a number, an
+ * object, or a future code this build does not know — becomes 'unknown'.
+ *
+ * Accepts a code with a human-readable suffix because the provider echoes one
+ * (e.g. "TS100 - Success"); the first whitespace/dash/colon-delimited token is
+ * the machine code.
+ */
+export function classifyPayoutTransactionStatus(rawStatus: unknown): PayoutTransactionVerdict {
+  if (typeof rawStatus !== 'string') return 'unknown';
+  const normalized = rawStatus.trim().toUpperCase();
+  if (!normalized) return 'unknown';
+  const code = normalized.split(/[\s\-–—:]+/)[0];
+  return PROVIDER_TRANSACTION_STATUS_VERDICTS[code] ?? 'unknown';
+}
+
+/**
+ * The `ledger.payout_outcome` values a provider status lookup may COMPLETE.
+ *
+ * These are exactly the UNRESOLVED_PAYOUT_OUTCOMES — the rows that positively
+ * record "a submission was made and no final result is known", i.e. the only
+ * rows for which a later provider confirmation is the missing evidence.
+ *
+ * Everything else is excluded on purpose:
+ *   'not_submitted' — no submission was ever made, so no provider transfer
+ *                     can exist to confirm; completing it from a provider
+ *                     lookup would be a guess.
+ *   'rejected'      — the provider refused it; a "completed" status would
+ *                     contradict the recorded refusal.
+ *   'completed'     — already paid (idempotency).
+ *   NULL            — legacy/unknown history. Fail closed.
+ */
+export const CONFIRMABLE_PAYOUT_OUTCOMES: readonly PayoutOutcome[] = UNRESOLVED_PAYOUT_OUTCOMES;
+
+/**
+ * May THIS row's payout be marked completed by an authoritative provider
+ * confirmation? A positive statement only: the row must still be bookable
+ * (`status === 'pending'`) AND carry a recorded, still-unresolved submission
+ * outcome. Every other state — including NULL — fails closed.
+ *
+ * This is the pure mirror of the SQL predicate confirmPayoutVerified() applies
+ * in its UPDATE ... WHERE clause, so the write-time guard and this readable
+ * rule cannot drift apart.
+ */
+export function isPayoutConfirmable(row: PayoutSubmissionState | null | undefined): boolean {
+  if (!row) return false;
+  if (row.status !== 'pending') return false;
+  return (
+    typeof row.payout_outcome === 'string' &&
+    (CONFIRMABLE_PAYOUT_OUTCOMES as readonly string[]).includes(row.payout_outcome)
+  );
+}
+
+/** The minimal identity of a local payout leg used for provider matching. */
+export interface PayoutLegIdentity {
+  /** The ledger row id — what a successful match returns. */
+  id: string;
+  provider_batch_id?: string | null;
+  provider_transaction_id?: string | null;
+}
+
+/** One provider-reported transaction, keyed by the two ids we correlate on. */
+export interface PayoutProviderTransaction {
+  batchId?: string | null;
+  transactionId?: string | null;
+}
+
+/** Trim to a non-empty string, or null. Blank/whitespace counts as absent. */
+function normalizeProviderRef(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+/**
+ * Resolve ONE provider transaction to EXACTLY ONE local payout leg.
+ *
+ * The correlation is `(provider_batch_id, provider_transaction_id)` — both,
+ * matched exactly. That pair is the only thing that makes a provider report
+ * evidence about a specific finder/agent transfer: a batch id alone covers
+ * every leg in the batch, and a transaction id alone could belong to another
+ * batch.
+ *
+ * Returns the leg's id, or null when the answer is not unambiguous:
+ *   * zero matches  — an unmatched row (e.g. a legacy row whose
+ *                     provider_transaction_id is NULL, or a batch id we never
+ *                     recorded). We cannot prove which leg this is, so we
+ *                     confirm nothing.
+ *   * two or more   — the provider answered with ids that are not unique among
+ *                     this batch's legs (duplicate transaction ids, which can
+ *                     arise when the submission path bound responses by
+ *                     recipient account instead of by position — see the
+ *                     Batch 1B proposal). Choosing one would be a coin flip.
+ *   * a missing id on EITHER side — an incomplete correlation is a guess.
+ *
+ * This is a pure function of data, so it is exhaustively unit-testable and
+ * cannot perform a side effect of any kind.
+ */
+export function matchPayoutTransactionToLegs(
+  transaction: PayoutProviderTransaction | null | undefined,
+  legs: readonly PayoutLegIdentity[] | null | undefined,
+): string | null {
+  if (!transaction || !Array.isArray(legs) || legs.length === 0) return null;
+
+  const batchId = normalizeProviderRef(transaction.batchId);
+  const transactionId = normalizeProviderRef(transaction.transactionId);
+  // Both identifiers are REQUIRED. Without either one, a "match" is a guess.
+  if (!batchId || !transactionId) return null;
+
+  const matches = legs.filter((leg) => {
+    if (!leg || typeof leg.id !== 'string') return false;
+    const legBatch = normalizeProviderRef(leg.provider_batch_id);
+    const legTransaction = normalizeProviderRef(leg.provider_transaction_id);
+    return (
+      legBatch !== null &&
+      legTransaction !== null &&
+      legBatch === batchId &&
+      legTransaction === transactionId
+    );
+  });
+
+  return matches.length === 1 ? matches[0].id : null;
+}

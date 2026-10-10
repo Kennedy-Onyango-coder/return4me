@@ -59,7 +59,7 @@ import { isAllowedClaimTransition, TERMINAL_CLAIM_STATUSES } from "../config/cla
 // vocabulary and the retry-eligibility rule. Imported here (not re-derived) so
 // the data layer, the settlement executor and the schema definitions cannot
 // disagree about what is safe to submit.
-import { isPayoutOutcome, isUnresolvedPayoutRow, type PayoutOutcome } from "../config/payoutOutcomes";
+import { isPayoutOutcome, isUnresolvedPayoutRow, CONFIRMABLE_PAYOUT_OUTCOMES, type PayoutOutcome } from "../config/payoutOutcomes";
 // A1 (Batch 0A) — the single definition of the 5-day strike window, plus the
 // repository's EXISTING canonical phone normalization (re-exported, never
 // reimplemented) so every strike path resolves to one identity.
@@ -2160,6 +2160,119 @@ class DatabaseEngine {
     } catch (error) {
       console.error("Database update failed:", error);
       throw new Error("Failed to mark payout submission started.", { cause: error });
+    }
+  }
+
+  /**
+   * BATCH 1 — THE PAYOUT LEGS A PROVIDER BATCH ID IS KNOWN TO OWN.
+   *
+   * READ-ONLY. Given a provider batch tracking id (the value stored in
+   * `provider_batch_id`), returns the finder/agent ledger rows that recorded it,
+   * so a provider status report can be bound back to THIS application's rows.
+   *
+   * Scoped to `finder_payout` / `agent_payout` on purpose: a batch tracking id
+   * belongs to a disbursement, and no other row type may ever be completed by a
+   * payout provider lookup. An unknown or blank id returns [] rather than the
+   * whole table — a caller that has no batch id has no legs, and must not be
+   * handed every payout row to match against.
+   */
+  public async getPayoutLegsByProviderBatchId(providerBatchId: string): Promise<LedgerEntry[]> {
+    try {
+      const trimmed = String(providerBatchId || "").trim();
+      if (!trimmed) return [];
+      const rows = await drizzleDb
+        .select()
+        .from(ledgerTable)
+        .where(and(
+          eq(ledgerTable.provider_batch_id, trimmed),
+          inArray(ledgerTable.type, ["finder_payout", "agent_payout"]),
+        ));
+      return rows.map(parseLedgerEntry);
+    } catch (error) {
+      console.error("Database query failed:", error);
+      throw new Error("Failed to query payout legs for provider batch id.", { cause: error });
+    }
+  }
+
+  /**
+   * BATCH 1 — CAS-GUARDED PAYOUT CONFIRMATION FROM PROVIDER EVIDENCE.
+   *
+   * THE ONE WRITE in this batch, and the only way an unconfirmed payout row may
+   * ever become 'completed' from the provider side.
+   *
+   * WHY A COMPARE-AND-SWAP AND NOT A READ-THEN-WRITE
+   *
+   * recordPayoutAttempt() writes `completed` unconditionally on a provider
+   * 'success' result, so a replayed, duplicated or late-arriving event could move
+   * a row that is not in a state to be completed — critically, a row booked as
+   * 'not_submitted' (no submission was ever made) or a legacy row whose
+   * payout_outcome is NULL. Either would be a completion we cannot justify. The
+   * guard below is therefore part of the WRITE:
+   *
+   *     WHERE id = $1 AND status = 'pending'
+   *       AND payout_outcome IN ('submitting','accepted','unknown')
+   *
+   * Every branch that is not that positive statement fails closed:
+   *   * already 'completed'        — idempotency: the first winner takes it, a
+   *                                  duplicate/out-of-order delivery matches
+   *                                  zero rows and changes nothing.
+   *   * 'not_submitted'            — no submission exists to confirm.
+   *   * 'rejected'                 — the provider refused it; a "completed"
+   *                                  status would contradict our own record.
+   *   * payout_outcome NULL        — a legacy row with no submission history.
+   *                                  We cannot prove it was ever submitted, so
+   *                                  it can never be completed here; it stays
+   *                                  unresolved and visible for an operator.
+   *   * status already 'failed'    — not bookable, so not completable.
+   *
+   * The predicate is generated from CONFIRMABLE_PAYOUT_OUTCOMES (the same list
+   * isPayoutConfirmable() reads), so the SQL guard and the readable rule cannot
+   * drift apart.
+   *
+   * PROVIDER IDENTITY IS PRESERVED, NOT OVERWRITTEN — same rule as
+   * recordPayoutAttempt: a caller that supplies no id keeps whatever the row
+   * already had. The row is read first because a COALESCE write is opaque to the
+   * in-memory test double, which would make the guarantee untestable.
+   *
+   * This method does NOT: change statuses other than pending -> completed, move
+   * a row to failed/rejected, touch any other row, release a claim, finalise a
+   * settlement, or make a row eligible for resubmission. It completes ONE leg.
+   *
+   * Returns whether THIS caller won the CAS.
+   */
+  public async confirmPayoutVerified(
+    ledgerEntryId: string,
+    confirmation: {
+      providerBatchId?: string | null;
+      providerTransactionId?: string | null;
+      failureReason?: string | null;
+    } = {},
+  ): Promise<boolean> {
+    try {
+      const existingRows = await drizzleDb.select().from(ledgerTable).where(eq(ledgerTable.id, ledgerEntryId));
+      const existing = existingRows[0];
+      if (!existing) return false;
+
+      const rows = await drizzleDb
+        .update(ledgerTable)
+        .set({
+          status: "completed",
+          payout_outcome: "completed",
+          provider_batch_id: confirmation.providerBatchId ?? existing.provider_batch_id ?? null,
+          provider_transaction_id: confirmation.providerTransactionId ?? existing.provider_transaction_id ?? null,
+          failure_reason: confirmation.failureReason ?? null,
+        })
+        .where(and(
+          eq(ledgerTable.id, ledgerEntryId),
+          eq(ledgerTable.status, "pending"),
+          inArray(ledgerTable.payout_outcome, [...CONFIRMABLE_PAYOUT_OUTCOMES]),
+        ))
+        .returning({ id: ledgerTable.id });
+
+      return rows.length > 0;
+    } catch (error) {
+      console.error("Database update failed:", error);
+      throw new Error("Failed to confirm payout from provider evidence.", { cause: error });
     }
   }
 

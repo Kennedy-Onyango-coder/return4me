@@ -71,9 +71,61 @@ export function registerWebhookRoutes(
     ) => Promise<string | null>;
     /** Shared error disclosure, identical to every other route. */
     sendServerError: (res: any, error: any, context: string) => any;
+    /**
+     * BATCH 1 — the payout-batch VERIFICATION TRIGGER. Injected, never
+     * reimplemented here: the authoritative provider lookup
+     * (services/payments.ts), the exact transaction-to-leg matching and the
+     * ledger compare-and-swap (services/payoutReconciliation.ts) all live
+     * outside this module. This route only decides WHETHER to ask.
+     */
+    reconcilePayoutBatchStatus: (trackingId: string) => Promise<unknown>;
   }
 ) {
-  const { processClaimPaymentConfirmed, sendServerError } = deps;
+  const { processClaimPaymentConfirmed, sendServerError, reconcilePayoutBatchStatus } = deps;
+
+  /**
+   * BATCH 1 — the `send_money_event` (payout / disbursement) TRIGGER.
+   *
+   * A payout callback is a HINT, not proof. Its own per-transaction status field
+   * is never read and never trusted: IntaSend's documented guidance is to confirm
+   * critical events against the API, and a payout is the most critical event
+   * there is. So this handler does exactly one thing — it extracts the batch
+   * tracking id and asks the injected verification path to RE-READ that batch
+   * from the provider. Only a leg the provider authoritatively reports as
+   * completed AND that matches exactly one local ledger row can be confirmed
+   * there, and even then nothing about the claim's settlement is released.
+   *
+   * A missing tracking id is refused (400) — with no batch identity there is
+   * nothing to verify. A verification failure is surfaced as an error (so the
+   * provider retries) and confirms nothing. The response body is deliberately
+   * uninformative about local state.
+   *
+   * Accepted field names mirror the submission path's own defensive alias
+   * handling (`tracking_id`, with `trackingId`/`batch_reference` as
+   * compatibility aliases). A wrong id simply fails verification — the trigger
+   * can never complete a payout on its own.
+   */
+  const handlePayoutBatchEvent = async (payload: any, res: any) => {
+    const trackingId = payload?.tracking_id ?? payload?.trackingId ?? payload?.batch_reference ?? null;
+    if (!trackingId || typeof trackingId !== 'string' || trackingId.trim() === '') {
+      console.warn('[INTASEND WEBHOOK] send_money_event carried no usable tracking_id; nothing to verify.');
+      return res.status(400).json({ error: 'Missing tracking_id' });
+    }
+    try {
+      const outcome: any = await reconcilePayoutBatchStatus(trackingId.trim());
+      // Log the OUTCOME SHAPE, never the payload: a payout callback carries
+      // recipient details, and the counts are what an operator needs.
+      console.log('[INTASEND WEBHOOK] send_money_event handled as a verification trigger.', JSON.stringify({
+        tracking_id: trackingId.trim(),
+        handled: outcome?.handled ?? null,
+        confirmed: Array.isArray(outcome?.confirmedLegIds) ? outcome.confirmedLegIds.length : 0,
+      }));
+      return res.json({ status: 'ok' });
+    } catch (err: any) {
+      console.error('[INTASEND WEBHOOK] Payout verification trigger failed:', err);
+      return sendServerError(res, err, 'INTASEND_WEBHOOK_PAYOUT_VERIFY_ERROR');
+    }
+  };
 
   // Webhook for IntaSend collection confirmation events
   app.post('/api/webhooks/intasend', async (req, res) => {
@@ -121,9 +173,25 @@ export function registerWebhookRoutes(
     // a real challenge — but it can never fabricate money in production.
 
     // ---------------------------------------------------------------------
-    // 2. TOPIC. A non-collection lifecycle event is acknowledged and ignored.
+    // 2. TOPIC ROUTING. Only TWO topics are actionable; every other lifecycle
+    //    event is acknowledged and ignored.
+    //
+    //    `collection_event` — the collection path below.
+    //    `send_money_event` — a PAYOUT/disbursement callback, handled as a
+    //                         TRIGGER ONLY (see handlePayoutBatchEvent above):
+    //                         the payload is never trusted as proof that money
+    //                         moved, it only causes an authoritative provider
+    //                         status re-read.
+    //
+    //    Routing lives INSIDE this one registered handler deliberately: this is
+    //    the ONLY route in the module (the collection contract test asserts
+    //    that shape), so there is exactly one authenticated entry point to
+    //    reason about and one place the challenge is verified.
     // ---------------------------------------------------------------------
     if (payload.topic && payload.topic !== 'collection_event') {
+      if (payload.topic === 'send_money_event') {
+        return await handlePayoutBatchEvent(payload, res);
+      }
       console.log(`[INTASEND WEBHOOK] Ignoring non-collection topic "${payload.topic}".`);
       return res.json({ status: 'ignored' });
     }

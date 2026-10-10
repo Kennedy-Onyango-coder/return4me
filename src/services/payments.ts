@@ -1,4 +1,7 @@
 import { db } from '../db/database';
+// BATCH 1 — the ONE place a provider payout status code becomes a decision.
+// payoutOutcomes.ts has no imports of its own, so this cannot create a cycle.
+import { classifyPayoutTransactionStatus, type PayoutTransactionVerdict } from '../config/payoutOutcomes';
 
 // Local copy of the phone-masking helper (also in services/auth.ts as
 // maskPhoneForLog, and database.ts) — duplicated rather than imported to
@@ -446,6 +449,139 @@ export const PaymentService = {
         ? String(invoice.provider_ref)
         : (invoice.transaction_id ? String(invoice.transaction_id) : null),
     };
+  },
+
+  /**
+   * BATCH 1 — AUTHORITATIVE PAYOUT-BATCH STATUS LOOKUP.
+   *
+   * The verdict half of payout confirmation: given a payout batch's provider
+   * tracking id, ask IntaSend what it actually did with each transaction in it.
+   * This exists because a payout callback is only a TRIGGER — the provider's own
+   * per-transaction record is the evidence — and because IntaSend accepting a
+   * batch (`HTTP 2xx` on submission) is NOT the same as an individual M-Pesa B2C
+   * transfer having settled.
+   *
+   * CONTRACT, deliberately narrow and fail-closed (mirrors
+   * fetchAuthoritativeCollectionStatus):
+   *   - `verified` is true ONLY when the provider answered about the SAME
+   *     tracking id we asked about AND returned a per-transaction array.
+   *     Anything else — no credentials, a 4xx/5xx, a timeout, an unrecognised
+   *     body, a mismatched id — is `verified: false` with a reason, and the only
+   *     correct caller response is to confirm NOTHING.
+   *   - Per-transaction status is normalised to a verdict by
+   *     classifyPayoutTransactionStatus(), which maps every unrecognised code to
+   *     'unknown'. Only 'completed' can ever complete a payout.
+   *   - A transaction entry with no usable id is returned with
+   *     `transactionId: null` rather than being dropped or guessed at, so the
+   *     matcher refuses it instead of binding it to the wrong leg.
+   *   - Never throws, never invents a status, never logs the secret key or the
+   *     raw provider body.
+   *   - Bounded by fetchWithTimeout (12s) so a webhook can never hang.
+   *   - Honours the same sandbox/production base URL split as every other call.
+   *
+   * ASSUMPTION, STATED EXPLICITLY: the endpoint path (`/send-money/status/`) and
+   * the request field (`tracking_id`) follow the same provider contract family as
+   * the documented collection status endpoint. If a future IntaSend revision
+   * changes either, this lookup returns `verified: false` and NOTHING is
+   * confirmed — the failure mode is an inert feature, never a false completion.
+   * Confirming the exact contract against the live provider is a Batch 1B item.
+   */
+  async fetchIntasendPayoutBatchStatus(
+    trackingId: string,
+  ): Promise<{
+    verified: boolean;
+    reason: string;
+    providerTrackingId: string | null;
+    transactions: Array<{ transactionId: string | null; providerStatus: string | null; verdict: PayoutTransactionVerdict }>;
+  }> {
+    type BatchStatusView = {
+      verified: boolean;
+      reason: string;
+      providerTrackingId: string | null;
+      transactions: Array<{ transactionId: string | null; providerStatus: string | null; verdict: PayoutTransactionVerdict }>;
+    };
+    const unverified = (reason: string, extra: Partial<BatchStatusView> = {}): BatchStatusView => ({
+      verified: false,
+      reason,
+      providerTrackingId: null,
+      transactions: [],
+      ...extra,
+    });
+
+    const trimmed = String(trackingId || '').trim();
+    if (!trimmed) return unverified('missing_tracking_id');
+
+    const secretKey = process.env.INTASEND_SECRET_KEY;
+    if (isPlaceholderKey(secretKey)) {
+      // No real credentials means there is nothing authoritative to consult.
+      // The simulation path must never be mistaken for evidence of a payout.
+      return unverified('provider_credentials_unavailable');
+    }
+
+    let data: any;
+    try {
+      // CURRENT PROVIDER CONTRACT (IntaSend Send Money status):
+      //   POST {base}/send-money/status/
+      //   body: { "tracking_id": "<batch tracking id>" }
+      //   response: { tracking_id, transactions: [ { transaction_id, status } ] }
+      const response = await fetchWithTimeout(
+        `${INTASEND_BASE_URL}/send-money/status/`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${secretKey}`,
+          },
+          body: JSON.stringify({ tracking_id: trimmed }),
+        },
+        12000
+      );
+      if (!response.ok) return unverified(`provider_http_${response.status}`);
+      data = await response.json();
+    } catch (error: any) {
+      // Network error, DNS failure, provider outage or our own 12s timeout.
+      return unverified('provider_request_failed');
+    }
+
+    // Identity must match the batch we asked about. A provider that answers with
+    // a different batch is not evidence about this payout.
+    const providerTrackingId = data?.tracking_id != null ? String(data.tracking_id) : null;
+    if (!providerTrackingId || providerTrackingId !== trimmed) {
+      return unverified('provider_tracking_identity_mismatch', { providerTrackingId });
+    }
+
+    const rawTransactions = data?.transactions ?? data?.disbursements;
+    if (!Array.isArray(rawTransactions)) {
+      // Guessing at a shape we do not control is the failure mode this method
+      // exists to close, so an unexpected body is unverified, never inferred.
+      return unverified('provider_response_unrecognised', { providerTrackingId });
+    }
+
+    const transactions = rawTransactions.map((entry: any) => {
+      const providerStatus =
+        entry?.status != null ? String(entry.status)
+          : entry?.status_code != null ? String(entry.status_code)
+            : null;
+      const transactionId =
+        entry?.transaction_id != null ? String(entry.transaction_id)
+          : entry?.id != null ? String(entry.id)
+            : null;
+      return {
+        transactionId,
+        providerStatus,
+        verdict: classifyPayoutTransactionStatus(providerStatus),
+      };
+    });
+
+    // Log the shape and the counts only — never the secret, never a phone
+    // number, never the raw provider body.
+    console.warn('[INTASEND PAYOUT LOOKUP] Batch status resolved; handing per-transaction verdicts to reconciliation.', {
+      tracking_id: providerTrackingId,
+      transactions: transactions.length,
+      completed: transactions.filter(t => t.verdict === 'completed').length,
+    });
+
+    return { verified: true, reason: 'provider_status_retrieved', providerTrackingId, transactions };
   },
 
   /**

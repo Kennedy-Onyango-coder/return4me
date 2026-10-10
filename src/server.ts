@@ -96,6 +96,12 @@ import { INACTIVE_CLAIM_STATUSES, isPickupEligibleClaimStatus, CLAIM_UNAVAILABLE
 // re-derive "is this payout safe to send?" locally: it asks this predicate,
 // which is also what the data layer's unresolved-payout query uses.
 import { isPayoutSubmittable } from './config/payoutOutcomes';
+// BATCH 1 — the payout-batch verification path (authoritative provider lookup +
+// exact transaction-to-leg matching + CAS-guarded confirmation). Imported by
+// name so the webhook route receives it as an INJECTED dependency rather than
+// re-deriving any of it, and so its behaviour is exercised by tests that never
+// boot this file.
+import { reconcilePayoutBatchStatus } from './services/payoutReconciliation';
 import { toOwnerSafeAgentView, toOwnerSafeClaimView, toOwnerSafeItemView } from './services/ownerSafeViews';
 // Phase 7B: the shared public (unauthenticated) item read model. getRoughArea
 // moved here from this file so the public search route and the new public
@@ -3346,6 +3352,12 @@ async function createApp() {
   registerWebhookRoutes(app, {
     processClaimPaymentConfirmed,
     sendServerError,
+    // BATCH 1 — the payout (`send_money_event`) callback is routed inside the
+    // SAME authenticated handler and is a TRIGGER ONLY: it asks this path to
+    // re-read the batch from the provider, and the path can only complete a leg
+    // the provider authoritatively reports as done AND that matches exactly one
+    // local ledger row. It never finalises a settlement and never resubmits.
+    reconcilePayoutBatchStatus,
   });
 
   // DEV/TEST-ONLY: lets a local tester complete a payment without a real
