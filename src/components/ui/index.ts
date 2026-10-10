@@ -41,6 +41,12 @@ export type { Step } from './Stepper';
 
 export { default as OTPInput } from './OTPInput';
 
+// Phase 2 — location-first ordering shell shared by every form that asks for a
+// location (found-item, lost-item, agent registration). Orders the location
+// action before the County/Sub-county selectors.
+export { default as LocationFirstField } from './LocationFirstField';
+export type { LocationFirstFieldProps } from './LocationFirstField';
+
 // UX-01 — the shared icon ladder. Exported so later UX batches adopt the same
 // five sizes instead of re-deriving them per screen.
 export { ICON_SIZE, ICON_LADDER } from './iconSize';

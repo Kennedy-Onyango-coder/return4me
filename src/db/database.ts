@@ -1029,6 +1029,38 @@ function isUniqueViolation(error: any): boolean {
   return /duplicate key value violates unique constraint/i.test(message);
 }
 
+// -----------------------------------------------------------------------------
+// D-1B — CUSTOMER OTP ATTEMPT CAS.
+//
+// `incrementCustomerOtpAttempts` counts a WRONG one-time code with a
+// compare-and-swap loop rather than a read-modify-write. The loop needs a bound
+// so a pathologically contended challenge cannot spin: this is how many times a
+// caller re-reads and retries before failing CLOSED (reporting the ceiling)
+// instead of writing an uncounted attempt. It is generous relative to the real
+// concurrency of a single six-digit challenge, and it is a retry bound only —
+// it changes no policy value and no customer-facing behaviour.
+// -----------------------------------------------------------------------------
+const CUSTOMER_OTP_ATTEMPT_CAS_ROUNDS = 8;
+
+// -----------------------------------------------------------------------------
+// D-1F — CUSTOMER IDENTITY-CHANGE ATTEMPT CAS.
+//
+// The SAME bounded compare-and-swap retry as the customer-OTP counter above,
+// applied to the identity-change counter, for the same reason: an absolute
+// read-modify-write lets two concurrent wrong codes read the same total and both
+// write the same successor, so N simultaneous guesses can spend fewer than N of
+// the five-guess allowance. That counter IS the defence against walking a
+// six-digit space inside the 30-minute TTL, so a ceiling that a parallel burst can
+// outrun is not a ceiling.
+//
+// The bound is deliberately the same value as the OTP counter's: the contention
+// profile of one six-digit challenge is identical. It is a SEPARATE constant so
+// the two counters' worst-case latency can be tuned independently, and like its
+// sibling it is a retry bound only — it changes no policy value, and no
+// customer-facing behaviour.
+// -----------------------------------------------------------------------------
+const CUSTOMER_IDENTITY_CHANGE_ATTEMPT_CAS_ROUNDS = 8;
+
 class DatabaseEngine {
   constructor() {}
 
@@ -3618,6 +3650,15 @@ class DatabaseEngine {
           amount: String(entry.amount),
           phone_or_till: entry.phone_or_till,
           status: entry.status,
+          // D-2A — the caller's own provider reference for THIS row, when it has
+          // one. A collection-attempt receipt row carries the provider invoice id
+          // of the attempt it belongs to, which is the binding key the
+          // authoritative confirmation (attemptClaimEscrowHold) resolves that
+          // exact row by. Callers that pass nothing write NULL, exactly as
+          // before — a row with no reference simply cannot be resolved by an
+          // invoice, so it stays unresolved rather than being completed by
+          // assumption.
+          provider_transaction_id: entry.provider_transaction_id ?? null,
           // E3A — the caller states the payout submission history when it has
           // one. Anything that does NOT pass a value is written as NULL, which
           // the settlement executor reads as "unknown history" and never
@@ -4192,6 +4233,45 @@ class DatabaseEngine {
             throw new Error(`Payment session ${sessionIdToConfirm} could not be confirmed atomically for claim ${claimId}. Rolling back the escrow hold.`);
           }
         }
+
+        // (4) RECEIPT LEDGER ROW — resolved for THIS attempt, and ONLY here.
+        //
+        // D-2A. A `payment_received` row is booked 'pending' by the collection
+        // attempt that caused it (services/payments.ts) the moment the provider
+        // ACCEPTS the STK request — i.e. the prompt was sent and nothing had been
+        // collected. The row carries that attempt's provider reference
+        // (`provider_transaction_id` = the provider invoice id, the same key the
+        // session above was resolved by). This statement, in the SAME transaction
+        // as the claim CAS and the session CAS, is the ONLY writer that promotes
+        // such a row to 'completed' — and it can only ever match the row whose
+        // reference equals the invoice that has just been authoritatively
+        // confirmed for THIS claim, plus a `status = 'pending'` predicate that
+        // makes a repeat a no-op.
+        //
+        // Consequences, deliberately:
+        //   * An ABANDONED, expired or superseded attempt keeps its own pending
+        //     row forever: it is not collected revenue and must not be reported as
+        //     such, but a customer who simply never approved the prompt is also
+        //     not proof of failure (the provider could have collected it), so the
+        //     row is left UNRESOLVED rather than written to 'failed'.
+        //   * A claim reaching settlement can no longer promote anything here —
+        //     finalizeSettlement's sweep is scoped to the settlement row types.
+        //   * A confirmed collection with no attempt row to resolve (a row booked
+        //     before this correlation existed, or a caller that booked none) adds
+        //     nothing: the missing receipt row is visible as an absence, which
+        //     understates rather than overstates, and is reconcilable — the
+        //     opposite failure is not. Nothing is ever fabricated here.
+        if (paymentRef) {
+          await tx
+            .update(ledgerTable)
+            .set({ status: 'completed' })
+            .where(and(
+              eq(ledgerTable.claim_id, claimId),
+              eq(ledgerTable.type, 'payment_received'),
+              eq(ledgerTable.provider_transaction_id, paymentRef),
+              eq(ledgerTable.status, 'pending'),
+            ));
+        }
         return true;
       });
     } catch (error) {
@@ -4660,10 +4740,31 @@ class DatabaseEngine {
         // payout provider — it's the platform's own retained share) should
         // still be 'pending' at this point; finder_payout/agent_payout
         // rows were already individually confirmed 'completed' above.
+        //
+        // D-2A — THE SWEEP IS SCOPED TO THE SETTLEMENT'S OWN ROW TYPES.
+        //
+        // This used to be `status='pending' -> 'completed'` for EVERY row of the
+        // claim, which is not a statement about money: it promoted any pending row
+        // merely because the claim had reached settlement. The rows it wrongly
+        // laundered were the `payment_received` receipt rows booked by collection
+        // ATTEMPTS — so an abandoned or expired M-Pesa prompt, or the losing
+        // attempt of a retry, was recorded as collected revenue the moment its
+        // claim settled, inflating receipt-ledger totals with money that was never
+        // taken. A receipt row is completed only by attemptClaimEscrowHold, from
+        // the authoritative confirmation of its OWN provider reference; this sweep
+        // must therefore be structurally incapable of touching that type. An
+        // explicit allow-list (rather than excluding `payment_received`) is used so
+        // a row type added later cannot silently inherit completion here either —
+        // and so a receipt row left pending stays visible and unresolved, which is
+        // the honest record for an attempt whose outcome was never confirmed.
         await tx
           .update(ledgerTable)
           .set({ status: "completed" })
-          .where(and(eq(ledgerTable.claim_id, claimId), eq(ledgerTable.status, "pending")));
+          .where(and(
+            eq(ledgerTable.claim_id, claimId),
+            eq(ledgerTable.status, "pending"),
+            inArray(ledgerTable.type, ["finder_payout", "agent_payout", "platform_fee"]),
+          ));
 
         await tx.insert(auditLogTable).values({
           id: "AUD-" + Math.random().toString(36).substr(2, 9).toUpperCase(),
@@ -6989,15 +7090,81 @@ await drizzleDb.transaction(async (tx) => {
 
   // Bounds brute force: each failed verification increments the counter, and
   // the challenge is burned once the ceiling is reached.
+  //
+  // D-1B — THE COUNT IS A COMPARE-AND-SWAP LOOP, NOT A READ-MODIFY-WRITE.
+  //
+  // This used to read the row, add one in JavaScript and write the ABSOLUTE
+  // result back. Two guesses arriving together could both read
+  // `attempt_count = 1` and both write `2`, so N concurrent wrong guesses could
+  // spend fewer than N of the allowance: the ceiling could be walked past
+  // without it ever firing, which is precisely the defence this counter exists
+  // to provide now that the erasure route relies on it too.
+  //
+  // The write only lands when the row still holds the exact value that was read
+  // AND the challenge is still unconsumed — the same conditional-update +
+  // RETURNING idiom `consumeCustomerOtp` already uses for one-time use. A caller
+  // that loses the race re-reads and retries, so a guess that DOES land is
+  // charged exactly once, and `attempt_count` can never pass `maxAttempts` (the
+  // write that reaches it sets `used_at`, after which no further CAS can match).
+  //
+  // This is deliberately NOT a promise that every refused guess was counted: a
+  // guess that loses all `CUSTOMER_OTP_ATTEMPT_CAS_ROUNDS` rounds — only
+  // reachable under sustained contention — returns without having incremented
+  // anything. See the sentinel note below for why that still fails closed.
+  //
+  // SQL arithmetic (`attempt_count + 1`) is deliberately NOT used: this file
+  // documents that this database silently produced NULL for both the
+  // bare-column and `sql`-template forms of that expression, which is why every
+  // other counter here is written back as an absolute value.
+  //
+  // THE RETURN VALUE IS A CONSERVATIVE SENTINEL, NOT A PROOF OF CHARGE. A missing
+  // row, an already-used challenge, an exhausted retry budget and a thrown error
+  // all return `maxAttempts` — the SAME value a successful increment that REACHES
+  // the ceiling returns. The value therefore cannot distinguish "burned" from
+  // "counted up to the ceiling", and neither caller reads it: `server.ts` and the
+  // erasure route refuse the guess on every outcome, which is what makes an
+  // uncounted guess harmless rather than what charges it.
   public async incrementCustomerOtpAttempts(id: string, maxAttempts: number): Promise<number> {
     try {
-      const rows = await drizzleDb.select().from(customerOtpsTable).where(eq(customerOtpsTable.id, id));
-      const next = ((rows[0]?.attempt_count) || 0) + 1;
-      await drizzleDb
-        .update(customerOtpsTable)
-        .set({ attempt_count: next, used_at: next >= maxAttempts ? new Date() : null })
-        .where(eq(customerOtpsTable.id, id));
-      return next;
+      for (let round = 0; round < CUSTOMER_OTP_ATTEMPT_CAS_ROUNDS; round++) {
+        const rows = await drizzleDb.select().from(customerOtpsTable).where(eq(customerOtpsTable.id, id));
+        const row = rows[0];
+        // No row, or already consumed: there is nothing left to count.
+        if (!row || row.used_at) return maxAttempts;
+
+        // The value the swap is compared against. A row written before
+        // `attempt_count` existed has no usable value; it is treated as zero
+        // rather than as an unknown, which is the same defensive posture the
+        // previous `|| 0` took. The distinction matters for the predicate
+        // below: a missing counter can only be matched by IS NULL.
+        const raw = row.attempt_count;
+        const hasCount = raw !== null && raw !== undefined && Number.isFinite(Number(raw));
+        const current = hasCount ? Number(raw) : 0;
+        const next = current + 1;
+
+        const updated = await drizzleDb
+          .update(customerOtpsTable)
+          .set({ attempt_count: next, used_at: next >= maxAttempts ? new Date() : null })
+          .where(
+            and(
+              eq(customerOtpsTable.id, id),
+              // CAS: only the caller that still sees the exact value it read may
+              // write. An unconditional write here is what let concurrent
+              // guesses overwrite one another's increment.
+              hasCount
+                ? eq(customerOtpsTable.attempt_count, current)
+                : isNull(customerOtpsTable.attempt_count),
+              isNull(customerOtpsTable.used_at),
+            ),
+          )
+          .returning();
+        if (updated.length > 0) return next;
+        // Lost the race (or the challenge was burned meanwhile): re-read and
+        // retry. The round that WINS charges this guess exactly once; if every
+        // round is lost the guess is refused without being charged (see the
+        // sentinel note below).
+      }
+      return maxAttempts;
     } catch (error) {
       console.error("Failed to increment customer OTP attempts:", error);
       return maxAttempts;
@@ -7387,52 +7554,127 @@ await drizzleDb.transaction(async (tx) => {
    * Count a WRONG verification code for a pending identity change and return the
    * new attempt total.
    *
-   * Read-modify-write, NOT SQL arithmetic: this is the idiom the rest of this
-   * file already uses (incrementOtpAttempts, incrementClaimOtpAttempts,
-   * currentCount) because the sandbox database this suite runs on silently
-   * produced NULL for both `attempt_count + 1` as a bare column and the `sql`
-   * template form. The value is read, coerced (NULL/NaN -> 0), then written back
-   * as an ABSOLUTE number. Absent a fully atomic UPDATE this is not perfectly
-   * atomic under concurrency, but the counter is a backstop rather than the only
-   * defence - the change is also session-bound, single-use, and TTL-bound - so a
-   * rare lost update merely costs an attacker a guess or two and the ceiling
-   * still holds.
+   * D-1F — THE COUNT IS A BOUNDED COMPARE-AND-SWAP, NOT A READ-MODIFY-WRITE.
+   *
+   * This used to read the row, add one in JavaScript and write the ABSOLUTE
+   * result back unconditionally. Two wrong codes arriving together could both read
+   * `attempt_count = 1` and both write `2`, so N concurrent guesses could spend
+   * fewer than N of the allowance — and this counter is the whole defence against
+   * walking a six-digit space inside the 30-minute TTL, so a ceiling a parallel
+   * burst can outrun is not a ceiling.
+   *
+   * The write now lands only when the row still holds the exact value that was
+   * read AND the change is still unconsumed: the same conditional-update +
+   * RETURNING idiom `consumeCustomerIdentityChange` and
+   * `incrementCustomerOtpAttempts` already use. A caller that loses the race
+   * re-reads and retries, so a guess that DOES land is charged exactly once.
+   *
+   * THE CEILING IS BURNED IN THE SAME WRITE THAT REACHES IT: `consumed_at` is set
+   * when the new total meets `maxAttempts`, after which the `consumed_at IS NULL`
+   * half of the predicate can never match again. `attempt_count` therefore cannot
+   * pass the ceiling, and the change cannot be redeemed even with the correct
+   * code. The route still calls `consumeCustomerIdentityChange` when the returned
+   * total reaches the ceiling; that CAS is idempotent, so it is a no-op here and
+   * remains the backstop for the fail-closed sentinel described below.
+   *
+   * SQL ARITHMETIC (`attempt_count + 1`) is deliberately NOT used: this database
+   * silently produced NULL for both the bare-column and `sql`-template forms of
+   * that expression, which is why every counter in this file is written back as an
+   * ABSOLUTE value.
+   *
+   * NULL / UNREADABLE COUNTER. `attempt_count` is NOT NULL DEFAULT 0 in every
+   * definition of the table, so this branch is unreachable through this
+   * application; it is handled anyway because this counter's failure mode is the
+   * bad direction and the test doubles do not enforce NOT NULL. A value that is
+   * missing (or is not a finite number) is treated as zero and matched with
+   * IS NULL, so the first wrong guess against such a row CHARGES instead of
+   * reporting the ceiling and leaving the code guessable for its whole life. A
+   * value that is present but unreadable matches NEITHER predicate, so the swap
+   * cannot land and the stored value is left exactly as it was found.
+   *
+   * THE RETURN VALUE IS A CONSERVATIVE SENTINEL, NOT A PROOF OF CHARGE. A change
+   * that does not resolve for this customer, an already-consumed change, an
+   * exhausted retry budget and a thrown error all return `maxAttempts` — the SAME
+   * value a successful increment that REACHES the ceiling returns. Nothing can
+   * distinguish those cases from the value alone, and deliberately so: every one
+   * of them must fail CLOSED, and the route's ceiling test then burns the change
+   * (a no-op when it is already burned, and when it does not resolve at all). The
+   * sentinel used to be 0 for a non-resolving id — the one value the route did NOT
+   * treat as a lockout.
    *
    * The customer_id is part of BOTH the read and the write, so a change id
-   * belonging to another account matches nothing and returns 0 - the same
-   * cross-customer rule the rest of this batch uses.
+   * belonging to another account matches nothing and returns the sentinel — the
+   * same cross-customer rule the rest of this batch uses.
    */
   public async incrementCustomerIdentityChangeAttempts(params: {
     id: string;
     customerId: string;
+    /**
+     * The ceiling this counter enforces. Passed in rather than imported so the
+     * policy number lives in exactly one place
+     * (IDENTITY_CHANGE_MAX_VERIFICATION_ATTEMPTS) and the data layer keeps none of
+     * its own — the same contract `incrementCustomerOtpAttempts` has.
+     */
+    maxAttempts: number;
   }): Promise<number> {
     try {
-      const rows = await drizzleDb
-        .select()
-        .from(customerIdentityChangesTable)
-        .where(
-          and(
-            eq(customerIdentityChangesTable.id, params.id),
-            eq(customerIdentityChangesTable.customer_id, params.customerId),
-          ),
-        )
-        .limit(1);
-      if (rows.length === 0) return 0;
-      const current = Number(rows[0].attempt_count);
-      const next = (Number.isFinite(current) ? current : 0) + 1;
-      await drizzleDb
-        .update(customerIdentityChangesTable)
-        .set({ attempt_count: next })
-        .where(
-          and(
-            eq(customerIdentityChangesTable.id, params.id),
-            eq(customerIdentityChangesTable.customer_id, params.customerId),
-          ),
-        );
-      return next;
+      for (let round = 0; round < CUSTOMER_IDENTITY_CHANGE_ATTEMPT_CAS_ROUNDS; round++) {
+        const rows = await drizzleDb
+          .select()
+          .from(customerIdentityChangesTable)
+          .where(
+            and(
+              eq(customerIdentityChangesTable.id, params.id),
+              eq(customerIdentityChangesTable.customer_id, params.customerId),
+            ),
+          )
+          .limit(1);
+        const row = rows[0];
+        // No row, or already consumed: there is nothing left to count. Reported at
+        // the ceiling so the caller refuses the guess (see the sentinel note).
+        if (!row || row.consumed_at) return params.maxAttempts;
+
+        // The value the swap is compared against. See the NULL note above: a
+        // missing or unreadable value is treated as zero, and can only ever be
+        // matched by IS NULL below.
+        const raw = row.attempt_count;
+        const hasCount = raw !== null && raw !== undefined && Number.isFinite(Number(raw));
+        const current = hasCount ? Number(raw) : 0;
+        const next = current + 1;
+
+        const updated = await drizzleDb
+          .update(customerIdentityChangesTable)
+          .set({
+            attempt_count: next,
+            // Burned ATOMICALLY with the charge that reaches the ceiling, so no
+            // later CAS can match and the stored total can never pass it.
+            consumed_at: next >= params.maxAttempts ? new Date() : null,
+          })
+          .where(
+            and(
+              eq(customerIdentityChangesTable.id, params.id),
+              eq(customerIdentityChangesTable.customer_id, params.customerId),
+              // CAS: only the caller that still sees the exact value it read may
+              // write. An unconditional write here is what let concurrent guesses
+              // overwrite one another's increment.
+              hasCount
+                ? eq(customerIdentityChangesTable.attempt_count, current)
+                : isNull(customerIdentityChangesTable.attempt_count),
+              // The same guard the redemption path uses: a change burned meanwhile
+              // is no longer chargeable, and must not be resurrected by a write.
+              isNull(customerIdentityChangesTable.consumed_at),
+            ),
+          )
+          .returning();
+        if (updated.length > 0) return next;
+        // Lost the race (or the change was burned meanwhile): re-read and retry.
+        // The round that WINS charges this guess exactly once. The stored total is
+        // only ever written by a winning CAS, so a loss can never lower it.
+      }
+      return params.maxAttempts;
     } catch (error) {
       console.error("Failed to increment customer identity change attempts:", error);
-      return 0;
+      return params.maxAttempts;
     }
   }
 

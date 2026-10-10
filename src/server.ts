@@ -221,7 +221,7 @@ import { isSentryDsnUsable, sentryDsnProblem, sentryDsnProblemLabel } from './co
 import { resolveContainedSourcePath } from './utils/safeStaticPath';
 // PHASE 10 (F-2): the escrow-holdings aggregate. The admin "Escrow Funds Held"
 // card previously displayed a claim COUNT where a monetary total belongs.
-import { computeEscrowFundsHeld } from './services/escrowFunds';
+import { computeEscrowFundsHeld, computeMoneyInFlight, computeUnresolvedPayouts } from './services/escrowFunds';
 // N3 note: the activation email reuses the EXISTING EmailService (its provider
 // adapter under services/notificationProviders.ts), whose `send()` already fails
 // closed in production â€” it returns false when Resend has no usable credentials
@@ -233,7 +233,10 @@ import { computeEscrowFundsHeld } from './services/escrowFunds';
 // (it boots the application on import), so the gate that protects a
 // money-faking endpoint had no regression coverage at all. The logic is
 // unchanged â€” see config/devPaymentSimulation.ts.
-import { resolveDevPaymentSimulationEnabled } from './config/devPaymentSimulation';
+import {
+  resolveDevPaymentSimulationEnabled,
+  resolveSimulatedAttemptReference,
+} from './config/devPaymentSimulation';
 import { getAdminNotificationEmail } from './config/adminNotificationEmail';
 import { assertEmailTransportConfiguration } from './config/emailConfig';
 import {
@@ -1056,7 +1059,8 @@ async function startServer() {
     console.log(`[RETURN4ME SERVER] Running on http://0.0.0.0:${PORT}`);
     // Start background sweep for payment window expiry every 60 seconds
     setInterval(expireStaleClaims, 60000);
-    // Start background sweep for due settlements (dispute window closed) every 5 minutes
+    // Start background settlement sweep (reporting only - it submits no payout;
+    // see releaseDueSettlements) every 5 minutes.
     setInterval(releaseDueSettlements, 5 * 60 * 1000);
     // Start background sweep for retryable social-publication failures every 5 minutes
     setInterval(socialRetrySweep, 5 * 60 * 1000);
@@ -3360,6 +3364,12 @@ async function createApp() {
   //   2. ALLOW_MOCK_OTP_BYPASS === 'true'   (the existing dev-convenience flag)
   //   3. ENABLE_DEV_PAYMENT_SIMULATION === 'true'  (dedicated, money-specific)
   // and boot() additionally refuses to start in production if (3) is set.
+  //
+  // D-2A-H: it confirms the claim's OWN newest payment attempt — identified by
+  // the provider invoice the initiate route already persisted on that attempt's
+  // session — and refuses outright when the claim has no confirmable attempt.
+  // So a simulation can only ever complete the receipt row of the attempt it
+  // stands for (see config/devPaymentSimulation.ts for the selection rule).
   app.post('/api/dev/simulate-payment/:claimId', async (req, res) => {
     if (!isDevPaymentSimulationEnabled()) {
       return res.status(404).json({ error: 'Not found' });
@@ -3372,7 +3382,41 @@ async function createApp() {
       if (claim.status !== 'pending_payment') {
         return res.status(400).json({ error: `Claim is not awaiting payment (status: ${claim.status})` });
       }
-      const pickupCode = await processClaimPaymentConfirmed(req.params.claimId, `TEST-SIMULATED-${Date.now()}`);
+      // D-2A-H — THE SIMULATION CONFIRMS AN ATTEMPT THAT ACTUALLY EXISTS.
+      //
+      // This used to confirm under `TEST-SIMULATED-<now>`, a reference that
+      // belongs to no attempt, no session and no provider record. Nothing could
+      // be correlated by it: the claim moved, a reference that never existed was
+      // stamped into `claims.payment_reference`, and the attempt's real receipt
+      // row stayed 'pending' even though the claim then read as paid.
+      //
+      // The invoice that identifies the attempt is already persisted — the
+      // initiate route stores the provider invoice id (the same value the
+      // booking code stamped on that attempt's receipt row) as the session's
+      // `provider_invoice_id`. So the simulation stands for the claim's newest
+      // confirmable session: the SAME claim/session/invoice correlation the real
+      // webhook and the reconciliation sweep use. The canonical path below then
+      // completes exactly that attempt's receipt row, consumes exactly that
+      // session, and refuses a session bound to another claim.
+      //
+      // The amount handed to the canonical path is the SESSION'S own
+      // authoritative amount, never request input: it is what the provider would
+      // report for that invoice, and it is what lets the existing amount
+      // controls run (confirmed amount == session amount, and confirmed amount
+      // == the claim's expected fee) without asking a provider this environment
+      // has no credentials for. With no confirmable attempt there is nothing to
+      // correlate, so the request is refused rather than guessed at.
+      const attempt = resolveSimulatedAttemptReference(
+        await db.listPaymentSessionsForClaim(claim.id),
+        { claimId: claim.id, claimStatus: claim.status, paidAt: claim.paid_at },
+      );
+      if (!attempt) {
+        return res.status(409).json({
+          error:
+            'No confirmable payment attempt exists for this claim, so its success cannot be simulated. Start the payment (claim payment-session, then initiate) first.',
+        });
+      }
+      const pickupCode = await processClaimPaymentConfirmed(claim.id, attempt.invoiceId, attempt.amount);
       const updatedClaim = await db.getClaim(req.params.claimId);
       // pickupCode is only ever returned here â€” a dev/test-only endpoint,
       // already hard-gated off in production above. In the real flow it's
@@ -3508,6 +3552,24 @@ async function createApp() {
       // The count is still published, under its own truthful label in the UI.
       const escrowFundsHeld = computeEscrowFundsHeld(claims, items);
 
+      // BATCH 1 — MONEY IN FLIGHT. Both figures above are TERMINAL-STATE figures:
+      // `escrowHeldAmount` counts only claims still in 'escrow_held', and
+      // `totalRevenue` counts only platform_fee rows already marked 'completed'.
+      // Money attached to a claim that has moved on — the dispute window is
+      // running ('pending_settlement'), or a payout was submitted and its provider
+      // outcome is not yet confirmed ('releasing') — was therefore not visible
+      // anywhere on the overview, and a claim whose payout outcome came back
+      // unknown or refused sits in 'pending_settlement' indefinitely.
+      //
+      // These two pure aggregates read the rows already loaded above. They add NO
+      // query, change NO money-path behaviour, and reuse the authoritative
+      // definitions instead of restating them: the fee is `items.locked_total_fee`
+      // (the same field the money path charges) and "unresolved payout" is
+      // isUnresolvedPayoutRow() — the same rule that
+      // GET /api/admin/payout-reconciliation lists rows by.
+      const moneyInFlight = computeMoneyInFlight(claims, items);
+      const unresolvedPayouts = computeUnresolvedPayouts(ledger);
+
       const stats = {
         pendingAgentsCount: agents.filter(a => a.status === 'pending').length,
         itemsInReviewCount: items.filter(i => i.status === 'awaiting_dropoff').length,
@@ -3518,6 +3580,26 @@ async function createApp() {
         escrowHeldCount: escrowFundsHeld.count,
         disputesOpenCount: disputes.filter(d => !d.resolved_at).length,
         totalRevenue: ledger.filter(l => l.type === 'platform_fee' && l.status === 'completed').reduce((sum, l) => sum + l.amount, 0),
+        // MONEY IN FLIGHT (Batch 1). Each of these is an independent, separately
+        // labelled fact — never summed into an "available funds" figure, because
+        // no provider/accounting model in this codebase supports one. All three
+        // amounts use the same authoritative basis as escrowHeldAmount above
+        // (SUM of items.locked_total_fee over the claims carrying that status),
+        // and the three statuses are mutually exclusive, so `fundsInFlightAmount`
+        // cannot double-count a claim.
+        settlementPendingAmount: moneyInFlight.settlementPendingAmount,
+        settlementPendingCount: moneyInFlight.settlementPendingCount,
+        releasingAmount: moneyInFlight.releasingAmount,
+        releasingCount: moneyInFlight.releasingCount,
+        fundsInFlightAmount: moneyInFlight.heldAmount,
+        fundsInFlightCount: moneyInFlight.heldCount,
+        // Payouts whose provider outcome is unresolved — not confirmed paid, and
+        // deliberately never auto-resubmitted. The same rows
+        // GET /api/admin/payout-reconciliation returns. A count of 0 means "no
+        // unresolved payout rows are recorded", which is a genuine fact and not a
+        // placeholder for "unknown".
+        unresolvedPayoutsCount: unresolvedPayouts.count,
+        unresolvedPayoutsAmount: unresolvedPayouts.amount,
       };
 
       // Attach each agent's total earnings (their share of completed
@@ -5531,9 +5613,9 @@ async function executeClaimSettlement(claimId: string): Promise<{ success: boole
   // This function is only ever called AFTER attemptSettlementRelease() won the
   // lock, so the claim is already in the transient 'releasing' state. Returning
   // early here (missing item/agent/category - a data-integrity failure, not a
-  // provider one) used to leave the claim in 'releasing' forever: the sweep's
-  // work queue only selects 'pending_settlement', so nothing would ever look at
-  // it again, and the payout rows were not even inspected.
+  // provider one) used to leave the claim in 'releasing' forever: the due-claim
+  // queue only selects 'pending_settlement', so nothing would ever look at it
+  // again, and the payout rows were not even inspected.
   //
   // Giving the lock back is safe BECAUSE retry eligibility is decided per payout
   // ROW and never by claim state: the next attempt re-reads the rows and may
@@ -5702,10 +5784,11 @@ async function executeClaimSettlement(claimId: string): Promise<{ success: boole
 
   if (unresolvedPayout) {
     // The RELEASE LOCK is given back so the claim is not parked in the
-    // transient 'releasing' state - but the payout is NOT re-queued: the next
-    // sweep re-reads eligibility from the ledger row and finds it ineligible.
-    // Reverting the CLAIM can never resubmit a PAYOUT, because retry
-    // eligibility is decided by payout_outcome, never by claim state.
+    // transient 'releasing' state - but the payout is NOT re-queued: a later,
+    // explicitly-approved initiation re-reads eligibility from the ledger row
+    // and finds it ineligible. Reverting the CLAIM can never resubmit a PAYOUT,
+    // because retry eligibility is decided by payout_outcome, never by claim
+    // state.
     await db.revertSettlementRelease(claimId);
     // Named explicitly so an operator does not have to guess whether money
     // moved: 'no submission history recorded' is the fail-closed reading of a

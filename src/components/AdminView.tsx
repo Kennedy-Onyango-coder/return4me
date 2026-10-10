@@ -37,6 +37,21 @@ import { trapModalFocus } from '../utils/modalFocus';
 import ClaimsAdministration from './admin/claims/ClaimsAdministration';
 // PHASE 11A: read-only lost-report visibility for administrators.
 import LostReportsAdministration from './admin/lostReports/LostReportsAdministration';
+// BATCH 2 — the rows BEHIND this overview's "Unresolved Payouts" figure. A
+// disclosed panel, not a tab: the overview already states the count, and this is
+// read only when an operator asks to see which rows it is counting.
+import PayoutReconciliationPanel, { PAYOUT_RECONCILIATION_PANEL_ID } from './admin/payouts/PayoutReconciliationPanel';
+// BATCH 3 — the Overview's metric read-out rules (currency/count formatting and
+// payload validation), as ONE pure, React-free module. The cards below render
+// through it, and `fetchDashboardData` validates with it before anything is
+// rendered, so an incomplete payload can neither crash this tab nor be shown as
+// a figure it is not.
+import {
+  formatKesAmount,
+  formatMetricCount,
+  isReportedNumber,
+  readOverviewStats,
+} from './admin/dashboard/adminOverviewMetrics';
 // §10 — the console states who is signed in, using ONLY the claims the
 // authenticated session actually carries. The helper decodes a display label and
 // never returns the token itself (see src/services/adminSession.ts).
@@ -276,6 +291,39 @@ function settlementRefusalMessage(data: any, fallback: string): string {
   return reasons.length > 0 ? `${message} (${reasons.join('; ')})` : message;
 }
 
+// ---------------------------------------------------------------------------
+// MONEY-IN-FLIGHT READ-OUT HELPERS (Batch 1)
+//
+// A number the server did NOT send is not zero, and it must never be rendered as
+// one. On a financial overview that distinction is the whole point: an operator
+// must never have to wonder whether a figure is a fact or a missing value. These
+// helpers make it structural rather than a matter of discipline:
+//
+//   * a finite number -> the figure, exactly as the server computed it;
+//   * anything else   -> an em dash, i.e. "this build did not report it".
+//
+// The payload's own failure path is separate and already exists: a failed, 401 or
+// non-JSON dashboard fetch sets `dataError` and the Overview is not rendered at
+// all (see fetchDashboardData). This guards the narrower, more insidious case of
+// a server that answers 200 but does not carry the field.
+// ---------------------------------------------------------------------------
+// BATCH 3 — the two Batch 1 helpers keep their names (the Money-in-flight cards
+// call them and Batch 1's tests pin them), but their bodies now DELEGATE to the
+// one Overview read-out module. Before this, money on this screen was formatted
+// three different ways; a figure is now formatted by exactly one rule, and a
+// figure this server build did not report is an em dash in every case.
+function inFlightAmountLabel(value: unknown): string {
+  return formatKesAmount(value).text;
+}
+
+function inFlightCountLabel(value: unknown): string {
+  return formatMetricCount(value).text;
+}
+
+function isReported(value: unknown): boolean {
+  return isReportedNumber(value);
+}
+
 export default function AdminView({ token, setToken, onCategoriesChanged }: AdminViewProps) {
   const t = translations.en;
   // BATCH 2 — the file's own bilingual shorthand (see DisputeClaimantPanel),
@@ -304,6 +352,27 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
   // while a request is already in flight). fetchDashboardData() returns early if
   // a fetch is already running; the flag is cleared in its finally block.
   const dashboardFetchInFlightRef = useRef(false);
+  // BATCH 3 — ordering and coalescing for the dashboard request.
+  //
+  // `dashboardRequestSeqRef` is a monotonic id. Only the NEWEST request may apply
+  // its result, so a slow OLDER response can never overwrite a newer reading —
+  // which is the one way a "refresh" could otherwise show the operator figures
+  // they already know to be out of date.
+  //
+  // `dashboardRefreshQueuedRef` makes the in-flight guard non-lossy: a refresh
+  // that arrives while one is running (an explicit Retry, a tab entry, an action
+  // that just changed server state) is remembered and run once the running
+  // request settles, instead of being silently dropped.
+  const dashboardRequestSeqRef = useRef(0);
+  const dashboardRefreshQueuedRef = useRef(false);
+  // A ref, not state, because a trailing refresh runs from a closure that may
+  // predate the data arriving.
+  const dashboardHasDataRef = useRef(false);
+  // BATCH 3 — stale-data state. A failed refresh must NOT blank, zero or discard
+  // figures the server did report earlier: the operator keeps the last known
+  // reading, explicitly labelled as such, plus the error and a retry.
+  const [dashboardStale, setDashboardStale] = useState(false);
+  const [dashboardLoadedAt, setDashboardLoadedAt] = useState('');
   const [dataError, setDataError] = useState('');
   const [actionSuccess, setActionSuccess] = useState('');
   const [actionWarning, setActionWarning] = useState('');
@@ -321,6 +390,12 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
   const [refundReconcileItems, setRefundReconcileItems] = useState<any[] | null>(null);
   const [refundReconcileLoading, setRefundReconcileLoading] = useState(false);
   const [refundReconcileProcessing, setRefundReconcileProcessing] = useState<string | null>(null);
+
+  // BATCH 2 — whether the unresolved-payout reconciliation panel is disclosed.
+  // ONE flag, default CLOSED. The panel is the ONLY reader of GET
+  // /api/admin/payout-reconciliation, so keeping it collapsed means an ordinary
+  // visit to this tab still costs exactly the dashboard request it always did.
+  const [payoutReconciliationOpen, setPayoutReconciliationOpen] = useState(false);
 
   // On-demand dispute evidence, keyed by dispute id.
   //
@@ -627,10 +702,17 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
 
   const fetchDashboardData = async () => {
     if (!token) return;
+    // BATCH 3 — a refresh that arrives while one is running is COALESCED, not
+    // dropped: the request in flight is already fetching the newest server state,
+    // and the operator's Retry / tab entry is honoured by the trailing refresh
+    // this function runs from its finally block below.
+    if (dashboardFetchInFlightRef.current) dashboardRefreshQueuedRef.current = true;
     // Avoid a duplicate concurrent request (e.g. login fetch + a tab-entry
     // refetch overlapping). The one already in flight is authoritative enough.
     if (dashboardFetchInFlightRef.current) return;
     dashboardFetchInFlightRef.current = true;
+    // Monotonic id for THIS request. Only the newest request may apply state.
+    const requestSeq = (dashboardRequestSeqRef.current += 1);
     setDataError('');
     setDashboardLoading(true);
     try {
@@ -655,13 +737,40 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
       if (!response.ok) {
         throw new Error(data.error || 'Failed to fetch admin statistics.');
       }
+      // BATCH 3 — VALIDATE BEFORE ANYTHING IS RENDERED. A 200 whose body is not
+      // the statistics this console was built against (no `stats` block, a missing
+      // required field, or a string/NaN/fractional count) is a FAILED refresh, not
+      // a set of zeros: it is reported below, and the figures already on screen
+      // are kept and marked stale rather than replaced by an invented figure.
+      const readout = readOverviewStats(data);
+      if (!readout.ok) {
+        throw new Error(readout.reason || 'The dashboard returned an incomplete response. Reload to try again.');
+      }
+      // A newer request has already been issued; its result is the current one,
+      // so this one must not apply (or clear) anything.
+      if (requestSeq !== dashboardRequestSeqRef.current) return;
       setDashboardData(data);
+      dashboardHasDataRef.current = true;
       setAdminTotpEnabled(!!data.currentAdminTotpEnabled);
+      // A successful reading clears the stale marker and stamps the reading time.
+      setDashboardStale(false);
+      setDashboardLoadedAt(new Date().toISOString());
     } catch (e: any) {
+      // A superseded request must never report its failure over a newer reading.
+      if (requestSeq !== dashboardRequestSeqRef.current) return;
       setDataError(e.message);
+      // With figures already on screen this failure makes them STALE. It does not
+      // license showing zeros, and it does not clear what the server did report.
+      setDashboardStale(dashboardHasDataRef.current);
     } finally {
       dashboardFetchInFlightRef.current = false;
       setDashboardLoading(false);
+      // BATCH 3 — trailing refresh. The flag is cleared BEFORE the call, so this
+      // can only ever add one request per coalesced arrival (never a loop).
+      if (dashboardRefreshQueuedRef.current) {
+        dashboardRefreshQueuedRef.current = false;
+        void fetchDashboardData();
+      }
     }
   };
 
@@ -2690,6 +2799,33 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
 
           {dataError && <Banner kind="error">{dataError}</Banner>}
 
+          {/* BATCH 3 — STALE-DATA STATE. A refresh that fails while figures are
+              already on screen is NOT a licence to show zeros and does not clear
+              what the server did report: the last successful reading stays, and
+              this banner states plainly that it is an older reading. role="alert"
+              comes from Banner's warning kind, so this is announced, not merely
+              drawn. Retry re-issues the same GET — no polling, no new endpoint. */}
+          {dashboardStale && dashboardData && (
+            <Banner kind="warning">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <p>
+                  {dashboardLoadedAt
+                    ? `The figures below are the last successful reading, taken at ${new Date(dashboardLoadedAt).toLocaleTimeString()}. The most recent refresh failed, so they may be out of date.`
+                    : 'The figures below are the last successful reading. The most recent refresh failed, so they may be out of date.'}
+                </p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={fetchDashboardData}
+                  loading={dashboardLoading}
+                  className="shrink-0 self-start"
+                >
+                  {'Retry refresh'}
+                </Button>
+              </div>
+            </Banner>
+          )}
+
           {/* REQUEST 05 / SECTION 11 - ADMIN SIDEBAR SHELL
               The sections below are exactly the sections that already existed.
               Each one maps to a real admin endpoint; nothing was invented for
@@ -2872,16 +3008,36 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
           {/* TAB CONTENT 1: STATS WORKSPACE */}
           {activeTab === 'stats' && (
             <div className="space-y-6">
+              {/* BATCH 3 — READING PROVENANCE. Every figure below carries the time
+                  of the reading it came from, and a background refresh is stated
+                  in prose (aria-live) rather than replacing the figures with a
+                  spinner: an operator mid-read must never lose the numbers they
+                  were looking at, and must never have to guess their age. */}
+              <div className="flex flex-wrap items-center justify-between gap-2" aria-live="polite">
+                <p className="text-caption text-[var(--appearance-text-muted)]">
+                  {dashboardLoadedAt
+                    ? `Last updated ${new Date(dashboardLoadedAt).toLocaleTimeString()}${dashboardStale ? ' — the latest refresh failed, so this is an older reading' : ''}`
+                    : 'Waiting for the first reading…'}
+                </p>
+                {dashboardLoading && dashboardData && (
+                  <p className="flex items-center gap-2 text-caption font-semibold text-[var(--appearance-text-muted)]" aria-busy="true">
+                    <Loader2 className="animate-spin" size={ICON_SIZE.metadata} aria-hidden="true" />
+                    {'Refreshing…'}
+                  </p>
+                )}
+              </div>
               <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4">
                 <StatCard
                   icon={Package}
                   label={'Active Holding Items'}
-                  value={dashboardData.stats.itemsAtAgentCount}
+                  value={formatMetricCount(dashboardData.stats.itemsAtAgentCount).text}
+                  description={'Items physically held at an agent, awaiting the claimant’s collection.'}
                 />
                 <StatCard
                   icon={Users}
                   label={'Pending Agents'}
-                  value={dashboardData.stats.pendingAgentsCount}
+                  value={formatMetricCount(dashboardData.stats.pendingAgentsCount).text}
+                  description={'Agent applications still awaiting approval.'}
                 />
                 {/* PHASE 10 (F-2): this card previously rendered
                     `stats.escrowHeldCount` — a COUNT of claims — under the label
@@ -2899,18 +3055,120 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                     language as StatCard so the grid still reads as one set. */}
                 <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-4 sm:p-5 shadow-sm">
                   <span className="block text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">Escrow Funds Held</span>
-                  <span className="block mt-1 text-section font-extrabold text-[var(--appearance-primary)] tabular-nums tracking-tight leading-tight">KES {dashboardData.stats.escrowHeldAmount}</span>
+                  <span className="block mt-1 text-section font-extrabold text-[var(--appearance-primary)] tabular-nums tracking-tight leading-tight">{formatKesAmount(dashboardData.stats.escrowHeldAmount).text}</span>
                 </div>
                 <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-4 sm:p-5 shadow-sm">
                   <span className="block text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">Claims in Escrow</span>
-                  <span className="block mt-1 text-section font-extrabold text-[var(--appearance-primary)] tabular-nums tracking-tight leading-tight">{dashboardData.stats.escrowHeldCount}</span>
+                  <span className="block mt-1 text-section font-extrabold text-[var(--appearance-primary)] tabular-nums tracking-tight leading-tight">{formatMetricCount(dashboardData.stats.escrowHeldCount).text}</span>
                 </div>
                 <StatCard
                   icon={Coins}
                   label={t.totalRev}
-                  value={`KES ${dashboardData.stats.totalRevenue}`}
+                  value={formatKesAmount(dashboardData.stats.totalRevenue).text}
                 />
               </div>
+
+              {/* MONEY IN FLIGHT (Batch 1) — the cards above are TERMINAL-STATE
+                  figures: "Escrow Funds Held" counts only claims still in
+                  escrow_held, and "Total Revenue" only platform_fee rows already
+                  marked completed. Money attached to a claim that has moved on —
+                  the dispute window still running, or a payout submitted whose
+                  provider outcome is not yet confirmed — was invisible on this
+                  overview, which is exactly the state an approved settlement with
+                  an unresolved finder payout sits in.
+
+                  Each state is shown as its OWN labelled fact. They are
+                  deliberately NOT merged into an "available funds" number: no
+                  provider or accounting model in this codebase supports one, so
+                  such a figure would be invented rather than computed.
+
+                  A figure this server build did not report renders as "—", never
+                  as 0 (see inFlightAmountLabel), so a missing value can never be
+                  mistaken for a genuine zero. */}
+              <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-4 sm:p-6 shadow-sm space-y-4">
+                <div className="space-y-1">
+                  <h3 className="font-extrabold text-caption text-[var(--appearance-text-muted)] uppercase tracking-widest flex items-center gap-2">
+                    <ShieldCheck size={ICON_SIZE.ui} aria-hidden="true" />
+                    {'Money in flight'}
+                  </h3>
+                  <p className="text-body text-[var(--appearance-text-muted)]">
+                    {isReported(dashboardData.stats?.fundsInFlightAmount)
+                      ? ('Funds the platform is still holding for claims that have not been paid out yet.')
+                      : ('This server build does not report in-flight funds — read the figures below as unknown, not as zero.')}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
+                  <StatCard
+                    icon={Coins}
+                    label={'Funds Held (not yet paid out)'}
+                    value={inFlightAmountLabel(dashboardData.stats?.fundsInFlightAmount)}
+                    description={isReported(dashboardData.stats?.fundsInFlightCount)
+                      ? (`Across ${dashboardData.stats.fundsInFlightCount} claim(s) in escrow, inside the dispute window, or mid-payout.`)
+                      : ('The claim count was not reported by this server build.')}
+                  />
+                  <StatCard
+                    icon={ClipboardList}
+                    label={'Awaiting Payout'}
+                    value={inFlightAmountLabel(dashboardData.stats?.settlementPendingAmount)}
+                    description={isReported(dashboardData.stats?.settlementPendingCount)
+                      ? (`Dispute window closed; ${dashboardData.stats.settlementPendingCount} claim(s) awaiting settlement approval or payout initiation.`)
+                      : ('The claim count was not reported by this server build.')}
+                  />
+                  <StatCard
+                    icon={RefreshCw}
+                    label={'Payout In Flight'}
+                    value={inFlightAmountLabel(dashboardData.stats?.releasingAmount)}
+                    description={isReported(dashboardData.stats?.releasingCount)
+                      ? (`Submitted to the provider; ${dashboardData.stats.releasingCount} claim(s) not yet confirmed paid.`)
+                      : ('The claim count was not reported by this server build.')}
+                  />
+                  <div className="space-y-2">
+                    <StatCard
+                      icon={AlertTriangle}
+                      label={'Unresolved Payouts'}
+                      value={inFlightCountLabel(dashboardData.stats?.unresolvedPayoutsCount)}
+                      status={
+                        isReported(dashboardData.stats?.unresolvedPayoutsCount) && dashboardData.stats.unresolvedPayoutsCount > 0
+                          ? <Badge variant="warning">Needs provider check</Badge>
+                          : undefined
+                      }
+                      description={isReported(dashboardData.stats?.unresolvedPayoutsCount)
+                        ? (dashboardData.stats.unresolvedPayoutsCount > 0
+                            ? (`${formatKesAmount(dashboardData.stats?.unresolvedPayoutsAmount).text} is neither confirmed paid nor safe to resend automatically. Verify each row with the provider before any manual action.`)
+                            : ('No payout row is awaiting provider reconciliation.'))
+                        : ('Not reported by this server build — treat as unknown, not as zero.')}
+                    />
+                    {/* BATCH 2 — the disclosure. The count above is a figure; this
+                        is how an operator sees WHICH rows it counts. It reveals a
+                        read-only list, so it is a plain button with a real
+                        expanded/collapsed state — no navigation, no new tab. */}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="w-full"
+                      aria-expanded={payoutReconciliationOpen}
+                      aria-controls={PAYOUT_RECONCILIATION_PANEL_ID}
+                      onClick={() => setPayoutReconciliationOpen((open) => !open)}
+                    >
+                      {payoutReconciliationOpen
+                        ? ('Hide unresolved payout rows')
+                        : ('View unresolved payout rows')}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              {/* BATCH 2 — THE ROWS BEHIND THE "UNRESOLVED PAYOUTS" FIGURE.
+                  Mounted only while disclosed. The panel owns the ONE read of
+                  GET /api/admin/payout-reconciliation (and cancels it on unmount),
+                  so nothing about this tab's existing cost changes: the
+                  dashboard request is still the only request an operator pays
+                  for unless they ask to see the rows. Read-only — it can re-READ
+                  the list and nothing else. */}
+              {payoutReconciliationOpen && (
+                <PayoutReconciliationPanel token={token} />
+              )}
 
               {/* Admin 2FA / Security */}
               <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-6 shadow-sm space-y-4">

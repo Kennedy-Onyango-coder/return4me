@@ -1,9 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Check, MapPin, Package, Pencil, type LucideIcon } from 'lucide-react';
-import { Banner, Button, Input, Select, Stepper, Textarea } from '../ui';
+import { Banner, Button, Input, Select, Stepper, Textarea, LocationFirstField } from '../ui';
 import { ICON_SIZE } from '../ui/iconSize';
 import { countiesByUxGroup } from '../../config/kenyaCounties';
 import { administrativeUnitsForCounty } from '../../config/kenyaAdministrativeUnits';
+// LOCATION-FIRST (Phase 2) — the same shared GPS/reverse-geocoding contract
+// the Finder and Agent forms use, so the lost-report form can offer a location
+// suggestion before the County/Sub-county selectors. Detection is advisory and
+// confirm-before-use: it never silently assigns a county, and manual entry
+// remains a fully functional alternative.
+import { detectBrowserLocation, hasGeographyConflict, type DetectedLocation } from '../../services/browserLocation';
 import {
   LOST_REPORT_FIELD_LIMITS,
   LOST_REPORT_FIELD_MINIMUMS,
@@ -282,6 +288,50 @@ export default function LostReportWizard({
   const [stepError, setStepError] = useState<StepError | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // LOCATION-FIRST (Phase 2) — advisory location detection for the "where you
+  // lost it" step. It is a SUGGESTION only: detection captures the reading and
+  // offers it, and only an explicit "Use this location" applies it (see
+  // applyDetectedLocation). It never auto-submits, never silently assigns a
+  // county, and manual entry is always available.
+  const [detectedLocation, setDetectedLocation] = useState<DetectedLocation | null>(null);
+  const [locationMessage, setLocationMessage] = useState('');
+  const [locationLoading, setLocationLoading] = useState(false);
+
+  const detectLocation = async () => {
+    setLocationLoading(true);
+    setLocationMessage('');
+    const result = await detectBrowserLocation();
+    if (result.status === 'error') {
+      setLocationMessage(result.message);
+      setLocationLoading(false);
+      return;
+    }
+    setDetectedLocation(result.location);
+    setLocationMessage(
+      result.location.county
+        ? 'Location detected. Review the suggested area below, then confirm it or keep your own selection.'
+        : 'GPS coordinates captured. We could not reliably determine your county or sub-county; enter them manually.',
+    );
+    setLocationLoading(false);
+  };
+
+  // The ONLY path that may change the selected geography — an explicit confirm.
+  const applyDetectedLocation = () => {
+    if (!detectedLocation?.county) return;
+    setForm((prev) => ({
+      ...prev,
+      county: detectedLocation.county as string,
+      administrativeUnitId: detectedLocation.subCountyId ?? '',
+      locationArea: prev.locationArea.trim() ? prev.locationArea : (detectedLocation.place ?? prev.locationArea),
+    }));
+    setLocationMessage(
+      detectedLocation.subCountyId
+        ? 'Suggested area applied. You can still edit any field.'
+        : 'We detected your county but could not reliably determine your sub-county. Please select it manually.',
+    );
+  };
+
 
   /**
    * Focus contract (UX-04): a step change moves focus to the new step heading,
@@ -577,47 +627,102 @@ export default function LostReportWizard({
             {'Where you lost it'}
           </h4>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Select
-              label={'County'}
-              required
-              value={form.county}
-              onChange={(e) => {
-                set('county', e.target.value);
-                set('administrativeUnitId', '');
-              }}
-              disabled={submitting}
-              error={fieldError('county')}
-              ref={setFieldRef<HTMLSelectElement>('county')}
-            >
-              <option value="">{'Select a county'}</option>
-              {countyGroups.map((group) => (
-                <optgroup key={group.group} label={group.group}>
-                  {group.counties.map((county) => (
-                    <option key={county.code} value={county.name}>
-                      {county.name}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </Select>
+          {/* LOCATION-FIRST ORDER (Phase 2): the location action and the reason
+              we ask for permission now come BEFORE the County and Sub-county
+              selectors, with an "OR ENTER MANUALLY" divider between them. The
+              two selectors keep their exact fields, refs, error wiring and
+              county/sub-county dependence — only their position changed. */}
+          <LocationFirstField
+            id="lost-report-location-first"
+            actionLabel={['Use my current location', 'Tumia mahali nilipo sasa']}
+            explanation={[
+              'A rough answer is fine. This is used to compare your report with items found in the same area and around the same time. You can turn on your location to suggest the area, or choose the county and sub-county yourself below.',
+              'Jibu la kawaida linafaa. Hii hutumika kulinganisha ripoti yako na vitu vilivyopatikana katika eneo moja na karibu wakati huohuo. Unaweza kuwasha mahali pako kupendekeza eneo, au kuchagua kaunti na kaunti ndogo wewe mwenyewe hapa chini.',
+            ]}
+            statusMessage={locationMessage}
+            loading={locationLoading}
+            detected={detectedLocation !== null}
+            onDetect={detectLocation}
+          >
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Select
+                label={'County'}
+                required
+                value={form.county}
+                onChange={(e) => {
+                  set('county', e.target.value);
+                  set('administrativeUnitId', '');
+                }}
+                disabled={submitting}
+                error={fieldError('county')}
+                ref={setFieldRef<HTMLSelectElement>('county')}
+              >
+                <option value="">{'Select a county'}</option>
+                {countyGroups.map((group) => (
+                  <optgroup key={group.group} label={group.group}>
+                    {group.counties.map((county) => (
+                      <option key={county.code} value={county.name}>
+                        {county.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </Select>
 
-            <Select
-              label={'Sub-county'}
-              required
-              value={form.administrativeUnitId}
-              onChange={(e) => set('administrativeUnitId', e.target.value)}
-              disabled={submitting || !form.county}
-              hint={'Select county first, then choose its sub-county.'}
-              error={fieldError('administrativeUnitId')}
-              ref={setFieldRef<HTMLSelectElement>('administrativeUnitId')}
+              <Select
+                label={'Sub-county'}
+                required
+                value={form.administrativeUnitId}
+                onChange={(e) => set('administrativeUnitId', e.target.value)}
+                disabled={submitting || !form.county}
+                hint={'Select county first, then choose its sub-county.'}
+                error={fieldError('administrativeUnitId')}
+                ref={setFieldRef<HTMLSelectElement>('administrativeUnitId')}
+              >
+                <option value="">{form.county ? 'Select a sub-county' : 'Select county first'}</option>
+                {administrativeUnits.map((unit) => (
+                  <option key={unit.id} value={unit.id}>{unit.name}</option>
+                ))}
+              </Select>
+            </div>
+          </LocationFirstField>
+
+          {/* The confirm-before-use suggestion panel, shown only after a
+              detection. Detection never mutates the selection by itself — only
+              "Use this location" does — and manual entry stays fully usable. */}
+          {detectedLocation && (
+            <div
+              className="rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] p-3 text-body space-y-2"
+              role="status"
             >
-              <option value="">{form.county ? 'Select a sub-county' : 'Select county first'}</option>
-              {administrativeUnits.map((unit) => (
-                <option key={unit.id} value={unit.id}>{unit.name}</option>
-              ))}
-            </Select>
-          </div>
+              <p className="font-bold">Suggested area</p>
+              {detectedLocation.accuracyTier !== 'strong' && (
+                <p className="text-caption text-[var(--appearance-text-muted)]">
+                  {detectedLocation.accuracyTier === 'unknown'
+                    ? 'Location accuracy is not available from this device — treat this as an approximate suggestion.'
+                    : 'Location accuracy is low — treat this area as an approximate suggestion.'}
+                </p>
+              )}
+              {detectedLocation.county && <p>County: <strong>{detectedLocation.county}</strong></p>}
+              {detectedLocation.subCountyId ? (
+                <p>Sub-county: <strong>{administrativeUnits.find(unit => unit.id === detectedLocation.subCountyId)?.name ?? 'Please confirm'}</strong></p>
+              ) : detectedLocation.county && (
+                <p>We detected your county, but couldn't reliably determine your sub-county. Please select it manually.</p>
+              )}
+              {detectedLocation.place && <p>Detected place: {detectedLocation.place}</p>}
+              {hasGeographyConflict(form.county, detectedLocation.county) && (
+                <p className="text-caption text-[var(--appearance-text-muted)]">
+                  Your selected area (<strong>{form.county}</strong>) differs from the detected area (<strong>{detectedLocation.county}</strong>). Using this location will replace your selection.
+                </p>
+              )}
+              {detectedLocation.county && (
+                <div className="flex flex-wrap gap-3">
+                  <Button type="button" variant="secondary" size="sm" onClick={applyDetectedLocation}>Use this location</Button>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setDetectedLocation(null)}>Edit</Button>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* P14C-3A — the reporter's own description of where the item was lost,
               so the label says "Exact place". The field is UNCHANGED in the data

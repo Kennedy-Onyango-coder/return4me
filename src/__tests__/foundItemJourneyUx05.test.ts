@@ -431,7 +431,7 @@ describe('UX-05 every new string is bilingual', () => {
 
 describe('UX-05 the chrome sits on the UX-01 ladders and the shared primitives', () => {
   it('builds on the shared foundation instead of forking new controls', () => {
-    expect(FINDER).toContain("import { Button, ICON_SIZE, Input, Select, Stepper } from './ui';");
+    expect(FINDER).toContain("import { Button, ICON_SIZE, Input, Select, Stepper, LocationFirstField } from './ui';");
     for (const primitive of ['<Stepper', '<Input', '<Select', '<Button']) {
       expect(FINDER, `missing ${primitive}`).toContain(primitive);
     }

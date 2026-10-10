@@ -484,7 +484,7 @@ describe('UX-04 the host contract and the shared primitives are unchanged', () =
   });
 
   it('builds on the shared primitives instead of forking raw controls', () => {
-    expect(WIZARD).toContain("import { Banner, Button, Input, Select, Stepper, Textarea } from '../ui';");
+    expect(WIZARD).toContain("import { Banner, Button, Input, Select, Stepper, Textarea, LocationFirstField } from '../ui';");
     // The progress rail keeps marking the current step for assistive tech.
     expect(STEPPER_TSX).toContain("aria-current={isCurrent ? 'step' : undefined}");
     for (const raw of ['<button', '<input', '<select', '<textarea']) {

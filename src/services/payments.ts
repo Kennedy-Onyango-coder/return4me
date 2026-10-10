@@ -148,13 +148,26 @@ export const PaymentService = {
       const invoiceId = 'INV-' + Math.random().toString(36).substring(2, 10).toUpperCase();
       const receiptCode = 'MPX' + Math.floor(100000 + Math.random() * 900000).toString();
 
+      // D-2A — AN INITIATED ATTEMPT IS NOT A RECEIPT.
+      //
+      // This row used to be booked as 'completed': the simulation asserted money
+      // had been collected before anyone approved anything, which is the same
+      // class of defect as promoting an abandoned attempt at settlement. It is now
+      // exactly what the real path below books — an UNRESOLVED attempt carrying
+      // the provider reference its own confirmation would arrive under
+      // (`provider_transaction_id`, matched against the provider invoice id; see
+      // db.attemptClaimEscrowHold). Nothing promotes it to 'completed' except an
+      // authoritative confirmation for that reference. Simulation must not be read
+      // as a payment (docs/claims-and-payments.md), so it must not be written as
+      // one either.
       await db.logTransaction({
         claim_id: cId,
         item_id: null,
         type: 'payment_received',
         amount: amt,
         phone_or_till: formatMpesaPhone(phoneNumber),
-        status: 'completed',
+        status: 'pending',
+        provider_transaction_id: invoiceId,
       });
 
       return {
@@ -169,14 +182,23 @@ export const PaymentService = {
       // PRODUCTION MUST NEVER SIMULATE A PAYMENT. A misconfigured
       // production deployment (missing or still-placeholder IntaSend
       // keys) previously fell straight through to
-      // generateMockStkPushSuccess, which doesn't just simulate an STK
-      // push request — it directly writes a COMPLETED payment_received
-      // ledger entry for money that never moved. In production that
-      // means anyone could "pay" for any claim and proceed straight to
-      // collecting the item, for free, with zero real M-Pesa transaction
-      // behind it. Same fail-closed principle as the database connection
-      // guard in db/index.ts: refuse to start faking money movement
-      // rather than silently doing it.
+      // generateMockStkPushSuccess, which does not merely pretend an STK
+      // push was sent: it returns `success: true` for a request that
+      // never reached a phone, and it books that attempt's
+      // payment_received ledger row. The row itself is no longer written
+      // as 'completed' (D-2A — see the generator above): an initiated
+      // attempt is booked 'pending' and only an authoritative
+      // confirmation for that attempt's own reference can complete it,
+      // so a simulation cannot manufacture revenue on its own. It still
+      // fabricates the appearance of a payment prompt the customer was
+      // never shown, though, and every caller reads that `success: true`
+      // as "a payment request is out and may be approved". In production
+      // that means anyone could "pay" for any claim and proceed straight
+      // to collecting the item, for free, with zero real M-Pesa
+      // transaction behind it. Simulated success is NEVER proof that
+      // money moved. Same fail-closed principle as the database
+      // connection guard in db/index.ts: refuse to start faking money
+      // movement rather than silently doing it.
       if (process.env.NODE_ENV === 'production') {
         throw new Error(
           'FATAL: IntaSend payment credentials are missing or still a placeholder value in a production environment. ' +
@@ -231,6 +253,17 @@ export const PaymentService = {
 
       const invoiceId = data.invoice?.invoice_id || 'INV-' + Math.random().toString(36).substring(2, 10).toUpperCase();
 
+      // D-2A — THE RECEIPT ROW CARRIES ITS OWN ATTEMPT'S PROVIDER REFERENCE.
+      //
+      // A 2xx from the STK endpoint means the prompt was SENT, not that anything
+      // was collected. The row is booked 'pending' (unresolved) and stamped with
+      // the provider invoice id of THIS attempt — the binding key the
+      // authoritative confirmation resolves it by. db.attemptClaimEscrowHold
+      // completes exactly the row whose `provider_transaction_id` equals the
+      // confirming invoice, and no other row: an abandoned, expired or otherwise
+      // unconfirmed attempt therefore keeps its own pending row forever rather
+      // than becoming revenue when the claim settles (finalizeSettlement no longer
+      // touches this row type at all).
       await db.logTransaction({
         claim_id: claimId,
         item_id: null,
@@ -238,6 +271,7 @@ export const PaymentService = {
         amount,
         phone_or_till: formattedPhone,
         status: 'pending',
+        provider_transaction_id: invoiceId,
       });
 
       return {

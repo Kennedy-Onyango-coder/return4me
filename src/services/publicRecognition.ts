@@ -31,20 +31,6 @@ export interface SafePublicClues {
   description: string | null;
 }
 
-/**
- * Masks a person's name for public display: first letter of the first
- * TWO name parts only, everything else replaced with asterisks matching
- * the original word's length. Any name parts beyond the second are
- * dropped entirely — never exposed, even masked.
- *
- * "Kennedy Onyango" -> "K****** O******"
- * "Madonna" (one name) -> "M******"
- * "A" (single letter) -> "A" (nothing left to mask without showing
- *   nothing useful at all — a bare single letter is already minimal)
- * null/undefined/empty -> null (caller should omit the name clue
- *   entirely rather than show a placeholder)
- */
-
 // ---------------------------------------------------------------------------
 // SENTINEL VALUES (P13 DEFECT FIX)
 // ---------------------------------------------------------------------------
@@ -74,6 +60,34 @@ function isSentinelValue(value: string): boolean {
   return SENTINEL_VALUES.has(value.trim().toLowerCase());
 }
 
+/**
+ * Masks a person's name for public display, under the D-2B-C privacy rule:
+ *
+ *   * the FIRST name part is shown in full — it is the recognition key a
+ *     genuine owner needs to think "this could be mine";
+ *   * the SECOND part shows only its first character, the remaining
+ *     characters masked (length-matched asterisks);
+ *   * the THIRD and every later part follows the same rule — masked to its
+ *     first character, never dropped silently and never shown in full;
+ *   * a one-part name is that person's first (only) name and stands as-is;
+ *   * a single-character part has nothing left to mask and stands as-is;
+ *   * null/undefined/empty/sentinel -> null (the caller omits the name clue
+ *     entirely rather than showing a placeholder).
+ *
+ * "Kennedy Otieno Abuga" -> "Kennedy O***** A****"
+ * "Madonna" (one name)   -> "Madonna"
+ * "A" (single letter)    -> "A"
+ *
+ * This is the ONE name-masking function every social platform's post flows
+ * through (Facebook, Telegram and X all receive their name clue from
+ * buildSafePublicClues). It is deliberately distinct from the fuzzy-match
+ * masks used for stored search data — those never reach a public post.
+ *
+ * For especially sensitive categories the admin can set public_clue_style
+ * to 'none', which suppresses the name clue ENTIRELY (see
+ * buildSafePublicClues) — a full first name can still identify a person, and
+ * the privacy classification must be able to say "publish no name at all".
+ */
 export function maskPublicName(fullName: string | null | undefined): string | null {
   if (!fullName || !fullName.trim()) return null;
   if (isSentinelValue(fullName)) return null;
@@ -81,14 +95,18 @@ export function maskPublicName(fullName: string | null | undefined): string | nu
   const parts = fullName.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return null;
 
+  // Iterate by Unicode code points (Array.from), not UTF-16 code units, so an
+  // astral character in a name never produces a broken half surrogate at the
+  // mask boundary.
   const maskWord = (word: string): string => {
-    if (word.length <= 1) return word;
-    return word[0] + '*'.repeat(word.length - 1);
+    const chars = Array.from(word);
+    if (chars.length <= 1) return word;
+    return chars[0] + '*'.repeat(chars.length - 1);
   };
 
-  // Only the first two name parts are ever shown, even masked — a third+
-  // given name or a middle name is dropped entirely rather than exposed.
-  return parts.slice(0, 2).map(maskWord).join(' ');
+  return parts
+    .map((part, index) => (index === 0 ? part : maskWord(part)))
+    .join(' ');
 }
 
 // ---------------------------------------------------------------------------
@@ -124,12 +142,17 @@ export function isPublicClueStyle(value: unknown): value is PublicClueStyle {
  * hardcoded per category ID here, so new categories/policy changes don't
  * require a code change.
  *
- * 'national_id'      "12345678" -> "12******"
- * 'passport'         "A1234567" -> "A*******"
- * 'driving_licence'  "KX123456" -> "K*******"
- * 'card'             "4111111111114821" -> "•••• 4821"
+ * D-2B-C PRIVACY RULE — a COMPLETE national ID, passport number, driving
+ * licence number or card number is NEVER published, under any style. A
+ * limited suffix (the last four characters, rendered `•••• 4821`) is revealed
+ * only where the style explicitly permits it:
+ *
+ * 'national_id'      "12345678" -> "•••• 5678"  (limited suffix — the standard "ID ending …" shape)
+ * 'card'             "4111111111114821" -> "•••• 4821" (PCI-style limited suffix)
+ * 'passport'         "A1234567" -> "********"   (format uncertain -> mask the ENTIRE identifier)
+ * 'driving_licence'  "KX123456" -> "********"   (format uncertain -> mask the ENTIRE identifier)
  * 'none'             -> null (never show a clue for this category, period)
- * 'generic' (default) -> first character + asterisks
+ * 'generic' (default, and any future unmapped style) -> full mask
  */
 export function maskPublicDocumentNumber(
   documentNumber: string | null | undefined,
@@ -146,23 +169,22 @@ export function maskPublicDocumentNumber(
   if (isSentinelValue(clean)) return null;
 
   switch (style) {
-    case 'national_id': {
-      if (clean.length <= 2) return clean[0] + '*'.repeat(Math.max(clean.length - 1, 0));
-      return clean.slice(0, 2) + '*'.repeat(clean.length - 2);
-    }
-    case 'passport':
-    case 'driving_licence': {
-      if (clean.length <= 1) return clean;
-      return clean[0] + '*'.repeat(clean.length - 1);
-    }
+    case 'national_id':
     case 'card': {
+      // The two styles that explicitly permit a limited suffix reveal. A
+      // value too short to yield a safe suffix is masked entirely — a short
+      // number (a PIN or CVV-shaped value) is never shown in any form.
       if (clean.length <= 4) return '•'.repeat(clean.length);
       return '•••• ' + clean.slice(-4);
     }
+    case 'passport':
+    case 'driving_licence':
     case 'generic':
     default: {
-      if (clean.length <= 1) return clean;
-      return clean[0] + '*'.repeat(clean.length - 1);
+      // Suffix reveal is not explicitly permitted for these formats (and any
+      // future, unmapped style has an uncertain format), so the ENTIRE
+      // identifier is masked.
+      return '*'.repeat(clean.length);
     }
   }
 }
@@ -261,9 +283,16 @@ export function buildSafePublicClues(item: VerifiedItemLike, category: CategoryL
     return { nameClue: null, documentNumberClue: null, location, description: item.verified_description ?? null };
   }
 
+  // D-2B-C: 'none' is the STRICTEST classification and now suppresses the
+  // name clue too. A full first name can still identify a person, so a
+  // category whose policy says "publish no document-number clue, period"
+  // is understood to mean "publish no identity clue at all" — name
+  // included. Every other style keeps the masked recognition name under
+  // the one shared masking rule (maskPublicName).
+  const style = category.public_clue_style ?? 'generic';
   return {
-    nameClue: maskPublicName(item.verified_name ?? null),
-    documentNumberClue: maskPublicDocumentNumber(item.verified_document_number ?? null, category.public_clue_style ?? 'generic'),
+    nameClue: style === 'none' ? null : maskPublicName(item.verified_name ?? null),
+    documentNumberClue: maskPublicDocumentNumber(item.verified_document_number ?? null, style),
     location,
     // Sensitive items never publish a free-text description clue at all —
     // matches the existing behavior (sensitive posts only ever showed

@@ -469,7 +469,12 @@ describe('UX-12 leaves the location, verification and payout behaviour intact', 
   });
 
   it('keeps the optional GPS capture and its confirm-before-use step', () => {
-    expect(PANEL).toContain('onClick={detectAgentLocation}');
+    // LOCATION-FIRST (Phase 2): the detect action is now wired through the
+    // shared LocationFirstField as onDetect (the button and its onClick live
+    // inside that component), so the panel passes the handler rather than
+    // rendering its own button. The handler, the confirm-before-use apply step
+    // and the coordinate state writes are all still here.
+    expect(PANEL).toContain('onDetect={detectAgentLocation}');
     expect(PANEL).toContain('applyDetectedAgentLocation');
     expect(VIEW).toContain('detectBrowserLocation()');
     expect(VIEW).toContain('setAgentLatitude(agentDetectedLocation.latitude)');

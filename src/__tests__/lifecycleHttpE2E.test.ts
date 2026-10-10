@@ -1465,7 +1465,8 @@ describe('stage 7A â€” owner-bound pickup-code resend over real HTTP', () =
 // required, so a photo-less request legitimately marks the code verified. The
 // tests below assert the ACTUAL behaviour rather than an assumed rollback.
 // The route deliberately does NOT pay: the payout stays in the ledger for the
-// settlement sweep / admin release. Stage 7 must end at pending_settlement.
+// administrator-initiated settlement path, which the sweep never reaches.
+// Stage 7 must end at pending_settlement.
 // ===========================================================================
 let pickupPlain = '';
 let handoverUrl = '';
@@ -1651,29 +1652,38 @@ describe('stage 7 â€” pickup-code handover to pending_settlement', () => {
 //
 // SOURCE CONTRACT AUDIT (read from the current source, not assumed).
 //
-// 1. SETTLEMENT ENTRY POINTS â€” there are exactly two callers of the settlement
-//    machinery and only ONE is reachable over HTTP:
-//      a) POST /api/admin/claims/:id/release-settlement  (server.ts)
-//         authenticateJWT -> requireCurrentAdminSession -> role==='admin'
-//         -> db.attemptSettlementRelease(claimId, /*force*/ true)
-//         -> executeClaimSettlement(claimId)
-//         force=true is the DOCUMENTED admin override: it skips the settle_at
-//         check but still requires status==='pending_settlement'.
-//      b) releaseDueSettlements() â€” a setInterval(5min) sweep started by
-//         startServer(), using attemptSettlementRelease(claimId, false) so it
-//         DOES honour settle_at. Not HTTP-reachable: createApp() does not
-//         start it and this suite never calls startServer().
+// 1. SETTLEMENT ENTRY POINTS (D-2B-B-E) - payout submission is reachable over
+//    HTTP ONLY, and EVERY path is gated on a durable administrator approval:
+//      a) POST /api/admin/claims/:id/settlement/approve  - records the durable
+//         sign-off (settlement_approved_at / settlement_approved_by) and its
+//         CLAIM_SETTLEMENT_APPROVED audit row in ONE transaction. It never
+//         moves the claim and never touches the provider.
+//      b) POST /api/admin/claims/:id/settlement/initiate  - the supported payout
+//         path: requireAdminPermission(claims.settlement_initiate) ->
+//         db.attemptSettlementRelease(claimId) -> executeClaimSettlement(claimId).
+//      c) POST /api/admin/claims/:id/release-settlement   - LEGACY, retained for
+//         compatibility. It delegates to exactly the same CAS as (b) and can no
+//         longer force anything: no durable approval, or an unelapsed settle_at
+//         window, means 409 and no payout, with `next` pointing at (a)/(b).
+//      d) releaseDueSettlements() - a setInterval(5min) sweep started by
+//         startServer(). It SUBMITS NO PAYOUT AT ALL (reporting only); its own
+//         source contract is asserted in src/db/__tests__/settlementEarnings.test.ts.
+//         Not HTTP-reachable: createApp() does not start it and this suite never
+//         calls startServer().
 //
-//    This suite drives (a), the real HTTP boundary. It never calls
-//    attemptSettlementRelease / executeClaimSettlement / finalizeSettlement
-//    directly.
+//    This suite drives (a), (b) and (c) over the real HTTP boundary. It never
+//    calls attemptSettlementRelease / executeClaimSettlement / finalizeSettlement
+//    directly; the only DB-level primitives it uses are the fixture builders
+//    (enterPendingSettlement / approveSettlement) that stand in for the earlier
+//    lifecycle stages.
 //
-// 2. DISPUTE WINDOW â€” claims.settle_at, written by enterPendingSettlement() as
-//    now + DISPUTE_WINDOW_MS (DISPUTE_WINDOW_HOURS, default 48). It gates the
-//    AUTOMATIC sweep only; the admin route deliberately overrides it. Both
-//    halves are asserted below, the window guard itself through
-//    db.getClaimsDueForSettlement() â€” a READ-ONLY query, not a settlement
-//    function, returning exactly the rows the sweep would act on.
+// 2. SETTLE_AT REVIEW WINDOW - claims.settle_at, written by
+//    enterPendingSettlement() as now + DISPUTE_WINDOW_MS
+//    (DISPUTE_WINDOW_HOURS, default 48). D-2B-B-E: it gates BOTH actions - the
+//    approval write and the release CAS - and there is no override anywhere, so
+//    a claim inside its window cannot be approved OR paid even by an admin
+//    (asserted in 8.14). The window guard itself is also asserted below through
+//    db.getClaimsDueForSettlement(), a READ-ONLY reporting query.
 //
 // 3. PAYOUT PROVIDER SEAM â€” PaymentService.triggerIntasendPayout() ->
 //    fetchWithTimeout() -> the global fetch() against
@@ -1689,7 +1699,8 @@ describe('stage 7 â€” pickup-code handover to pending_settlement', () => {
 //    category's shares). The route reads NO amount from the request.
 //
 // 5. IDEMPOTENCY - three independent mechanisms, all asserted below:
-//      a) attemptSettlementRelease()'s CAS pending_settlement -> releasing.
+//      a) attemptSettlementRelease()'s CAS: pending_settlement -> releasing, only
+//         with a durable approval on file and an elapsed settle_at window.
 //      b) per-recipient ledger rows: only rows whose payout_outcome is
 //         'not_submitted' are ever sent, so a retry can never re-pay a
 //         recipient that already succeeded (E3A).
@@ -1720,6 +1731,11 @@ describe('stage 7 â€” pickup-code handover to pending_settlement', () => {
 // ===========================================================================
 
 const RELEASE = (id: string) => `/api/admin/claims/${id}/release-settlement`;
+// D-2B-B-E - the supported workflow. Approve records the durable sign-off;
+// initiate is the only path that may submit a payout. The legacy RELEASE route
+// above delegates to exactly the same rule.
+const APPROVE = (id: string) => `/api/admin/claims/${id}/settlement/approve`;
+const INITIATE = (id: string) => `/api/admin/claims/${id}/settlement/initiate`;
 const ADMIN_USERNAME = `e2e-admin-${RUN}`;
 // Committed test-only fixtures. Not credentials: valid against no real
 // IntaSend or admin account, and the CI committed-secret scanner ignores the
@@ -1734,6 +1750,13 @@ let prevIntaKey: string | undefined;
 // in this stage deliberately do NOT: their payouts end in an accepted, unknown
 // or refused state, which is exactly what must never be resubmitted.
 let releasedClaimId = '';
+// D-2B-B-E: the claim used for the provider-outcome half of the stage. claim-1's
+// settle_at window is deliberately still OPEN (asserted in 8.0 and again in
+// 8.14), so under the new rule it can neither be approved nor paid - a real,
+// elapsed window plus a durable approval is now required, and this fixture has
+// both.
+let dueClaimId = '';
+let dueItemId = '';
 
 // The controlled payout provider. `mode` is swapped per test; `calls` records
 // the exact batch payload the application SENT, so the amount invariant is
@@ -1818,18 +1841,23 @@ const auditFor = async (action: string, needle: string) =>
   (await db.getAuditLogs()).filter((l: any) => l.action === action && String(l.details).includes(needle));
 
 /**
- * E3A fixture: a genuinely releasable claim — item assigned to the real E2E
+ * E3A fixture: a genuinely releasable claim - item assigned to the real E2E
  * agent, an escrow_held claim, and the payout booked through the REAL
  * enterPendingSettlement path (so the three ledger rows carry the real
- * 'not_submitted' booking state). The dispute window is already elapsed, which
- * is what the ADMIN route ignores anyway (force=true) but which keeps this
- * fixture identical in shape to what the automatic sweep would act on.
+ * 'not_submitted' booking state). The dispute window is already elapsed.
+ *
+ * D-2B-B-E: an elapsed window is NOT sufficient any more, so by default this
+ * fixture also records the durable administrator approval through the real
+ * approveSettlement() write - that is what makes the claim releasable at all.
+ * Pass `{ approve: false }` to get an otherwise-identical claim with a durable
+ * window and NO approval, which is how the "no payout without approval" tests
+ * (8.12-8.14) get their subject.
  *
  * Each provider outcome in this stage gets its OWN claim: a payout row's
  * submission state is one-way by design (that is the whole point of E3A), so a
  * single claim cannot be reused to exercise two different outcomes.
  */
-const makeReleasableClaim = async (suffix: string) => {
+const makeReleasableClaim = async (suffix: string, opts: { approve?: boolean } = {}) => {
   const newClaimId = `E2E-E3A-CLAIM-${RUN}-${suffix}`;
   const newItemId = `E2E-E3A-ITEM-${RUN}-${suffix}`;
   await db.createItem({
@@ -1869,6 +1897,13 @@ const makeReleasableClaim = async (suffix: string) => {
   } as any);
   const booked = await db.enterPendingSettlement(newClaimId, -1000);
   expect(booked.success, booked.message).toBe(true);
+  // The durable approval is what actually authorizes a payout (D-2B-B-E), so the
+  // default fixture records it through the real write - unless the caller wants
+  // the unapproved variant on purpose.
+  if (opts.approve !== false) {
+    const approved = await db.approveSettlement(newClaimId, 'E2E fixture admin', `E3A fixture approval for ${suffix}`);
+    expect(approved.ok, 'E3A fixture must record the durable settlement approval').toBe(true);
+  }
   return { claimId: newClaimId, itemId: newItemId };
 };
 
@@ -1984,33 +2019,39 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     expect((await db.getClaim(claimId))!.status).toBe('pending_settlement');
   });
 
-  it('8.4 refuses an INELIGIBLE claim (409) â€” no payout, no release, no audit', async () => {
+  it('8.4 refuses an INELIGIBLE claim (409) - no payout, no release, no audit', async () => {
     // claim-2 is at pending_verification, produced by the real lifecycle above.
     const before = await financialSnapshot(secondClaimId);
-    const auditsBefore = (await auditFor('ADMIN_FORCE_RELEASE_SETTLEMENT', secondClaimId)).length;
+    const auditsBefore = (await auditFor('ADMIN_RELEASE_SETTLEMENT', secondClaimId)).length;
 
     const r = await http(RELEASE(secondClaimId), { token: adminToken, body: {} });
     expect(r.status).toBe(409);
     // The eligibility guard fired BEFORE the release lock, so there is no
-    // provider call, no ledger movement and no force-release audit row.
+    // provider call, no ledger movement and no release audit row.
     expect(payout.calls.length).toBe(0);
     expect(await financialSnapshot(secondClaimId)).toEqual(before);
-    expect((await auditFor('ADMIN_FORCE_RELEASE_SETTLEMENT', secondClaimId)).length).toBe(auditsBefore);
+    expect((await auditFor('ADMIN_RELEASE_SETTLEMENT', secondClaimId)).length).toBe(auditsBefore);
     // claim-1 is entirely unaffected.
     expect((await db.getClaim(claimId))!.status).toBe('pending_settlement');
   });
 
   it('8.5 the payout amount is server-authoritative: a hostile client amount is ignored', async () => {
+    // A claim whose window has elapsed AND which carries the durable approval -
+    // the only shape that can be paid at all now (D-2B-B-E).
+    const due = await makeReleasableClaim('DUE-WINDOW');
+    dueClaimId = due.claimId;
+    dueItemId = due.itemId;
+
     // The route reads no amount from the request, so this is proven where the
-    // money actually moves â€” the batch the application SENT to the provider.
+    // money actually moves - the batch the application SENT to the provider.
     // The provider is in 'accept' mode behind a real (non-placeholder) key, so
     // triggerIntasendPayout() takes its genuine HTTP branch.
     payout.reset();
-    const item: any = await db.getItem(itemId);
+    const item: any = await db.getItem(dueItemId);
     const expectedFinder = Number(item.locked_finder_share);
     const expectedAgent = Number(item.locked_agent_share);
 
-    const r = await http(RELEASE(claimId), {
+    const r = await http(RELEASE(dueClaimId), {
       token: adminToken,
       body: { amount: 1, fee: 1, total_fee: 1, finder_share: 1, agent_share: 1, payout: 1 },
     });
@@ -2042,7 +2083,7 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     // The provider is addressed with the claim reference, and each recipient
     // is a real destination the application resolved server-side.
     for (const t of txns) {
-      expect(String(t.narrative)).toContain(claimId);
+      expect(String(t.narrative)).toContain(dueClaimId);
       expect(String(t.account).length).toBeGreaterThan(0);
     }
     expect(payout.calls[0].payload?.provider).toBe('MPESA-B2C');
@@ -2054,7 +2095,7 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     // E3A - an ACCEPTED batch is NOT a completed transfer. Both recipient rows
     // are recorded as 'accepted', the legacy status stays 'pending', the claim
     // is NOT released, and no provider identifier is invented.
-    const accepted = await financialSnapshot(claimId);
+    const accepted = await financialSnapshot(dueClaimId);
     expect(accepted.status).toBe('pending_settlement');
     expect(accepted.ledger.filter((l) => l.type !== 'platform_fee').every((l) => l.payout_outcome === 'accepted')).toBe(true);
     expect(accepted.ledger.filter((l) => l.type !== 'platform_fee').every((l) => l.status === 'pending')).toBe(true);
@@ -2067,22 +2108,23 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     // The defect this pins: the row is 'pending' on the ledger, and the NEXT
     // release used to treat that as "outstanding, send it again" - a second
     // transfer for money the provider had already accepted.
-    const before = await financialSnapshot(claimId);
+    const before = await financialSnapshot(dueClaimId);
     const callsBefore = payout.calls.length;
 
-    const r = await http(RELEASE(claimId), { token: adminToken, body: {} });
+    const r = await http(RELEASE(dueClaimId), { token: adminToken, body: {} });
 
-    // The claim is still releasable (it is back in pending_settlement, so the
-    // release CAS succeeds) but the executor finds NOTHING eligible to submit,
-    // so it reports an unresolved payout rather than moving money.
+    // The claim is still releasable (it is back in pending_settlement and still
+    // carries its durable approval, so the release CAS succeeds) but the
+    // executor finds NOTHING eligible to submit, so it reports an unresolved
+    // payout rather than moving money.
     expect(r.status).toBe(500);
     expect(payout.calls.length, 'the provider must not be called a second time').toBe(callsBefore);
 
-    const after = await financialSnapshot(claimId);
+    const after = await financialSnapshot(dueClaimId);
     expect(after.ledger, 'the ledger is byte-identical: nothing was submitted').toEqual(before.ledger);
     expect(after.status).toBe('pending_settlement');
     // ...and the unresolved state is explicitly recorded for the operator.
-    expect((await auditFor('PAYOUT_RECONCILIATION_REQUIRED', claimId)).length).toBeGreaterThan(0);
+    expect((await auditFor('PAYOUT_RECONCILIATION_REQUIRED', dueClaimId)).length).toBeGreaterThan(0);
   });
 
   it('8.6 an UNREACHABLE provider is recorded as UNKNOWN and is never resubmitted', async () => {
@@ -2206,11 +2248,11 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     // platform_fee never touches a provider, so it keeps no submission history.
     expect(platformFee.payout_outcome).toBeNull();
     // FINALIZE_SETTLEMENT is the money-moving event and must exist EXACTLY
-    // once. ADMIN_FORCE_RELEASE_SETTLEMENT is written per release-LOCK
-    // acquisition, so it legitimately has one row per attempt that won the
-    // CAS - each is a distinct operator action, not a duplicate disbursement.
+    // once. ADMIN_RELEASE_SETTLEMENT is written per release-LOCK acquisition,
+    // so it legitimately has one row per attempt that won the CAS - each is a
+    // distinct operator action, not a duplicate disbursement.
     expect((await auditFor('FINALIZE_SETTLEMENT', c)).length).toBe(1);
-    expect((await auditFor('ADMIN_FORCE_RELEASE_SETTLEMENT', c)).length).toBeGreaterThanOrEqual(1);
+    expect((await auditFor('ADMIN_RELEASE_SETTLEMENT', c)).length).toBeGreaterThanOrEqual(1);
     // Restore the real key so the remaining tests use the HTTP branch again.
     process.env.INTASEND_SECRET_KEY = FAKE_INTASEND_KEY;
   });
@@ -2272,17 +2314,17 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     const item: any = await db.getItem(`E2E-E3A-ITEM-${RUN}-CONFIRMED`);
     const disbursed = payouts.reduce((n: number, l: any) => n + Number(l.amount), 0);
     expect(disbursed + Number(item.locked_platform_share)).toBe(Number(item.locked_total_fee));
-    // The money-moving settlement event was never duplicated. The force-release
+    // The money-moving settlement event was never duplicated. The release
     // audit row is per lock acquisition, so it is only required to exist.
     expect((await auditFor('FINALIZE_SETTLEMENT', releasedClaimId)).length).toBe(1);
-    expect((await auditFor('ADMIN_FORCE_RELEASE_SETTLEMENT', releasedClaimId)).length).toBeGreaterThanOrEqual(1);
+    expect((await auditFor('ADMIN_RELEASE_SETTLEMENT', releasedClaimId)).length).toBeGreaterThanOrEqual(1);
   });
 
   it('8.11 E3A: unresolved payouts are never paid, never resubmitted, and never invisible', async () => {
-    // claim-1's payout was accepted by the provider and never confirmed. E3A
-    // leaves it exactly there: not completed, not resubmitted, and listed for
-    // provider reconciliation.
-    const s1 = await financialSnapshot(claimId);
+    // The due claim's payout was accepted by the provider and never confirmed.
+    // E3A leaves it exactly there: not completed, not resubmitted, and listed
+    // for provider reconciliation.
+    const s1 = await financialSnapshot(dueClaimId);
     expect(s1.status).toBe('pending_settlement');
     expect(s1.status).not.toBe('released');
     const unresolvedOnes = s1.ledger.filter((l) => l.type !== 'platform_fee');
@@ -2290,13 +2332,13 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     expect(unresolvedOnes.every((l) => l.status === 'pending')).toBe(true);
     // No completion, no claim of completion, and no invented reference: the
     // transaction ids that ARE recorded came from the provider's own response.
-    expect((await auditFor('FINALIZE_SETTLEMENT', claimId)).length).toBe(0);
+    expect((await auditFor('FINALIZE_SETTLEMENT', dueClaimId)).length).toBe(0);
     expect(unresolvedOnes.every((l) => typeof l.provider_transaction_id === 'string' && l.provider_transaction_id!.startsWith('E2E-TXN-'))).toBe(true);
 
     // The unresolved row is visible through the new read-only reconciliation
     // surface, with the evidence an operator needs to check it with IntaSend.
     const rows = await db.getUnresolvedPayouts();
-    const mine = rows.filter((r: any) => r.claim_id === claimId);
+    const mine = rows.filter((r: any) => r.claim_id === dueClaimId);
     expect(mine.length).toBe(2);
     for (const row of mine) {
       expect(row.status).toBe('pending');
@@ -2307,13 +2349,412 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     // The confirmed claim is NOT in that queue: it is genuinely paid.
     expect(rows.some((r: any) => r.claim_id === releasedClaimId)).toBe(false);
 
-    // And the provider was never asked to move claim-1's money a second time:
-    // each recipient appears in exactly ONE submitted batch across the whole
-    // stage, even though the claim was released repeatedly afterwards.
-    const claim1Narratives = payout.seenNarratives.filter((n) => n.includes(claimId));
-    expect(claim1Narratives.length).toBe(2); // finder + agent, once each
-    expect(new Set(claim1Narratives).size).toBe(2);
-    expect(claim1Narratives.filter((n) => n.includes('FINDER')).length).toBe(1);
-    expect(claim1Narratives.filter((n) => n.includes('AGENT')).length).toBe(1);
+    // And the provider was never asked to move that money a second time: each
+    // recipient appears in exactly ONE submitted batch across the whole stage,
+    // even though the release was attempted repeatedly afterwards.
+    const dueNarratives = payout.seenNarratives.filter((n) => n.includes(dueClaimId));
+    expect(dueNarratives.length).toBe(2); // finder + agent, once each
+    expect(new Set(dueNarratives).size).toBe(2);
+    expect(dueNarratives.filter((n) => n.includes('FINDER')).length).toBe(1);
+    expect(dueNarratives.filter((n) => n.includes('AGENT')).length).toBe(1);
+  });
+
+  // =========================================================================
+  // 8.12-8.16 - D-2B-B-E: the durable-approval workflow, and the bypasses that
+  // are now closed. All five drive the REAL routes over real HTTP.
+  // =========================================================================
+
+  it('8.12 approve records the durable sign-off (who/when/why) atomically, and a duplicate changes nothing', async () => {
+    const { claimId: c } = await makeReleasableClaim('APPROVE-HTTP', { approve: false });
+    const approvalAudits = async () =>
+      (await db.getAuditLogs()).filter(
+        (l) => l.action === 'CLAIM_SETTLEMENT_APPROVED' && String(l.details).includes(c),
+      );
+
+    // Unauthenticated -> 401; an authenticated NON-admin (the real agent token)
+    // -> 403; the admin without a reason -> 400. None of them may write.
+    expect((await http(APPROVE(c), { body: { reason: 'no token' } })).status).toBe(401);
+    expect((await http(APPROVE(c), { token: agentToken(AGENT_ID), body: { reason: 'agent' } })).status).toBe(403);
+    const noReason = await http(APPROVE(c), { token: adminToken, body: {} });
+    expect(noReason.status).toBe(400);
+    expect((await db.getClaim(c))!.settlement_approved_at ?? null).toBeNull();
+    expect((await approvalAudits()).length, 'a rejected request writes no evidence').toBe(0);
+
+    // The admin, with a reason -> the durable sign-off.
+    const ok = await http(APPROVE(c), { token: adminToken, body: { reason: 'Handover verified; no dispute filed.' } });
+    expect(ok.status).toBe(200);
+    expect(ok.body?.success).toBe(true);
+    expect(ok.body?.approved_by).toBe(ADMIN_USERNAME);
+    expect(ok.body?.approved_at).toBeTruthy();
+
+    const claim = (await db.getClaim(c))!;
+    expect(claim.settlement_approved_at).toBeTruthy();
+    expect(claim.settlement_approved_by).toBe(ADMIN_USERNAME);
+    // Approval never moves the claim and never touches the ledger.
+    expect(claim.status).toBe('pending_settlement');
+    expect((await db.getLedgerEntriesForClaim(c)).every((l) => l.status === 'pending')).toBe(true);
+
+    // The reason is durable, in the SAME audit row that records the approval.
+    const audits = await approvalAudits();
+    expect(audits.length, 'exactly one approval audit row').toBe(1);
+    expect(audits[0].admin_user).toBe(ADMIN_USERNAME);
+    expect(String(audits[0].details)).toContain('Handover verified; no dispute filed.');
+
+    // A duplicate approval is a 409 that persists NOTHING: no overwrite, no
+    // second audit row - so no false success evidence can exist for it.
+    const dup = await http(APPROVE(c), { token: adminToken, body: { reason: 'second attempt' } });
+    expect(dup.status).toBe(409);
+    expect(dup.body?.approved_by).toBe(ADMIN_USERNAME);
+    expect((await db.getClaim(c))!.settlement_approved_at).toBe(claim.settlement_approved_at);
+    expect((await approvalAudits()).length).toBe(1);
+    expect((await db.getAuditLogs()).some((l) => String(l.details).includes('second attempt'))).toBe(false);
+  });
+
+  it('8.13 initiate requires the durable approval, and the legacy route cannot bypass it', async () => {
+    const { claimId: c } = await makeReleasableClaim('INITIATE-GATE', { approve: false });
+    payout.reset();
+
+    // Supported path: no approval -> 409 naming the real cause, no payout.
+    const blocked = await http(INITIATE(c), { token: adminToken, body: {} });
+    expect(blocked.status).toBe(409);
+    expect(blocked.body?.reasons).toEqual(['no_durable_approval']);
+
+    // Legacy path: the SAME refusal - it no longer force-releases ahead of the
+    // window or without approval - and it points at the supported workflow.
+    const legacy = await http(RELEASE(c), { token: adminToken, body: {} });
+    expect(legacy.status).toBe(409);
+    expect(String(legacy.body?.next?.approve)).toContain('/settlement/approve');
+    expect(String(legacy.body?.next?.initiate)).toContain('/settlement/initiate');
+    expect(payout.calls.length, 'neither route may reach the provider without approval').toBe(0);
+    expect((await db.getClaim(c))!.status).toBe('pending_settlement');
+
+    // With the durable approval in place, the supported path completes the payout.
+    expect((await http(APPROVE(c), { token: adminToken, body: { reason: 'approved for payout' } })).status).toBe(200);
+    process.env.INTASEND_SECRET_KEY = '';
+    payout.reset();
+    const paid = await http(INITIATE(c), { token: adminToken, body: {} });
+    process.env.INTASEND_SECRET_KEY = FAKE_INTASEND_KEY;
+    expect(paid.status).toBe(200);
+    expect(paid.body?.success).toBe(true);
+    expect((await db.getClaim(c))!.status).toBe('released');
+    expect(payout.calls.length, 'the simulated disbursement branch never calls the provider').toBe(0);
+  });
+
+  it('8.14 an admin WITH a reason still cannot approve or release a claim whose window is open', async () => {
+    // claim-1's settle_at is genuinely in the future (asserted in 8.0). The
+    // force-release probe that used to pay it ahead of the window must now fail
+    // closed on ALL THREE routes: no approval is even possible while the window
+    // is open, so there is no path left that skips it.
+    const before = await financialSnapshot(claimId);
+    expect(new Date(String(before.settle_at)).getTime()).toBeGreaterThan(Date.now());
+    payout.reset();
+
+    expect((await http(APPROVE(claimId), { token: adminToken, body: { reason: 'release it early please' } })).status).toBe(409);
+    expect((await http(RELEASE(claimId), { token: adminToken, body: {} })).status).toBe(409);
+    const initiate = await http(INITIATE(claimId), { token: adminToken, body: {} });
+    expect(initiate.status).toBe(409);
+    // The reported reasons are the REAL ones the CAS enforces - not a hard-coded
+    // list claiming a pause/hold failure this method cannot even detect.
+    expect(initiate.body?.reasons).toEqual(['no_durable_approval', 'settle_at_not_elapsed']);
+
+    expect(payout.calls.length).toBe(0);
+    expect(await financialSnapshot(claimId)).toEqual(before);
+  });
+
+  it('8.15 a legal hold placed AFTER approval still stops the payout (fail closed)', async () => {
+    const { claimId: c, itemId: ci } = await makeReleasableClaim('HOLD-AFTER-APPROVAL', { approve: true });
+    // The approval is durable and the window has elapsed - only the hold changes,
+    // and it is applied after the sign-off.
+    await db.setItemReviewStatus(ci, 'legal_hold', 'E2E: court order received', 'SYSTEM');
+    payout.reset();
+
+    const r = await http(INITIATE(c), { token: adminToken, body: {} });
+    // The lock was won (approval + window were valid) and then given back: the
+    // provider was never called and the claim is not stranded in 'releasing'.
+    expect(r.status).toBe(500);
+    expect(payout.calls.length).toBe(0);
+    expect((await db.getClaim(c))!.status).toBe('pending_settlement');
+    expect((await db.getLedgerEntriesForClaim(c)).every((l) => l.status === 'pending')).toBe(true);
+    const abandoned = await auditFor('SETTLEMENT_RELEASE_ABANDONED', c);
+    expect(abandoned.length).toBeGreaterThan(0);
+    expect(String(abandoned[0].details)).toContain('legal_hold');
+  });
+
+  it('8.16 a platform-wide payout pause stops a fully approved payout (fail closed)', async () => {
+    // Pause through the REAL admin route, then attempt a fully valid payout.
+    const pause = await http('/api/admin/settings/pause', { token: adminToken, body: { scope: 'payouts', paused: true } });
+    expect(pause.status).toBe(200);
+    try {
+      const { claimId: c } = await makeReleasableClaim('PAUSED-PAYOUT', { approve: true });
+      payout.reset();
+      const r = await http(INITIATE(c), { token: adminToken, body: {} });
+      expect(r.status).toBe(500);
+      expect(payout.calls.length, 'no payout may be submitted while paused').toBe(0);
+      expect((await db.getClaim(c))!.status).toBe('pending_settlement');
+      expect((await auditFor('SETTLEMENT_SKIPPED_PAYOUTS_PAUSED', c)).length).toBeGreaterThan(0);
+    } finally {
+      const resume = await http('/api/admin/settings/pause', { token: adminToken, body: { scope: 'payouts', paused: false } });
+      expect(resume.status).toBe(200);
+    }
+  });
+
+
+});
+
+// ===========================================================================
+// STAGE 9 — THE DEV-ONLY PAYMENT SIMULATOR, OVER REAL HTTP (D-2A-H).
+//
+// POST /api/dev/simulate-payment/:claimId fabricates an authoritative payment
+// confirmation, so it is the one endpoint in the product that can hand a claim
+// to a claimant with no money behind it — and it is hard-gated off in
+// production (three conditions, plus a boot refusal). What it must NOT do is
+// confirm under a reference of its own invention: that moved the claim while
+// leaving the attempt's real receipt row unresolved forever, and stamped a
+// payment reference that never existed onto the claim.
+//
+// These are the first behavioural tests the endpoint has ever had (its gate is
+// unit-tested and source-audited in config/__tests__/devPaymentSimulation.test.ts).
+// Everything below runs the REAL application over REAL HTTP: the real Express
+// chain, the real route, the real canonical confirmation path, the real atomic
+// claim/session compare-and-set and the real receipt-row resolution. Only the
+// outbound email/SMS seams are doubled (file-wide), and the attempt/session
+// rows are seeded directly because this stage is about the simulator, not about
+// re-driving the journey stages above it.
+// ===========================================================================
+describe('stage 9 — the dev payment simulator confirms only the attempt it stands for', () => {
+  /**
+   * A per-test invoice id. The real schema enforces ONE session per provider
+   * invoice (uq_payment_sessions_provider_invoice), so reusing an invoice across
+   * claims would cross-bind them; every fixture below is therefore unique.
+   */
+  const invoiceFor = (suffix: string, which: 'OLD' | 'NEW' | 'ORPHAN' | 'UNRELATED' | 'WEBHOOK') =>
+    `INV-E2E-DEVSIM-${which}-${RUN}-${suffix}`;
+  // The `A-`/`B-`/`C-`/`D-` prefix keeps the "newest attempt" choice
+  // deterministic even when two sessions share a creation timestamp (the
+  // selection rule breaks a tie on the session id).
+  const sessionFor = (
+    suffix: string, which: 'A-OLD' | 'B-NEW' | 'C-UNINITIATED' | 'D-WEBHOOK',
+  ) => `PS-E2E-DEVSIM-${RUN}-${which}-${suffix}`;
+
+  /** Runs `fn` with the simulator's two non-production switches ON, then restores them. */
+  const withSimulationEnabled = async <T,>(fn: () => Promise<T>): Promise<T> => {
+    const prevSim = process.env.ENABLE_DEV_PAYMENT_SIMULATION;
+    const prevOtp = process.env.ALLOW_MOCK_OTP_BYPASS;
+    process.env.ENABLE_DEV_PAYMENT_SIMULATION = 'true';
+    process.env.ALLOW_MOCK_OTP_BYPASS = 'true';
+    try {
+      return await fn();
+    } finally {
+      if (prevSim === undefined) delete process.env.ENABLE_DEV_PAYMENT_SIMULATION;
+      else process.env.ENABLE_DEV_PAYMENT_SIMULATION = prevSim;
+      if (prevOtp === undefined) delete process.env.ALLOW_MOCK_OTP_BYPASS;
+      else process.env.ALLOW_MOCK_OTP_BYPASS = prevOtp;
+    }
+  };
+
+  const simulatePayment = (claimId: string) =>
+    withSimulationEnabled(() =>
+      http(`/api/dev/simulate-payment/${claimId}`, { method: 'POST' }),
+    );
+
+  /** A claim awaiting payment, with the item parent the real FKs require. */
+  const makeSimClaim = async (suffix: string) => {
+    const claimId = `E2E-DEVSIM-CLAIM-${RUN}-${suffix}`;
+    const itemId = `E2E-DEVSIM-ITEM-${RUN}-${suffix}`;
+    await db.createItem({
+      id: itemId, category_id: CATEGORY, photo_url: 'test-photo.jpg',
+      ocr_extracted_number: null, ocr_extracted_name: null, document_number_hash: null,
+      document_name_fuzzy: null, location_description: 'Dev-simulation fixture',
+      latitude: null, longitude: null, finder_phone: FINDER_PHONE,
+      assigned_agent_id: null, status: 'at_agent', flaggedForReview: false,
+      isDescriptionOnly: false, description: null, is_sensitive_document: false,
+      rejection_reason: null, locked_total_fee: String(TOTAL_FEE),
+    } as any);
+    await db.createClaim({
+      id: claimId, item_id: itemId, owner_phone: OWNER_PHONE,
+      security_answers: { lastDigits: '0000', color: 'black', lostDetails: 'dev-simulation fixture' },
+      verification_tier: 1, status: 'pending_payment', owner_id_proof_url: null,
+      payment_reference: null, owner_identifying_details: null,
+    });
+    return { claimId, itemId };
+  };
+
+  /** One collection attempt's receipt row, exactly as services/payments.ts books it. */
+  const bookAttemptRow = (claimId: string, invoice: string) =>
+    db.logTransaction({
+      claim_id: claimId, item_id: null, type: 'payment_received',
+      amount: TOTAL_FEE, phone_or_till: OWNER_PHONE, status: 'pending',
+      provider_transaction_id: invoice,
+    });
+
+  /** The session an attempt's STK initiation leaves behind, optionally expired. */
+  const makeFinalizedSession = async (
+    claimId: string, sessionId: string, invoice: string, state: 'pending' | 'expired',
+  ) => {
+    expect(await db.createPaymentSession({
+      id: sessionId, claimId, amount: TOTAL_FEE, payerPhone: OWNER_PHONE,
+      expiresAt: new Date(Date.now() + 60_000),
+    })).toBe(true);
+    expect(await db.reservePaymentSession(sessionId)).toBe(true);
+    expect(await db.finalizePaymentSessionInitiated(sessionId, invoice, `MPX-${sessionId}`)).toBe(true);
+    if (state === 'expired') expect(await db.expirePaymentSession(sessionId)).toBe(true);
+  };
+
+  const receiptRows = async (claimId: string) =>
+    (await db.getLedgerEntriesForClaim(claimId)).filter((e: any) => e.type === 'payment_received');
+
+  it('completes only the attempt it stands for, and stamps no invented reference', async () => {
+    const { claimId } = await makeSimClaim('SELECT');
+    const oldInvoice = invoiceFor('SELECT', 'OLD');
+    const newInvoice = invoiceFor('SELECT', 'NEW');
+    // A superseded attempt: its prompt was accepted, then its window elapsed.
+    const superseded = await bookAttemptRow(claimId, oldInvoice);
+    await makeFinalizedSession(claimId, sessionFor('SELECT', 'A-OLD'), oldInvoice, 'expired');
+    // The attempt the simulator stands for.
+    const current = await bookAttemptRow(claimId, newInvoice);
+    await makeFinalizedSession(claimId, sessionFor('SELECT', 'B-NEW'), newInvoice, 'pending');
+
+    const r = await simulatePayment(claimId);
+    expect(r.status).toBe(200);
+    expect(typeof r.body?.pickupCode).toBe('string');
+    expect(String(r.body?.pickupCode).length).toBeGreaterThan(0);
+
+    const claim: any = await db.getClaim(claimId);
+    expect(claim.status).toBe('escrow_held');
+    expect(claim.paid_at).toBeTruthy();
+    // The claim carries the attempt's REAL provider invoice, never a fabricated
+    // reference — this is what makes the receipt row above resolvable at all.
+    expect(claim.payment_reference).toBe(newInvoice);
+
+    const rows = await receiptRows(claimId);
+    expect(rows.find((e: any) => e.id === current.id)!.status).toBe('completed');
+    // The abandoned attempt's row is untouched: an unresolved prompt is not
+    // evidence of collection, and it is not revenue.
+    expect(rows.find((e: any) => e.id === superseded.id)!.status).toBe('pending');
+    expect(rows.find((e: any) => e.id === superseded.id)!.provider_transaction_id).toBe(oldInvoice);
+
+    // Only the simulated attempt's own session was consumed.
+    expect((await db.getPaymentSessionById(sessionFor('SELECT', 'B-NEW')))!.status).toBe('confirmed');
+    expect((await db.getPaymentSessionById(sessionFor('SELECT', 'A-OLD')))!.status).toBe('expired');
+
+    // The pickup code exists and is stored as a hash only, exactly as the
+    // webhook-driven path leaves it.
+    const pickup: any = await db.getPickupCode(claimId);
+    expect(pickup?.code_hash).toBeTruthy();
+    expect(String(pickup.code_hash)).not.toBe(String(r.body?.pickupCode));
+  });
+
+  it('cannot be repeated: a second simulation neither re-completes nor double-books', async () => {
+    const { claimId } = await makeSimClaim('REPLAY');
+    const newInvoice = invoiceFor('REPLAY', 'NEW');
+    const row = await bookAttemptRow(claimId, newInvoice);
+    await makeFinalizedSession(claimId, sessionFor('REPLAY', 'B-NEW'), newInvoice, 'pending');
+
+    expect((await simulatePayment(claimId)).status).toBe(200);
+    // The confirmation really did happen — asserted before reading the rows it
+    // is expected to have produced, so a refusal can never masquerade as one.
+    expect((await db.getClaim(claimId))!.status).toBe('escrow_held');
+
+    const after = await db.getClaim(claimId);
+    const ledgerAfter = (await db.getLedgerEntriesForClaim(claimId)).map(
+      (e: any) => [e.id, e.type, e.status, e.amount, e.provider_transaction_id],
+    );
+    const pickupAfter = String(((await db.getPickupCode(claimId)) as any).code_hash);
+
+    // The claim is no longer awaiting payment, so the endpoint refuses outright...
+    const again = await simulatePayment(claimId);
+    expect(again.status).toBe(400);
+    expect(again.body?.pickupCode ?? null).toBeNull();
+
+    // ...and NOTHING moved: same claim facts, same ledger, same pickup code.
+    const afterReplay = await db.getClaim(claimId);
+    expect(afterReplay!.status).toBe(after!.status);
+    expect(afterReplay!.paid_at).toEqual(after!.paid_at);
+    expect(afterReplay!.payment_reference).toBe(newInvoice);
+    expect(
+      (await db.getLedgerEntriesForClaim(claimId)).map(
+        (e: any) => [e.id, e.type, e.status, e.amount, e.provider_transaction_id],
+      ),
+    ).toEqual(ledgerAfter);
+    expect(String(((await db.getPickupCode(claimId)) as any).code_hash)).toBe(pickupAfter);
+    // The one receipt row is completed exactly once.
+    expect((await receiptRows(claimId)).filter((e: any) => e.status === 'completed').length).toBe(1);
+    expect((await receiptRows(claimId)).find((e: any) => e.id === row.id)!.status).toBe('completed');
+  });
+
+  it('refuses a claim with no confirmable attempt, leaving its unresolved row untouched', async () => {
+    const { claimId } = await makeSimClaim('NOATTEMPT');
+    // A row with no correlatable session: nothing can say which attempt it is.
+    const orphan = await bookAttemptRow(claimId, invoiceFor('NOATTEMPT', 'ORPHAN'));
+
+    const r = await simulatePayment(claimId);
+    expect(r.status).toBe(409);
+    expect(r.body?.pickupCode ?? null).toBeNull();
+
+    const claim: any = await db.getClaim(claimId);
+    expect(claim.status).toBe('pending_payment');
+    expect(claim.paid_at ?? null).toBeNull();
+    expect(claim.payment_reference ?? null).toBeNull();
+    expect((await receiptRows(claimId)).find((e: any) => e.id === orphan.id)!.status).toBe('pending');
+  });
+
+  it('refuses a session whose provider invoice was never persisted', async () => {
+    const { claimId } = await makeSimClaim('UNINITIATED');
+    // 'created' only: the STK push never happened, so there is no invoice to
+    // correlate and no receipt row this confirmation could legitimately resolve.
+    expect(await db.createPaymentSession({
+      id: sessionFor('UNINITIATED', 'C-UNINITIATED'), claimId, amount: TOTAL_FEE,
+      payerPhone: OWNER_PHONE, expiresAt: new Date(Date.now() + 60_000),
+    })).toBe(true);
+
+    const r = await simulatePayment(claimId);
+    expect(r.status).toBe(409);
+    expect((await db.getClaim(claimId))!.status).toBe('pending_payment');
+  });
+
+  it('stays refused in production even with both non-production switches set', async () => {
+    const { claimId } = await makeSimClaim('PRODUCTION');
+    const newInvoice = invoiceFor('PRODUCTION', 'NEW');
+    const newSession = sessionFor('PRODUCTION', 'B-NEW');
+    const row = await bookAttemptRow(claimId, newInvoice);
+    await makeFinalizedSession(claimId, newSession, newInvoice, 'pending');
+
+    // Both switches on — only NODE_ENV stands between the endpoint and a faked
+    // payment, which is exactly the boundary that must hold.
+    const prod = await withSimulationEnabled(() =>
+      asProduction(() => http(`/api/dev/simulate-payment/${claimId}`, { method: 'POST' })),
+    );
+    expect(prod.status).toBe(404);
+    expect(prod.body?.pickupCode ?? null).toBeNull();
+
+    const claim: any = await db.getClaim(claimId);
+    expect(claim.status).toBe('pending_payment');
+    expect(claim.paid_at ?? null).toBeNull();
+    expect(claim.payment_reference ?? null).toBeNull();
+    expect((await receiptRows(claimId)).find((e: any) => e.id === row.id)!.status).toBe('pending');
+    expect((await db.getPaymentSessionById(newSession))!.status).toBe('pending');
+  });
+
+  it('keeps real-provider correlation intact: a webhook resolves only its own invoice', async () => {
+    const { claimId } = await makeSimClaim('WEBHOOK');
+    const collectedInvoice = invoiceFor('WEBHOOK', 'WEBHOOK');
+    const collected = await bookAttemptRow(claimId, collectedInvoice);
+    const unrelated = await bookAttemptRow(claimId, invoiceFor('WEBHOOK', 'UNRELATED'));
+    const webhookSession = sessionFor('WEBHOOK', 'D-WEBHOOK');
+    await makeFinalizedSession(claimId, webhookSession, collectedInvoice, 'pending');
+
+    const res = await postHook(
+      { invoice_id: collectedInvoice, state: 'COMPLETE', api_ref: claimId, value: String(TOTAL_FEE) },
+      WEBHOOK_CHALLENGE,
+    );
+    expect(res.status).toBeLessThan(500);
+    expect((await db.getClaim(claimId))!.status).toBe('escrow_held');
+
+    const rows = await receiptRows(claimId);
+    // The invoice the provider named resolves exactly its own attempt...
+    expect(rows.find((e: any) => e.id === collected.id)!.status).toBe('completed');
+    // ...and an unrelated unresolved attempt is left alone.
+    expect(rows.find((e: any) => e.id === unrelated.id)!.status).toBe('pending');
+    expect((await db.getPaymentSessionById(webhookSession))!.status).toBe('confirmed');
   });
 });

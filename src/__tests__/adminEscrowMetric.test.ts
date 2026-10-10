@@ -63,9 +63,13 @@ describe('admin console renders the escrow card truthfully', () => {
     expect(labelIndex, 'the Escrow Funds Held card must exist').toBeGreaterThan(-1);
 
     // The value rendered for that card is in the same JSX card, immediately
-    // after the label.
+    // after the label. BATCH 3 re-pins only the FORMATTER: the figure still comes
+    // from `escrowHeldAmount` and nothing else (the negative assertion below is
+    // untouched), but every money card on the Overview now reads through the ONE
+    // read-out module, so a missing figure is an em dash rather than the literal
+    // text "KES undefined".
     const cardWindow = adminView.slice(labelIndex, labelIndex + 400);
-    expect(cardWindow).toContain('KES {dashboardData.stats.escrowHeldAmount}');
+    expect(cardWindow).toContain('formatKesAmount(dashboardData.stats.escrowHeldAmount)');
   });
 
   it('does NOT render the claim count under the "Escrow Funds Held" label', () => {
@@ -84,8 +88,12 @@ describe('admin console renders the escrow card truthfully', () => {
   });
 
   it('keeps both escrow cards adjacent, so the amount and the count are read together', () => {
-    const amountCard = adminView.indexOf('KES {dashboardData.stats.escrowHeldAmount}');
-    const countCard = adminView.indexOf('dashboardData.stats.escrowHeldCount}');
+    // BATCH 3 — both values now pass through the shared read-out formatters, which
+    // lengthens the two expressions by ~20 characters each. The property under
+    // test is unchanged: the amount card and the count card are neighbours in the
+    // same grid, so the two are read as a pair.
+    const amountCard = adminView.indexOf('formatKesAmount(dashboardData.stats.escrowHeldAmount)');
+    const countCard = adminView.indexOf('formatMetricCount(dashboardData.stats.escrowHeldCount)');
     expect(amountCard).toBeGreaterThan(-1);
     expect(countCard).toBeGreaterThan(amountCard);
     // Same grid, same card styling — a small, non-invasive change.

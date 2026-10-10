@@ -167,7 +167,11 @@ async function makeReleasableClaim(suffix: string) {
   // layer, not executeClaimSettlement.)
   const settled = await db.enterPendingSettlement(claimId, 0);
   expect(settled.success, 'fixture must reach pending_settlement').toBe(true);
-  const released = await db.attemptSettlementRelease(claimId, true);
+  // D-2B-B-E: taking the release lock now requires the durable administrator
+  // approval, so the fixture records one through the real approval write.
+  const approved = await db.approveSettlement(claimId, 'test-admin', 'CAS fixture approval');
+  expect(approved.ok, 'fixture must record the durable approval').toBe(true);
+  const released = await db.attemptSettlementRelease(claimId);
   expect(released, 'fixture must win the release CAS').toBe(true);
 
   const entries = await db.getLedgerEntriesForClaim(claimId);

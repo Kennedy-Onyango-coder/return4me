@@ -63,23 +63,6 @@ const OVERVIEW = sliceBetween(
 );
 
 /**
- * Every `t('english', 'kiswahili')` pair in a stripped source string. Either
- * quote style is accepted, plus the backticks one call site needs for an
- * interpolated count; the trailing comma some call sites carry is optional, and
- * so is the argument layout. The pair is the contract, not the punctuation.
- */
-function bilingualPairs(source: string): Array<[string, string]> {
-  const pairs: Array<[string, string]> = [];
-  const re =
-    /\bt\(\s*(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)"|`((?:[^`\\]|\\.)*)`)\s*,\s*(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)"|`((?:[^`\\]|\\.)*)`)\s*,?\s*\)/g;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(source)) !== null) {
-    pairs.push([match[1] ?? match[2] ?? match[3], match[4] ?? match[5] ?? match[6]]);
-  }
-  return pairs;
-}
-
-/**
  * Colour vocabulary that predates UX-01. None of it may appear on the customer
  * dashboard any more: the fixed literals do not flip in dark mode, the brand-*
  * names are the ones the token layer replaced, and the elevation/radius/focus
@@ -219,17 +202,18 @@ describe('UX-08 keeps every dashboard behaviour exactly as it was', () => {
 // -----------------------------------------------------------------------------
 
 describe('UX-08 makes the Overview answer where-is-my-item / what-next', () => {
-  it('asks those two questions, in both languages', () => {
-    expect(DASHBOARD).toContain("t('Where your items stand', 'Hali ya vitu vyako')");
-    expect(DASHBOARD).toContain("t('What to do next', 'Cha kufanya baadaye')");
+  it('asks those two questions, in the approved single-language copy', () => {
+    // The English-only decision (commit e073c8e) removed this surface's
+    // two-argument `t(en, sw)` helper and every Kiswahili twin with it, so both
+    // headings are plain literals now.
+    expect(DASHBOARD).toContain("{'Where your items stand'}");
+    expect(DASHBOARD).toContain("{'What to do next'}");
     // The Overview's own page title/description were rewritten to promise
     // exactly that, and nothing more.
     expect(DASHBOARD).toContain(
       "description: 'Where your lost reports and claims stand, and the one next step to take.'",
     );
-    expect(DASHBOARD).toContain(
-      "description: 'Hali ya ripoti zako na claims zako, na hatua moja inayofuata ya kuchukua.'",
-    );
+    expect(DASHBOARD).not.toContain('Hali ya ripoti zako');
   });
 
   it('offers exactly ONE next step, through the existing section switch', () => {
@@ -258,7 +242,7 @@ describe('UX-08 makes the Overview answer where-is-my-item / what-next', () => {
   it('describes an item in progress with the SAME vocabulary as the claims list', () => {
     // One status vocabulary, so the Overview can never describe a claim
     // differently from the list below it — and never invents a lifecycle state.
-    expect(DASHBOARD).toContain('getClaimStatusDisplay(activeClaims[0].status, lang)');
+    expect(DASHBOARD).toContain('getClaimStatusDisplay(activeClaims[0].status)');
     expect(count(DASHBOARD, /getClaimStatusDisplay\(/g)).toBeGreaterThanOrEqual(2);
     expect(DASHBOARD).not.toMatch(/const\s+STATUS[A-Z_]*\s*=/);
     expect(DASHBOARD).not.toContain("'pending_payment'");
@@ -268,7 +252,7 @@ describe('UX-08 makes the Overview answer where-is-my-item / what-next', () => {
     // The status line is guarded on a claim actually existing, and the empty
     // branch promises a watch, not a recovery.
     expect(DASHBOARD).toContain('{leadClaimStatus && (');
-    expect(DASHBOARD).toContain("t('In progress now', 'Kinachoendelea sasa')");
+    expect(DASHBOARD).toContain("{'In progress now'}");
     expect(DASHBOARD).toContain(
       "'Nothing of yours is in progress yet. File a lost report and we will watch the found-item records for anything that looks like it.'",
     );
@@ -279,8 +263,8 @@ describe('UX-08 makes the Overview answer where-is-my-item / what-next', () => {
 
   it('keeps the button label and its destination decided by the same fact', () => {
     // The pair cannot drift: both read `hasWorkInProgress`.
-    expect(DASHBOARD).toContain("? t('View my claims', 'Ona claims zangu')");
-    expect(DASHBOARD).toContain(": t('Report a lost item', 'Ripoti kitu kilichopotea')");
+    expect(DASHBOARD).toContain("? 'View my claims'");
+    expect(DASHBOARD).toContain(": 'Report a lost item'");
     expect(count(DASHBOARD, /hasWorkInProgress/g)).toBeGreaterThanOrEqual(4);
   });
 
@@ -297,8 +281,8 @@ describe('UX-08 makes the Overview answer where-is-my-item / what-next', () => {
   });
 
   it('takes its heading, its hint and its icon from the same section table', () => {
-    expect(DASHBOARD).toContain('const sectionCopy = ACCOUNT_SECTIONS[tab][lang];');
-    expect(DASHBOARD).toContain('const nextCopy = ACCOUNT_SECTIONS[nextSection][lang];');
+    expect(DASHBOARD).toContain('const sectionCopy = ACCOUNT_SECTIONS[tab];');
+    expect(DASHBOARD).toContain('const nextCopy = ACCOUNT_SECTIONS[nextSection];');
     expect(DASHBOARD).toContain('const NextSectionIcon = ACCOUNT_SECTIONS[nextSection].icon;');
     expect(DASHBOARD).toContain('{nextCopy.hint && (');
     expect(DASHBOARD).toContain("hint: 'File a report and check for possible matches.',");
@@ -314,7 +298,7 @@ describe('UX-08 makes the Overview answer where-is-my-item / what-next', () => {
 describe('UX-08 keeps the account workspace operable and accessible', () => {
   it('presents the four sections as a labelled navigation of real buttons', () => {
     expect(DASHBOARD).toContain('<nav');
-    expect(DASHBOARD).toContain("aria-label={t('Account sections', 'Sehemu za akaunti')}");
+    expect(DASHBOARD).toContain("aria-label={'Account sections'}");
     // The navigation is the ONLY hand-rolled <button> in the surface, and it is
     // rendered from the section order — so all four destinations exist.
     expect(count(DASHBOARD, /<button\s/g)).toBe(1);
@@ -339,11 +323,13 @@ describe('UX-08 keeps the account workspace operable and accessible', () => {
     // A 44px touch target on the nav items (the strip scrolls below lg).
     expect(DASHBOARD).toContain('min-h-11');
     // The three accessible names: the navigation itself and the two icon-only
-    // buttons. Nothing else in this surface is icon-only.
-    expect(count(DASHBOARD, /aria-label=\{t\(/g)).toBe(3);
-    expect(DASHBOARD).toContain("aria-label={t('Refresh', 'Onyesha upya')}");
+    // buttons. Nothing else in this surface is icon-only. (Literal strings, not
+    // `t(...)` calls: the surface renders one language.)
+    expect(count(DASHBOARD, /aria-label=\{/g)).toBe(3);
+    expect(DASHBOARD).toContain("aria-label={'Account sections'}");
+    expect(DASHBOARD).toContain("aria-label={'Refresh'}");
     expect(DASHBOARD).toContain(
-      "aria-label={t('Remove from my account', 'Ondoa kwenye akaunti yangu')}",
+      "aria-label={'Remove from my account'}",
     );
   });
 
@@ -373,7 +359,7 @@ describe('UX-08 keeps the account workspace operable and accessible', () => {
   it('announces loading instead of leaving a silent skeleton', () => {
     expect(DASHBOARD).toContain('aria-busy="true"');
     expect(DASHBOARD).toContain('<span className="sr-only">');
-    expect(DASHBOARD).toContain("t('Loading your claims', 'Inapakia claims zako')");
+    expect(DASHBOARD).toContain("{'Loading your claims'}");
   });
 
   it('hides every decorative icon from assistive technology', () => {
@@ -562,65 +548,72 @@ describe('UX-08 puts the dashboard on the shared appearance vocabulary', () => {
 });
 
 // -----------------------------------------------------------------------------
-// The workspace stays bilingual
+// The workspace renders the ONE approved language
 // -----------------------------------------------------------------------------
 
-describe('UX-08 keeps the account workspace bilingual', () => {
-  it('translates every string it renders, in both languages', () => {
-    // This surface takes the explicit two-argument `t(en, sw)` helper — there is
-    // no lookup table to fall back on, so a missing translation is a missing
-    // argument. One `t(` call site per pair means no string was rendered in a
-    // single language only.
-    expect(DASHBOARD).toContain("const t = (en: string, sw: string) => (lang === 'sw' ? sw : en);");
-    const pairs = bilingualPairs(DASHBOARD);
-    expect(count(DASHBOARD, /\bt\(/g)).toBe(pairs.length);
-    expect(pairs.length).toBeGreaterThan(50);
-    for (const [en, sw] of pairs) {
-      expect(en.trim().length, `empty English copy: ${JSON.stringify(en)}`).toBeGreaterThan(0);
-      expect(sw.trim().length, `missing Kiswahili copy for "${en}"`).toBeGreaterThan(0);
-      expect(sw, `"${en}" was left untranslated`).not.toBe(en);
-    }
+describe('UX-08 keeps the account workspace in the approved English-only copy', () => {
+  it('renders one language, with no translation helper', () => {
+    // The English-only decision (commit e073c8e) is a deliberate product
+    // decision, so the ABSENCE of the machinery is the contract: no two-argument
+    // `t(en, sw)` helper, no `lang` prop and no Kiswahili literal may reappear
+    // without someone re-deciding the language question.
+    expect(DASHBOARD).not.toMatch(/\bt\(\s*'/);
+    expect(DASHBOARD).not.toMatch(/\blang\b/);
+    expect(DASHBOARD).not.toMatch(/kiswahili|swahili/i);
   });
 
-  it('ships the recovery copy in both languages', () => {
-    const pairs = bilingualPairs(DASHBOARD);
-    const required: Array<[string, string]> = [
-      ['Where your items stand', 'Hali ya vitu vyako'],
-      ['What to do next', 'Cha kufanya baadaye'],
-      ['In progress now', 'Kinachoendelea sasa'],
-      ['View my claims', 'Ona claims zangu'],
-      ['Report a lost item', 'Ripoti kitu kilichopotea'],
-      ['Claims linked', 'Claims zilizounganishwa'],
-      ['No claims linked yet', 'Hakuna claim iliyounganishwa bado'],
-      ['Loading your claims', 'Inapakia claims zako'],
-      ['Signed in as', 'Umeingia kama'],
-      ['Sign out', 'Toka'],
+  it('keeps the component props contract, and takes no language prop', () => {
+    // The same prop list the surface has always taken, minus `lang`.
+    expect(DASHBOARD).toContain(
+      'customer, onSignOut, signingOut = false, onOpenItem, onSessionExpired,',
+    );
+  });
+
+  it('ships the recovery copy the workspace is built on', () => {
+    const required = [
+      'Where your items stand',
+      'What to do next',
+      'In progress now',
+      'View my claims',
+      'Report a lost item',
+      'Claims linked',
+      'No claims linked yet',
+      'Loading your claims',
+      'Signed in as',
+      'Sign out',
     ];
-    for (const pair of required) {
-      expect(pairs, `${pair[0]} / ${pair[1]}`).toEqual(expect.arrayContaining([pair]));
+    for (const copy of required) {
+      expect(DASHBOARD, `missing copy: ${copy}`).toContain("'" + copy + "'");
+    }
+    // ...and the Kiswahili twins of those same strings stay gone, so a partial
+    // reintroduction is caught here rather than only in review.
+    for (const removed of [
+      'Hali ya vitu vyako',
+      'Cha kufanya baadaye',
+      'Kinachoendelea sasa',
+      'Ona claims zangu',
+      'Ripoti kitu kilichopotea',
+      'Claims zilizounganishwa',
+      'Hakuna claim iliyounganishwa bado',
+      'Inapakia claims zako',
+      'Umeingia kama',
+      'Toka',
+    ]) {
+      expect(DASHBOARD, `removed Kiswahili copy returned: ${removed}`).not.toContain(removed);
     }
   });
 
-  it('translates the interpolated claims summary too', () => {
+  it('keeps the interpolated claims summary', () => {
+    // The summary still reports the live counts the Overview already holds, and
+    // no second, translated variant exists any more.
     expect(DASHBOARD).toContain('`${activeClaims.length} active, ${historyClaims.length} past`');
-    expect(DASHBOARD).toContain(
-      '`${activeClaims.length} zinazoendelea, ${historyClaims.length} za nyuma`',
-    );
+    expect(DASHBOARD).not.toContain('zinazoendelea');
   });
 
-  it('gives the next-step hint in both languages', () => {
+  it('gives the next-step hint', () => {
     expect(DASHBOARD).toContain("hint: 'File a report and check for possible matches.',");
-    expect(DASHBOARD).toContain("hint: 'Wasilisha ripoti na uangalie mechi zinazowezekana.',");
     expect(DASHBOARD).toContain("hint: 'See the claims linked to this account.',");
-    expect(DASHBOARD).toContain("hint: 'Ona claims zilizounganishwa na akaunti hii.',");
     expect(DASHBOARD).toContain("hint: 'See updates and your notification history.',");
-    expect(DASHBOARD).toContain("hint: 'Tazama taarifa na historia yako.',");
-  });
-
-  it('keeps the language a required, typed prop', () => {
-    expect(DASHBOARD).toContain("lang: 'en' | 'sw';");
-    expect(DASHBOARD).toContain(
-      'lang, customer, onSignOut, signingOut = false, onOpenItem, onSessionExpired,',
-    );
+    expect(DASHBOARD).not.toContain('Wasilisha ripoti');
   });
 });

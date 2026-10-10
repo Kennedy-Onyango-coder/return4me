@@ -544,12 +544,15 @@ export function registerAgentOperationalRoutes(
 
 
       // NOTE: the actual M-Pesa split disbursement does NOT happen here. The
-      // payout is booked in the ledger as 'pending' and will be sent by the
-      // settlement sweep (releaseDueSettlements) once DISPUTE_WINDOW_HOURS
-      // has elapsed with no dispute raised â€” or immediately by an admin via
-      // POST /api/admin/claims/:id/release-settlement. This gives a real
-      // window for a second claimant, the owner, or an admin to freeze a
-      // suspicious handover before any money actually moves.
+      // payout is booked in the ledger as 'pending' and stays parked until an
+      // administrator has (a) recorded a durable approval
+      // (POST /api/admin/claims/:id/settlement/approve) and (b) explicitly
+      // initiated the payout (POST /api/admin/claims/:id/settlement/initiate)
+      // once DISPUTE_WINDOW_HOURS has elapsed with no dispute raised. The
+      // settlement sweep no longer pays anything out - it reports only - so no
+      // timer can move money. This gives a real window for a second claimant,
+      // the owner, or an admin to freeze a suspicious handover before any money
+      // actually moves.
 
       // Close out the public listing with a short, privacy-safe follow-up notice.
       // Fired asynchronously so a social platform outage never blocks the actual

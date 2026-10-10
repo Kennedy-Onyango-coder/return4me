@@ -8,7 +8,7 @@ import { countiesByUxGroup } from '../config/kenyaCounties';
 import { administrativeUnitsForCounty } from '../config/kenyaAdministrativeUnits';
 import { detectBrowserLocation, hasGeographyConflict, type DetectedLocation } from '../services/browserLocation';
 import { useAgentOperations } from '../hooks/useAgentOperations';
-import { Banner, Button, ICON_SIZE, Input } from './ui';
+import { Banner, Button, ICON_SIZE, Input, LocationFirstField } from './ui';
 import Skeleton from './ui/Skeleton';
 
 // UX-12 imports the two shared primitives the registration steps need, by the
@@ -436,50 +436,70 @@ export default function AgentView({ token, setToken, categories, refreshCategori
           <p className="text-body leading-relaxed text-[var(--appearance-text-muted)]">
             {'Owners pick a county and sub-county when they hand an item in, so this is how your collection point is shown to the people nearest it.'}
           </p>
-          <Select
-            id="agent-county"
-            label={'Service county'}
-            required
-            value={agentCounty}
-            onChange={(e) => {
-              setAgentCounty(e.target.value);
-              setAgentAdministrativeUnitId('');
-            }}
+          {/* LOCATION-FIRST ORDER (Phase 2): the "Use my current location"
+              action and the reason we ask for permission now come BEFORE the
+              Service county and Service sub-county selectors, with an
+              "OR ENTER MANUALLY" divider between them. The shared
+              LocationFirstField owns only the ordering and presentation; the
+              county/sub-county state, handlers and server re-validation are
+              unchanged, and permission is requested only when the applicant
+              presses the action (onDetect = detectAgentLocation). */}
+          <LocationFirstField
+            id="agent-location-first"
+            actionLabel={['Use my current location', 'Tumia mahali nilipo sasa']}
+            explanation={[
+              'Owners pick a county and sub-county when they hand an item in, so this is how your collection point is shown to the people nearest it. You can turn on your location to fill these in, or choose them yourself below.',
+              'Wamiliki huchagua kaunti na kaunti ndogo wanapowasilisha kitu, hivyo ndivyo kituo chako cha kukusanya kinavyoonekana kwa watu walio karibu. Unaweza kuwasha mahali pako kujaza hivi, au kuzichagua wewe mwenyewe hapa chini.',
+            ]}
+            statusMessage={agentLocationMessage}
+            loading={false}
+            detected={agentDetectedLocation !== null}
+            onDetect={detectAgentLocation}
           >
-            <option value="">{'Select county'}</option>
-            {countyGroups.map((group) => (
-              <optgroup key={group.group} label={group.group}>
-                {group.counties.map((county) => (
-                  <option key={county.code} value={county.name}>{county.name}</option>
-                ))}
-              </optgroup>
-            ))}
-          </Select>
-          <Select
-            id="agent-sub-county"
-            label={'Service sub-county'}
-            required
-            value={agentAdministrativeUnitId}
-            onChange={(e) => setAgentAdministrativeUnitId(e.target.value)}
-            disabled={!agentCounty}
-            hint={'Choose the county first.'}
-          >
-            <option value="">
-              {agentCounty
-                ? 'Select sub-county'
-                : 'Select county first'}
-            </option>
-            {agentUnits.map((unit) => (
-              <option key={unit.id} value={unit.id}>{unit.name}</option>
-            ))}
-          </Select>
+            <Select
+              id="agent-county"
+              label={'Service county'}
+              required
+              value={agentCounty}
+              onChange={(e) => {
+                setAgentCounty(e.target.value);
+                setAgentAdministrativeUnitId('');
+              }}
+            >
+              <option value="">{'Select county'}</option>
+              {countyGroups.map((group) => (
+                <optgroup key={group.group} label={group.group}>
+                  {group.counties.map((county) => (
+                    <option key={county.code} value={county.name}>{county.name}</option>
+                  ))}
+                </optgroup>
+              ))}
+            </Select>
+            <Select
+              id="agent-sub-county"
+              label={'Service sub-county'}
+              required
+              value={agentAdministrativeUnitId}
+              onChange={(e) => setAgentAdministrativeUnitId(e.target.value)}
+              disabled={!agentCounty}
+              hint={'Choose the county first.'}
+            >
+              <option value="">
+                {agentCounty
+                  ? 'Select sub-county'
+                  : 'Select county first'}
+              </option>
+              {agentUnits.map((unit) => (
+                <option key={unit.id} value={unit.id}>{unit.name}</option>
+              ))}
+            </Select>
+          </LocationFirstField>
 
+          {/* The post-detection suggestion panel stays below the selectors: it
+              is the confirm-before-use step, and detection itself never mutates
+              the selected geography (only "Use this location" does). */}
           <div className="space-y-2">
-            <Button type="button" variant="outline" size="md" className="w-full" onClick={detectAgentLocation}>
-              <MapPin size={ICON_SIZE.ui} aria-hidden="true" />
-              {'Use my current location'}
-            </Button>
-            {agentLocationMessage && (
+            {agentDetectedLocation && (
               <p role="status" className="text-caption text-[var(--appearance-text-muted)]">{agentLocationMessage}</p>
             )}
             {agentDetectedLocation && (

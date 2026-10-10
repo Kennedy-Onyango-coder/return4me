@@ -673,12 +673,19 @@ describe('7. a recovered payment settles exactly once, on the existing terms', (
     expect(await db.getLedgerEntriesForClaim(claimId)).toHaveLength(3);
   });
 
-  it('cannot be released before the dispute window has elapsed (no acceleration)', async () => {
+  it('cannot be approved or released before the dispute window has elapsed (no acceleration)', async () => {
     const { claimId } = await makeRecoveredPaidClaim('SETTLE-C');
     expect((await db.enterPendingSettlement(claimId, DISPUTE_WINDOW_MS)).success).toBe(true);
-    // Not forced: the guard must refuse while settle_at is in the future.
-    expect(await db.attemptSettlementRelease(claimId, false)).toBe(false);
-    expect((await db.getClaim(claimId))!.status).toBe('pending_settlement');
+    // D-2B-B-E: the force/override path is gone AND the approval write is gated
+    // by the same window, so a claim still inside its window can neither be
+    // approved into a releasable state nor released.
+    const approval = await db.approveSettlement(claimId, 'test-admin', 'window still open');
+    expect(approval.ok).toBe(false);
+    expect(approval.code).toBe('outside_review_window');
+    expect(await db.attemptSettlementRelease(claimId)).toBe(false);
+    const claim = (await db.getClaim(claimId))!;
+    expect(claim.status).toBe('pending_settlement');
+    expect(claim.settlement_approved_at ?? null).toBeNull();
   });
 });
 
@@ -686,7 +693,9 @@ describe('7b. the recovered claim completes the ordinary settlement lifecycle', 
   it('cannot be finalized before the payouts are genuinely completed', async () => {
     const { claimId } = await makeRecoveredPaidClaim('FIN-GUARD');
     await db.enterPendingSettlement(claimId, -1000);
-    expect(await db.attemptSettlementRelease(claimId, false)).toBe(true);
+    // D-2B-B-E: the release CAS now requires the durable approval.
+    expect((await db.approveSettlement(claimId, 'test-admin', 'lifecycle fixture')).ok).toBe(true);
+    expect(await db.attemptSettlementRelease(claimId)).toBe(true);
 
     // Nothing has actually disbursed yet, so finalize must refuse.
     const refused = await db.finalizeSettlement(claimId);
@@ -697,7 +706,8 @@ describe('7b. the recovered claim completes the ordinary settlement lifecycle', 
   it('finalizes exactly once, even on a concurrent retry', async () => {
     const { claimId } = await makeRecoveredPaidClaim('FIN-ONCE');
     await db.enterPendingSettlement(claimId, -1000);
-    expect(await db.attemptSettlementRelease(claimId, false)).toBe(true);
+    expect((await db.approveSettlement(claimId, 'test-admin', 'finalize-once fixture')).ok).toBe(true);
+    expect(await db.attemptSettlementRelease(claimId)).toBe(true);
 
     // The provider confirmed both recipients (what executeClaimSettlement records).
     for (const type of ['finder_payout', 'agent_payout']) {
@@ -734,7 +744,8 @@ describe('7b. the recovered claim completes the ordinary settlement lifecycle', 
   it('a refund path is still refused for a recovered, already-released claim', async () => {
     const { claimId } = await makeRecoveredPaidClaim('FIN-TERM');
     await db.enterPendingSettlement(claimId, -1000);
-    expect(await db.attemptSettlementRelease(claimId, false)).toBe(true);
+    expect((await db.approveSettlement(claimId, 'test-admin', 'terminal fixture')).ok).toBe(true);
+    expect(await db.attemptSettlementRelease(claimId)).toBe(true);
     for (const type of ['finder_payout', 'agent_payout']) {
       const row = (await db.getLedgerEntriesForClaim(claimId)).find((e) => e.type === type)!;
       await db.recordPayoutAttempt(row.id, {

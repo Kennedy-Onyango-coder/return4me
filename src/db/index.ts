@@ -151,7 +151,17 @@ function evaluateWhere(row: any, whereClause: string, params: any[]): boolean {
       if (/^now\(\)$/i.test(v)) return new Date();
       return v.replace(/^'|'$/g, '').trim();
     });
-    const isMember = values.some((val) => String(row[inCol]) === String(val));
+    // SQL THREE-VALUED LOGIC. `NULL IN (1,2)` and `NULL NOT IN (1,2)` are both
+    // UNKNOWN, never TRUE — so a NULL column value must not answer either form,
+    // and a NULL *list element* poisons NOT IN for every row. Without this the
+    // String() coercion below made `String(null) === String(null)` true, i.e.
+    // "NULL equals NULL", which real Postgres never does.
+    const rowVal = row[inCol];
+    if (rowVal === null || rowVal === undefined) return false;
+    if (negated && values.some((val) => val === null || val === undefined)) return false;
+    const isMember = values.some(
+      (val) => val !== null && val !== undefined && String(rowVal) === String(val),
+    );
     return negated ? !isMember : isMember;
   }
 
@@ -173,7 +183,18 @@ function evaluateWhere(row: any, whereClause: string, params: any[]): boolean {
       if (val === 'null') val = null;
     }
     
-    return String(row[col]) === String(val);
+    // SQL THREE-VALUED LOGIC (the defect this fixes). Coercing both sides with
+    // String() made `String(null) === String(null)` TRUE, so `eq(col, null)`
+    // matched every NULL row in this harness while real Postgres matched NONE
+    // (`col = NULL` is UNKNOWN, never true). That divergence is how a broken
+    // nullable-equality predicate in production code could be "verified" by a
+    // mock-backed test. In SQL, an equality against NULL (either side) is
+    // UNKNOWN, so the row must not match; the correct "is NULL" predicate is
+    // isNull(), handled above, and IS NOT NULL is isNotNull().
+    const rowVal = row[col];
+    if (val === null || val === undefined) return false;
+    if (rowVal === null || rowVal === undefined) return false;
+    return String(rowVal) === String(val);
   }
 
   // Match not equals: "col <> $1" or "col != $1"
@@ -194,7 +215,14 @@ function evaluateWhere(row: any, whereClause: string, params: any[]): boolean {
       if (val === 'null') val = null;
     }
     
-    return String(row[col]) !== String(val);
+    // SQL THREE-VALUED LOGIC: `col <> NULL` is UNKNOWN, never true. Previously
+    // `String(null) !== String('completed')` was true, so a NULL column matched an
+    // inequality filter in this harness while real Postgres excluded it (the same
+    // divergence class as the equals branch above).
+    const rowVal = row[col];
+    if (val === null || val === undefined) return false;
+    if (rowVal === null || rowVal === undefined) return false;
+    return String(rowVal) !== String(val);
   }
 
   // Match ordering comparisons: "col <= $1", "col < $1", "col >= $1", "col > $1"

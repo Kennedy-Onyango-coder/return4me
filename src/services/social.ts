@@ -2,6 +2,21 @@ import dotenv from 'dotenv';
 import crypto from 'crypto';
 import { db } from '../db/database';
 import { buildSafePublicClues } from './publicRecognition';
+// D-2B-C SOCIAL REDESIGN — Facebook and Telegram posts are now two renderings
+// of ONE canonical set of privacy-transformed facts. buildPostFacts assembles
+// the facts ONCE; formatFacebookPost / formatTelegramPost render each platform
+// from those same facts, so the two can never drift on labels, content, the
+// timestamp, the shop name or the claim link. The masking, verification
+// fail-closed gate and location generalisation that decide WHICH values are
+// safe still live in publicRecognition.ts — this module only formats what is
+// already safe. Twitter/X and the reunited notice keep their own text for now
+// (they are out of scope for this redesign and are unchanged here).
+import {
+  buildPostFacts,
+  formatFacebookPost,
+  formatTelegramPost,
+  type SocialPostStatus,
+} from './socialPostContent';
 
 dotenv.config();
 
@@ -126,6 +141,12 @@ export interface SocialItem {
   is_sensitive_document: boolean;
   locked_total_fee?: string | number | null;
   photo_url?: string | null;
+  // The report's OWN creation timestamp. Passed through to the post formatter
+  // so a public post can show when the item was actually reported, in Kenya
+  // local time — never the publishing time. Optional because FoundItem's field
+  // is optional and a caller may not carry it; when absent the formatter omits
+  // the timestamp line rather than substituting the current time.
+  created_at?: string | null;
   verified_name?: string | null;
   verified_document_number?: string | null;
   verified_found_area?: string | null;
@@ -285,35 +306,27 @@ export const SocialService = {
       return 'permanent_failure';
     }
 
-    let text = '';
-    if (isSensitive) {
-      // Recognition clues, not authentication: enough that a genuine
-      // owner thinks "this could be mine", never enough to prove it.
-      const nameLine = clues.nameClue ? `<b>Name clue:</b> <code>${escapeTelegramHtml(clues.nameClue)}</code>\n` : '';
-      const numberLine = clues.documentNumberClue ? `<b>ID clue:</b> <code>${escapeTelegramHtml(clues.documentNumberClue)}</code>\n` : '';
-
-      text = `<b>FOUND: ${escapeTelegramHtml(categoryName).toUpperCase()}</b>\n\n` +
-             nameLine +
-             numberLine +
-             `<b>Found around:</b> ${escapeTelegramHtml(clues.location)}\n\n` +
-             `A verified item is safely held by a Return4me Agent.\n\n` +
-             `Think this may be yours?\n\n` +
-             `Verify ownership securely through Return4me. Use the private claim workflow for real identity matching — this post is never sufficient to claim the item on its own.\n\n` +
-             `<b>Claim Link:</b> <a href="https://return4me.co.ke/?claim=${item.id}">https://return4me.co.ke/?claim=${item.id}</a>`;
-    } else {
-      const itemDesc = sanitizeSocialText(clues.description, { htmlEscape: true }) || 'No additional details provided.';
-      const safeLocation = escapeTelegramHtml(clues.location);
-
-      text = `<b>NOTICE OF FOUND ITEM</b>\n\n` +
-             `A lost item has been deposited and verified at an authorized Return4me agent hub.\n\n` +
-             `<b>Category:</b> ${escapeTelegramHtml(categoryName)}\n` +
-             `<b>Location Found:</b> ${safeLocation}\n` +
-             `<b>Collection Point:</b> ${agent ? escapeTelegramHtml(agent.business_name) : 'Return4me Hub'}, ${agent ? escapeTelegramHtml(agent.location_address) : 'Kenya'}\n` +
-             `<b>Description:</b> <i>${itemDesc}</i>\n\n` +
-             `<b>Status:</b> Physically verified by authorized agent.\n\n` +
-             `To claim this item, please visit the portal link below.\n\n` +
-             `<b>Claim Link:</b> <a href="https://return4me.co.ke/?claim=${item.id}">https://return4me.co.ke/?claim=${item.id}</a>`;
-    }
+    // D-2B-C SOCIAL REDESIGN — assemble the ONE canonical set of post facts
+    // (status, category, masked clues, location label, report timestamp,
+    // verified shop name, claim link) and render Telegram from them. The
+    // privacy transformations above (buildSafePublicClues) already decided
+    // which values are safe; this only formats them. Phone numbers and
+    // claimant data are not representable in SocialPostFacts, so they cannot
+    // leak. The item photo is handled separately below (never for sensitive).
+    const facts = buildPostFacts({
+      status: 'FOUND' as SocialPostStatus,
+      categoryLabel: categoryName,
+      isSensitive,
+      description: clues.description,
+      nameClue: clues.nameClue,
+      documentNumberClue: clues.documentNumberClue,
+      location: clues.location,
+      createdAtIso: item.created_at ?? null,
+      shopName: agent?.business_name ?? null,
+      agentAddress: agent?.location_address ?? null,
+      itemId: item.id,
+    });
+    const text = formatTelegramPost(facts);
 
     // SAFETY: only ever attach a photo for confirmed non-sensitive items. Sensitive
     // documents (national ID, passport, logbook, etc.) must never have their photo
@@ -446,33 +459,25 @@ export const SocialService = {
       return 'permanent_failure';
     }
 
-    let text = '';
-    if (isSensitive) {
-      const nameLine = clues.nameClue ? `Name clue: ${sanitizeSocialText(clues.nameClue)}\n` : '';
-      const numberLine = clues.documentNumberClue ? `ID clue: ${sanitizeSocialText(clues.documentNumberClue)}\n` : '';
-
-      text = `FOUND: ${categoryName.toUpperCase()}\n\n` +
-             nameLine +
-             numberLine +
-             `Found around: ${sanitizeSocialText(clues.location)}\n\n` +
-             `A verified item is safely held by a Return4me Agent.\n\n` +
-             `Think this may be yours?\n\n` +
-             `Verify ownership securely through Return4me. Use the private claim workflow for real identity matching — this post is never sufficient to claim the item on its own.\n\n` +
-             `Claim Link: https://return4me.co.ke/?claim=${item.id}`;
-    } else {
-      const itemDesc = sanitizeSocialText(clues.description) || 'No additional details provided.';
-      const safeLocation = sanitizeSocialText(clues.location);
-
-      text = `NOTICE OF FOUND ITEM\n\n` +
-             `A lost item has been deposited and verified at an authorized Return4me agent hub.\n\n` +
-             `Category: ${categoryName}\n` +
-             `Location Found: ${safeLocation}\n` +
-             `Collection Point: ${agent ? agent.business_name : 'Return4me Hub'}, ${agent ? agent.location_address : 'Kenya'}\n` +
-             `Description: ${itemDesc}\n\n` +
-             `Status: Physically verified by authorized agent.\n\n` +
-             `To claim this item, please visit the portal link below.\n\n` +
-             `Claim Link: https://return4me.co.ke/?claim=${item.id}`;
-    }
+    // D-2B-C SOCIAL REDESIGN — same ONE canonical facts object as Telegram,
+    // rendered by the Facebook formatter. This is the fuller of the two
+    // renderings (a longer description and a stronger heading), but it is
+    // built from the identical privacy-transformed facts, so Facebook and
+    // Telegram can never diverge on what is published or on the privacy rules.
+    const facts = buildPostFacts({
+      status: 'FOUND' as SocialPostStatus,
+      categoryLabel: categoryName,
+      isSensitive,
+      description: clues.description,
+      nameClue: clues.nameClue,
+      documentNumberClue: clues.documentNumberClue,
+      location: clues.location,
+      createdAtIso: item.created_at ?? null,
+      shopName: agent?.business_name ?? null,
+      agentAddress: agent?.location_address ?? null,
+      itemId: item.id,
+    });
+    const text = formatFacebookPost(facts);
 
     // SAFETY: redundant, deliberate last-line-of-defense check — never attach a photo
     // for a sensitive document, regardless of what the caller passes in.

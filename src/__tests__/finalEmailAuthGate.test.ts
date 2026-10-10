@@ -78,12 +78,37 @@ describe('Part 5 — identity-change verification is bounded', () => {
     expect(accountTs).toContain('IDENTITY_CHANGE_MAX_VERIFICATION_ATTEMPTS,');
   });
 
-  it('bumps the counter with the sandbox-safe absolute-write idiom', () => {
-    expect(dbTs).toContain('incrementCustomerIdentityChangeAttempts');
-    // Read-modify-write with an ABSOLUTE value, matching incrementOtpAttempts -
-    // the sandbox database this suite runs on NULLs SQL arithmetic.
-    expect(dbTs).toContain('.set({ attempt_count: next })');
-    expect(dbTs).toContain('const current = Number(rows[0].attempt_count)');
+  it('bumps the counter with the sandbox-safe absolute-write CAS idiom', () => {
+    // D-1F — the counter is a BOUNDED COMPARE-AND-SWAP that still writes an
+    // ABSOLUTE value (matching incrementCustomerOtpAttempts and incrementOtpAttempts:
+    // the sandbox database this suite runs on NULLs SQL arithmetic, so
+    // `attempt_count + 1` is never used). The COMPARISON half is what stops two
+    // concurrent wrong codes overwriting one another's increment — the defect this
+    // counter exists to prevent — so BOTH halves are pinned here. The assertions
+    // are scoped to the helper's own source (like the D-1E route slice in
+    // batch2CustomerAccountHttp), so they cannot be satisfied by the customer-OTP
+    // counter's copy of the same idiom.
+    const counterStart = dbTs.indexOf('public async incrementCustomerIdentityChangeAttempts(');
+    const counterEnd = dbTs.indexOf('public async applyVerifiedCustomerIdentifier(');
+    expect(counterStart, 'identity-change counter not found in db/database.ts').toBeGreaterThan(-1);
+    expect(counterEnd, 'the method after the identity-change counter was not found').toBeGreaterThan(
+      counterStart,
+    );
+    const counter = dbTs.slice(counterStart, counterEnd);
+
+    // An ABSOLUTE write, never SQL arithmetic — and the computed value is what
+    // lands in the attempt_count column, not merely a local named `next`.
+    expect(counter).toContain('const next = current + 1;');
+    expect(counter).toContain('attempt_count: next,');
+    expect(counter).not.toContain('attempt_count + 1');
+    // The COMPARE half: only the caller that still sees the value it read may
+    // write, and a change burned meanwhile is never resurrected.
+    expect(counter).toContain('eq(customerIdentityChangesTable.attempt_count, current)');
+    expect(counter).toContain('isNull(customerIdentityChangesTable.consumed_at)');
+    // BOUNDED retry, then fail CLOSED at the ceiling rather than writing an
+    // uncounted attempt.
+    expect(counter).toContain('CUSTOMER_IDENTITY_CHANGE_ATTEMPT_CAS_ROUNDS');
+    expect(counter).toContain('return params.maxAttempts;');
   });
 
   it('persists the counter in every schema definition of the table', () => {

@@ -3,8 +3,13 @@ import fs from 'fs';
 import path from 'path';
 import {
   resolveDevPaymentSimulationEnabled,
+  resolveSimulatedAttemptReference,
   DEV_SIMULATION_ENVS,
 } from '../devPaymentSimulation';
+import {
+  isPaymentReconciliationEligible,
+  RECONCILABLE_SESSION_STATUSES,
+} from '../paymentReconciliation';
 
 // Phase 10 (F-4). POST /api/dev/simulate-payment/:claimId fabricates an
 // authoritative payment confirmation — it moves a claim to `escrow_held` and
@@ -123,5 +128,182 @@ describe('the server actually uses the extracted gate and keeps its production r
   it('documents ENABLE_DEV_PAYMENT_SIMULATION in .env.example as development-only', () => {
     const envExample = fs.readFileSync(path.resolve(__dirname, '../../../.env.example'), 'utf8');
     expect(envExample).toMatch(/^ENABLE_DEV_PAYMENT_SIMULATION="false"/m);
+  });
+
+  // D-2A-H — the endpoint must confirm an attempt that EXISTS, and must be
+  // gated before it reads or writes anything.
+  it('confirms the claim\'s OWN persisted attempt, never a fabricated reference', () => {
+    const start = serverTs.indexOf("app.post('/api/dev/simulate-payment/:claimId'");
+    expect(start, 'the dev simulation endpoint must still exist').toBeGreaterThan(-1);
+    const body = serverTs.slice(start, start + 4000);
+
+    // The fabricated reference is gone: it matched no session and no receipt
+    // row, so it could complete nothing while moving the claim.
+    expect(serverTs).not.toContain('`TEST-SIMULATED-${Date.now()}`');
+
+    // The attempt is resolved from THIS claim's persisted sessions...
+    expect(body).toContain('await db.listPaymentSessionsForClaim(claim.id)');
+    expect(body).toContain('resolveSimulatedAttemptReference(');
+    // ...and the canonical confirmation is handed that attempt's own invoice AND
+    // its authoritative amount (never request input).
+    expect(body).toContain('processClaimPaymentConfirmed(claim.id, attempt.invoiceId, attempt.amount)');
+    // A claim with no confirmable attempt is refused before anything is written.
+    expect(body).toMatch(/if \(!attempt\) \{[\s\S]{0,260}status\(409\)/);
+  });
+
+  it('decides the gate BEFORE it reads a claim or writes anything', () => {
+    const start = serverTs.indexOf("app.post('/api/dev/simulate-payment/:claimId'");
+    const body = serverTs.slice(start, start + 1200);
+    const gate = body.indexOf('if (!isDevPaymentSimulationEnabled())');
+    const refused = body.indexOf('res.status(404)');
+    const firstRead = body.indexOf('await db.getClaim(');
+
+    expect(gate).toBeGreaterThan(-1);
+    expect(refused).toBeGreaterThan(gate);
+    // Production is decided by the gate alone: nothing is read, listed or
+    // written when it does not say yes.
+    expect(firstRead).toBeGreaterThan(refused);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// D-2A-H — WHICH ATTEMPT A SIMULATED CONFIRMATION MAY STAND FOR.
+// -----------------------------------------------------------------------------
+// The endpoint used to confirm under a fabricated `TEST-SIMULATED-<now>`
+// reference, which matched no attempt, no session and no provider record: the
+// claim moved, a reference that never existed was stamped onto it, and the
+// attempt's real receipt row stayed unresolved forever. These assertions are
+// falsification in the dangerous direction — the simulation must only ever
+// stand for ONE of THIS claim's persisted, confirmable attempts, and must stand
+// for nothing at all when it cannot identify one.
+
+const SELECTED_CLAIM = { claimId: 'TEST-CLAIM-SEL', claimStatus: 'pending_payment', paidAt: null };
+
+/** A persisted attempt row, as db.listPaymentSessionsForClaim returns it. */
+const attempt = (over: Record<string, unknown> = {}) => ({
+  id: 'PS-SEL-1',
+  claim_id: SELECTED_CLAIM.claimId,
+  status: 'pending',
+  provider_invoice_id: 'INV-SEL-1',
+  amount: 500,
+  created_at: new Date('2026-01-01T00:00:00.000Z'),
+  ...over,
+});
+
+describe('D-2A-H — a simulated confirmation may only stand for a confirmable existing attempt', () => {
+  it('selects the attempt own persisted provider invoice, never a fabricated one', () => {
+    const ref = resolveSimulatedAttemptReference([attempt()], SELECTED_CLAIM);
+
+    // The invoice is the SESSION'S, which is the same value the attempt's
+    // receipt row is stamped with — so exactly that row can be resolved by the
+    // confirmation, and no other row can be touched by it.
+    expect(ref).toEqual({
+      sessionId: 'PS-SEL-1',
+      invoiceId: 'INV-SEL-1',
+      amount: 500,
+      sessionStatus: 'pending',
+    });
+    expect(ref!.invoiceId).not.toMatch(/TEST-SIMULATED/);
+  });
+
+  it('prefers the NEWEST attempt, so a superseded attempt is not the one simulated', () => {
+    const older = attempt({
+      id: 'PS-SEL-OLD',
+      status: 'expired',
+      provider_invoice_id: 'INV-OLD',
+      created_at: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    const newer = attempt({
+      id: 'PS-SEL-NEW',
+      provider_invoice_id: 'INV-NEW',
+      created_at: new Date('2026-01-01T00:00:01.000Z'),
+    });
+
+    expect(resolveSimulatedAttemptReference([newer, older], SELECTED_CLAIM)!.invoiceId).toBe('INV-NEW');
+    // Independent of the order the rows arrive in.
+    expect(resolveSimulatedAttemptReference([older, newer], SELECTED_CLAIM)!.invoiceId).toBe('INV-NEW');
+  });
+
+  it('is deterministic when two attempts share a timestamp', () => {
+    const a = attempt({ id: 'PS-SEL-A', provider_invoice_id: 'INV-A' });
+    const b = attempt({ id: 'PS-SEL-B', provider_invoice_id: 'INV-B' });
+
+    const first = resolveSimulatedAttemptReference([a, b], SELECTED_CLAIM)!.invoiceId;
+    const second = resolveSimulatedAttemptReference([b, a], SELECTED_CLAIM)!.invoiceId;
+
+    expect(first).toBe(second);
+    expect(first).toBe('INV-B');
+  });
+
+  it('refuses a session carrying no provider invoice — there is nothing to correlate', () => {
+    for (const invoice of [null, undefined, '', '   ']) {
+      expect(
+        resolveSimulatedAttemptReference([attempt({ provider_invoice_id: invoice })], SELECTED_CLAIM),
+        `provider_invoice_id=${JSON.stringify(invoice)}`,
+      ).toBeNull();
+    }
+  });
+
+  it('refuses every session state that production recovery would not confirm', () => {
+    for (const status of ['created', 'payment_initiated', 'failed', 'cancelled', 'refunded']) {
+      expect(resolveSimulatedAttemptReference([attempt({ status })], SELECTED_CLAIM), status).toBeNull();
+    }
+  });
+
+  it('accepts exactly the session states production recovery accepts (cannot drift)', () => {
+    for (const status of RECONCILABLE_SESSION_STATUSES) {
+      expect(resolveSimulatedAttemptReference([attempt({ status })], SELECTED_CLAIM), status).not.toBeNull();
+    }
+
+    // Both directions, over a superset of the states that exist.
+    for (const status of [
+      'created', 'payment_initiated', 'pending', 'expired', 'confirmed',
+      'failed', 'cancelled', 'refunded',
+    ]) {
+      const selected = resolveSimulatedAttemptReference([attempt({ status })], SELECTED_CLAIM) !== null;
+      const eligible = isPaymentReconciliationEligible({
+        claimStatus: SELECTED_CLAIM.claimStatus,
+        paidAt: SELECTED_CLAIM.paidAt,
+        sessionStatus: status,
+        hasProviderInvoice: true,
+      });
+      expect(selected, status).toBe(eligible);
+    }
+  });
+
+  it('never selects a session belonging to another claim', () => {
+    const foreign = attempt({
+      id: 'PS-SEL-FOREIGN',
+      claim_id: 'TEST-CLAIM-OTHER',
+      provider_invoice_id: 'INV-FOREIGN',
+    });
+
+    expect(resolveSimulatedAttemptReference([foreign], SELECTED_CLAIM)).toBeNull();
+  });
+
+  it('refuses once the claim can no longer be reconciled', () => {
+    expect(
+      resolveSimulatedAttemptReference([attempt()], { ...SELECTED_CLAIM, paidAt: new Date() }),
+    ).toBeNull();
+
+    for (const claimStatus of ['escrow_held', 'released', 'refunded', 'rejected']) {
+      expect(
+        resolveSimulatedAttemptReference([attempt()], { ...SELECTED_CLAIM, claimStatus }),
+        claimStatus,
+      ).toBeNull();
+    }
+  });
+
+  it('refuses when the claim has no attempt at all', () => {
+    expect(resolveSimulatedAttemptReference([], SELECTED_CLAIM)).toBeNull();
+    expect(resolveSimulatedAttemptReference(null, SELECTED_CLAIM)).toBeNull();
+    expect(resolveSimulatedAttemptReference(undefined, SELECTED_CLAIM)).toBeNull();
+  });
+
+  it('carries the session own authoritative amount, the only amount the control may use', () => {
+    expect(resolveSimulatedAttemptReference([attempt({ amount: 1250 })], SELECTED_CLAIM)!.amount).toBe(1250);
+    // An amount-less session is reported as-is rather than invented: the
+    // canonical path's amount reconciliation then fails closed on it.
+    expect(resolveSimulatedAttemptReference([attempt({ amount: null })], SELECTED_CLAIM)!.amount).toBeNull();
   });
 });

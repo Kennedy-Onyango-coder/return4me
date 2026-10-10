@@ -115,7 +115,7 @@ describe('each pausable scope is actually enforced at its real gate, not just to
     expect(body).toMatch(/isPlatformOperationPaused\(pauseSettingKey\('handovers'\)\)/);
   });
 
-  it('payouts are blocked at the single shared executeClaimSettlement choke point, used by both the automatic sweep and the admin manual-release endpoint', () => {
+  it('payouts are blocked at the single shared executeClaimSettlement choke point reached by the admin settlement-initiate route and the legacy release-settlement route', () => {
     const body = functionBody('executeClaimSettlement');
     expect(body).toMatch(/isPlatformOperationPaused\(pauseSettingKey\('payouts'\)\)/);
     // Must not leave the claim stuck in the 'releasing' lock forever.

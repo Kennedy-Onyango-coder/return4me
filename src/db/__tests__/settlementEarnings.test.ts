@@ -250,28 +250,55 @@ describe('TEST 5 — a claim inside its dispute window is never paid out', () =>
     expect(claim?.settle_at, 'enterPendingSettlement must set the window').toBeTruthy();
     expect(new Date(claim!.settle_at!).getTime()).toBeGreaterThan(Date.now());
 
-    // The sweep's own two decision points:
-    //   1. getClaimsDueForSettlement() — the work queue (settle_at <= now).
-    //   2. attemptSettlementRelease(id, /*force*/ false) — the CAS the sweep uses,
-    //      which MUST honour settle_at.
+    // The two decision points that protect the window:
+    //   1. getClaimsDueForSettlement() — the reporting queue (settle_at <= now).
+    //   2. attemptSettlementRelease(id) — the approval-and-deadline CAS. D-2B-B-E
+    //      removed the force/approval flags, so BOTH preconditions are
+    //      unconditional: the deadline cannot be skipped and the approval cannot
+    //      be waived anywhere in the codebase.
     expect((await db.getClaimsDueForSettlement()).some((c) => c.id === claimId)).toBe(false);
-    expect(await db.attemptSettlementRelease(claimId, false)).toBe(false);
+    expect(await db.attemptSettlementRelease(claimId)).toBe(false);
+    // ...and the approval write itself is gated by the same window, so a claim
+    // still inside it cannot even be approved into a releasable state.
+    const earlyApproval = await db.approveSettlement(claimId, 'test-admin', 'window still open');
+    expect(earlyApproval.ok).toBe(false);
+    expect(earlyApproval.code).toBe('outside_review_window');
+    expect((await db.getClaim(claimId))!.settlement_approved_at ?? null).toBeNull();
     // Nothing moved: the claim is still waiting and no payout row was paid.
     expect((await db.getClaim(claimId))?.status).toBe('pending_settlement');
     expect((await db.getLedgerEntriesForClaim(claimId)).map((e) => `${e.type}:${e.status}`).sort())
       .toEqual(['agent_payout:pending', 'finder_payout:pending', 'platform_fee:pending']);
   });
 
-  it('settle_at in the PAST is selected by the sweep and IS releasable', async () => {
+  it('settle_at in the PAST is selected by the reporting queue and IS releasable once approved', async () => {
     const { claimId } = await makeEscrowHeldClaim('G');
-    // A window that has already elapsed (the SWEEP is what waits 48h; this fixture
-    // only has to be due now).
+    // A window that has already elapsed (the 48h wait is a policy the fixtures
+    // do not have to sit through; this one only has to be due now).
     const settlement = await db.enterPendingSettlement(claimId, -1000);
     expect(settlement.success, settlement.message).toBe(true);
 
     expect((await db.getClaimsDueForSettlement()).some((c) => c.id === claimId)).toBe(true);
-    expect(await db.attemptSettlementRelease(claimId, false), 'the sweep must be able to take the lock').toBe(true);
+    // D-2B-B-E: the lock is gated on the durable approval, so the fixture
+    // records one through the real approval write first - an unapproved claim is
+    // refused even with an elapsed window (asserted separately below).
+    const approval = await db.approveSettlement(claimId, 'test-admin', 'window elapsed, approved');
+    expect(approval.ok, 'the review window has elapsed, so approval must succeed').toBe(true);
+    expect(await db.attemptSettlementRelease(claimId), 'an approved, due claim must be releasable').toBe(true);
     expect((await db.getClaim(claimId))?.status).toBe('releasing');
+  });
+
+  it('D-2B-B-E — an elapsed window alone is NOT enough: without the durable approval the release CAS refuses', async () => {
+    const { claimId } = await makeEscrowHeldClaim('G2');
+    expect((await db.enterPendingSettlement(claimId, -1000)).success).toBe(true);
+
+    // Due, in the past window, in 'pending_settlement' - and still refused,
+    // because no administrator approval is on file. This is the rule the whole
+    // batch exists to enforce, asserted where the money would move.
+    expect(await db.attemptSettlementRelease(claimId)).toBe(false);
+    const claim = (await db.getClaim(claimId))!;
+    expect(claim.status).toBe('pending_settlement');
+    expect(claim.settlement_approved_at ?? null).toBeNull();
+    expect(claim.settlement_approved_by ?? null).toBeNull();
   });
 
   it('E3A — a newly booked payout is recorded as never submitted, so it can be sent exactly once', async () => {
@@ -321,12 +348,15 @@ describe('TEST 6 — settlement execution is idempotent', () => {
   it('the release CAS admits exactly ONE winner even when run concurrently', async () => {
     const { claimId } = await makeEscrowHeldClaim('H');
     await db.enterPendingSettlement(claimId, -1000);
+    // D-2B-B-E: the CAS requires the durable approval, so the fixture records it
+    // first - then two concurrent initiations race for the one lock.
+    expect((await db.approveSettlement(claimId, 'test-admin', 'concurrency fixture')).ok).toBe(true);
     const rowsBefore = (await db.getLedgerEntriesForClaim(claimId)).length;
     expect(rowsBefore).toBe(3);
 
     const results = await Promise.all([
-      db.attemptSettlementRelease(claimId, true),
-      db.attemptSettlementRelease(claimId, true),
+      db.attemptSettlementRelease(claimId),
+      db.attemptSettlementRelease(claimId),
     ]);
     expect(results.filter(Boolean).length, 'exactly one caller may take the lock').toBe(1);
     // The loser books nothing at all.
@@ -348,7 +378,8 @@ describe('TEST 6 — settlement execution is idempotent', () => {
   it('running the full settlement twice produces one release, three completed rows and one FINALIZE_SETTLEMENT audit', async () => {
     const { claimId } = await makeEscrowHeldClaim('J');
     await db.enterPendingSettlement(claimId, -1000);
-    expect(await db.attemptSettlementRelease(claimId, false)).toBe(true);
+    expect((await db.approveSettlement(claimId, 'test-admin', 'idempotency fixture')).ok).toBe(true);
+    expect(await db.attemptSettlementRelease(claimId)).toBe(true);
 
     // The provider confirmed both recipients (what executeClaimSettlement records).
     for (const type of ['finder_payout', 'agent_payout']) {
@@ -373,7 +404,7 @@ describe('TEST 6 — settlement execution is idempotent', () => {
     expect(await finalizeAudits()).toBe(1);
 
     // A repeat of the whole release/finalize path is refused and changes nothing.
-    expect(await db.attemptSettlementRelease(claimId, true)).toBe(false);
+    expect(await db.attemptSettlementRelease(claimId)).toBe(false);
     expect((await db.finalizeSettlement(claimId)).success).toBe(false);
     expect((await db.getLedgerEntriesForClaim(claimId)).length).toBe(3);
     expect(await finalizeAudits()).toBe(1);
@@ -389,12 +420,26 @@ describe('TEST 6 — settlement execution is idempotent', () => {
 // functions the sweep calls; the wiring is pinned here, exactly as the repo already
 // does for other inline code in server.ts.
 describe('the settlement sweep and its executor keep their safety guarantees (E3A reviewed them)', () => {
-  it('B — the sweep takes its queue from the due-settlement query, not from all pending claims', () => {
-    const sweep = SERVER_TS.slice(SERVER_TS.indexOf('async function releaseDueSettlements()'));
+  it('B — the sweep takes its queue from the due-settlement query and submits NO payout', () => {
+    const sweep = SERVER_TS.slice(
+      SERVER_TS.indexOf('async function releaseDueSettlements()'),
+      SERVER_TS.indexOf('// Social-media emergency stop'),
+    );
     expect(sweep).toContain('const due = await db.getClaimsDueForSettlement();');
-    expect(sweep).toContain('const won = await db.attemptSettlementRelease(claim.id, false);');
-    const casIdx = sweep.indexOf('attemptSettlementRelease(claim.id, false)');
-    expect(sweep.indexOf('executeClaimSettlement(claim.id)'), 'money moves only after the lock is won').toBeGreaterThan(casIdx);
+    // D-2B-B-E — the timer is not a payer. The scheduler must not take the
+    // release lock, execute a settlement, reach the provider or write anything:
+    // not even for an already-approved claim. (The behavioural half of the
+    // approval rule - that the CAS itself refuses an unapproved claim - is
+    // asserted against the real database functions above.)
+    expect(sweep).not.toContain('attemptSettlementRelease');
+    expect(sweep).not.toContain('executeClaimSettlement');
+    expect(sweep).not.toContain('triggerIntasendPayout');
+    expect(sweep).not.toContain('.update(');
+    expect(sweep).not.toContain('.insert(');
+    // It still REPORTS the review queue and flags stranded 'releasing' claims.
+    expect(sweep).toContain('settlement_approved_at');
+    expect(sweep).toContain("filter((c) => c.status === 'releasing')");
+    expect(sweep).toContain('awaitingReview');
   });
 
   it('A — the due-settlement query is the ONLY place settle_at is applied, and it is a read-only SELECT', () => {

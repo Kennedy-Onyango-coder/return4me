@@ -19,7 +19,8 @@ import { Camera, Upload, AlertCircle, AlertTriangle, MapPin, CheckCircle, Shield
 // foundation (Stepper + the Input/Select/Button primitives) instead of
 // hand-rolled controls, so the step rail, the field chrome and the button
 // ladder are the same ones the rest of the app already uses.
-import { Button, ICON_SIZE, Input, Select, Stepper } from './ui';
+import { Button, ICON_SIZE, Input, Select, Stepper, LocationFirstField } from './ui';
+import FoundItemCamera from './customer/FoundItemCamera';
 
 // Computed once at module scope: the 47 counties, grouped by the UX-only
 // former-province labels, exactly as the lost-report wizard presents them. The
@@ -224,22 +225,24 @@ export default function FinderView({ categories, categoriesLoading = false, cate
     }
   }, [errorMsg]);
 
-  // Launch camera stream
+  // Open the dedicated capture surface. The surface acquires and owns the live
+  // stream; this handler only pre-flights the permission, so a device with no
+  // camera — or a refused permission — is explained on the form itself instead
+  // of inside a full-view modal. The probe track is stopped again immediately:
+  // the form must never hold a second live camera next to the capture surface's
+  // own stream.
   const startCamera = async () => {
     setErrorMsg('');
-    setUseCamera(true);
     setPhotoBase64(null);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
-      }
+      const probe = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      probe.getTracks().forEach((track) => track.stop());
     } catch (e) {
       console.error('Camera access denied:', e);
       setErrorMsg('Could not access camera. Please use file upload instead.');
-      setUseCamera(false);
+      return;
     }
+    setUseCamera(true);
   };
 
   const stopCamera = () => {
@@ -709,27 +712,7 @@ export default function FinderView({ categories, categoriesLoading = false, cate
                     to assistive tech. */}
                 <p className="block text-sm font-extrabold text-primary-green">{t.capturePhoto} *</p>
             
-                {useCamera ? (
-                  <div className="relative bg-black rounded-2xl overflow-hidden aspect-video">
-                    <video ref={videoRef} className="w-full h-full object-cover" />
-                    <div className="absolute bottom-4 left-0 right-0 flex justify-center space-x-4">
-                      <button
-                        type="button"
-                        onClick={captureFrame}
-                        className="bg-accent-orange text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-lg transition hover:bg-accent-hover"
-                      >
-                        {'Capture'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={stopCamera}
-                        className="bg-stone-800 text-white px-5 py-2.5 rounded-xl font-bold text-sm transition hover:bg-stone-700"
-                      >
-                        {'Cancel'}
-                      </button>
-                    </div>
-                  </div>
-                ) : photoBase64 ? (
+                {useCamera ? (<FoundItemCamera open={useCamera} onCapture={setPhotoBase64} onClose={stopCamera} persistedCaptureKey="foundItemPhoto" previewLabel={t.takeSnap} ariaLabel={t.takeSnap} />) : photoBase64 ? (
                   <div className="relative rounded-2xl overflow-hidden border border-line-subtle bg-brand-beige aspect-video">
                     <img
                       src={photoBase64}
@@ -743,7 +726,7 @@ export default function FinderView({ categories, categoriesLoading = false, cate
                     <button
                         type="button"
                         onClick={startCamera}
-                        className="bg-white text-primary-green p-2.5 rounded-full hover:bg-stone-100 shadow-md transition"
+                        className="bg-stone-800 text-white p-2.5 rounded-full hover:bg-stone-700 shadow-md transition"
                         title={'Retake photo'}
                         aria-label={'Retake photo'}
                       >
@@ -955,15 +938,37 @@ export default function FinderView({ categories, categoriesLoading = false, cate
               />
 
 
-              {/* Location Details & GPS Prompt */}
+              {/* Location Details — LOCATION-FIRST ORDER (Phase 2).
+                  The "Turn location on" action now comes BEFORE the County and
+                  Sub-county selectors, not after them. The shared
+                  LocationFirstField renders: the action + why we ask for
+                  permission + the live status, then an "OR ENTER MANUALLY"
+                  divider, then the County and Sub-county selects (passed as
+                  children, so their state, handlers and validation are
+                  unchanged). Browser permission is requested only when the
+                  Finder presses the action (onDetect = getCoordinates), never
+                  on mount, and detection never auto-submits or silently picks a
+                  default county. */}
               <div className="space-y-3">
-                {/* PHASE 9D — REQUIRED COUNTY. Deliberately the FIRST geographic
-                    question, and a select rather than free text: the value is the
-                    authoritative found-side county the matcher compares against
-                    the lost report's county, and it must be one of the canonical
-                    47 rather than something a person typed and the server then has
-                    to interpret. Asking here is what removes the old
-                    "Mombasa Road -> Mombasa County" style of guess.
+              <LocationFirstField
+                id="finder-location-first"
+                actionLabel={['Turn location on', 'Washa mahali']}
+                explanation={[
+                  'Turning on your location helps us match your report to a nearby available Return4me Agent hub for your drop-off. This is where you are now, and it may not be where you found the item. The county, sub-county and exact place below are what describe where you found it. If no Agent can be matched, our team will assign one for you.',
+                  'Kuwasha mahali pako husaidia kulinganisha ripoti yako na kituo cha Wakala wa Return4me aliye karibu. Hapa ni mahali ulipo sasa, na huenda si mahali ulipoona kitu. Kaunti, kaunti ndogo na mahali halisi hapa chini ni yanayoeleza mahali ulipoona. Hakuna Wakala atakayelingana, timu yetu itakupangia mmoja.',
+                ]}
+                statusMessage={gpsMessage}
+                loading={gpsLoading}
+                detected={!(latitude === null || longitude === null)}
+                onDetect={getCoordinates}
+              >
+                {/* PHASE 9D — REQUIRED COUNTY. Deliberately the FIRST of the two
+                    manual selectors, and a select rather than free text: the
+                    value is the authoritative found-side county the matcher
+                    compares against the lost report's county, and it must be one
+                    of the canonical 47 rather than something a person typed and
+                    the server then has to interpret. Asking here is what removes
+                    the old "Mombasa Road -> Mombasa County" style of guess.
                     Requirement is mirrored by the browser's `required` attribute
                     AND re-validated server-side, which is the authority. */}
                 <Select
@@ -1004,48 +1009,23 @@ export default function FinderView({ categories, categoriesLoading = false, cate
                     <option key={unit.id} value={unit.id}>{unit.name}</option>
                   ))}
                 </Select>
+              </LocationFirstField>
 
                 {/* P14A (P14-13) — FREE TEXT, with no suggestions attached. The
                     county is chosen in the required selector above; this field
                     describes the actual place (e.g. "Near Sarit Centre, Ring Road
                     Parklands"), so offering county names here was misleading. No
                     sub-county/city dataset exists and none is invented here. */}
-            
-                {/* GPS prompt — an OPTIONAL aid to agent matching, never a promise of one */}
-                {latitude === null || longitude === null ? (
-                  <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-3">
-                    <div className="flex gap-2.5">
-                      <MapPin className="text-accent-orange shrink-0 mt-0.5" size={18} />
-                      <div className="space-y-1">
-                        <h4 className="text-xs font-bold text-ink leading-none">
-                          {'Help Us Match an Agent'}
-                        </h4>
-                        <p className="text-caption text-ink-muted leading-normal">
-                          {'Turning on your location helps us match your report to a nearby available Return4me Agent hub for your drop-off. This is where you are now, and it may not be where you found the item. The county, sub-county and exact place you set are what describe where you found it. If no Agent can be matched, our team will assign one for you.'}
-                        </p>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={getCoordinates}
-                      disabled={gpsLoading}
-                      className="w-full bg-accent-strong hover:bg-accent-strong-hover text-white text-xs font-bold py-2.5 px-4 rounded-xl transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
-                    >
-                      {gpsLoading ? (
-                        <>
-                          <Loader2 className="animate-spin" size={14} />
-                          <span>{'Getting your location...'}</span>
-                        </>
-                      ) : (
-                        <>
-                          <MapPin size={14} />
-                          <span>{'Turn Location On'}</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
 
-                ) : (
+                {/* LOCATION-FIRST (Phase 2): the "Turn location on" ACTION now
+                    lives at the TOP of LocationFirstField, above the County and
+                    Sub-county selectors. What remains here is only the
+                    post-detection CONFIRMATION — once coordinates are captured,
+                    this reassures the Finder what was saved and that it is for
+                    agent matching, not the found location. The pre-detection
+                    prompt/button was removed because LocationFirstField now
+                    provides the single, correctly-ordered action. */}
+                {latitude !== null && longitude !== null && (
                   <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex gap-3 items-center">
                     <div className="bg-emerald-100 p-2 rounded-xl text-emerald-600 shrink-0">
                       <MapPin size={18} />

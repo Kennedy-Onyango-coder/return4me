@@ -149,8 +149,12 @@ payment window is 24 hours from agent confirmation; each individual STK attempt
 has its own short session window and can be retried while the claim window stays
 open.
 
-Settlement is likewise a CAS, so an automatic sweep and an administrator's
-manual release cannot both pay out.
+Settlement is likewise a CAS: the `pending_settlement → releasing` move is a
+single conditional update that only the administrator-initiated settlement path
+reaches, so two initiation attempts cannot both acquire the release lock, and a
+claim without a durable approval, or one still inside its settle window, never
+acquires it at all. The periodic settlement sweep pays nothing: it only reports
+claims past their deadline and any claim stranded in `releasing`.
 
 See [claims-and-payments.md](claims-and-payments.md).
 

@@ -89,6 +89,17 @@ The persisted payment truth is the `payment_sessions` row plus the provider
 webhook. `provider_invoice_id` carries a partial unique index, so a provider
 invoice can be tied to at most one session.
 
+Once the provider ACCEPTS an STK request, that attempt books its own
+`payment_received` ledger row with status `pending`, stamped with the attempt's
+provider invoice id. That row records that a prompt was sent — not that money was
+collected — so it is not revenue in that state. It is completed only by the
+authoritative confirmation of its own reference, in the same atomic transaction
+that moves the claim to `escrow_held` (`attemptClaimEscrowHold`). An abandoned,
+expired or superseded attempt therefore keeps its own pending row: it is not
+revenue, and an unapproved prompt is not proof of failure, so it is left
+unresolved rather than marked `failed`. Settlement never completes a receipt row
+— its sweep is scoped to the payout rows it books itself.
+
 ### Escrow
 
 The claim becomes `escrow_held` only when the webhook confirms payment. That move
@@ -203,8 +214,53 @@ the operational end of the claim and the trigger for settlement.
 
 ### Settlement
 
-After the dispute window closes, the claim enters `pending_settlement` and then
-`releasing`, and the disbursement split is paid out.
+After the dispute window closes, the claim enters `pending_settlement`. That is as
+far as anything automatic goes: reaching `releasing` and paying the disbursement
+split requires a durable administrator approval, an elapsed `settle_at` window,
+and the guarded initiation path described next.
+
+Settlement is a durable, human-gated process. A claim does not leave
+`pending_settlement` because of a timer or a shared "escrow" that a second
+button can release. The operator must first record a **durable approval**
+(POST /api/admin/claims/:id/settlement/approve) and then deliberately **initiate**
+the payout (POST /api/admin/claims/:id/settlement/initiate). Each step is a
+separate, permissioned action with its own eligibility checks.
+
+- **Approval** does not change claim status and never touches the provider.
+  It records who approved and when (settlement_approved_at /
+  settlement_approved_by) plus the required reason in the approval's own
+  `CLAIM_SETTLEMENT_APPROVED` audit row, which commits in the same transaction
+  as the approval itself. The approval is CAS-guarded: the claim must still be
+  unapproved, still in `pending_settlement`, and still inside an elapsed
+  settle_at window at the moment of the write, so two concurrent approvals
+  produce exactly one approval and a claim that has already been approved cannot
+  be re-approved.
+- **Initiated payout** requires the durable approval to already exist in the
+  database and the settle_at deadline to have elapsed — both as write-time
+  conditions of the release itself. Global payout pause, an item
+  suspected-stolen/legal-hold review and any per-recipient payout row that has
+  already been submitted are enforced by the executor, which re-reads the claim,
+  the approval and the item from the database immediately before it calls the
+  provider. If all conditions hold the route atomically claims the release lock
+  and calls executeClaimSettlement(). On success the claim moves to `released`
+  and the ledger rows are completed. On failure the lock is reverted and the
+  claim returns to `pending_settlement`; no money moves.
+
+The legacy `POST /api/admin/claims/:id/release-settlement` route is retained for
+compatibility and delegates to exactly the same rule. It cannot force anything:
+there is no `force`/override parameter left in the data layer, so a claim with
+no durable approval, or one still inside its settle_at window, is refused with a
+clear non-success response that points at the two supported actions.
+
+The settlement sweep does not call the provider and moves no money. It is a
+reporting sweep: it counts the claims past their settle_at deadline (split into
+"approved, awaiting an explicit initiation" and "awaiting review") and flags any
+claim stranded in `releasing` for manual reconciliation. Recovering a stranded
+claim is deliberately left to an operator, because its provider outcome may be
+unknown — the sweep never resets or retries a payout.
+
+For the ledger outcome model and the payment_received / finder_payout /
+agent_payout / platform_fee row types, see [claims-and-payments.md](claims-and-payments.md#ledger-outcomes).
 
 ## Disputes
 
@@ -277,12 +333,22 @@ refuse.
 Simulated payment is not a payment and produces no settlement. It exists to drive
 state transitions in a test environment.
 
+It also does not invent a payment reference. The simulation stands for the claim's
+own newest confirmable payment attempt — the provider invoice already persisted on
+that attempt's payment session — and drives the same canonical confirmation path
+the provider webhook uses, so it completes exactly that attempt's
+`payment_received` row and consumes exactly that session. A claim with no
+confirmable attempt is refused (`409`) instead of being confirmed under a reference
+that exists nowhere. The amount confirmed is the session's own
+server-authoritative amount, so the same amount controls run; only the provider
+lookup is absent, which is the point.
+
 ## Concurrency summary
 
 | Operation | Mechanism | Prevents |
 |---|---|---|
 | `attemptClaimEscrowHold` | CAS with transition assertion | Duplicate webhook re-running escrow |
-| `attemptSettlementRelease` | CAS with transition assertion | Sweep and manual release both paying out |
+| `attemptSettlementRelease` | CAS with transition assertion | Two concurrent settlement initiations both acquiring the release lock |
 | `uq_claims_one_active_per_item` | Partial unique index | Two live claims on one item |
 | `uq_disputes_one_unresolved_per_item` | Partial unique index | Two concurrent dispute filings |
 | `uq_payment_sessions_provider_invoice` | Partial unique index | One provider invoice paying two claims |
@@ -296,9 +362,16 @@ state transitions in a test environment.
 - [operations.md](operations.md) — the expiry and settlement sweeps
 
 
-Settlement is a compare-and-swap, `attemptSettlementRelease`, which asserts the
-`pending_settlement → releasing` edge before executing. It exists so that the
-automatic sweep and an administrator's manual release cannot both pay out.
+Settlement initiation requires two things to hold at write time: a durable
+approval is already recorded on the claim, and the `settle_at` window has
+elapsed. Both are conditions of the compare-and-swap
+`attemptSettlementRelease`, which asserts the `pending_settlement → releasing`
+edge before the payout executor runs, and the executor re-reads the claim, the
+approval and the item from the database immediately before it calls the
+provider. The periodic sweep does not execute payouts — it reports only — so it
+is the conditional database update plus the single payout executor that protect
+initiation against duplicate submission: two concurrent initiations cannot both
+take the lock, and a claim that is not both approved and due is refused.
 
 ### Payout submission outcome
 

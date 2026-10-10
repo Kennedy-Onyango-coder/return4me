@@ -32,8 +32,19 @@ import { requireCustomerAuth } from '../services/customerAuth.ts';
 import { smsRateLimit } from '../services/smsRateLimit.ts';
 import { identityEmailChangeRateLimit } from '../services/identityChangeRateLimit.ts';
 import { db } from '../db/database.ts';
-import { hashCode, toE164Kenyan } from '../services/auth.ts';
+// D-1D / D-1E — `timingSafeEqualHex` is the ONE comparison helper this codebase
+// uses for every stored digest (login OTP in server.ts, claim pickup codes,
+// payment auth tokens). BOTH re-authentication routes in this module — the
+// identity-change verification and the account erasure — compare the SAME kind of
+// value (two HMAC-SHA256 hex digests produced by `hashCode`), so both reuse that
+// helper rather than inventing a second mechanism or comparing bytes with `!==`.
+import { hashCode, timingSafeEqualHex, toE164Kenyan } from '../services/auth.ts';
 import { generateSecureId } from '../services/customerAuth.ts';
+// D-1B — the ONE customer one-time-code attempt ceiling, shared with the login
+// route and its helpers. The erasure route re-authenticates against the SAME
+// `login` challenge the sign-in flow issues, so it enforces the SAME limit
+// rather than inventing a second, competing budget.
+import { CUSTOMER_OTP_MAX_ATTEMPTS } from '../services/customerAuth.ts';
 import {
   emailOtpRecipientIsSafe,
   EMAIL_VERIFICATION_REQUIRED_MESSAGE,
@@ -381,18 +392,49 @@ export function registerCustomerAccountRoutes(app: any, deps: {
       if (new Date(record.expires_at).getTime() <= Date.now()) {
         return res.status(400).json({ error: 'That code has expired.' });
       }
-      if (hashCode(code) !== record.code_hash) {
+      // D-1E — THE COMPARISON IS TIMING-SAFE, the way login verification and the
+      // erasure route below already are. A byte-wise `!==` on two digests is not a
+      // constant-time operation: string equality stops at the first differing
+      // character, so the time it takes leaks how much of a guess matched. The
+      // stored value is a 64-character HMAC-SHA256 hex digest and the expected
+      // value is derived from the presented code, so that leak is measurable and
+      // turns redeeming the six-digit code into a character-by-character search.
+      // `timingSafeEqualHex` compares the full buffers and is the SAME helper, with
+      // the SAME argument order (stored digest first, computed digest second), used
+      // by every other digest comparison in the codebase. It also length-checks
+      // first, so a malformed code is an ordinary refusal rather than the exception
+      // `crypto.timingSafeEqual` throws on unequal buffers.
+      if (!timingSafeEqualHex(record.code_hash, hashCode(code))) {
         // BOUNDED GUESSING. A six-digit space is small enough that an attacker
         // holding the (session-bound) changeId could otherwise walk the whole
         // range inside the 30-minute TTL. Count the failure ATOMICALLY, and once
         // the ceiling is reached BURN the change so it can never be redeemed even
         // with the correct code. The response is byte-identical to an ordinary
         // wrong code, so the eventual lockout is not itself an oracle.
+        //
+        // D-1F — the count is a bounded compare-and-swap (see
+        // incrementCustomerIdentityChangeAttempts), so concurrent wrong codes can no
+        // longer overwrite one another's increment, and the write that REACHES the
+        // ceiling burns the change in the same statement. The ceiling is PASSED IN
+        // rather than known to the data layer, so this constant stays the single
+        // source of the policy number.
         const attempts = await db.incrementCustomerIdentityChangeAttempts({
           id: changeId,
           customerId: req.customer.id,
+          maxAttempts: IDENTITY_CHANGE_MAX_VERIFICATION_ATTEMPTS,
         });
         if (attempts >= IDENTITY_CHANGE_MAX_VERIFICATION_ATTEMPTS) {
+          // Belt and braces. The atomic write above already burned the change when
+          // the total reached the ceiling, and the returned value is a CONSERVATIVE
+          // sentinel — it also answers a change that never resolved, or one burned
+          // meanwhile. This CAS on `consumed_at IS NULL` is idempotent, so the
+          // second burn is a no-op: never a resurrection, never a second charge.
+          // FAIL-CLOSED COST, accepted by design: an unexpected database error, or
+          // exhausted CAS retries, also return that sentinel, so a legitimate pending
+          // change can be consumed here without any wrong guess — the authoritative
+          // customer identifier is untouched (this call only marks the pending change
+          // consumed, and can never force the write when the database is unavailable),
+          // and the customer can simply request a new change.
           await db.consumeCustomerIdentityChange({ id: changeId, customerId: req.customer.id });
         }
         return res.status(400).json({ error: 'That code is not correct.' });
@@ -461,18 +503,80 @@ export function registerCustomerAccountRoutes(app: any, deps: {
       if (!code || !confirmed) return res.status(400).json(BAD_REQUEST);
 
       const customer = req.customer;
+
+      // D-1B — EVERY refusal on this route answers with this ONE body, exactly as
+      // the pre-Batch-2 route did for a wrong code. "No challenge", "expired",
+      // "already used", "guessed too often" and "wrong code" are therefore
+      // indistinguishable to the caller: the endpoint cannot be used to probe for
+      // the existence or state of a challenge.
+      const rejectCode = () =>
+        res.status(400).json({ error: 'That confirmation code is not correct.' });
+
       const challenge = await db.getCustomerOtpForPurpose(customer.phone, 'login');
-      const valid =
-        challenge &&
+      if (!challenge) return rejectCode();
+
+      // D-1B — OWNERSHIP BINDING. The challenge is resolved from the phone on the
+      // SESSION's own authoritative customer record; the body supplies a code and
+      // nothing else, so there is no customer or challenge owner for a caller to
+      // name. A row that NAMES a different customer is refused here WITHOUT
+      // touching its counter: a stolen session must not be able to burn a live
+      // challenge belonging to somebody else, and a row written before the
+      // `customer_id` column existed (no owner recorded) is not held against the
+      // account that legitimately holds the phone.
+      if (challenge.customer_id && challenge.customer_id !== customer.id) return rejectCode();
+
+      // One-time use and expiry, exactly as before.
+      const usable =
         !challenge.used_at &&
-        new Date(challenge.expires_at).getTime() > Date.now() &&
-        challenge.code_hash === hashCode(code);
-      if (!valid) {
-        return res.status(400).json({ error: 'That confirmation code is not correct.' });
+        new Date(challenge.expires_at).getTime() > Date.now();
+      if (!usable) return rejectCode();
+
+      // D-1B — THE ATTEMPT CEILING (the gap D-1A identified).
+      //
+      // This route proves the code against the account's CURRENT phone using the
+      // SAME `login` challenge the sign-in endpoint issues, so it now enforces the
+      // SAME ceiling that endpoint already enforced. Without it, a six-digit code
+      // was guessable inside its five-minute lifetime by anyone holding a session
+      // cookie — the exact failure erasure's re-authentication step exists to
+      // prevent.
+      //
+      // The shared helper burns the challenge the moment the count REACHES the
+      // ceiling, so a burned challenge is already unusable. This check also covers
+      // the case where a concurrent caller burned it between the read above and
+      // this line, and burns it explicitly rather than trusting the count alone.
+      if (Number(challenge.attempt_count || 0) >= CUSTOMER_OTP_MAX_ATTEMPTS) {
+        await db.consumeCustomerOtp(challenge.id);
+        return rejectCode();
       }
 
-      // Burn the proof so one code can never erase twice.
-      await db.consumeCustomerOtp(challenge.id);
+      // D-1D — TIMING-SAFE COMPARISON. Both sides are fixed-length hex digests of
+      // the SAME primitive (`hashCode`, HMAC-SHA256 keyed on JWT_SECRET), exactly
+      // the input contract `timingSafeEqualHex` was written for and the same call
+      // the login verify route makes. A byte-wise string comparison short-circuits
+      // on the first differing character, so how much of the stored digest a guess
+      // reproduced would shape the response time — a real edge on a six-digit
+      // space for an attacker who already holds the session cookie. The helper
+      // also length-checks before `crypto.timingSafeEqual`, which would otherwise
+      // THROW on unequal buffers, so a malformed code is an ordinary refusal.
+      if (!timingSafeEqualHex(challenge.code_hash, hashCode(code))) {
+        // Charges the wrong guess through the SHARED, atomic helper the login
+        // route uses, which burns the challenge at the ceiling — so the number of
+        // usable guesses is bounded by that one constant however fast they arrive,
+        // and once the ceiling is reached the correct code is dead too.
+        //
+        // The returned count is deliberately NOT read: this route refuses the
+        // guess whatever the helper reports, so an increment that could not be
+        // written (all CAS rounds lost, or the row burned meanwhile) cannot turn
+        // into an uncounted guess that is nevertheless accepted.
+        await db.incrementCustomerOtpAttempts(challenge.id, CUSTOMER_OTP_MAX_ATTEMPTS);
+        return rejectCode();
+      }
+
+      // Burn the proof so one code can never erase twice. This is a CAS on
+      // `used_at IS NULL`: a request that loses the race has proved nothing and
+      // is refused rather than erasing a second time.
+      const burned = await db.consumeCustomerOtp(challenge.id);
+      if (!burned) return rejectCode();
 
       // BATCH 2: Batch 1's customer_notifications rows are personal data keyed to
       // this account, and purgeUserData predates them. They are removed HERE,

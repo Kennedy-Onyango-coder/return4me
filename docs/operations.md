@@ -13,7 +13,7 @@ timer.
 |---|---|---|
 | `expireStaleClaims` | 60 seconds | Moves unpaid, agent-confirmed claims past their 24-hour payment window to `payment_window_expired` and records a payment strike |
 | `reconcilePendingPaymentSessions` | 60 seconds | Recovers a completed M-Pesa payment whose webhook was missed or delayed, via the authoritative IntaSend status API. It also repairs a payment session stranded in `confirmed` against an unpaid claim, a bounded number of times per process |
-| `releaseDueSettlements` | 5 minutes | Pays the disbursement split for claims whose dispute window has closed |
+| `releaseDueSettlements` | 5 minutes | Reports settlement-review status for claims whose dispute window has closed (who is approved and awaiting an explicit initiation, and what is stranded in `releasing`). It submits no payout and moves no money |
 | `socialRetrySweep` | 5 minutes | Retries failed found-notice social publications |
 | `notificationRetrySweep` | 5 minutes | Re-dispatches due retryable notifications |
 | `handoverEvidenceRetentionSweep` | 24 hours | Purges handover evidence photos past their retention window |
@@ -31,9 +31,18 @@ the conditional update is the only writer that acts.
 
 ### Settlement
 
-The sweep selects claims due for settlement, then uses the CAS-guarded
-`attemptSettlementRelease`, which asserts the `pending_settlement → releasing`
-edge and conditionally updates. Only the instance that wins performs the payout.
+The sweep is reporting-only. It selects the claims in `pending_settlement` whose
+`settle_at` deadline has passed and reports the ones that need attention: those
+already carrying a durable approval and awaiting an explicit initiation, those
+still awaiting review, and any claim stranded in `releasing`. It never calls the
+provider, writes no claim status, ledger row or audit row, and submits no payout.
+
+Payout initiation therefore happens only through an authorized administrator
+action — `POST /api/admin/claims/:id/settlement/initiate`, or the legacy
+`POST /api/admin/claims/:id/release-settlement` that delegates to the same rule —
+and only subject to a durable settlement approval already on file, an elapsed
+`settle_at` window, and the server-side safeguards described below (the global
+payout pause, an item legal hold, and per-recipient payout submission state).
 
 A recipient is submitted to the provider only when its ledger row positively
 records that it has never been submitted (`ledger.payout_outcome =
@@ -46,10 +55,13 @@ Settlement is partial-tolerant, but only for payouts that were never submitted.
 If one leg succeeds and the other is accepted by the provider but not confirmed,
 or its outcome is unknown, or the provider refuses it, the claim returns to
 `pending_settlement` and the unresolved leg is **not** resubmitted
-automatically. An administrator can retry a manual settlement through
-`POST /api/admin/claims/:id/release-settlement`, but that re-runs the same
-eligibility rule: a payout that may already have moved money is never re-sent.
-Unresolved payouts are listed by `GET /api/admin/payout-reconciliation`.
+automatically. An administrator can either record a durable, queryable approval
+(POST /api/admin/claims/:id/settlement/approve) and then deliberately initiate
+the payout (POST /api/admin/claims/:id/settlement/initiate), or mask the claim
+back to a non-review state through the normal lifecycle transitions. Either way,
+the same durable eligibility rule applies: a payout that may already have moved
+money is never re-sent. Unresolved payouts are listed by `GET
+/api/admin/payout-reconciliation`.
 
 ### Notification retry
 
@@ -110,10 +122,15 @@ endpoint rather than retrying the notification.
 ### A claim is stuck in `releasing`
 
 A settlement that died mid-flight can leave the claim in `releasing`. The release
-operation is re-entrant from `releasing` back to `pending_settlement`, so the
-next sweep pass picks it up and re-evaluates the payouts. If it does not clear,
-settle it manually through the admin route and check the settlement sweep logs
-for the specific payout that is failing.
+lock is given back to `pending_settlement` only by the payout path itself, while
+that process is still alive to do it: the global payout pause, a local failure
+such as a missing claim, item, agent or category, and an unresolved payout row all
+return it deliberately. Nothing returns it on a timer. The next sweep pass only
+reports the stranded claim (`[SETTLEMENT SWEEP] ... locked in 'releasing' need
+manual reconciliation`) — it neither resets the payout state nor retries the
+payout — and initiating a payout for a claim that is still in `releasing` is
+refused with `settlement_already_in_flight`. Clearing it is an operator decision,
+taken with `GET /api/admin/payout-reconciliation` in hand.
 
 Releasing the claim does **not** re-authorize a payout. Eligibility is decided by
 the payout row's own outcome, so a row that may already have moved money

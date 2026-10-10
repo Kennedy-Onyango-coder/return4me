@@ -159,7 +159,9 @@ applicable a named permission.
 |---|---|---|
 | GET | `/api/admin/claims` | List claims (`claims.read`) |
 | GET | `/api/admin/claims/:claimId` | Claim detail (`claims.detail`) |
-| POST | `/api/admin/claims/:id/release-settlement` | Manual settlement |
+| POST | `/api/admin/claims/:id/settlement/approve` | Record durable settlement approval (`claims.settlement_approve`) |
+| POST | `/api/admin/claims/:id/settlement/initiate` | Initiate the payout (`claims.settlement_initiate`) |
+| POST | `/api/admin/claims/:id/release-settlement` | Legacy manual settlement. Delegates to the same rule as `initiate` (`claims.settlement_initiate`); it cannot bypass the durable approval or the settle_at window, and answers 409 with `next: { approve, initiate }` when they are missing |
 | GET | `/api/admin/payout-reconciliation` | Finder/agent payouts whose provider outcome is unresolved (read-only) |
 | GET | `/api/admin/disputes/:disputeId/evidence` | Evidence view |
 | POST | `/api/admin/disputes/resolve` | Resolve a dispute |
