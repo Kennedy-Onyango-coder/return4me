@@ -405,3 +405,172 @@ export function matchPayoutTransactionToLegs(
 
   return matches.length === 1 ? matches[0].id : null;
 }
+
+// ============================================================================
+// BATCH 1B-C1 — BINDING AN INITIATION RESPONSE TRANSACTION TO A LOCAL LEG
+// ============================================================================
+//
+// WHAT THIS REPLACES, AND WHY
+//
+// The payout-initiation path used to tie the provider's per-transaction response
+// entries to local payout legs by the LAST NINE DIGITS of the destination
+// account (`acct.endsWith(destination.replace(/\s+/g, '').slice(-9))`). That is
+// not an identity. A finder's M-Pesa number and an agent's till number are both
+// plain digit strings, and `find()` returns the FIRST entry that matches, so a
+// shared suffix handed BOTH legs the same provider `transaction_id`.
+//
+// The damage is not a wrong payment — nothing in this module moves money — it is
+// a WRONG provider transaction id recorded on a ledger leg, which then makes
+// `matchPayoutTransactionToLegs()` unable to bind the provider's authoritative
+// status report to the correct leg. That matcher's own docstring names this
+// exact cause ("the submission path bound responses by recipient account instead
+// of by position").
+//
+// WHAT IS USABLE, ON THE DOCUMENTED CONTRACT
+//
+// IntaSend documents that the initiation response (`POST
+// /api/v1/send-money/initiate/`) carries, per submitted transaction, the
+// `account` it was addressed to plus a provider-assigned `transaction_id`:
+//
+//   "transactions": [ { "transaction_id": "KQ9PLXR", "status": "Pending",
+//                       "status_code": "TP101", "request_reference_id": "…",
+//                       "name": "Jane Doe", "account": "254712345678",
+//                       "amount": "150.00", "narrative": "Salary" } ]
+//
+// The documented response does NOT echo `idempotency_key`, and no ordering
+// guarantee is documented for the transactions array, so NEITHER of those may be
+// used as a correlation. The one value that is both documented in the response
+// and chosen by us per leg is the exact `account` we submitted, so the
+// correlation below is EXACT equality on it, with every ambiguity refused:
+//
+//   * accounts are compared after whitespace removal only — never by suffix,
+//     never by amount, never by array position;
+//   * a leg whose account is blank, or shared with another leg of the same
+//     submission, is refused — every side of the collision, not just the later
+//     one;
+//   * a leg with zero matching provider transactions, or with more than one, is
+//     refused;
+//   * a matching provider transaction with no usable `transaction_id` is refused.
+//
+// A refusal returns `providerTransactionId: null`. That is deliberate and is not
+// a financial decision: the ledger row stays unresolved, the provider batch id is
+// still recorded, and only the authoritative status lookup plus the operator
+// reconciliation surface can resolve it. NOTHING here can complete a payout.
+//
+// STATED ASSUMPTION (explicit, falsifiable, sandbox-verifiable): the initiation
+// response echoes the submitted `account` verbatim. If a provider revision
+// reformats it (e.g. answers `0712…` for a submitted `254712…`), the correlation
+// simply finds no match — an inert feature, never a wrong binding. If IntaSend
+// ever echoes the per-transaction `idempotency_key`, that would be a strictly
+// stronger correlation and should replace the account comparison.
+
+/** One local payout leg EXACTLY AS IT WAS SUBMITTED to the provider. */
+export interface PayoutSubmittedLegIdentity {
+  /**
+   * An opaque local identity for this leg. It is echoed back in the result and
+   * is never used for matching, so it may be a ledger row id or a recipient role.
+   */
+  id: string;
+  /** The exact `account` value submitted for this leg. */
+  account: string;
+}
+
+/** Why a provider transaction id was, or was not, bound to a local leg. */
+export type PayoutBindingOutcome =
+  | 'bound'
+  | 'leg_account_missing'
+  | 'duplicate_local_leg_account'
+  | 'provider_transaction_not_found'
+  | 'provider_transaction_ambiguous'
+  | 'provider_transaction_id_missing';
+
+export interface PayoutLegBinding {
+  /** The `id` of the submitted leg this entry describes. */
+  id: string;
+  /** The provider's own transaction id, or null when nothing was bound. */
+  providerTransactionId: string | null;
+  outcome: PayoutBindingOutcome;
+}
+
+export interface PayoutBindingReport {
+  /** One entry per SUBMITTED leg, in the same order. */
+  bindings: PayoutLegBinding[];
+  /**
+   * How many provider transactions could not be tied to any submitted leg (an
+   * unrecognised or blank account). Counted, never returned as values, so a
+   * caller cannot log a third party's account by accident.
+   */
+  unmatchedProviderTransactions: number;
+}
+
+/**
+ * Whitespace-free account form, or null when there is no account at all.
+ * Accepts a numeric JSON value (some serializers emit digits as numbers) but not
+ * booleans/objects/arrays, which are malformed rather than absent.
+ */
+function normalizeAccountValue(value: unknown): string | null {
+  if (typeof value !== 'string' && typeof value !== 'number') return null;
+  const compact = String(value).replace(/\s+/g, '');
+  return compact === '' ? null : compact;
+}
+
+/**
+ * Resolve each SUBMITTED payout leg to at most ONE provider transaction from the
+ * initiation response. Pure: no imports, no I/O, no side effects.
+ *
+ * Fail-closed by construction — see the block comment above for why exact account
+ * equality is the only correlation the documented contract supports, and why
+ * every ambiguity yields `providerTransactionId: null`.
+ */
+export function resolvePayoutTransactionBindings(
+  legs: readonly PayoutSubmittedLegIdentity[] | null | undefined,
+  providerTransactions: readonly unknown[] | null | undefined,
+): PayoutBindingReport {
+  const submitted = Array.isArray(legs) ? legs : [];
+
+  const entries = (Array.isArray(providerTransactions) ? providerTransactions : []).map((entry) => {
+    const record = entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : null;
+    // ONLY the documented field names are read. Guessing at alternative spellings
+    // (id / invoice / phone_number / destination) is the shape-guessing this
+    // codebase refuses to do: an unreadable entry simply cannot be bound.
+    return {
+      account: normalizeAccountValue(record?.account),
+      transactionId: record ? normalizeProviderRef(record.transaction_id) : null,
+    };
+  });
+
+  const legAccounts = submitted.map((leg) => normalizeAccountValue(leg?.account));
+  const knownAccounts = new Set(legAccounts.filter((account): account is string => account !== null));
+
+  const bindings: PayoutLegBinding[] = submitted.map((leg, index) => {
+    const id = String(leg?.id ?? '');
+    const account = legAccounts[index];
+    if (account === null) {
+      return { id, providerTransactionId: null, outcome: 'leg_account_missing' };
+    }
+    if (legAccounts.filter((candidate) => candidate === account).length > 1) {
+      // Two legs were addressed to the same account, so a provider transaction
+      // for it is evidence about NEITHER of them. Refuse both.
+      return { id, providerTransactionId: null, outcome: 'duplicate_local_leg_account' };
+    }
+    const matches = entries.filter((entry) => entry.account === account);
+    if (matches.length === 0) {
+      return { id, providerTransactionId: null, outcome: 'provider_transaction_not_found' };
+    }
+    if (matches.length > 1) {
+      return { id, providerTransactionId: null, outcome: 'provider_transaction_ambiguous' };
+    }
+    const transactionId = matches[0].transactionId;
+    if (transactionId === null) {
+      return { id, providerTransactionId: null, outcome: 'provider_transaction_id_missing' };
+    }
+    return { id, providerTransactionId: transactionId, outcome: 'bound' };
+  });
+
+  return {
+    bindings,
+    unmatchedProviderTransactions: entries.filter(
+      (entry) => entry.account === null || !knownAccounts.has(entry.account),
+    ).length,
+  };
+}

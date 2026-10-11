@@ -3,6 +3,7 @@ import {
   classifyPayoutTransactionStatus,
   readProviderTransactionStatus,
   matchPayoutTransactionToLegs,
+  resolvePayoutTransactionBindings,
   isPayoutConfirmable,
   CONFIRMABLE_PAYOUT_OUTCOMES,
 } from '../payoutOutcomes';
@@ -247,6 +248,168 @@ describe('BATCH 1 — a provider transaction binds to exactly ONE leg', () => {
   it('tolerates surrounding whitespace on either side', () => {
     expect(matchPayoutTransactionToLegs({ batchId: ' TRK-1 ', transactionId: ' TX-1 ' }, [LEG_A]))
       .toBe('TXN-A');
+  });
+});
+
+// =============================================================================
+// BATCH 1B-C1 — BINDING THE INITIATION RESPONSE TO THE SUBMITTED LEGS.
+// =============================================================================
+// The other half of the same question. `matchPayoutTransactionToLegs` above binds
+// a provider transaction that was ALREADY recorded on a leg; this function
+// decides which provider transaction id may be recorded on a leg in the first
+// place, from the initiation response.
+//
+// It replaces a suffix match on the destination account
+// (`acct.endsWith(destination.slice(-9))`), which is not an identity: the finder
+// and agent accounts below genuinely collide on their last nine digits, and
+// `find()` handed the first matching entry to BOTH legs.
+//
+// The rules pinned here are exact equality on the account WE submitted, plus a
+// refusal for every ambiguity. A refusal is `providerTransactionId: null`, which
+// leaves the leg unresolved — never a wrong id, never a fabricated one.
+// =============================================================================
+const SUBMITTED_FINDER = { id: 'finder', account: '254712345678' };
+// Deliberately the SAME last nine digits as the finder account: this is the
+// collision the old suffix matcher could not tell apart.
+const SUBMITTED_AGENT = { id: 'agent', account: '712345678' };
+const SUBMITTED = [SUBMITTED_FINDER, SUBMITTED_AGENT];
+
+const transaction = (account: unknown, transactionId: unknown) => ({
+  account,
+  transaction_id: transactionId,
+});
+
+describe('BATCH 1B-C1 — an initiation transaction binds only on an exact, unique account', () => {
+  it('binds each submitted leg to its OWN provider transaction', () => {
+    const report = resolvePayoutTransactionBindings(SUBMITTED, [
+      transaction('254712345678', 'KQ9PLXR'),
+      transaction('712345678', 'AB7CDE1'),
+    ]);
+
+    expect(report.bindings).toEqual([
+      { id: 'finder', providerTransactionId: 'KQ9PLXR', outcome: 'bound' },
+      { id: 'agent', providerTransactionId: 'AB7CDE1', outcome: 'bound' },
+    ]);
+    expect(report.unmatchedProviderTransactions).toBe(0);
+  });
+
+  it('never binds across the shared account SUFFIX (the defect this replaces)', () => {
+    // The provider answered about the AGENT only. The finder account ends with
+    // the agent account's digits, so the old suffix matcher bound the agent's
+    // transaction to the finder leg as well. It must not any more.
+    const report = resolvePayoutTransactionBindings(SUBMITTED, [
+      transaction('712345678', 'AB7CDE1'),
+    ]);
+
+    expect(report.bindings[0]).toEqual({
+      id: 'finder', providerTransactionId: null, outcome: 'provider_transaction_not_found',
+    });
+    expect(report.bindings[1]).toEqual({
+      id: 'agent', providerTransactionId: 'AB7CDE1', outcome: 'bound',
+    });
+  });
+
+  it('refuses a match that carries no usable provider transaction id', () => {
+    for (const id of [null, undefined, '', '   ', 12345, { id: 'X' }]) {
+      const report = resolvePayoutTransactionBindings([SUBMITTED_FINDER], [
+        transaction('254712345678', id),
+      ]);
+      expect(report.bindings[0]).toEqual({
+        id: 'finder', providerTransactionId: null, outcome: 'provider_transaction_id_missing',
+      });
+    }
+  });
+
+  it('refuses a DUPLICATED provider transaction for one account', () => {
+    const report = resolvePayoutTransactionBindings([SUBMITTED_FINDER], [
+      transaction('254712345678', 'TX-1'),
+      transaction('254712345678', 'TX-2'),
+    ]);
+
+    expect(report.bindings[0].providerTransactionId).toBeNull();
+    expect(report.bindings[0].outcome).toBe('provider_transaction_ambiguous');
+  });
+
+  it('refuses BOTH legs when two of them were submitted with the same account', () => {
+    const report = resolvePayoutTransactionBindings(
+      [{ id: 'finder', account: '254712345678' }, { id: 'agent', account: '254 712 345 678' }],
+      [transaction('254712345678', 'TX-1')],
+    );
+
+    // Whitespace is not an identity difference, so this is ONE account sent
+    // twice: a transaction for it is evidence about neither leg.
+    expect(report.bindings).toEqual([
+      { id: 'finder', providerTransactionId: null, outcome: 'duplicate_local_leg_account' },
+      { id: 'agent', providerTransactionId: null, outcome: 'duplicate_local_leg_account' },
+    ]);
+  });
+
+  it('refuses a leg whose submitted account is blank', () => {
+    for (const account of ['', '   ', null, undefined, {}, true]) {
+      const report = resolvePayoutTransactionBindings(
+        [{ id: 'finder', account: account as any }],
+        [transaction(account, 'TX-1')],
+      );
+      expect(report.bindings[0]).toEqual({
+        id: 'finder', providerTransactionId: null, outcome: 'leg_account_missing',
+      });
+    }
+  });
+
+  it('counts a provider transaction for an account we never submitted, and binds nothing', () => {
+    const report = resolvePayoutTransactionBindings([SUBMITTED_FINDER], [
+      transaction('254700000000', 'TX-OTHER'),
+    ]);
+
+    expect(report.bindings[0]).toEqual({
+      id: 'finder', providerTransactionId: null, outcome: 'provider_transaction_not_found',
+    });
+    expect(report.unmatchedProviderTransactions).toBe(1);
+  });
+
+  it('reads ONLY the documented field names (no shape guessing)', () => {
+    // `id` / `invoice` / `phone_number` / `destination` were probed by the old
+    // implementation. A body that uses them is unrecognised, not bound.
+    const report = resolvePayoutTransactionBindings([SUBMITTED_FINDER], [
+      { phone_number: '254712345678', id: 'TX-1', invoice: 'TX-2' },
+      { destination: '254712345678', transaction_id: 'TX-3' },
+    ]);
+
+    expect(report.bindings[0].providerTransactionId).toBeNull();
+    expect(report.bindings[0].outcome).toBe('provider_transaction_not_found');
+    expect(report.unmatchedProviderTransactions).toBe(2);
+  });
+
+  it('tolerates whitespace in the echoed account, but nothing else', () => {
+    const spaced = resolvePayoutTransactionBindings([SUBMITTED_FINDER], [
+      transaction(' 254 712 345 678 ', 'TX-1'),
+    ]);
+    expect(spaced.bindings[0]).toEqual({
+      id: 'finder', providerTransactionId: 'TX-1', outcome: 'bound',
+    });
+
+    // A reformatted account is not the account we sent: refuse rather than guess.
+    const reformatted = resolvePayoutTransactionBindings([SUBMITTED_FINDER], [
+      transaction('0712345678', 'TX-1'),
+    ]);
+    expect(reformatted.bindings[0].providerTransactionId).toBeNull();
+    expect(reformatted.bindings[0].outcome).toBe('provider_transaction_not_found');
+  });
+
+  it('refuses everything when the response carries no usable per-transaction array', () => {
+    for (const body of [[], null, undefined, 'transactions', 42, {}]) {
+      const report = resolvePayoutTransactionBindings(SUBMITTED, body as any);
+      expect(report.bindings.map(binding => binding.providerTransactionId)).toEqual([null, null]);
+      expect(report.bindings.map(binding => binding.outcome))
+        .toEqual(['provider_transaction_not_found', 'provider_transaction_not_found']);
+    }
+  });
+
+  it('returns one entry per submitted leg, in submission order, for no legs at all', () => {
+    expect(resolvePayoutTransactionBindings([], [transaction('254712345678', 'TX-1')]))
+      .toEqual({ bindings: [], unmatchedProviderTransactions: 1 });
+    expect(resolvePayoutTransactionBindings(null, null))
+      .toEqual({ bindings: [], unmatchedProviderTransactions: 0 });
   });
 });
 

@@ -74,11 +74,13 @@ describe('P1-01 — refund reconciliation confirmation', () => {
     expect(adminSource).toContain('disabled={refundReconcileProcessing === item.claimId}');
   });
 
-  it('is bilingual and states plainly that no money is sent', () => {
+  it('states plainly that no money is sent, in the one approved language', () => {
+    // English-only since the English-only decision (commit e073c8e): the
+    // Kiswahili twin is gone, so its ABSENCE is what this pins now.
     expect(adminSource).toContain('Confirm refund NOT executed');
-    expect(adminSource).toContain('Thibitisha kwamba urejeshaji haukuuatikwa');
     expect(adminSource).toContain('It will NOT send any money.');
-    expect(adminSource).toContain('Hakutuma pesa yoyote.');
+    expect(adminSource).not.toContain('Thibitisha kwamba urejeshaji haukuuatikwa');
+    expect(adminSource).not.toContain('Hakutuma pesa yoyote.');
   });
 });
 describe('P2-01 / P2-02 — customer-facing terminology', () => {
@@ -96,20 +98,21 @@ describe('P2-01 / P2-02 — customer-facing terminology', () => {
     expect(ownerSource).not.toMatch(/Return4me Escrow & Platform/);
   });
 
-  it('replacements stay bilingual and promise nothing the backend does not do', () => {
+  it('replacements stay English-only and promise nothing the backend does not do', () => {
+    // English-only since the English-only decision (commit e073c8e): both
+    // replacements ship as plain English literals, and the Kiswahili twins this
+    // batch introduced are gone.
     expect(homeSource).toContain("'Payment held safely'");
-    expect(homeSource).toContain("'Pesa inashikiliwa kwa usalama'");
     expect(ownerSource).toContain("'Payment receipt'");
-    expect(ownerSource).toContain("'Kipokezi cha malipo'");
+    expect(homeSource).not.toContain("'Pesa inashikiliwa kwa usalama'");
+    expect(ownerSource).not.toContain("'Kipokezi cha malipo'");
     // The new copy must stay descriptive, not promissory. Scoped to the exact
     // phrases introduced by this batch: HomeView already contains pre-existing
     // copy that explicitly promises NO guarantee, which a file-wide keyword
     // scan would wrongly flag.
     const introduced = [
       'Payment held safely',
-      'Pesa inashikiliwa kwa usalama',
       'Payment receipt',
-      'Kipokezi cha malipo',
       'Return4me platform fee',
     ];
     for (const phrase of introduced) {

@@ -152,12 +152,41 @@ export function registerAdminDisputeRoutes(app: Express, deps: AdminDisputeRoute
       // If the losing claimant had already paid into escrow, they were
       // locked into 'refunding' by resolveDispute above. Trigger the real
       // M-Pesa refund now — outside the DB transaction, since it's a
-      // network call to IntaSend — and only mark the refund complete once
-      // the transfer actually succeeds. A definite provider rejection does
-      // NOT roll back the dispute decision (the winner has already been
-      // decided); it reverts just the loser's claim to 'rejected' and flags
-      // it in the audit log for manual admin reconciliation, exactly like a
-      // failed payout during normal escrow release.
+      // network call to IntaSend.
+      //
+      // BATCH 1B-C1-R1 / R2 — 'completed' means ONE thing only: an authoritative
+      // provider confirmation that THIS individual refund transaction settled.
+      // It does NOT mean "the initiation call returned 2xx", and since
+      // BATCH 1B-C1-R2 it no longer means "the initiation response contained a
+      // TS100" either: PaymentService.triggerIntasendRefund reports EVERY HTTP
+      // 2xx from /send-money/initiate/ as 'unknown', because an initiation
+      // response is a submission receipt, not a settlement record. No
+      // authoritative refund-status confirmation mechanism exists yet in this
+      // codebase, so the 'completed' branch below is retained for that future
+      // mechanism and is NOT reachable from an initiation response today. The
+      // three results are therefore:
+      //
+      //   'completed' — authoritative provider-confirmed settlement (not
+      //                 reachable from the initiation path today): finalize the
+      //                 claim as 'refunded' and notify the customer.
+      //   'unknown'   — EVERY initiation response: accepted-but-unsettled,
+      //                 preview/approval-pending (BP103), pending (TP101), a
+      //                 per-transaction TS100, malformed/absent evidence, or a
+      //                 timeout/5xx. The money may or may not have moved. Leave
+      //                 the claim LOCKED in 'refunding', audit it, notify NOBODY,
+      //                 and take no automatic action (the admin
+      //                 refund-reconciliation endpoints resolve it after an
+      //                 operator has confirmed the transfer with the provider).
+      //   'failed'    — the provider refused the request with a definite 4xx:
+      //                 no transfer was executed, so the refund lock can be
+      //                 released (claim 'rejected', money still flagged for a
+      //                 manual refund).
+      //
+      // A failure or an unverified outcome does NOT roll back the dispute
+      // decision (the winner has already been decided); it reverts just the
+      // loser's claim, or leaves the refund lock in place, and flags it in the
+      // audit log for manual admin reconciliation, exactly like a failed payout
+      // during normal escrow release.
       if (result.refundNeededForClaimId && result.refundAmount && result.refundPhone) {
         const refundResult = await PaymentService.triggerIntasendRefund(
           result.refundPhone,
@@ -173,10 +202,15 @@ export function registerAdminDisputeRoutes(app: Express, deps: AdminDisputeRoute
           // That is the idempotency guard: a repeated reconciliation of a claim
           // that is no longer in 'refunding' returns false and stays silent.
           //
-          // Note the deliberate distinction from the ambiguous branch below: a
-          // network timeout leaves the claim in 'refunding' and notifies NOTHING,
-          // because we genuinely do not know yet whether the money moved. Only a
-          // confirmed-executed refund produces a customer-visible completion.
+          // Note the deliberate distinction from the unknown branch below: an
+          // UNCONFIRMED outcome (a timeout, but equally EVERY initiation
+          // response — accepted-but-unsettled, preview/approval-pending (BP103),
+          // pending (TP101), a per-transaction TS100, or an unreadable body)
+          // leaves the claim in 'refunding' and notifies NOTHING, because an
+          // initiation response cannot tell us whether the money moved. Only an
+          // authoritative provider confirmation of THIS transaction — from a
+          // mechanism that does not exist yet for refunds — could produce a
+          // customer-visible completion through this branch.
           if (refundFinalized) {
             await produceRefundComplete(result.refundNeededForClaimId);
           }
@@ -190,20 +224,35 @@ export function registerAdminDisputeRoutes(app: Express, deps: AdminDisputeRoute
           // uq_claims_one_active_per_item, so the winner remains the sole
           // active claim), record an audit entry for reconciliation, and
           // take NO automatic action.
+          //
+          // BATCH 1B-C1-R1 widened this branch from "network error" to every
+          // outcome that is not PROOF of a completed transfer. BATCH 1B-C1-R2
+          // makes it the ONLY branch an initiation response can reach: every HTTP
+          // 2xx from /send-money/initiate/ is reported 'unknown', whether it
+          // carries acceptance, a preview/approval-pending batch (BP103), a
+          // pending transaction (TP101), a per-transaction TS100, or nothing
+          // readable at all. All of them are the same operational situation the
+          // A1 discipline already describes: the money may have moved and we
+          // cannot tell, so nothing is finalized and nobody is notified. Like a
+          // timeout, none of them is auto-retried; the refund-reconciliation
+          // endpoints are the way out.
           await db.logAudit(
             adminIdentifier,
             'REFUND_UNKNOWN_OUTCOME',
-            `Claim ${result.refundNeededForClaimId}: refund request to IntaSend ended in an ambiguous outcome (timeout/network error). The claim remains locked in 'refunding'. No automatic retry has been issued. Manual provider reconciliation is required: confirm with IntaSend whether the refund executed, then finalizeClaimRefund (executed) or revertClaimRefundLock (not executed).`
+            `Claim ${result.refundNeededForClaimId}: the refund initiation request to IntaSend returned an UNCONFIRMED outcome. BATCH 1B-C1-R2: an initiation response is never proof that the refund was paid out — every HTTP 2xx from /send-money/initiate/ (accepted, preview/approval-pending BP103, pending TP101, a per-transaction TS100, or an unreadable body alike), plus 408/5xx and transport errors, is recorded as unresolved. The claim remains locked in 'refunding' and NO refund-completion notification has been sent. No automatic retry has been issued. Manual provider reconciliation is required: confirm with IntaSend whether the refund executed, then finalizeClaimRefund (executed) or revertClaimRefundLock (not executed).`
           );
           return res.status(207).json({
             success: true,
-            message: 'Dispute resolved, but the losing claimant\'s refund outcome is unverified (network error). The claim remains in refunding — confirm with IntaSend before any further action.',
+            message: 'Dispute resolved, but the losing claimant\'s refund is NOT confirmed: an IntaSend initiation response cannot confirm that this specific refund transaction was paid out. The claim remains in refunding and no completion notice was sent — confirm the transfer with IntaSend, then use the refund-reconciliation actions.',
             refundUnknown: true,
           });
         } else {
-          // Definite provider rejection (IntaSend received the request and
-          // refused it) — the refund was NOT executed, so reverting the
-          // claim's refund lock is safe.
+          // Definite provider rejection: a 4xx (excluding 408), i.e. IntaSend
+          // received the request and refused it before executing anything — the
+          // refund was NOT executed, so reverting the claim's refund lock is
+          // safe. 5xx and 408 are deliberately NOT here: they are ambiguous and
+          // are reported as 'unknown' by triggerIntasendRefund so this branch
+          // can never release a lock for a refund that may have been accepted.
           await db.revertClaimRefundLock(result.refundNeededForClaimId, 'IntaSend refund disbursement rejected by provider', adminIdentifier);
           return res.status(207).json({
             success: true,

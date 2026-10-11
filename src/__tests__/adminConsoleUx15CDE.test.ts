@@ -251,7 +251,8 @@ describe('UX-15E: the item-review reason step is the shared Modal, not window.pr
   });
 
   it('offers Cancel and the action confirm control', () => {
-    expect(REVIEW_MODAL).toContain("{lang === 'en' ? 'Cancel' : 'Ghairi'}");
+    // English-only since the English-only decision (commit e073c8e).
+    expect(REVIEW_MODAL).toContain("{'Cancel'}");
     expect(REVIEW_MODAL).toContain('onClick={confirmItemReviewStatusChange}');
     expect(REVIEW_MODAL).toContain('onClick={closeItemReviewPrompt}');
   });

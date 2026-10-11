@@ -1687,7 +1687,7 @@ describe('stage 7 â€” pickup-code handover to pending_settlement', () => {
 //
 // 3. PAYOUT PROVIDER SEAM â€” PaymentService.triggerIntasendPayout() ->
 //    fetchWithTimeout() -> the global fetch() against
-//    <INTASEND_BASE_URL>/send-money/. The provider is controlled AT THAT
+//    <INTASEND_BASE_URL>/send-money/initiate/ (documented initiation path, Batch 1B-C1). The provider is controlled AT THAT
 //    EXISTING SEAM by a passthrough global.fetch that intercepts only the
 //    IntaSend host and lets every other request (including this suite's own
 //    calls to the ephemeral listener) through untouched. The provider

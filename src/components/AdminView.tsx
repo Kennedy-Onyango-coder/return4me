@@ -1956,13 +1956,17 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
             throw new Error(data.error || 'Dispute resolution failed');
           }
 
-          // A refund-transfer failure is reported with success:true (the
-          // dispute itself WAS resolved — that decision doesn't get rolled
-          // back) plus a refundFailed flag, so it lands here rather than
-          // the catch block below. It needs to stand out from a routine
-          // success message: it means real M-Pesa money is stuck and
-          // needs manual admin follow-up, not just an FYI.
-          if (data.refundFailed) {
+          // A refund that did not go through cleanly is reported with
+          // success:true (the dispute itself WAS resolved — that decision
+          // doesn't get rolled back) plus a `refundFailed` (a definite provider
+          // rejection: nothing was sent) or `refundUnknown` (BATCH 1B-C1-R1:
+          // IntaSend did not confirm THIS refund transaction, so the money may
+          // or may not have moved and the claim stays locked in 'refunding')
+          // flag, so it lands here rather than the catch block below. Both must
+          // stand out from a routine success message: a green "resolved" toast
+          // for a refund that is not confirmed would tell the administrator a
+          // refund is done when it is not.
+          if (data.refundFailed || data.refundUnknown) {
             setActionWarning(data.message);
           } else {
             setActionSuccess(data.message);

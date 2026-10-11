@@ -132,3 +132,71 @@ describe('production boot guard requires the challenge', () => {
     expect(SERVER).toContain('isPlaceholderKey(process.env.INTASEND_WEBHOOK_CHALLENGE)');
   });
 });
+
+describe('IntaSend payout initiation contract (Batch 1B-C1)', () => {
+  it('POSTs payout initiation to the documented /send-money/initiate/ path', () => {
+    // Documented: "Initiate a batch with POST /api/v1/send-money/initiate/."
+    expect(PAYMENTS).toContain("'/send-money/initiate/'");
+    expect(PAYMENTS).toContain('${INTASEND_BASE_URL}${INTASEND_SEND_MONEY_INITIATE_PATH}');
+  });
+
+  it('no longer posts to the bare, undocumented /send-money/ path', () => {
+    // Both call sites (batch payout and single-transaction refund) used it.
+    expect(PAYMENTS).not.toContain('${INTASEND_BASE_URL}/send-money/`');
+  });
+
+  it('leaves the payout status endpoint untouched', () => {
+    expect(PAYMENTS).toContain('${INTASEND_BASE_URL}/send-money/status/');
+  });
+
+  it('sends the documented per-transaction idempotency_key', () => {
+    // "Unique key per transaction. A repeat request with the same key is
+    // rejected, so you can retry safely."
+    expect(PAYMENTS).toContain('idempotency_key: leg.idempotencyKey');
+    expect(PAYMENTS).toMatch(/PAYOUT_LEG_\$\{recipientType\.toUpperCase\(\)\}/);
+  });
+
+  it('never correlates provider transactions by an account suffix again', () => {
+    // BATCH 1B-C1-R1 — SCOPED to the initiation block instead of the whole
+    // file. A file-wide `not.toContain('endsWith(')` / `not.toContain('slice(-9)')`
+    // fails on ANY future legitimate use of those ordinary string operations
+    // anywhere in payments.ts (URL checks, id handling, an unrelated provider),
+    // and it cannot distinguish the account-suffix correlation this test exists
+    // to pin from code that has nothing to do with correlation. The suffix
+    // matcher only ever lived in the initiation block, so that is where the
+    // negative belongs — see the next test, which asserts the same thing on the
+    // same slice plus the alternative response keys.
+    const start = PAYMENTS.indexOf('async triggerIntasendPayout');
+    expect(start, 'triggerIntasendPayout not found').toBeGreaterThan(-1);
+    const end = PAYMENTS.indexOf('async triggerIntasendRefund', start);
+    expect(end, 'triggerIntasendRefund not found').toBeGreaterThan(start);
+    const initiation = PAYMENTS.slice(start, end);
+
+    expect(initiation).not.toContain('slice(-9)');
+    expect(initiation).not.toContain('endsWith(');
+    // The replacement correlation is still the ONLY one, file-wide and here.
+    expect(initiation).toContain('resolvePayoutTransactionBindings');
+    expect(PAYMENTS).toContain('resolvePayoutTransactionBindings');
+  });
+
+  it('reads only the documented response fields in the initiation parser', () => {
+    // Scoped to the INITIATION block: the status lookup keeps its own
+    // (pre-existing, out-of-scope) `disbursements` fallback, so a file-wide
+    // assertion would be asserting about code this batch does not own.
+    const start = PAYMENTS.indexOf('async triggerIntasendPayout');
+    expect(start, 'triggerIntasendPayout not found').toBeGreaterThan(-1);
+    const end = PAYMENTS.indexOf('async triggerIntasendRefund', start);
+    expect(end, 'triggerIntasendRefund not found').toBeGreaterThan(start);
+    const initiation = PAYMENTS.slice(start, end);
+
+    // The alternative key names the suffix matcher probed are gone.
+    expect(initiation).not.toContain('data?.invoices');
+    expect(initiation).not.toContain('data?.disbursements');
+    expect(initiation).not.toContain('t?.phone_number');
+    expect(initiation).not.toContain('match?.invoice');
+    // ...and the suffix correlation itself is gone, from this block and the file.
+    expect(initiation).not.toContain('slice(-9)');
+    expect(initiation).not.toContain('endsWith(');
+    expect(initiation).toContain('resolvePayoutTransactionBindings');
+  });
+});

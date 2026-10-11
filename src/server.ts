@@ -4030,17 +4030,29 @@ async function createApp() {
       }
       const finalized = await db.finalizeClaimRefund(claimId, found.refundAmount, found.ownerPhone, adminIdentifier);
       if (!finalized) {
+        // The CAS refused: this claim is no longer in 'refunding' (a concurrent
+        // finalize/revert won, or it was never in that state). Nothing was
+        // written by finalizeClaimRefund, so nothing may be announced.
         return res.status(409).json({ error: 'This claim is no longer in the refunding state.' });
+      }
       // BATCH 3 / P9 - customer notification for the completed refund.
       //
-      // After the `if (!finalized)` early return, so it runs only where
-      // finalizeClaimRefund actually performed its refunding -> refunded CAS.
-      // `finalized` is the idempotency guard, so a repeated admin reconciliation
-      // of the same claim cannot notify twice. The refund has already committed;
-      // the producer can only add an in-app row and cannot undo it.
+      // STRICTLY AFTER the `if (!finalized)` early return above, so it runs only
+      // where finalizeClaimRefund actually performed its refunding -> refunded
+      // CAS. It previously sat INSIDE that if-block, textually after the
+      // unconditional `return`, i.e. it was unreachable dead code: a reconciled
+      // refund finalized the claim silently and the customer was never told.
+      //
+      // `finalized` is the ONLY deduplication this notification has.
+      // finalizeClaimRefund is an atomic refunding -> refunded CAS that returns
+      // false on every later call, and `customer_notifications` has no unique
+      // constraint on business_reference, so a repeated admin reconciliation
+      // reaches the 409 above and cannot notify twice. Do not move this call
+      // before the guard and do not make it unconditional.
+      //
+      // The refund has already committed; the producer can only add an in-app
+      // row and cannot undo it.
       await produceRefundComplete(claimId);
-
-      }
       res.json({ success: true, message: 'Refund confirmed executed and claim finalized.' });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');

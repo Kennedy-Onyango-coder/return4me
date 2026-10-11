@@ -280,9 +280,8 @@ describe('the viewer still dismisses the way it always did — plus one control'
 
   it('gives the close control an accessible label and a 44px target', () => {
     expect(LIGHTBOX_CODE).toContain('type="button"');
-    expect(LIGHTBOX_CODE).toContain(
-      "aria-label={lang === 'en' ? 'Close full screen view' : 'Funga mwonekano wa skrini nzima'}",
-    );
+    // English-only since the English-only decision (commit e073c8e).
+    expect(LIGHTBOX_CODE).toContain("aria-label={'Close full screen view'}");
     expect(LIGHTBOX_CODE).toContain('absolute top-4 right-4 z-10 h-11 w-11 rounded-full');
     expect(LIGHTBOX_CODE).toContain('<X size={ICON_SIZE.emphasis} aria-hidden="true" />');
     // 44px is the documented touch floor, and `h-11 w-11` is how the hero

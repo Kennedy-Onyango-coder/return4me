@@ -39,10 +39,21 @@ import path from 'path';
 //   * which flows open the confirmation, or what they store in it;
 //   * the confirmation callback, the endpoint, the method, the payload, the
 //     authorization, the success/error handling, the refreshes, the processing
-//     flags or the bilingual labels;
+//     flags or the copy the dialog and its six flows render;
 //   * the UX-14 authentication gate, the UX-15E item-review dialog, the UX-15F
 //     agent-warning dialog, anything UX-16 still owns, or the lightbox (which is
 //     deliberately deferred to its own UX-15H audit).
+//
+// COPY IS ENGLISH-ONLY (post-`e073c8e`)
+//   The bilingual copy this batch preserved was removed by the English-only
+//   decision (commit e073c8e, "feat: harden agent email otp and remove swahili
+//   ui") along with the rest of the Swahili UI. The assertions below therefore
+//   pin the SHIPPED English copy - plain literals, with no `lang === 'en' ? ... :
+//   ...` pair - exactly as the later suites already do: customerDashboardUx08
+//   says so in as many words, and the same commit rewrote the Batch A/C language
+//   suites into English-only contracts. Nothing else in the UX-15G contract
+//   moved: the same six flows, the same state, the same callbacks, the same
+//   single dismissal path and the same single mutation path.
 //
 // There is no jsdom/React harness in this repository, so — exactly as the
 // UX-06 … UX-15F suites do — the contract is asserted against the shipped source
@@ -157,7 +168,7 @@ describe('the confirmation dialog is the shared Modal, not bespoke markup', () =
     expect(CONFIRM_MODAL_CODE).toContain('open={confirmModal !== null}');
     expect(CONFIRM_MODAL_CODE).toContain('onClose={closeConfirmModal}');
     expect(CONFIRM_MODAL_CODE).toContain("title={confirmModal?.title ?? ''}");
-    expect(CONFIRM_MODAL_CODE).toContain("closeLabel={lang === 'en' ? 'Close' : 'Funga'}");
+    expect(CONFIRM_MODAL_CODE).toContain("closeLabel={'Close'}");
     expect(CONFIRM_MODAL_CODE).toContain('footer={');
     expect(CONFIRM_MODAL_CODE).toContain('{confirmModal.message}');
     // Exactly four shared Modal usages: P1-01, UX-15E, UX-15F and this one.
@@ -213,7 +224,7 @@ describe('the confirmation contract is unchanged', () => {
     expect(count(CONFIRM_STATE, /^\s+\w+: /gm)).toBe(3);
   });
 
-  it('is still opened by the same six flows, each with its own bilingual copy', () => {
+  it('is still opened by the same six flows, each with its own English-only copy', () => {
     expect(count(CODE, /setConfirmModal\(\{/g)).toBe(6);
     for (const [name, source] of Object.entries(FLOWS)) {
       expect(source, `${name} must still open the confirmation`).toContain('setConfirmModal({');
@@ -221,12 +232,16 @@ describe('the confirmation contract is unchanged', () => {
       expect(source).toContain('message:');
       expect(source).toContain('onConfirm: async () => {');
     }
-    expect(FLOWS.deleteCategory).toContain("lang === 'en' ? 'Delete Category' : 'Futa Kitengo'");
-    expect(FLOWS.clearStrikes).toContain("lang === 'en' ? 'Clear Payment Strikes' : 'Ondoa Vikwazo vya Malipo'");
-    expect(FLOWS.approveAgent).toContain("lang === 'en' ? 'Approve Agent' : 'Muidhinishe Wakala'");
-    expect(FLOWS.suspendAgent).toContain("lang === 'en' ? 'Suspend Agent' : 'Msimamishe Wakala'");
-    expect(FLOWS.resolveDispute).toContain("lang === 'en' ? 'Resolve Dispute' : 'Suluhisha Mzozo'");
-    expect(FLOWS.clearReputation).toContain("lang === 'en' ? 'Clear Reputation Flag' : 'Ondoa Bendera ya Sifa'");
+    // English-only since the English-only decision (commit e073c8e): each flow
+    // still stores its own title, as a plain literal with no `lang` pair.
+    expect(FLOWS.deleteCategory).toContain("title: 'Delete Category',");
+    expect(FLOWS.clearStrikes).toContain("title: 'Clear Payment Strikes',");
+    expect(FLOWS.approveAgent).toContain("title: 'Approve Agent',");
+    expect(FLOWS.suspendAgent).toContain("title: 'Suspend Agent',");
+    expect(FLOWS.resolveDispute).toContain("title: 'Resolve Dispute',");
+    expect(FLOWS.clearReputation).toContain("title: 'Clear Reputation Flag',");
+    // ...and no confirmation flow carries a language axis any more.
+    expect(ALL_FLOWS).not.toMatch(/\blang\b/);
   });
 
   it('is still opened from the same pre-existing controls', () => {
@@ -285,8 +300,11 @@ describe('the confirmation contract is unchanged', () => {
     for (const name of ['approveAgent', 'suspendAgent', 'resolveDispute', 'clearReputation']) {
       expect(FLOWS[name], `${name} must still refresh`).toContain('fetchDashboardData();');
     }
-    // The dispute flow still separates a stuck refund from a clean success.
-    expect(FLOWS.resolveDispute).toContain('if (data.refundFailed) {');
+    // The dispute flow still separates a not-confirmed refund from a clean
+    // success. BATCH 1B-C1-R1: `refundUnknown` (provider did not confirm the
+    // individual refund transaction) is surfaced as a warning alongside the
+    // pre-existing definite `refundFailed`.
+    expect(FLOWS.resolveDispute).toContain('if (data.refundFailed || data.refundUnknown) {');
     expect(FLOWS.resolveDispute).toContain('setActionWarning(data.message);');
     expect(FLOWS.resolveDispute).toContain('setActionSuccess(data.message);');
   });
@@ -314,7 +332,8 @@ describe('dismissal can never confirm anything', () => {
       '<Button variant="secondary" size="sm" onClick={closeConfirmModal}>',
       '</Button>',
     );
-    expect(cancelButton).toContain("{lang === 'en' ? 'Cancel' : 'Ghairi'}");
+    // English-only since the English-only decision (commit e073c8e).
+    expect(cancelButton).toContain("{'Cancel'}");
     expect(cancelButton).not.toContain('fetch(');
     expect(cancelButton).not.toContain('onConfirm');
     expect(cancelButton).not.toContain('confirmPendingAction');
@@ -404,7 +423,8 @@ describe('the dialog reads the design system, and nothing else', () => {
       'They will no longer be able to accept drop-offs or process handovers.',
     );
     expect(FLOWS.resolveDispute).toContain('This decision is final and cannot be undone.');
-    expect(CONFIRM_MODAL_CODE).toContain("{lang === 'en' ? 'Confirm' : 'Thibitisha'}");
+    // English-only since the English-only decision (commit e073c8e).
+    expect(CONFIRM_MODAL_CODE).toContain("{'Confirm'}");
     // The ONE generic dialog cannot know which of its six callers is destructive,
     // so it must not paint all six destructive: `danger` stays reserved for the
     // actions that already carried it (UX-15E's legal hold, UX-15F's warning).
@@ -415,7 +435,7 @@ describe('the dialog reads the design system, and nothing else', () => {
 });
 
 // -----------------------------------------------------------------------------
-// E. Accessibility: the primitive's dialog semantics, and the bilingual labels.
+// E. Accessibility: the primitive's dialog semantics, and the English-only labels.
 // -----------------------------------------------------------------------------
 
 describe('the dialog is accessible because the primitive is', () => {
@@ -439,11 +459,12 @@ describe('the dialog is accessible because the primitive is', () => {
     expect(CONFIRM_MODAL_CODE).not.toContain('tabIndex');
   });
 
-  it('keeps an accessible close control and the bilingual labels', () => {
-    expect(CONFIRM_MODAL_CODE).toContain("closeLabel={lang === 'en' ? 'Close' : 'Funga'}");
+  it('keeps an accessible close control and the English-only labels', () => {
+    // The three user-visible labels, pinned as the shipped English literals.
+    expect(CONFIRM_MODAL_CODE).toContain("closeLabel={'Close'}");
     expect(MODAL_PRIMITIVE).toContain("aria-label={closeLabel ?? 'Close dialog'}");
-    expect(CONFIRM_MODAL_CODE).toContain("{lang === 'en' ? 'Cancel' : 'Ghairi'}");
-    expect(CONFIRM_MODAL_CODE).toContain("{lang === 'en' ? 'Confirm' : 'Thibitisha'}");
+    expect(CONFIRM_MODAL_CODE).toContain("{'Cancel'}");
+    expect(CONFIRM_MODAL_CODE).toContain("{'Confirm'}");
     // The alert lead icon is decorative: the heading carries the meaning.
     expect(CONFIRM_MODAL_CODE).toContain('aria-hidden="true"');
   });

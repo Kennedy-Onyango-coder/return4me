@@ -27,7 +27,8 @@ import path from 'path';
 //   * the route architecture — this remains the `/console` gate, reachable only
 //     while there is no admin token.
 // What it changes is hierarchy, control semantics, the type/colour/radius/
-// elevation vocabulary and the copy in both languages — all of it by adopting
+// elevation vocabulary and the copy (English-only since the English-only
+// decision, commit e073c8e) - all of it by adopting
 // primitives and tokens that already exist (`Button`, `Input`, `Banner`, the
 // `--appearance-*` tokens, the type/radius/elevation ladders), exactly as UX-07
 // did for customer authentication and UX-11 did for agent sign-in.
@@ -82,28 +83,11 @@ const CODE_STEP = stripComments(sliceBetween(GATE_TSX, ') : (', '</form>'));
 /** The one dominant action — the LAST <Button in the gate. */
 const SUBMIT = stripComments(GATE.slice(GATE.lastIndexOf('<Button')));
 
-/**
- * Every `lang === 'en' ? 'english' : 'kiswahili'` pair in a slice, whatever the
- * layout — the long context sentence wraps across three lines, so the separator
- * and the `:` are allowed to sit on any line.
- */
-function bilingualPairs(source: string): Array<[string, string]> {
-  const pairs: Array<[string, string]> = [];
-  const re = /lang === 'en'\s*\?\s*'((?:[^'\\]|\\.)*)'\s*:\s*'((?:[^'\\]|\\.)*)'/g;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(source)) !== null) pairs.push([match[1], match[2]]);
-  return pairs;
-}
-
-/** The Kiswahili twin of one specific English string, or null when that string
- *  is not carried by a bilingual pair at all — i.e. it is an untranslated
- *  hard-coded English literal. */
-function twinOf(source: string, english: string): string | null {
-  const escaped = english.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(`lang === 'en'\\s*\\?\\s*'${escaped}'\\s*:\\s*'((?:[^'\\\\]|\\\\.)*)'`);
-  const match = source.match(re);
-  return match ? match[1] : null;
-}
+/* The `bilingualPairs` / `twinOf` helpers that used to live here were removed
+ * with the English-only decision (commit e073c8e): the gate no longer carries a
+ * single `lang === 'en' ? ... : ...` pair to pair up, so section I asserts that
+ * absence directly instead of auditing a translation table that no longer
+ * exists. */
 
 /* ---------------------------------------------------------------------------
  * The three guards the mutation checks at the bottom re-run against a
@@ -168,18 +152,20 @@ describe('UX-14 gives the gate an administrative identity', () => {
     expect(GATE).not.toMatch(/>\s*Return4me\s*</);
   });
 
-  it('keeps the heading the single <h1>, in both languages', () => {
+  it('keeps the heading the single <h1>, in the one approved language', () => {
     expect(IDENTITY).toMatch(/<h1\b/);
     expect(count(IDENTITY, /<h1\b/g)).toBe(1);
-    expect(twinOf(IDENTITY, 'Admin Authentication')).toBe('Uthibitishaji wa Msimamizi');
+    expect(IDENTITY).toContain("{'Admin Authentication'}");
   });
 
   it('states who the gate is for, without a slogan or a fabricated claim', () => {
-    expect(twinOf(IDENTITY, 'Return4me administration')).toBe('Utawala wa Return4me');
+    // English-only since the English-only decision (commit e073c8e): both strings
+    // are plain literals now, with no `t(en, sw)` pair left to translate.
+    expect(IDENTITY).toContain("{'Return4me administration'}");
     // The existing sentence is kept verbatim (only its typography changed).
-    expect(
-      twinOf(IDENTITY, 'Access restricted strictly to platform executives and vetted managers.'),
-    ).toContain('Ufikiaji umezuiwa');
+    expect(IDENTITY).toContain(
+      "{'Access restricted strictly to platform executives and vetted managers.'}",
+    );
     // No marketing vocabulary and no claim the system cannot support.
     for (const marketing of ['Welcome', 'welcome', 'Get started', 'Sign up', 'seamless', 'world-class']) {
       expect(GATE, `marketing copy: ${marketing}`).not.toContain(marketing);
@@ -278,10 +264,12 @@ describe('UX-14 gives the gate one dominant action and an honest loading state',
   });
 
   it('communicates progress without inventing it, and cannot double-submit', () => {
-    expect(SUBMIT).toContain("lang === 'en' ? 'Signing in…' : 'Inaingia…'");
-    expect(SUBMIT).toContain("lang === 'en' ? 'Verifying…' : 'Inathibitisha…'");
-    expect(SUBMIT).toContain("lang === 'en' ? 'Unlock System Console' : 'Fungua Konsoli ya Mfumo'");
-    expect(SUBMIT).toContain("lang === 'en' ? 'Verify Code' : 'Thibitisha Msimbo'");
+    // English-only since the English-only decision (commit e073c8e): the four
+    // labels are plain literals, still owned by the shared Button's loading state.
+    expect(SUBMIT).toContain("'Signing in…'");
+    expect(SUBMIT).toContain("'Verifying…'");
+    expect(SUBMIT).toContain("'Unlock System Console'");
+    expect(SUBMIT).toContain("'Verify Code'");
     // The shared primitive owns the disable + aria-busy behaviour.
     expect(BUTTON_PRIMITIVE).toContain('disabled={isDisabled}');
     expect(BUTTON_PRIMITIVE).toContain('aria-busy={loading || undefined}');
@@ -436,42 +424,33 @@ describe('UX-14 is accessible without piling on ARIA', () => {
 });
 
 // -----------------------------------------------------------------------------
-// I. Bilingual support, preserved and extended across the whole gate.
+// I. English-only: the approved single language, across the whole gate.
 // -----------------------------------------------------------------------------
 
-describe('UX-14 speaks both languages on the whole gate', () => {
-  it('carries a Kiswahili twin for every visible string it introduces', () => {
-    const pairs = bilingualPairs(GATE);
-    expect(pairs.length).toBeGreaterThanOrEqual(11);
-    for (const [en, sw] of pairs) {
-      expect(sw.length, `${en} has an empty translation`).toBeGreaterThan(0);
-      expect(sw, `${en} was left untranslated`).not.toBe(en);
-    }
+describe('UX-14 speaks the one approved language on the whole gate', () => {
+  it('carries no runtime language axis, and no Kiswahili twin', () => {
+    // The English-only decision (commit e073c8e) is a deliberate product
+    // decision, so the ABSENCE of the machinery is the contract: no
+    // `lang === 'en' ? ... : ...` pair and no `translations[lang]` lookup may
+    // reappear without someone re-deciding the language question.
+    expect(GATE).not.toMatch(/\blang\b/);
+    expect(ADMIN_VIEW_TSX).not.toContain('const t = translations[lang];');
   });
 
-  it('translates the load-bearing strings in place', () => {
-    const expected: Array<[string, string]> = [
-      ['Admin Authentication', 'Uthibitishaji wa Msimamizi'],
-      ['Return4me administration', 'Utawala wa Return4me'],
-      ['Admin Username', 'Jina la Mtumiaji wa Msimamizi'],
-      ['Access Password', 'Nenosiri la Ufikiaji'],
-      ['6-Digit Authenticator Code', 'Msimbo wa Kithibitishaji wa Tarakimu 6'],
-      ['Back to password', 'Rudi kwenye nenosiri'],
-      ['Unlock System Console', 'Fungua Konsoli ya Mfumo'],
-      ['Verify Code', 'Thibitisha Msimbo'],
+  it('still renders every load-bearing string the gate introduces', () => {
+    const expected = [
+      'Admin Authentication',
+      'Return4me administration',
+      'Admin Username',
+      'Access Password',
+      '6-Digit Authenticator Code',
+      'Back to password',
+      'Unlock System Console',
+      'Verify Code',
     ];
-    for (const [en, sw] of expected) {
-      expect(twinOf(GATE, en), `${en} must keep its Kiswahili twin`).toBe(sw);
+    for (const en of expected) {
+      expect(GATE, `${en} must still be rendered`).toContain(en);
     }
-  });
-
-  it('leaves the existing translation mechanism and its keys untouched', () => {
-    expect(ADMIN_VIEW_TSX).toContain("import { translations } from '../types';");
-    expect(ADMIN_VIEW_TSX).toContain('const t = translations[lang];');
-    expect(ADMIN_VIEW_TSX).toContain('CONSOLE_SECTIONS[activeTab][lang]');
-    // UX-14 added no key to the shared dictionary: it used the file's own
-    // established `lang === 'en' ? … : …` convention, exactly as the console does.
-    expect(count(ADMIN_VIEW_TSX, /lang === 'en' \? /g)).toBeGreaterThanOrEqual(6);
   });
 });
 
@@ -551,11 +530,9 @@ describe('UX-14 guards are live, not decorative (mutation checks)', () => {
     expect(primaryActions(`${FORM}\n<Button variant="primary">Go</Button>`)).toBe(2);
   });
 
-  it('detects an untranslated visible string', () => {
-    const pairs = bilingualPairs(GATE);
-    expect(pairs.every(([en, sw]) => sw !== en)).toBe(true);
-    const mutated = GATE.replace("'Uthibitishaji wa Msimamizi'", "'Admin Authentication'");
-    expect(bilingualPairs(mutated).some(([en, sw]) => sw === en)).toBe(true);
+  it('detects a reintroduced language axis', () => {
+    expect(GATE).not.toMatch(/\blang\b/);
+    expect(`${GATE}\n{lang === 'en' ? 'One language' : 'Another'}`).toMatch(/\blang\b/);
   });
 
   it('detects a hand-built control on the gate', () => {

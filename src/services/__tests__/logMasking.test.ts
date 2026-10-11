@@ -43,6 +43,9 @@ describe('phone numbers are masked before logging (payment paths)', () => {
     expect(start, 'webhook route not found in routes/webhooks.ts').toBeGreaterThan(-1);
     const body = webhooksTs.slice(start, start + 1500);
     expect(body).not.toMatch(/console\.log\('\[INTASEND WEBHOOK\] Received callback event:', JSON\.stringify\(payload,/);
-    expect(body).toMatch(/maskPhoneForLog\(payload\?\.phone_number\)/);
+    // The masking call is the contract, not the exact narrowing style: the route
+    // now reads `payload.phone_number` (the payload is narrowed before this line)
+    // where it once used the optional-chained `payload?.phone_number`.
+    expect(body).toMatch(/maskPhoneForLog\(payload\??\.phone_number\)/);
   });
 });

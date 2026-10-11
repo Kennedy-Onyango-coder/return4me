@@ -1,7 +1,11 @@
 import { db } from '../db/database';
 // BATCH 1 — the ONE place a provider payout status code becomes a decision.
 // payoutOutcomes.ts has no imports of its own, so this cannot create a cycle.
-import { readProviderTransactionStatus, type PayoutTransactionVerdict } from '../config/payoutOutcomes';
+import {
+  readProviderTransactionStatus,
+  resolvePayoutTransactionBindings,
+  type PayoutTransactionVerdict,
+} from '../config/payoutOutcomes';
 
 // Local copy of the phone-masking helper (also in services/auth.ts as
 // maskPhoneForLog, and database.ts) — duplicated rather than imported to
@@ -26,6 +30,28 @@ const INTASEND_BASE_URL = process.env.NODE_ENV === 'production'
   ? 'https://api.intasend.com/api/v1'
   : 'https://sandbox.intasend.com/api/v1';
 
+// PAYOUT INITIATION ENDPOINT — THE DOCUMENTED PATH (Batch 1B-C1).
+//
+// IntaSend initiates a payout batch by POSTing to `{base}/send-money/initiate/`,
+// NOT to `{base}/send-money/`:
+//
+//   "Initiate a batch with POST /api/v1/send-money/initiate/."
+//   — https://developers.intasend.com/guides/send-money/overview/
+//
+// The bare `/send-money/` path was used here for BOTH the payout batch and the
+// single-transaction refund. It is not part of the documented contract, and a
+// 404 there is indistinguishable — to the caller — from a provider refusal,
+// which is exactly the class of defect this batch closes. It is now ONE shared
+// constant so the payout and refund paths cannot drift apart again.
+//
+// NOT VERIFIED AGAINST OUR MERCHANT ACCOUNT. Confirming this path (and the
+// approval behaviour that follows it) against the real sandbox/production
+// account is a separately authorized check by the account owner.
+//
+// The STATUS endpoint is deliberately NOT changed: `/send-money/status/` is the
+// documented status path and stays exactly as it was.
+const INTASEND_SEND_MONEY_INITIATE_PATH = '/send-money/initiate/';
+
 // Recognizes an unset/placeholder API key under any of the common
 // conventions used across this project's own .env.example (REPLACE_WITH...)
 // and the ones commonly used when an assistant or teammate fills in a .env
@@ -48,6 +74,16 @@ export function isPlaceholderKey(key: string | undefined | null): boolean {
     normalized === 'todo' ||
     normalized === 'tbd'
   );
+}
+
+// The observed NODE_ENV, rendered for a fail-closed refusal message: 'unset'
+// when it is absent, otherwise the value sanitised to a short, log-safe token.
+// An environment variable is operator configuration rather than customer data,
+// but it can still reach a log aggregator and is not guaranteed to be
+// newline-free, so it is never interpolated verbatim.
+export function describeNodeEnvForRefusal(nodeEnv: string | undefined): string {
+  if (nodeEnv === undefined) return 'unset';
+  return `"${String(nodeEnv).replace(/[^A-Za-z0-9_.-]/g, '?').slice(0, 32)}"`;
 }
 
 // P1: webhook amount reconciliation — pure decision logic behind
@@ -117,6 +153,42 @@ export function reconcileWebhookAmount(
   if (confirmedNum <= 0) return 'unknown';
 
   return Math.abs(confirmedNum - expectedNum) <= 0.5 ? 'match' : 'mismatch';
+}
+
+// BATCH 1B-C1 — PROVIDER-SIDE IDEMPOTENCY KEY FOR ONE PAYOUT LEG.
+//
+// IntaSend documents `idempotency_key` as a PER-TRANSACTION field of the send
+// money request:
+//
+//   "idempotency_key | No | Unique key per transaction. A repeat request with the
+//    same key is rejected, so you can retry safely."
+//   "Set a unique idempotency_key on every transaction (for example your internal
+//    payout ID). ... duplicates are rejected with duplicate transaction detected."
+//   — https://developers.intasend.com/guides/send-money/overview/
+//
+// So the key MUST be a pure function of the leg's stable local identity:
+//   * deterministic — the same logical leg always sends the same key, so a
+//     retried submission is recognised as a duplicate by the provider;
+//   * distinct per leg — a claim's finder and agent legs never share one;
+//   * PII-free — it carries the claim id and the recipient role only. No phone
+//     number, Till/PayBill number, name or secret ever enters the key.
+//
+// ACTUAL RETRY BEHAVIOUR, STATED HONESTLY: the local submission guard in
+// server.ts already refuses to re-send an unresolved leg, so this key is
+// defence-in-depth at the provider boundary rather than the primary control.
+// Whether a duplicate is replayed or rejected is the provider's semantics, and a
+// "duplicate transaction detected" rejection is a 4xx. That is NOT claimed to
+// make a payout exactly-once, and it does not replace any local guard.
+//
+// A blank claim id yields `PAYOUT_LEG_<ROLE>:` — shared across claims. That
+// cannot occur for a real settlement (the claim row must exist for
+// executeClaimSettlement() to be called at all), and the provider answers a
+// duplicate key with a rejection, which fails closed rather than paying twice.
+export function buildPayoutLegIdempotencyKey(
+  claimId: string,
+  recipientType: 'finder' | 'agent'
+): string {
+  return `PAYOUT_LEG_${recipientType.toUpperCase()}:${String(claimId ?? '').trim()}`;
 }
 
 // fetch() has no built-in timeout — without one, a request to a third-party
@@ -615,6 +687,23 @@ export const PaymentService = {
    * "done", and only the simulation path (no real credentials configured)
    * reports 'success' immediately, since there's no real money movement to
    * wait on.
+   *
+   * BATCH 1B-C1-R1 — the three states, named explicitly, because collapsing
+   * them is exactly what produced the refund false-completion defect (see
+   * triggerIntasendRefund below):
+   *
+   *   * initiation accepted — an HTTP 2xx from /send-money/initiate/. The
+   *                          provider took the request; nothing has
+   *                          necessarily been transferred.
+   *   * approval pending    — `"status_code": "BP103"`, "Preview and approve":
+   *                          the batch is only a preview and pays NOTHING
+   *                          until it is approved in a separate call.
+   *   * confirmed success   — the provider reports THIS individual
+   *                          transaction as `"status_code": "TS100"`.
+   *
+   * The payout path never crosses from the first state to the third: its legs
+   * are reported 'pending' and only the authoritative status lookup
+   * (services/payoutReconciliation.ts) may complete them.
    */
   async triggerIntasendPayout(
     claimId: string,
@@ -648,7 +737,12 @@ export const PaymentService = {
       };
     }
 
-    const transactions = payouts.map(p => {
+    // BATCH 1B-C1 — the payload and its binding inputs are built together, so
+    // the EXACT account submitted for a leg is the same string used to correlate
+    // the provider's per-transaction response back to that leg (see
+    // resolvePayoutTransactionBindings). Deriving them separately is how the two
+    // could drift apart.
+    const submittedLegs = payouts.map(p => {
       let cleanAccount = p.destination;
       const method = p.payoutMethodType || 'Personal M-Pesa';
 
@@ -658,12 +752,25 @@ export const PaymentService = {
       }
 
       return {
-        name: `Return4me ${p.recipientType === 'finder' ? 'Finder' : 'Agent'}`,
+        recipientType: p.recipientType,
+        destination: p.destination,
+        amount: p.amount,
         account: cleanAccount,
-        amount: String(p.amount),
         narrative: `R4M-${p.recipientType.toUpperCase()}-${claimId}`,
+        // Per-transaction provider idempotency: a pure function of this leg's
+        // stable local identity (claim + role), identical on every submission
+        // attempt of the same leg and distinct for the finder and the agent.
+        idempotencyKey: buildPayoutLegIdempotencyKey(claimId, p.recipientType),
       };
     });
+
+    const transactions = submittedLegs.map(leg => ({
+      name: `Return4me ${leg.recipientType === 'finder' ? 'Finder' : 'Agent'}`,
+      account: leg.account,
+      amount: String(leg.amount),
+      narrative: leg.narrative,
+      idempotency_key: leg.idempotencyKey,
+    }));
 
     const payload = {
       provider: 'MPESA-B2C',
@@ -677,7 +784,7 @@ export const PaymentService = {
     }, null, 2));
 
     try {
-      const response = await fetchWithTimeout(`${INTASEND_BASE_URL}/send-money/`, {
+      const response = await fetchWithTimeout(`${INTASEND_BASE_URL}${INTASEND_SEND_MONEY_INITIATE_PATH}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -730,30 +837,64 @@ export const PaymentService = {
 
       const batchId: string | null = data?.tracking_id || data?.batch_reference || null;
 
-      // Defensively attempt to match individual transaction identifiers
-      // back to each recipient by account number, if IntaSend's response
-      // includes a per-transaction array (field name varies by API
-      // version — checking the common candidates rather than assuming
-      // one specific shape, since this cannot be verified without live
-      // credentials in this environment). If no per-transaction detail is
-      // present at all, every recipient still gets a real batchId to
-      // reconcile against later, just no individual transaction id yet.
-      const rawTxns: any[] = data?.transactions || data?.invoices || data?.disbursements || [];
-      const results = payouts.map(p => {
-        const match = rawTxns.find((t: any) => {
-          const acct = (t?.account || t?.phone_number || t?.destination || '').toString().replace(/\s+/g, '');
-          return acct && acct.endsWith(p.destination.replace(/\s+/g, '').slice(-9));
-        });
-        return {
-          recipientType: p.recipientType,
-          destination: p.destination,
-          providerTransactionId: match?.transaction_id || match?.id || match?.invoice || null,
-          // Deliberately 'pending', not 'success' — see function docstring.
-          // IntaSend accepting the batch is not the same as the M-Pesa B2C
-          // transfer having actually completed.
-          status: 'pending' as const,
-        };
-      });
+      // BATCH 1B-C1 — EXPLICIT, FAIL-CLOSED BINDING (replaces the suffix guess).
+      //
+      // What used to happen here: each recipient was matched to a response
+      // transaction by the LAST NINE DIGITS of its destination account, which is
+      // ambiguous whenever two destinations share a suffix (a phone number and a
+      // till number are both digit strings) and could therefore record the SAME
+      // provider transaction id on two ledger legs.
+      //
+      // What happens now: resolvePayoutTransactionBindings() correlates a
+      // response transaction to a leg ONLY by an exact match on the account we
+      // submitted, and ONLY when that account is unique among the submitted legs
+      // and matches exactly one response entry that carries the provider's own
+      // `transaction_id`. Anything else — a missing account, a duplicated local
+      // account, no match, several matches, or a match with no usable id — yields
+      // `providerTransactionId: null`.
+      //
+      // A leg left without a transaction id is NOT a lost payout: the batch id is
+      // still recorded, the leg's outcome stays 'pending' (accepted, not
+      // confirmed), and it can only ever be resolved by the authoritative status
+      // lookup in services/payoutReconciliation.ts — which itself refuses to
+      // confirm a leg it cannot bind to exactly one provider transaction, and
+      // records PAYOUT_VERIFICATION_UNMATCHED for an operator. No id is invented
+      // here, and nothing here can complete a payout or release a settlement.
+      //
+      // Only the DOCUMENTED per-transaction fields are read. The array of
+      // alternative key names this block used to probe
+      // (invoices/disbursements/phone_number/destination/id/invoice) is gone:
+      // guessing at a shape we do not control is the failure mode this batch
+      // closes. An unrecognised body degrades to "no transaction ids bound",
+      // never to a wrong one.
+      const binding = resolvePayoutTransactionBindings(
+        submittedLegs.map(leg => ({ id: leg.recipientType, account: leg.account })),
+        Array.isArray(data?.transactions) ? data.transactions : [],
+      );
+
+      const results = submittedLegs.map((leg, index) => ({
+        recipientType: leg.recipientType,
+        destination: leg.destination,
+        providerTransactionId: binding.bindings[index]?.providerTransactionId ?? null,
+        // Deliberately 'pending', not 'success' — see function docstring.
+        // IntaSend accepting the batch is not the same as the M-Pesa B2C
+        // transfer having actually completed.
+        status: 'pending' as const,
+      }));
+
+      // Evidence for the operator: which legs could not be bound and why. Codes
+      // only — no account, no phone number, no raw provider body.
+      const unbound = binding.bindings.filter(entry => entry.providerTransactionId === null);
+      if (unbound.length > 0) {
+        console.warn(
+          `[INTASEND DISBURSEMENT] ${unbound.length} of ${binding.bindings.length} leg(s) were not bound to a provider transaction ` +
+          `(${unbound.map(entry => `${entry.id}:${entry.outcome}`).join(', ')}${
+            binding.unmatchedProviderTransactions > 0
+              ? `; ${binding.unmatchedProviderTransactions} unmatched provider transaction(s)`
+              : ''
+          }). Batch ${batchId || '(none)'} retained; those legs stay unresolved for provider reconciliation.`
+        );
+      }
 
       return { batchId, results };
     } catch (error: any) {
@@ -779,18 +920,111 @@ export const PaymentService = {
    * (rather than reusing it with a 1-item array) so refund failures are
    * never confused with finder/agent payout failures in logs — the two
    * cases need different admin follow-up.
+   *
+   * BATCH 1B-C1-R1 — A 2xx FROM THE INITIATION ENDPOINT IS NOT A REFUND.
+   *
+   * `POST /send-money/initiate/` INITIATES a disbursement; it does not settle
+   * one. Until R1 ANY 2xx was reported as `outcome: 'completed'`, so the caller
+   * (routes/adminDisputes.ts) marked the claim 'refunded' and told the customer
+   * their refund was complete — including for a batch that only needs merchant
+   * approval, whose documented response is a 200 carrying
+   * `"status_code": "BP103"`, `"status": "Preview and approve"` and pays
+   * nothing until it is approved in a separate call. That is a false
+   * completion: no money moved, the claimant's escrow balance was never
+   * returned, and the reconciliation workflow that exists for exactly this was
+   * never reached.
+   *
+   * BATCH 1B-C1-R2 — NO INITIATION RESPONSE CAN COMPLETE A REFUND AT ALL.
+   *
+   * R1 narrowed the false completion to "only a per-transaction TS100 in the
+   * initiation response completes". That was still wrong. The initiation
+   * response is a SUBMISSION RECEIPT, not a settlement record:
+   *
+   *   * the documented response for a freshly accepted transaction is
+   *     `{ "transaction_id": "…", "status": "Pending", "status_code": "TP101" }`
+   *     — a snapshot taken when the batch was accepted, not a settlement fact;
+   *   * the SAME endpoint answers 200 with
+   *     `{ "status_code": "BP103", "status": "Preview and approve" }` for a
+   *     batch that pays NOTHING until a separate approval call is made, and that
+   *     response can carry per-transaction entries too;
+   *   * nothing in the documented contract makes this endpoint authoritative for
+   *     final settlement, and a body that merely echoes or replays a status is
+   *     not proof that THIS transfer settled.
+   *
+   * A `TS100` read out of an initiation body is therefore NOT proof of transfer
+   * and MUST NOT complete a refund. There is no code-vocabulary reading here any
+   * more: EVERY 2xx from the initiation endpoint is reported as
+   * `outcome: 'unknown'`. Provider identifiers that were genuinely returned are
+   * preserved for reconciliation (see summarizeRefundInitiationResponse below),
+   * and none is ever invented.
+   *
+   * The claim therefore stays locked in 'refunding' for the existing admin
+   * reconciliation workflow (getRefundReconciliationClaims /
+   * finalizeClaimRefund / revertClaimRefundLock), and no completion
+   * notification is produced.
+   *
+   * AUTHORITATIVE CONFIRMATION DOES NOT EXIST YET FOR REFUNDS. The payout path
+   * has one — services/payoutReconciliation.ts over
+   * PaymentService.getPayoutBatchStatus, which reads the provider's batch status
+   * and accepts only its documented terminal codes — but no refund-status
+   * lookup, webhook or callback is implemented in this codebase today. Until one
+   * is added and verified, an initiated refund is completed ONLY by an operator
+   * who has confirmed the transfer with IntaSend and records that outcome
+   * through the admin refund-reconciliation endpoints. That is a real,
+   * deliberate operational limitation; it is NOT disguised by reporting the
+   * initiation as a success.
+   *
+   * The payload is deliberately left alone. This path submits at most ONE
+   * transaction per claim and is reached at most once per claim (the
+   * resolved_at compare-and-swap inside resolveDispute is the guard), and
+   * nothing auto-retries an ambiguous refund, so no refund idempotency key is
+   * introduced here.
+   *
+   * The no-credentials branch is now a FAIL-CLOSED ALLOW-LIST rather than a
+   * production-only deny-list: it emulates a completed refund ONLY when
+   * NODE_ENV is exactly 'development' or 'test'. 'production', an UNSET
+   * NODE_ENV, and any unrecognised value ('prod', 'Production', 'staging') all
+   * throw before a simulated success can be produced. The previous exact-string
+   * check (`=== 'production'`) failed OPEN for every value it did not recognise,
+   * so a misconfigured deployment could report a fabricated 'completed' refund
+   * that the caller reads as "the money moved". The caller treats
+   * 'completed' as "the money moved" — it finalizes the claim as refunded and
+   * notifies the customer — so an environment that is not positively recognised
+   * as non-production must never reach a simulated completion.
+   * (triggerIntasendPayout and triggerMpesaStkPush still use the older
+   * production-only check; tightening those gates is a separate, owner-approved
+   * change and is deliberately not made here.)
+   *
+   * R2 reachability note: the caller's `outcome === 'completed'` branch is
+   * retained for a future authoritative confirmation, but it is NOT reachable
+   * from this function's HTTP path any more — against a real credential this
+   * function can only return 'unknown' or 'failed'. The simulation branch below
+   * is the single exception: it is reachable ONLY when NODE_ENV is exactly
+   * 'development' or 'test', and it throws for every other value (production,
+   * unset, or unrecognised).
    */
   async triggerIntasendRefund(
     phone: string,
     amount: number,
     claimId: string
-  ): Promise<{ success: boolean; transactionId: string; outcome: 'completed' | 'failed' | 'unknown' }> {
+  ): Promise<{ success: boolean; transactionId: string; providerBatchId: string | null; outcome: 'completed' | 'failed' | 'unknown' }> {
     const secretKey = process.env.INTASEND_SECRET_KEY;
     if (isPlaceholderKey(secretKey)) {
-      console.warn('[INTASEND REFUND] Key missing/dummy. Emulating refund disbursement.');
+      // Fail-closed allow-list; the full rationale is in the docstring above.
+      if (process.env.NODE_ENV !== 'development' && process.env.NODE_ENV !== 'test') {
+        throw new Error(
+          `FATAL: IntaSend secret key is missing or a placeholder and NODE_ENV is ` +
+          `${describeNodeEnvForRefusal(process.env.NODE_ENV)}, which is not a non-production simulation environment. ` +
+          'Refusing to simulate a refund: a simulated completion would mark the claim as refunded and tell the ' +
+          'customer their money was returned when no transfer was made. Set NODE_ENV to "development" or "test", ' +
+          'or configure a real INTASEND_SECRET_KEY.'
+        );
+      }
+      console.warn('[INTASEND REFUND] Key missing/dummy (development/test only). Emulating refund disbursement.');
       return {
         success: true,
         transactionId: 'SIM-REFUND-' + Math.random().toString(36).substring(2, 10).toUpperCase(),
+        providerBatchId: null,
         outcome: 'completed',
       };
     }
@@ -812,7 +1046,7 @@ export const PaymentService = {
     }, null, 2));
 
     try {
-      const response = await fetchWithTimeout(`${INTASEND_BASE_URL}/send-money/`, {
+      const response = await fetchWithTimeout(`${INTASEND_BASE_URL}${INTASEND_SEND_MONEY_INITIATE_PATH}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -822,24 +1056,89 @@ export const PaymentService = {
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
-        console.warn(`[INTASEND REFUND] Sandbox API error (${response.status}): ${errorText.substring(0, 100)}.`);
-        // HTTP error response = IntaSend RECEIVED the request and explicitly
-        // rejected it. The refund was definitively NOT executed, so classifying
-        // this as 'failed' is safe (no duplicate-refund risk on retry).
-        return { success: false, transactionId: '', outcome: 'failed' };
+        // BATCH 1B-C1-R2 — the provider's ERROR BODY is never read and never
+        // logged. IntaSend echoes submission data back in validation errors
+        // (recipient name, account/phone, narrative), so truncating it is not
+        // sanitising it. The HTTP status is the whole operational signal we need.
+        console.warn(`[INTASEND REFUND] Provider did not accept the refund initiation request (HTTP ${response.status}).`);
+        // The E3A ambiguity rule, applied here exactly as the payout path above
+        // applies it. A non-2xx is NOT one fact:
+        //   * 5xx — the provider (or its gateway) failed while handling a
+        //     request it had already received. It may have accepted — and
+        //     executed — the refund before the error surfaced, so this is
+        //     'unknown'.
+        //   * 408 Request Timeout — same ambiguity.
+        //   * 429 Too Many Requests — a rate-limit response is NOT proof that the
+        //     request was refused before execution. It reached the provider (or a
+        //     gateway in front of it) far enough to be counted/rescheduled, so
+        //     execution cannot be ruled out from this status alone. Classifying it
+        //     as 'failed' would let the caller release the refund lock (claim
+        //     'rejected') for a transfer that may already be queued — the same
+        //     duplicate-refund risk as a 5xx — so it is UNRESOLVED and requires
+        //     operator reconciliation.
+        //   * every other non-ok status (400/401/403/404/409/422/… and an
+        //     unexpected 3xx surfaced by fetch) means the provider refused the
+        //     request itself with no transfer executed, so 'failed' is safe
+        //     (and is what lets the caller revert the refund lock and ask an
+        //     admin to act).
+        const mayHaveBeenProcessed =
+          response.status === 408 || response.status === 429 || response.status >= 500;
+        return {
+          success: false,
+          transactionId: '',
+          providerBatchId: null,
+          outcome: mayHaveBeenProcessed ? 'unknown' : 'failed',
+        };
       }
 
-      const data = await response.json() as any;
-      console.log('[INTASEND REFUND] Response received:', JSON.stringify(data, null, 2));
+      let data: any;
+      try {
+        data = await response.json();
+      } catch {
+        // A 2xx whose body cannot be parsed carries NO evidence about the
+        // individual transaction. That is neither a rejection nor a success:
+        // the refund may already have been accepted and executed, so it is
+        // unresolved and must be reconciled, never finalized.
+        console.warn('[INTASEND REFUND] HTTP 2xx but the response body was not valid JSON — refund outcome unverified.');
+        return { success: false, transactionId: '', providerBatchId: null, outcome: 'unknown' };
+      }
+      // BATCH 1B-C1-R2 — A 2xx FROM THE INITIATION ENDPOINT IS ACCEPTANCE, NOT
+      // SETTLEMENT, and is reported as 'unknown' WITHOUT EXCEPTION. The response
+      // is read only through a deliberate, safe operational projection (see
+      // summarizeRefundInitiationResponse below): HTTP status, top-level key
+      // NAMES, and provider identifiers/status codes. The raw body is never
+      // logged — it echoes the recipient's name, account/phone and narrative and
+      // can carry wallet/approval secrets — and it is never interpreted as
+      // evidence that the individual refund settled, not even when it carries
+      // TS100 (see the "NO INITIATION RESPONSE CAN COMPLETE A REFUND" note in
+      // this function's docstring).
+      const summary = summarizeRefundInitiationResponse(response.status, data);
+      console.log('[INTASEND REFUND] Initiation response received (operational summary only):', JSON.stringify(summary));
+
+      console.warn(
+        `[INTASEND REFUND] Initiation accepted (HTTP ${summary.httpStatus}) but an initiation response is NOT ` +
+        `evidence that the refund was paid out (transaction status: ${summary.transactions[0]?.providerStatus ?? 'absent'}, ` +
+        `transactions: ${summary.transactionCount}). Recording an UNRESOLVED outcome; the claim stays in 'refunding' ` +
+        `for reconciliation and no completion notification is produced.` +
+        (summary.providerTrackingId ? ` Provider batch/tracking id: ${summary.providerTrackingId}.` : '')
+      );
 
       return {
-        success: true,
-        transactionId: data.tracking_id || 'ISD-REFUND-' + Math.random().toString(36).substring(2, 10).toUpperCase(),
-        outcome: 'completed',
+        success: false,
+        // The provider's own per-transaction id, and only when exactly ONE
+        // transaction entry was returned: with two or more there is no way to
+        // prove which entry is this refund, so nothing is attributed. Never
+        // synthesized; empty when the provider supplied none.
+        transactionId: summary.transactionCount === 1 ? (summary.transactions[0].providerTransactionId ?? '') : '',
+        providerBatchId: summary.providerTrackingId,
+        outcome: 'unknown',
       };
-    } catch (error: any) {
-      console.warn('[INTASEND REFUND] Refund exception:', error.message);
+    } catch {
+      // A fixed, non-sensitive reason category only. An exception message can
+      // embed the request URL, the provider's error text (which echoes
+      // recipient data) or other submission content, so it is never
+      // interpolated into a log line. BATCH 1B-C1-R2.
+      console.warn('[INTASEND REFUND] Refund initiation failed with a transport/exception error; refund outcome unverified.');
       // 'unknown', not 'failed' — a network/timeout exception here means we
       // genuinely don't know whether IntaSend received and executed the
       // refund. Treating this as definitively failed (the pre-FIX#4 behavior)
@@ -849,7 +1148,7 @@ export const PaymentService = {
       // established principle: an ambiguous provider response must be treated
       // as UNKNOWN, leaving the claim in 'refunding' for manual admin/provider
       // reconciliation. No automatic retry is issued from this outcome.
-      return { success: false, transactionId: '', outcome: 'unknown' };
+      return { success: false, transactionId: '', providerBatchId: null, outcome: 'unknown' };
     }
   },
 
@@ -876,4 +1175,100 @@ function formatMpesaPhone(phone: string): string {
     clean = '254' + clean;
   }
   return clean;
+}
+
+/**
+ * BATCH 1B-C1-R2 — the SAFE, OPERATIONAL view of a refund INITIATION response.
+ *
+ * WHAT THIS FUNCTION IS NOT
+ * -------------------------
+ * It returns NO verdict, NO completion flag and NO settlement claim of any
+ * kind. There is deliberately nothing it can produce that would let a caller
+ * treat an initiation as a finished refund: the shape itself makes "the
+ * provider said TS100, so it is paid" unrepresentable. triggerIntasendRefund
+ * reports every 2xx as 'unknown' without consulting a status code for a
+ * decision.
+ *
+ * WHY (BATCH 1B-C1-R1 -> R2)
+ * --------------------------
+ * R1 read the per-transaction `status_code` out of this response and let TS100
+ * complete a refund. That was still a false completion: `POST
+ * /send-money/initiate/` is an initiation call. Its documented responses include
+ *
+ *   { "status_code": "BP103", "status": "Preview and approve", … }
+ *     — a batch that pays nothing until a separate approval call is made;
+ *   { "transaction_id": "KQ9PLXR", "status": "Pending", "status_code": "TP101" }
+ *     — an accepted transaction, snapshotted at submission time.
+ *
+ * Neither is settlement, and a TS100 inside an initiation body cannot be
+ * distinguished from replayed or unrelated data. Settlement can only be
+ * established by an authoritative provider status/callback mechanism — which
+ * DOES NOT EXIST YET for refunds in this codebase (the payout path's
+ * services/payoutReconciliation.ts is the only such mechanism, and it covers
+ * payouts, not refunds).
+ *
+ * WHAT IS READ (diagnostics for the operator and future reconciliation)
+ * --------------------------------------------------------------------
+ *   * the HTTP status
+ *   * the response's top-level KEY NAMES — never their values
+ *   * the provider's own batch `tracking_id`
+ *   * the transaction count
+ *   * per-transaction `transaction_id` and the status code chosen by the ONE
+ *     documented precedence rule (status_code, then status — reused from
+ *     config/payoutOutcomes.ts so it cannot drift). The code is recorded as a
+ *     DIAGNOSTIC STRING only; the verdict that comes with it is dropped here on
+ *     purpose and is never returned.
+ *
+ * WHAT IS NEVER READ, RETURNED OR LOGGED
+ * --------------------------------------
+ *   * `account` / `phone_number` — a third party's phone number
+ *   * `name` — the recipient's name
+ *   * `narrative` / submission text
+ *   * wallet balances, approval nonces, or any other secret
+ *
+ * Identifiers are PRESERVED but never invented: a missing `tracking_id` or
+ * `transaction_id` becomes null, and nothing is synthesized.
+ */
+function summarizeRefundInitiationResponse(httpStatus: number, data: unknown): {
+  httpStatus: number;
+  responseKeys: string[];
+  providerTrackingId: string | null;
+  transactionCount: number;
+  transactions: Array<{ providerTransactionId: string | null; providerStatus: string | null }>;
+} {
+  const record: Record<string, unknown> =
+    data !== null && typeof data === 'object' && !Array.isArray(data) ? (data as Record<string, unknown>) : {};
+  const usable = (value: unknown): string | null => {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed === '' ? null : trimmed;
+  };
+  // The provider's own transaction reference. A numeric id is a legitimate
+  // identifier (JSON serializers emit digits as numbers); anything else, and
+  // anything absent, yields null — never a synthesized id.
+  const providerTransactionId = (entry: unknown): string | null => {
+    if (entry === null || typeof entry !== 'object') return null;
+    const raw = (entry as Record<string, unknown>).transaction_id;
+    if (typeof raw !== 'string' && typeof raw !== 'number') return null;
+    return usable(String(raw));
+  };
+
+  const entries = Array.isArray(record.transactions) ? record.transactions : [];
+
+  return {
+    httpStatus,
+    // Key NAMES only: no value from the response is copied out of this branch.
+    responseKeys: Object.keys(record),
+    providerTrackingId: usable(record.tracking_id),
+    transactionCount: entries.length,
+    transactions: entries.map((entry) => ({
+      providerTransactionId: providerTransactionId(entry),
+      // The precedence rule is reused from the ONE place that owns it
+      // (config/payoutOutcomes.ts). The verdict that call also computes is
+      // dropped here deliberately: this function must not be able to report a
+      // success, so nothing downstream can mistake a diagnostic code for a
+      // settlement decision.
+      providerStatus: readProviderTransactionStatus(entry).providerStatus,
+    })),
+  };
 }
