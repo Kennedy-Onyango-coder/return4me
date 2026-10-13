@@ -4,6 +4,7 @@ import { db } from '../db/database';
 import {
   readProviderTransactionStatus,
   resolvePayoutTransactionBindings,
+  isBatchApprovalRequired,
   type PayoutTransactionVerdict,
 } from '../config/payoutOutcomes';
 
@@ -50,6 +51,65 @@ const INTASEND_BASE_URL = process.env.NODE_ENV === 'production'
 //
 // The STATUS endpoint is deliberately NOT changed: `/send-money/status/` is the
 // documented status path and stays exactly as it was.
+
+// PRODUCTION DISBURSEMENT-WALLET CONFIGURATION
+//
+// The IntaSend "send-money initiate" contract accepts an optional `wallet_id`
+// ("Wallet to debit. It must match currency. Defaults to your settlement
+// wallet for that currency. A working wallet must have can_disburse enabled."
+// — https://developers.intasend.com/guides/send-money/overview/). Return4me
+// exposes this as a single environment variable so the working-wallet ID is
+// never hardcoded in source.
+//
+// Fail-closed in production: an absent, empty, whitespace-only or
+// placeholder-shaped value aborts payout initiation before any provider
+// request is made (never a silent settlement-wallet fallback). In
+// non-production environments the configured value is never sent to the
+// provider, so sandbox/test behaviour is unchanged.
+//
+// SCOPE OF LOCAL VALIDATION - this code only checks that the variable is
+// present, non-blank and not placeholder-shaped (see isPlaceholderKey below,
+// the same convention every other REPLACE_WITH_* entry in .env.example relies
+// on: the documented placeholder value for THIS variable must not satisfy the
+// gate). It does NOT verify that the value is a real wallet, that the wallet
+// is KES-denominated, or that it has can_disburse enabled - the provider
+// validates those properties at request time and rejects an invalid wallet
+// there. The currency/capability requirements quoted above are
+// IntaSend's contract, not something enforced locally.
+const INTASEND_DISBURSEMENT_WALLET_ENV = 'INTASEND_DISBURSEMENT_WALLET_ID';
+
+export function getDisbursementWalletId(): string | null {
+  const raw = process.env[INTASEND_DISBURSEMENT_WALLET_ENV];
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+// True only for a wallet ID that is present, non-blank AND not placeholder
+// shaped. The placeholder half of that rule is what stops a deployment which
+// copied .env.example verbatim (INTASEND_DISBURSEMENT_WALLET_ID =
+// "REPLACE_WITH_KES_WORKING_WALLET_ID") from passing this gate: a
+// present-but-placeholder value is NOT a configured wallet, and sending an
+// API-shaped placeholder to the provider is exactly the class of mistake this
+// gate exists to catch.
+//
+// It reuses isPlaceholderKey() - the project-wide convention already applied
+// to the IntaSend keys, the webhook challenge and the Africa's Talking
+// credentials - rather than introducing a second, wallet-specific string list
+// that could drift from the others. That helper is declared later in this
+// module; function declarations are hoisted, so calling it from here is safe.
+// A legitimate wallet ID is never matched by it: the shapes it knows
+// ('replace_with', 'placeholder', 'your_key', 'changeme', 'xxx', 'todo',
+// 'tbd') are not wallet-ID shapes.
+//
+// Both production gates call this one function - executeClaimSettlement() in
+// server.ts (before any payout row is marked as submitted) and
+// triggerIntasendPayout() below (before the request body is built) - so the
+// placeholder rule cannot be enforced at one seam and forgotten at the other.
+export function isDisbursementWalletConfigured(): boolean {
+  return !isPlaceholderKey(getDisbursementWalletId());
+}
+
 const INTASEND_SEND_MONEY_INITIATE_PATH = '/send-money/initiate/';
 
 // Recognizes an unset/placeholder API key under any of the common
@@ -724,6 +784,7 @@ export const PaymentService = {
           'Refusing to simulate a payout in production — configure a real INTASEND_SECRET_KEY before processing settlements.'
         );
       }
+
       console.warn('[INTASEND DISBURSEMENT] Key missing/dummy (non-production only). Emulating disbursement split.');
       const batchId = 'SIM-BATCH-' + Math.random().toString(36).substring(2, 10).toUpperCase();
       return {
@@ -735,6 +796,37 @@ export const PaymentService = {
           status: 'success' as const,
         })),
       };
+    }
+
+    // PRODUCTION FAIL-CLOSED WALLET CONFIGURATION
+    //
+    // Service-level gate at the request seam, deliberately INDEPENDENT of the
+    // API-secret check above: a valid production secret key does NOT imply a
+    // configured disbursement wallet. This statement lives OUTSIDE the
+    // placeholder-key branch, so it is reached on the normal production request
+    // path (a real key skips the simulation return above and evaluates this
+    // gate before the initiation request is built or sent). A missing, empty,
+    // whitespace-only or placeholder-shaped INTASEND_DISBURSEMENT_WALLET_ID
+    // (the documented .env.example value included) therefore fails closed
+    // here — never a silent fallback to the provider's default settlement
+    // wallet for that currency.
+    //
+    // This is the second line of defence behind the earlier gate in
+    // executeClaimSettlement(), which runs before any payout row is marked as
+    // submitted and gives the release lock back through abandonRelease(). This
+    // throw performs no ledger write and takes no claim state transition of its
+    // own, so it cannot itself strand a payout row as submitted.
+    //
+    // Non-production environments never apply this gate, and never send a
+    // configured production wallet ID to a sandbox/test provider.
+    const disbursementWalletConfigured =
+      process.env.NODE_ENV !== 'production' || isDisbursementWalletConfigured();
+    if (!disbursementWalletConfigured) {
+      throw new Error(
+        'FATAL: INTASEND_DISBURSEMENT_WALLET_ID is not configured in production. ' +
+          'Configure a non-blank, non-placeholder working-wallet ID before initiating payouts (IntaSend requires it to be ' +
+          'KES-denominated with can_disburse enabled; that is enforced by the provider, not checked here).'
+      );
     }
 
     // BATCH 1B-C1 — the payload and its binding inputs are built together, so
@@ -772,11 +864,50 @@ export const PaymentService = {
       idempotency_key: leg.idempotencyKey,
     }));
 
+    // BATCH P2 — EXPLICIT, DOCUMENTED APPROVAL MODE.
+    //
+    // IntaSend's send-money contract offers two modes:
+    //   * `requires_approval: "NO"`   — the documented automated-payout mode; the
+    //     batch is created and disbursed without a separate human approval step.
+    //   * (default / "YES")            — the batch is created in the BP103
+    //     "Preview and approve" state and pays NOTHING until a separate approval
+    //     call is made from the dashboard/API.
+    //
+    // The intended approval gate for a Return4me payout is the platform's OWN
+    // durable administrator settlement approval (server.ts executeClaimSettlement
+    // re-checks `settlement_approved_at` and the 'releasing' lock immediately
+    // before this request). That internal gate is NOT bypassed or relaxed here.
+    // `requires_approval: "NO"` therefore tells the PROVIDER "do not add a second,
+    // human-in-the-loop approval on top of the one we already made" — without
+    // which the batch silently parks in BP103 and no money ever moves.
+    //
+    // If the provider STILL answers BP103 (e.g. an account-level setting forces
+    // approval regardless), the response is handled explicitly below: it is never
+    // treated as a completed payout, never auto-retried, and never settles the
+    // claim — it is surfaced for operator review with the batch reference kept.
     const payload = {
       provider: 'MPESA-B2C',
       currency: 'KES',
+      requires_approval: 'NO',
       transactions,
     };
+
+    // PRODUCTION FAIL-CLOSED WALLET SELECTION
+    //
+    // executeClaimSettlement() enforces the production configuration guard
+    // BEFORE the per-row CAS markers are written (see server.ts), so a missing
+    // value can never leave a payout marked as submitted. In non-production
+    // environments the configured wallet is never sent to the provider.
+    const disbursementWalletId =
+      process.env.NODE_ENV === 'production' ? getDisbursementWalletId() : null;
+
+    // wallet_id is an optional, documented field on the initiation request.
+    // It is injected only when a production disbursement wallet is configured.
+    const requestBody = {
+      ...payload,
+      ...(disbursementWalletId !== null ? { wallet_id: disbursementWalletId } : {}),
+    };
+
 
     console.log('[INTASEND DISBURSEMENT] Initiating payouts split:', JSON.stringify({
       ...payload,
@@ -790,7 +921,7 @@ export const PaymentService = {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${secretKey}`,
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(requestBody),
       });
 
       if (!response.ok) {
@@ -835,7 +966,52 @@ export const PaymentService = {
       // content from a third party.
       console.log('[INTASEND DISBURSEMENT] Response received. Top-level keys:', Object.keys(data || {}), 'tracking_id:', data?.tracking_id || data?.batch_reference || '(none)');
 
+      // Safe audit log: record ONLY the wallet_id the provider debited from.
+      // No balances, no PII, and no full response body are logged here.
+      console.log(
+        '[INTASEND DISBURSEMENT] Initiation response debited wallet:',
+        data?.wallet?.wallet_id ?? null
+      );
+
+
       const batchId: string | null = data?.tracking_id || data?.batch_reference || null;
+
+      // BATCH P2 — BP103 IS NOT AN ACCEPTED BATCH, AND NEVER A COMPLETED ONE.
+      //
+      // IntaSend signals a batch parked in "Preview and approve" with the batch-
+      // level status code `BP103` (see isBatchApprovalRequired in
+      // config/payoutOutcomes.ts). Such a batch pays NOTHING until it is approved
+      // through a separate, out-of-band step. Presenting it as an ordinary
+      // accepted batch ('pending') would be a lie the settlement path would act
+      // on; presenting it as success would be worse. So:
+      //   * every leg is reported 'unknown' — the UNRESOLVED, never-auto-resubmitted
+      //     state — so executeClaimSettlement returns the claim to pending_settlement
+      //     and flags it for provider reconciliation instead of finalizing;
+      //   * the provider batch reference is preserved (batchId is returned) so the
+      //     operator can locate the exact batch in IntaSend;
+      //   * we do NOT call an undocumented approval endpoint and do NOT retry —
+      //     approval is a human/account action, and a retry could double-pay.
+      //
+      // The response is otherwise parsed normally when BP103 is absent: an
+      // unrecognised batch-level code is left to the existing fail-closed binding
+      // (which only ever yields 'pending', never 'success').
+      if (isBatchApprovalRequired(data)) {
+        console.warn(
+          `[INTASEND DISBURSEMENT] Batch ${batchId ?? '(no ref)'} is parked in BP103 "Preview and approve": ` +
+          'the provider requires a separate approval before any money moves, despite requires_approval:"NO". ' +
+          'Approve the batch in the IntaSend dashboard/API (this app will not call an undocumented approval endpoint ' +
+          'and will not auto-retry). Recorded as UNRESOLVED for operator reconciliation — the claim is NOT settled.',
+        );
+        return {
+          batchId,
+          results: payouts.map(p => ({
+            recipientType: p.recipientType,
+            destination: p.destination,
+            providerTransactionId: null,
+            status: 'unknown' as const,
+          })),
+        };
+      }
 
       // BATCH 1B-C1 — EXPLICIT, FAIL-CLOSED BINDING (replaces the suffix guess).
       //

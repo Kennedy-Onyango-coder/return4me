@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { PaymentService, buildPayoutLegIdempotencyKey } from '../payments';
+import { PaymentService, buildPayoutLegIdempotencyKey, isDisbursementWalletConfigured } from '../payments';
 
 // =============================================================================
 // BATCH 1B-C1 — THE PAYOUT INITIATION CONTRACT.
@@ -112,9 +112,26 @@ describe('BATCH 1B-C1 — payout initiation uses the documented endpoint', () =>
 
     expect(calls[0].body.provider).toBe('MPESA-B2C');
     expect(calls[0].body.currency).toBe('KES');
-    expect(Object.keys(calls[0].body).sort()).toEqual(['currency', 'provider', 'transactions']);
+    // BATCH P2 — requires_approval is now an explicit, documented batch field
+    // (see the approval-mode block in triggerIntasendPayout). It is pinned here
+    // so an accidental removal or a drift to another provider field is caught.
+    expect(Object.keys(calls[0].body).sort()).toEqual(['currency', 'provider', 'requires_approval', 'transactions']);
   });
 });
+
+describe('BATCH P2 — automated approval mode is requested explicitly', () => {
+  it('sends requires_approval:"NO" so the batch is not parked in BP103', async () => {
+    useRealKey();
+    const calls = stubProvider({ tracking_id: 'TRK-1', transactions: [] });
+
+    await PaymentService.triggerIntasendPayout('CLAIM-1', twoLegs());
+
+    // The documented automated-payout mode. Without it IntaSend can create the
+    // batch in the "Preview and approve" (BP103) state, which pays nothing.
+    expect(calls[0].body.requires_approval).toBe('NO');
+  });
+});
+
 
 describe('BATCH 1B-C1 — one deterministic idempotency key per payout leg', () => {
   it('sends the documented idempotency_key field on every transaction', async () => {
@@ -256,5 +273,320 @@ describe('BATCH 1B-C1 — response binding is exact, unique and fail-closed', ()
       expect(r.status).not.toBe('success');
       expect(r.providerTransactionId).toBeNull();
     }
+  });
+});
+
+// =============================================================================
+// BATCH P2 — BP103 ("Preview and approve") IS HANDLED EXPLICITLY, NOT AS ACCEPTED.
+// =============================================================================
+// Even after the documented `requires_approval:"NO"` request, an account can be
+// configured so IntaSend answers the initiation with the batch-level approval
+// state BP103. The initiation path must:
+//   * never report a BP103 batch as a completed payout (no 'success');
+//   * never present it as an ordinary accepted/processing result ('pending') —
+//     that state is for a batch the provider took and will disburse;
+//   * report every leg as the UNRESOLVED 'unknown' outcome, which the settlement
+//     executor turns into "return to pending_settlement, needs provider
+//     reconciliation" rather than a finalized claim, and never auto-resubmits;
+//   * preserve the provider batch reference so an operator can find the exact
+//     batch in IntaSend.
+// An ordinary 2xx with no approval code keeps its existing 'pending' behaviour.
+// =============================================================================
+describe('BATCH P2 — a BP103 "Preview and approve" batch is unresolved, never completed', () => {
+  it('reports every leg unknown and keeps the batch reference when the provider answers BP103', async () => {
+    useRealKey();
+    // The batch-level status_code is the machine-readable BP103 token; the
+    // human label is present too, as the provider actually returns it.
+    const calls = stubProvider({
+      tracking_id: 'TRK-BP103',
+      status_code: 'BP103',
+      status: 'Preview and approve',
+      transactions: [
+        { account: '254712345678', transaction_id: 'KQ9PLXR' },
+        { account: '712345678', transaction_id: 'AB7CDE1' },
+      ],
+    });
+
+    const result = await PaymentService.triggerIntasendPayout('CLAIM-1', twoLegs());
+
+    // Exactly one provider call was made — BP103 is NOT auto-retried here.
+    expect(calls.length).toBe(1);
+    // The batch reference is preserved for operator reconciliation.
+    expect(result.batchId).toBe('TRK-BP103');
+    for (const r of result.results) {
+      // Never a completion, and never a misleading "accepted/processing" either.
+      expect(r.status).toBe('unknown');
+      expect(r.status).not.toBe('success');
+      expect(r.status).not.toBe('pending');
+      // No per-leg provider transaction id is bound out of a parked batch.
+      expect(r.providerTransactionId).toBeNull();
+    }
+  });
+
+  it('recognises BP103 from the documented response shape (status_code + status label)', async () => {
+    useRealKey();
+    // The provider actually returns the machine code in `status_code` and the
+    // human label in `status`. The classifier must recognise BP103 from the
+    // machine code and treat the batch as approval-required, not as accepted.
+    stubProvider({
+      tracking_id: 'TRK-BP103',
+      status_code: 'BP103',
+      status: 'Preview and approve',
+      transactions: [],
+    });
+
+    const result = await PaymentService.triggerIntasendPayout('CLAIM-1', twoLegs());
+
+    expect(result.batchId).toBe('TRK-BP103');
+    expect(result.results.every(r => r.status === 'unknown')).toBe(true);
+  });
+
+  it('does NOT treat an already-approved BP104 batch as awaiting approval (P2 correction)', async () => {
+    useRealKey();
+    // BP104 is the documented "Confirming balance / Approved; checking the wallet
+    // balance" batch state — the OPPOSITE of awaiting approval. It must keep the
+    // normal accepted/in-progress path ('pending'), never be converted to
+    // 'unknown'. This pins the exact-BP103 classifier against the earlier broad
+    // /^BP\d{3}$/ family match that wrongly swallowed BP104.
+    stubProvider({
+      tracking_id: 'TRK-BP104',
+      status_code: 'BP104',
+      status: 'Confirming balance',
+      transactions: [{ account: '254712345678', transaction_id: 'KQ9PLXR' }],
+    });
+
+    const result = await PaymentService.triggerIntasendPayout('CLAIM-1', twoLegs());
+
+    expect(result.batchId).toBe('TRK-BP104');
+    for (const r of result.results) {
+      expect(r.status).toBe('pending');
+      expect(r.status).not.toBe('unknown');
+      expect(r.status).not.toBe('success');
+    }
+  });
+
+  it('an ordinary accepted batch (no approval code) keeps its existing pending behaviour', async () => {
+    useRealKey();
+    // Guards the fail-closed default: without a BP code the response is parsed
+    // normally, and an accepted batch is 'pending', never 'success'.
+    stubProvider({
+      tracking_id: 'TRK-OK',
+      status_code: 'OK',
+      transactions: [{ account: '254712345678', transaction_id: 'KQ9PLXR' }],
+    });
+
+    const result = await PaymentService.triggerIntasendPayout('CLAIM-1', twoLegs());
+
+    expect(result.batchId).toBe('TRK-OK');
+    expect(result.results.every(r => r.status === 'pending')).toBe(true);
+    expect(result.results.every(r => r.status !== 'success')).toBe(true);
+  });
+});
+
+// =============================================================================
+// PRODUCTION WALLET SELECTION — THE GATE IS ON THE NORMAL REQUEST PATH.
+// =============================================================================
+// `wallet_id` is the documented way to name the IntaSend working wallet a
+// disbursement batch pays FROM. Two invariants must hold at this seam:
+//
+//   1. REACHABILITY — a production request carrying a valid secret key must
+//      STILL be refused when INTASEND_DISBURSEMENT_WALLET_ID is missing, empty
+//      or whitespace-only. The guard used to live INSIDE the placeholder-key
+//      branch, written after that branch's production secret-key throw, so it
+//      could only ever be reached with a PLACEHOLDER key: on the real production
+//      path it was dead code, and a deployment with a real key and no wallet
+//      silently fell back to the provider's default settlement wallet.
+//   2. NON-PRODUCTION SAFETY — a configured production wallet ID must never be
+//      sent to the sandbox/test provider.
+//   3. PLACEHOLDER REJECTION — a present-but-placeholder value is NOT a
+//      configured wallet: the documented .env.example value
+//      ("REPLACE_WITH_KES_WORKING_WALLET_ID") and every other shape the
+//      project-wide isPlaceholderKey() convention rejects must fail the gate
+//      exactly like a missing value does. The gate reuses that one convention
+//      (both the settlement-executor gate and the request-seam gate call
+//      isDisbursementWalletConfigured()), so a deployment that copied
+//      .env.example can never send a placeholder wallet ID to the provider.
+//
+// Every test below drives the REAL function against a stubbed `fetch`. That is
+// deliberate: source-text assertions would NOT have caught the original defect
+// (the guard existed and read correctly — it was simply unreachable), so the
+// gate is pinned through the same code path production uses.
+// =============================================================================
+
+const WALLET_ENV_KEY = 'INTASEND_DISBURSEMENT_WALLET_ID';
+
+const WALLET_UNCONFIGURED_CASES: Array<[string, string | undefined]> = [
+  ['unset', undefined],
+  ['empty', ''],
+  ['whitespace-only', '   '],
+  ['tab/newline-only', '\t\n'],
+];
+
+// Present, but not a wallet: every shape the shared placeholder convention
+// rejects. The first entry is the exact value .env.example ships, so a
+// deployment that copied the example verbatim is covered by a real case rather
+// than by a hypothetical one.
+const WALLET_PLACEHOLDER_CASES: Array<[string, string]> = [
+  ['.env.example documented placeholder', 'REPLACE_WITH_KES_WORKING_WALLET_ID'],
+  ['padded .env.example placeholder', '  REPLACE_WITH_KES_WORKING_WALLET_ID  '],
+  ['lowercase "replace_with"', 'replace_with_a_real_wallet_id'],
+  ['"placeholder"', 'placeholder'],
+  ['"your_key" convention', 'PASTE_YOUR_KEY_HERE'],
+  ['"changeme" convention', 'CHANGEME'],
+  ['"change_me" convention', 'change_me_wallet'],
+  ['"todo"', 'todo'],
+];
+
+// A realistic IntaSend-shaped fixture: the placeholder rule must NOT match it.
+const REALISTIC_WALLET_FIXTURE = 'b1f4c0de-9a72-4f5c-8e11-2a3d5c7e9f01';
+
+function useProductionKey(walletId: string | undefined) {
+  process.env.NODE_ENV = 'production';
+  process.env.INTASEND_SECRET_KEY = 'MY_TEST_ONLY_WALLET_PROD_KEY';
+  if (walletId === undefined) {
+    // `delete`, never an undefined assignment: assigning undefined stringifies
+    // to the literal 'undefined', which would read as a CONFIGURED wallet.
+    delete process.env[WALLET_ENV_KEY];
+  } else {
+    process.env[WALLET_ENV_KEY] = walletId;
+  }
+}
+
+describe('PRODUCTION WALLET SELECTION — reachable fail-closed gate, exact injection', () => {
+  it('sends the configured production wallet ID verbatim and changes nothing else in the batch', async () => {
+    useProductionKey('KES-PROD-WALLET-1');
+    const calls = stubProvider({
+      tracking_id: 'TRK-W1',
+      status_code: 'OK',
+      transactions: [{ account: '254712345678', transaction_id: 'KQ9PLXR' }],
+    });
+
+    await PaymentService.triggerIntasendPayout('CLAIM-1', twoLegs());
+
+    expect(calls.length).toBe(1);
+    // The EXACT configured value — not a default, not a sandbox fallback.
+    expect(calls[0].body.wallet_id).toBe('KES-PROD-WALLET-1');
+    // The injection is additive: every documented batch field is unchanged...
+    expect(calls[0].body.provider).toBe('MPESA-B2C');
+    expect(calls[0].body.currency).toBe('KES');
+    expect(calls[0].body.requires_approval).toBe('NO');
+    expect(Object.keys(calls[0].body).sort()).toEqual(
+      ['currency', 'provider', 'requires_approval', 'transactions', 'wallet_id']
+    );
+    // ...and so are the transaction payloads, including their idempotency keys.
+    expect(calls[0].body.transactions.map((t: any) => t.narrative).sort()).toEqual(
+      ['R4M-AGENT-CLAIM-1', 'R4M-FINDER-CLAIM-1']
+    );
+    expect(calls[0].body.transactions.map((t: any) => t.amount).sort()).toEqual(['300', '500']);
+    expect(calls[0].body.transactions.map((t: any) => t.idempotency_key).sort()).toEqual(
+      [buildPayoutLegIdempotencyKey('CLAIM-1', 'finder'), buildPayoutLegIdempotencyKey('CLAIM-1', 'agent')].sort()
+    );
+  });
+
+  it.each(WALLET_UNCONFIGURED_CASES)(
+    'fails closed BEFORE the provider request when the production wallet ID is %s',
+    async (_label, walletValue) => {
+      useProductionKey(walletValue);
+      const calls = stubProvider({ tracking_id: 'TRK-MUST-NOT-BE-USED', transactions: [] });
+
+      await expect(PaymentService.triggerIntasendPayout('CLAIM-1', twoLegs()))
+        .rejects.toThrow(/INTASEND_DISBURSEMENT_WALLET_ID is not configured in production/);
+
+      // Fail-closed means the provider was never contacted at all.
+      expect(calls.length).toBe(0);
+    }
+  );
+
+  // A present-but-placeholder value is not a configured wallet. These cases pin
+  // the shared isPlaceholderKey() convention at the SAME seam as the missing
+  // cases above: refusal happens before the request is built or sent.
+  it.each(WALLET_PLACEHOLDER_CASES)(
+    'fails closed BEFORE the provider request when the production wallet ID is %s',
+    async (_label, walletValue) => {
+      useProductionKey(walletValue);
+      const calls = stubProvider({ tracking_id: 'TRK-MUST-NOT-BE-USED', transactions: [] });
+
+      await expect(PaymentService.triggerIntasendPayout('CLAIM-1', twoLegs()))
+        .rejects.toThrow(/INTASEND_DISBURSEMENT_WALLET_ID is not configured in production/);
+
+      // Fail-closed means the provider was never contacted at all.
+      expect(calls.length).toBe(0);
+    }
+  );
+
+  it('accepts a realistic, explicitly configured fixture wallet ID verbatim (the placeholder rule is not over-broad)', async () => {
+    useProductionKey(REALISTIC_WALLET_FIXTURE);
+    const calls = stubProvider({ tracking_id: 'TRK-W2', transactions: [] });
+
+    await PaymentService.triggerIntasendPayout('CLAIM-1', twoLegs());
+
+    expect(calls.length).toBe(1);
+    expect(calls[0].body.wallet_id).toBe(REALISTIC_WALLET_FIXTURE);
+  });
+
+  it('the ONE helper both production gates call rejects every placeholder shape and accepts a real fixture', () => {
+    // executeClaimSettlement() in server.ts and triggerIntasendPayout() above
+    // both delegate to this helper, so this assertion covers the
+    // settlement-executor gate as well as the request-seam gate.
+    for (const [label, walletValue] of WALLET_PLACEHOLDER_CASES) {
+      useProductionKey(walletValue);
+      expect(
+        isDisbursementWalletConfigured(),
+        `placeholder shape "${label}" must not count as a configured wallet`
+      ).toBe(false);
+    }
+    useProductionKey(REALISTIC_WALLET_FIXTURE);
+    expect(isDisbursementWalletConfigured()).toBe(true);
+  });
+
+  it('keeps the production secret-key refusal intact and independent of the wallet gate', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.INTASEND_SECRET_KEY = 'REPLACE_WITH_REAL_INTASEND_KEY';
+    // A configured wallet must NOT rescue a placeholder key.
+    process.env[WALLET_ENV_KEY] = 'KES-PROD-WALLET-1';
+    const calls = stubProvider({ tracking_id: 'TRK-MUST-NOT-BE-USED', transactions: [] });
+
+    await expect(PaymentService.triggerIntasendPayout('CLAIM-1', twoLegs()))
+      .rejects.toThrow(/IntaSend secret key is missing or still a placeholder/);
+    expect(calls.length).toBe(0);
+  });
+
+  it('never sends the configured production wallet ID to the sandbox/test provider', async () => {
+    process.env.NODE_ENV = 'development';
+    process.env.INTASEND_SECRET_KEY = 'MY_TEST_ONLY_1BC1_KEY';
+    process.env[WALLET_ENV_KEY] = 'KES-PROD-WALLET-1';
+    const calls = stubProvider({ tracking_id: 'TRK-NP', transactions: [] });
+
+    await PaymentService.triggerIntasendPayout('CLAIM-1', twoLegs());
+
+    expect(calls.length).toBe(1);
+    expect(calls[0].body.wallet_id).toBeUndefined();
+    expect(Object.keys(calls[0].body).sort()).toEqual(
+      ['currency', 'provider', 'requires_approval', 'transactions']
+    );
+  });
+
+  it('keeps the exact BP103 handling on the production wallet path', async () => {
+    useProductionKey('KES-PROD-WALLET-1');
+    const calls = stubProvider({
+      tracking_id: 'TRK-W-BP103',
+      status_code: 'BP103',
+      status: 'Preview and approve',
+      transactions: [
+        { account: '254712345678', transaction_id: 'KQ9PLXR' },
+        { account: '712345678', transaction_id: 'AB7CDE1' },
+      ],
+    });
+
+    const result = await PaymentService.triggerIntasendPayout('CLAIM-1', twoLegs());
+
+    // The wallet is sent AND the parked-batch handling is unchanged: unresolved,
+    // never completed, batch reference preserved, nothing auto-retried.
+    expect(calls.length).toBe(1);
+    expect(calls[0].body.wallet_id).toBe('KES-PROD-WALLET-1');
+    expect(result.batchId).toBe('TRK-W-BP103');
+    expect(result.results.every(r => r.status === 'unknown')).toBe(true);
+    expect(result.results.every(r => r.status !== 'success')).toBe(true);
+    expect(result.results.every(r => r.providerTransactionId === null)).toBe(true);
   });
 });

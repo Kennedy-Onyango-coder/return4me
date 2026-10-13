@@ -240,6 +240,63 @@ export function classifyPayoutTransactionStatus(rawStatus: unknown): PayoutTrans
 }
 
 /**
+ * BATCH P2 — THE BATCH-LEVEL APPROVAL STATE ("Preview and approve").
+ *
+ * Distinct from the per-transaction codes above, a send-money BATCH can be
+ * created in a state that pays NOTHING until it is approved through a separate,
+ * out-of-band step. IntaSend flags this at the batch level with:
+ *
+ *   { "status_code": "BP103", "status": "Preview and approve", ... }
+ *
+ * (and, when the provider is in a mode that always requires it, the same state
+ * can arrive even after the documented `requires_approval: "NO"` request field).
+ *
+ * WHAT THIS FUNCTION IS FOR
+ * It is the ONE place that decides "this batch is parked awaiting approval", so
+ * the payout initiation path can treat that distinctly: report every leg as
+ * UNRESOLVED, keep the batch reference, refuse to auto-retry, and never present
+ * the batch as accepted or completed. It deliberately does NOT attempt to
+ * approve the batch — approval is a human/account action and no approval
+ * endpoint is documented in this codebase.
+ *
+ * FAIL-CLOSED BY CONSTRUCTION
+ * It reads ONLY the machine code token (with the human label as a documented
+ * fallback, exactly as pickProviderStatusField does) and returns true ONLY for
+ * the exact documented approval code BP103. Any other code — including the
+ * other `BP###` batch states (BP101 "Reading file", BP104 "Confirming balance /
+ * Approved", BP108/BP109/BP110 "Processing/Sending"), a missing value, or a
+ * malformed value — returns false, which routes the response to the existing
+ * normal parsing, where it can only ever become 'pending' (accepted), never a
+ * completion. There is no input for which this function can cause a payout to
+ * be treated as successful.
+ *
+ * WHY EXACT BP103 AND NOT THE WHOLE `BP###` FAMILY
+ * Only BP103 ("Preview and approve" / "Waiting for approval") means the batch
+ * is parked awaiting a separate approval and therefore pays nothing yet. The
+ * other `BP###` codes mean the opposite: BP104 is explicitly "Approved;
+ * checking the wallet balance", and BP108/BP109/BP110 mean the batch is already
+ * processing and sending. Treating any of those as "awaiting approval" would
+ * mislabel a healthy, in-progress batch as unresolved (per the documented
+ * batch-status contract). The exact-literal match therefore matches only the
+ * one code whose documented meaning is "waiting for approval".
+ */
+export function isBatchApprovalRequired(batch: unknown): boolean {
+  const statusCode = pickProviderStatusField(batch);
+  if (!statusCode) return false;
+  // Normalise exactly like a per-transaction code: uppercase, take the first
+  // whitespace/dash/colon-delimited token so "BP103 - Preview and approve" and
+  // a bare "BP103" both resolve to the same token.
+  const code = statusCode.trim().toUpperCase().split(/[\s\-–—:]+/)[0];
+  // EXACT documented approval code only. BP103 ("Preview and approve" /
+  // "Waiting for approval") is the single batch state that means the batch is
+  // parked awaiting a separate approval. Other BP### codes (e.g. BP104
+  // "Approved; checking balance", BP108/BP109/BP110 "Processing/Sending") are
+  // NOT approval-required and must keep the normal accepted/in-progress path,
+  // so they deliberately do not match here.
+  return code === 'BP103';
+}
+
+/**
  * BATCH 1B — WHICH PROVIDER FIELD IS THE STATUS AUTHORITY, AND WHAT IT MEANS.
  *
  * IntaSend returns BOTH a machine-readable code and a human-readable label:

@@ -25,6 +25,7 @@ const read = (rel: string) => fs.readFileSync(path.resolve(repoRoot, rel), 'utf8
 const WEBHOOKS = read('src/routes/webhooks.ts');
 const PAYMENTS = read('src/services/payments.ts');
 const SERVER = read('src/server.ts');
+const DATABASE = read('src/db/database.ts');
 
 // =============================================================================
 // SOURCE SLICING — WHY THERE IS NO CHARACTER BUDGET HERE
@@ -198,5 +199,150 @@ describe('IntaSend payout initiation contract (Batch 1B-C1)', () => {
     expect(initiation).not.toContain('slice(-9)');
     expect(initiation).not.toContain('endsWith(');
     expect(initiation).toContain('resolvePayoutTransactionBindings');
+  });
+
+  it('requests the documented automated approval mode (requires_approval: "NO")', () => {
+    // BATCH P2 — a send-money batch created without `requires_approval:"NO"` can
+    // be parked by the provider in the BP103 "Preview and approve" state, which
+    // pays NOTHING until a separate approval. The platform's own approval gate is
+    // the durable admin settlement approval (settlement_approved_at), so the
+    // provider must NOT add a second human approval on top of it.
+    expect(PAYMENTS).toContain("requires_approval: 'NO'");
+  });
+
+  it('handles a BP103 approval-required batch distinctly, never as accepted or completed', () => {
+    // BATCH P2 — the initiation block must consult the batch-level approval check
+    // and, on BP103, report every leg UNRESOLVED ('unknown') with the batch ref
+    // preserved. It must not call any undocumented approval endpoint or auto-retry.
+    expect(PAYMENTS).toContain('isBatchApprovalRequired(data)');
+    expect(PAYMENTS).not.toContain('/send-money/approve');
+    expect(PAYMENTS).not.toContain('/send-money/publish');
+  });
+
+  it('does not weaken the durable administrator settlement approval gate', () => {
+    // BATCH P2 — provider approval mode is additive; the platform's own gate is
+    // untouched. The settlement executor must still require settlement_approved_at
+    // and the 'releasing' lock immediately before any payout submission.
+    expect(SERVER).toContain("preSubmitClaim.settlement_approved_at == null");
+    expect(SERVER).toContain("preSubmitClaim.status !== 'releasing'");
+  });
+});
+
+// =============================================================================
+// RELEASE-LOCK REGRESSION — A REFUSED WALLET GATE MUST GIVE THE LOCK BACK.
+// =============================================================================
+// The production wallet gate sits in the middle of the settlement executor:
+// AFTER attemptSettlementRelease() has moved the claim to 'releasing', but
+// BEFORE the per-row compare-and-swap markers and the provider call. Returning
+// a bare failure there would strand the claim in 'releasing' — the settlement
+// sweep is reporting-only and never reverts it — with nothing submitted and
+// nothing written. So the gate MUST abandon the release exactly like every
+// other early-abandonment path in that function (abandonRelease()), and it MUST
+// do so BEFORE any row is marked as submitted and before any ledger write.
+//
+// HOW FAR THIS GOES: these are SOURCE-CONTRACT assertions on the real text of
+// server.ts and database.ts. The ordering and the helper call are pinned
+// exactly, and the state that helper finally commits is pinned on the database
+// method that performs it. The TRANSITION ITSELF (a live claim moving from
+// 'releasing' back to 'pending_settlement') is NOT integration-tested by this
+// file: it never opens a database. That limitation is stated, not implied.
+// =============================================================================
+describe('production wallet gate abandons the settlement release instead of stranding it', () => {
+  const guardStart = SERVER.indexOf('PRODUCTION DISBURSEMENT-WALLET CONFIGURATION GUARD');
+  // The durable pre-submission markers are the next structural landmark after
+  // the guard, so the slice below cannot silently grow into unrelated code.
+  const guardEnd = SERVER.indexOf('DURABLE PRE-SUBMISSION MARKERS', guardStart);
+
+  it('sits inside the submission block, among the pre-submission authorization re-checks', () => {
+    const blockStart = SERVER.indexOf('if (submittable.length > 0) {');
+    expect(blockStart, 'submission block not found').toBeGreaterThan(-1);
+    expect(guardStart, 'wallet guard not found').toBeGreaterThan(blockStart);
+    // The lock re-checks it shares a code path with, all inside that block.
+    const lockRecheck = SERVER.indexOf("preSubmitClaim.status !== 'releasing'");
+    expect(lockRecheck).toBeGreaterThan(blockStart);
+    expect(lockRecheck).toBeLessThan(guardStart);
+    expect(SERVER.indexOf('preSubmitClaim.settlement_approved_at == null')).toBeLessThan(guardStart);
+  });
+
+  it('gives the release lock back through abandonRelease() — never a bare failure return', () => {
+    expect(guardEnd, 'submission markers not found after the guard').toBeGreaterThan(guardStart);
+    const guard = SERVER.slice(guardStart, guardEnd);
+    expect(guard).toContain('if (!disbursementWalletConfigured) {');
+    expect(guard).toContain('INTASEND_DISBURSEMENT_WALLET_ID is not configured in production');
+    // The recovery, not merely a refusal.
+    expect(guard).toContain('return await abandonRelease(');
+    // A refusal that skips the reversion is the defect this test exists for.
+    expect(guard).not.toMatch(/return\s*\{\s*success:\s*false/);
+  });
+
+  it('abandons the release BEFORE the CAS markers, the provider call and the ledger writes', () => {
+    const abandonIdx = SERVER.indexOf('return await abandonRelease(', guardStart);
+    const markerSectionIdx = SERVER.indexOf('const claimed: typeof submittable = [];', guardStart);
+    const casIdx = SERVER.indexOf('await db.markPayoutSubmissionStarted(candidate.row.id)', guardStart);
+    const providerIdx = SERVER.indexOf('await PaymentService.triggerIntasendPayout(claimId, claimed.map', guardStart);
+    const ledgerIdx = SERVER.indexOf('await db.recordPayoutAttempt(candidate.row.id, {', guardStart);
+
+    expect(abandonIdx, "the guard's abandonRelease call was not found").toBeGreaterThan(-1);
+    expect(markerSectionIdx, 'the durable pre-submission marker section was not found').toBeGreaterThan(-1);
+    expect(casIdx, 'the per-row CAS marker was not found').toBeGreaterThan(-1);
+    expect(providerIdx, 'the provider call was not found').toBeGreaterThan(-1);
+    expect(ledgerIdx, 'the ledger write was not found').toBeGreaterThan(-1);
+
+    // The lock is returned BEFORE anything is durably claimed or written, so a
+    // refused wallet can never leave a payout row looking submitted.
+    expect(abandonIdx).toBeLessThan(markerSectionIdx);
+    expect(abandonIdx).toBeLessThan(casIdx);
+    expect(abandonIdx).toBeLessThan(ledgerIdx);
+    // ...and the established marker -> provider -> ledger order is untouched.
+    expect(casIdx).toBeLessThan(providerIdx);
+    expect(providerIdx).toBeLessThan(ledgerIdx);
+  });
+
+  it('the abandonment path really returns the claim to pending_settlement (source contract, not integration-tested)', () => {
+    const abandonStart = SERVER.indexOf('const abandonRelease = async (reason: string) => {');
+    expect(abandonStart, 'abandonRelease was not found').toBeGreaterThan(-1);
+    // Structural end of the helper: its own audit line, inside the same helper.
+    const abandonEnd = SERVER.indexOf("'SETTLEMENT_RELEASE_ABANDONED'", abandonStart);
+    expect(abandonEnd).toBeGreaterThan(abandonStart);
+    expect(SERVER.slice(abandonStart, abandonEnd)).toContain('await db.revertSettlementRelease(claimId)');
+
+    const revertStart = DATABASE.indexOf('public async revertSettlementRelease(claimId: string): Promise<void> {');
+    expect(revertStart, 'revertSettlementRelease was not found').toBeGreaterThan(-1);
+    // Structural end: the guarded UPDATE's own WHERE clause.
+    const revertEnd = DATABASE.indexOf('eq(claimsTable.status, "releasing")', revertStart);
+    expect(revertEnd).toBeGreaterThan(revertStart);
+    const revert = DATABASE.slice(revertStart, revertEnd);
+
+    // The ONLY transition this helper is allowed to take, and the state it writes.
+    expect(revert).toContain("this.assertClaimTransitionAllowed('releasing', 'pending_settlement')");
+    expect(revert).toContain('status: "pending_settlement"');
+    // Nothing in it can leave the claim in the state it was abandoned from.
+    expect(revert).not.toContain('status: "releasing"');
+  });
+
+  it('the service-level wallet guard is reachable on the normal production path', () => {
+    const start = PAYMENTS.indexOf('async triggerIntasendPayout');
+    expect(start, 'triggerIntasendPayout was not found').toBeGreaterThan(-1);
+    const end = PAYMENTS.indexOf('async triggerIntasendRefund', start);
+    expect(end, 'triggerIntasendRefund was not found').toBeGreaterThan(start);
+    const initiation = PAYMENTS.slice(start, end);
+
+    const simulationReturn = initiation.indexOf('SIM-BATCH-');
+    const serviceGuard = initiation.indexOf('if (!disbursementWalletConfigured) {');
+    const providerCall = initiation.indexOf('await fetchWithTimeout(');
+    expect(simulationReturn, 'the placeholder-key simulation branch was not found').toBeGreaterThan(-1);
+    expect(serviceGuard, 'the service-level wallet guard was not found').toBeGreaterThan(-1);
+    expect(providerCall, 'the provider call was not found').toBeGreaterThan(-1);
+
+    // AFTER the placeholder-key branch returns, i.e. OUTSIDE it: a real
+    // production key reaches the guard. Inside that branch it was dead code on
+    // the only path that matters — the defect this assertion pins.
+    expect(serviceGuard).toBeGreaterThan(simulationReturn);
+    // ...and still before any provider request is built or sent.
+    expect(serviceGuard).toBeLessThan(providerCall);
+    // Independent of the API key: it answers from the wallet configuration.
+    expect(initiation).toContain("process.env.NODE_ENV !== 'production' || isDisbursementWalletConfigured()");
+    // The wallet itself is injected production-only, from the one accessor.
+    expect(initiation).toContain("process.env.NODE_ENV === 'production' ? getDisbursementWalletId() : null");
   });
 });

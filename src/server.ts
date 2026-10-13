@@ -36,7 +36,7 @@ import {
 import { NotificationService, buildNotificationIdempotencyKey } from './services/notificationService';
 import { newEmailOtpIssuanceId, sendEmailOtp, emailOtpRecipientIsSafe, EMAIL_OTP_UNAVAILABLE_MESSAGE } from './services/emailOtp';
 import { smsRateLimit } from './services/smsRateLimit';
-import { PaymentService, isPlaceholderKey, reconcileWebhookAmount } from './services/payments';
+import { PaymentService, isDisbursementWalletConfigured, isPlaceholderKey, reconcileWebhookAmount } from './services/payments';
 import { OcrService } from './services/ocr';
 import { uploadBase64Image } from './services/storage';
 import { SocialService } from './services/social';
@@ -436,6 +436,14 @@ console.log(`DOC_HASH_SALT:           ${process.env.DOC_HASH_SALT ? '[OK] Config
 console.log(`ADMIN_PASSCODE:          ${process.env.ADMIN_PASSCODE ? '[OK] Configured' : '[MISSING] Missing'}`);
 console.log(`INTASEND_PUBLISHABLE:    ${process.env.INTASEND_PUBLISHABLE_KEY ? '[OK] Configured' : '[MISSING] Missing'}`);
 console.log(`INTASEND_SECRET:         ${process.env.INTASEND_SECRET_KEY ? '[OK] Configured' : '[MISSING] Missing'}`);
+// BATCH 1B — name-only startup signal for the disbursement wallet. The VALUE is
+// never printed (it is operator configuration, not customer data, but it still
+// belongs in a .env, not in a log aggregator). This mirrors the production rule
+// the payout gates enforce: outside production the variable is optional, and in
+// production a missing, blank or placeholder-shaped value makes payouts fail
+// closed, so it is reported as a warning here at boot rather than surfacing
+// only at the first payout attempt.
+console.log(`INTASEND_WALLET_ID:      ${process.env.NODE_ENV !== 'production' || isDisbursementWalletConfigured() ? '[OK] Configured' : '[WARNING] Missing or placeholder (production payouts refuse to start)'}`);
 console.log(`ALLOW_MOCK_OTP_BYPASS:   ${process.env.ALLOW_MOCK_OTP_BYPASS === 'true' ? '[WARNING] ENABLED (Insecure)' : '[OK] Disabled'}`);
 console.log(`GEMINI_API_KEY:          ${process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY' ? '[OK] Configured (Real OCR Active)' : '[WARNING] Missing or placeholder'}`);
 console.log(`GROQ_API_KEY:            ${process.env.GROQ_API_KEY && process.env.GROQ_API_KEY !== 'MY_GROQ_API_KEY' ? '[OK] Configured (Secondary OCR Active)' : '[WARNING] Missing or placeholder'}`);
@@ -451,7 +459,12 @@ const isFreshlyCloned = !realEnvExists ||
   process.env.ADMIN_PASSCODE === "REPLACE_WITH_STRONG_PASSCODE_MIN_12_CHARS" ||
   process.env.DOC_HASH_SALT === "REPLACE_WITH_STRONG_RANDOM_VALUE_MIN_32_CHARS" ||
   process.env.INTASEND_PUBLISHABLE_KEY === "REPLACE_WITH_INTASEND_PUBLISHABLE_KEY" ||
-  process.env.INTASEND_SECRET_KEY === "REPLACE_WITH_INTASEND_SECRET_KEY";
+  process.env.INTASEND_SECRET_KEY === "REPLACE_WITH_INTASEND_SECRET_KEY" ||
+  // BATCH 1B: the documented disbursement-wallet placeholder counts as a
+  // still-unconfigured marker too. Both production payout gates reject it (they
+  // share isDisbursementWalletConfigured() in services/payments.ts), so a
+  // deployment that copied .env.example is detected as freshly cloned here.
+  process.env.INTASEND_DISBURSEMENT_WALLET_ID === "REPLACE_WITH_KES_WORKING_WALLET_ID";
 
 if (isRealGoogleKey && isFreshlyCloned) {
   console.warn("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
@@ -5746,6 +5759,28 @@ async function executeClaimSettlement(claimId: string): Promise<{ success: boole
     }
     if (preSubmitItem.status === 'suspected_stolen' || preSubmitItem.status === 'legal_hold') {
       return await abandonRelease(`the item is under '${preSubmitItem.status}' review.`);
+    }
+    // PRODUCTION DISBURSEMENT-WALLET CONFIGURATION GUARD
+    //
+    // Fail-closed gate, enforced BEFORE any payout row is marked as submitted.
+    // In production a non-blank, non-placeholder INTASEND_DISBURSEMENT_WALLET_ID
+    // is mandatory; a missing or placeholder-shaped value is a hard stop, never a
+    // silent settlement-wallet fallback. Non-production environments never
+    // enforce this gate here.
+    //
+    // This check runs after attemptSettlementRelease() has already moved the
+    // claim into the transient 'releasing' state, so it MUST give the release
+    // lock back the same way every other early-abandonment path does (see
+    // abandonRelease below): returning a bare failure would leave the claim
+    // stuck in 'releasing', which the reporting-only settlement sweep never
+    // reverts automatically.
+    const disbursementWalletConfigured =
+      process.env.NODE_ENV !== 'production' || isDisbursementWalletConfigured();
+    if (!disbursementWalletConfigured) {
+      return await abandonRelease(
+        'INTASEND_DISBURSEMENT_WALLET_ID is not configured in production. ' +
+        'Production payouts require a configured, non-blank, non-placeholder working-wallet ID before initiation.'
+      );
     }
 
     // DURABLE PRE-SUBMISSION MARKERS - persisted BEFORE any network call, one
