@@ -86,6 +86,12 @@ import {
 } from './admin/consoleActionState';
 import type { ConsoleActions, ConsoleActionEvent } from './admin/consoleActionState';
 import SettlementPayoutConfirmation from './admin/settlement/SettlementPayoutConfirmation';
+// BATCH B0 — modern shell chrome (sidebar groups + contextual top bar). These
+// are presentation components only: they hold no data, make no requests and
+// change no behaviour. The nav registry mirrors the ten existing sections so
+// the shell cannot invent or drop a section.
+import AdminTopBar from './admin/shell/AdminTopBar';
+import AdminNavGroupLabel from './admin/shell/AdminNavGroupLabel';
 
 // P14A (P14-05) — human-readable labels for the canonical masking styles. Keyed
 // by the values in PUBLIC_CLUE_STYLES (the single source); an unmapped value
@@ -272,6 +278,46 @@ const CONSOLE_SECTIONS: Record<ConsoleSectionKey, ConsoleSectionCopy> = {
 };
 
 // ---------------------------------------------------------------------------
+// B1 — THE OVERVIEW'S "NEEDS ATTENTION" QUEUE CARD.
+//
+// The Overview is opened to decide what to do next, so every queue it shows is
+// three things in one card: the figure, what the figure counts in plain words,
+// and the control that opens the section holding the rows behind it — a count
+// must never be a dead end.
+//
+// PRESENTATION ONLY. The count arrives as display text, already formatted by
+// the shared read-out module (adminOverviewMetrics), so this component never
+// computes, formats or defaults a number: a figure the server did not report
+// reaches it as the same em dash every other Overview card shows, and cannot
+// be dressed up as a zero here.
+// ---------------------------------------------------------------------------
+interface OverviewQueueCardProps {
+  label: string;
+  /** Already-formatted display text — formatMetricCount(...).text, never a raw figure. */
+  count: string;
+  description: string;
+  /** Opens the section whose rows this figure counts. */
+  actionLabel: string;
+  onOpen: () => void;
+}
+
+function OverviewQueueCard({ label, count, description, actionLabel, onOpen }: OverviewQueueCardProps) {
+  return (
+    <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-panel p-4 sm:p-5 shadow-raised flex flex-col gap-3">
+      <div className="space-y-1 min-w-0">
+        <p className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">{label}</p>
+        <p className="text-section font-extrabold text-[var(--appearance-text-primary)] tabular-nums tracking-tight leading-tight">{count}</p>
+        <p className="text-caption text-[var(--appearance-text-muted)] leading-snug">{description}</p>
+      </div>
+      <Button variant="ghost" size="sm" className="self-start" onClick={onOpen}>
+        {actionLabel}
+        <ArrowRight size={ICON_SIZE.metadata} aria-hidden="true" />
+      </Button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // D-2B-B — A REFUSED PAYOUT INITIATION IS EXPLAINED BY THE SERVER, NOT GUESSED.
 //
 // POST /api/admin/claims/:id/settlement/initiate decides eligibility itself and
@@ -326,6 +372,10 @@ function isReported(value: unknown): boolean {
 
 export default function AdminView({ token, setToken, onCategoriesChanged }: AdminViewProps) {
   const t = translations.en;
+  // B0 FIX — the console is fixed-English (translations.en above); this is the
+  // same literal the bilingual nav label and AdminTopBar already expected, so
+  // the pinned `lang === 'en' ? ...` contract holds without new language state.
+  const lang = 'en' as const;
   // BATCH 2 — the file's own bilingual shorthand (see DisputeClaimantPanel),
   // used by the 2FA enrollment UX below so its long English/Swahili strings stay
   // readable in JSX.
@@ -2841,8 +2891,14 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
           <div className="lg:grid lg:grid-cols-[236px_minmax(0,1fr)] lg:gap-8 lg:items-start">
           <nav
             className="r4m-admin-nav flex border-b border-[var(--appearance-border)] overflow-x-auto scrollbar-none"
-            aria-label={'Admin sections'}
+            aria-label={lang === 'en' ? 'Admin sections' : 'Sehemu za msimamizi'}
           >
+            {/* BATCH B0 — grouped sidebar. The ten buttons below are exactly the
+                ten pre-existing sections in grouped order (Overview / Money /
+                Operations / Configuration, mirroring ADMIN_NAV_GROUPS in
+                admin/shell). No section added, removed or renamed; only their
+                order changed to match the groups. */}
+            <AdminNavGroupLabel>Overview</AdminNavGroupLabel>
             <button
               onClick={() => setActiveTab('stats')}
               aria-current={activeTab === 'stats' ? 'page' : undefined}
@@ -2853,6 +2909,40 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
               <BarChart2 size={ICON_SIZE.metadata} aria-hidden="true" />
               <span>{t.statsTab}</span>
             </button>
+            <AdminNavGroupLabel>Money</AdminNavGroupLabel>
+            {/* Phase 6F — Claims Administration. Read-only; the surface itself
+                enforces nothing (the server does) and exposes no mutation. */}
+            <button
+              onClick={() => setActiveTab('claims')}
+              aria-current={activeTab === 'claims' ? 'page' : undefined}
+              className={`py-3 px-6 text-caption font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
+                activeTab === 'claims' ? 'border-[var(--appearance-primary)] text-[var(--appearance-text-primary)] font-extrabold' : 'border-transparent text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'
+              }`}
+            >
+              <ClipboardList size={ICON_SIZE.metadata} aria-hidden="true" />
+              <span>{'Claims'}</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('ledger')}
+              aria-current={activeTab === 'ledger' ? 'page' : undefined}
+              className={`py-3 px-6 text-caption font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
+                activeTab === 'ledger' ? 'border-[var(--appearance-primary)] text-[var(--appearance-text-primary)] font-extrabold' : 'border-transparent text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'
+              }`}
+            >
+              <Coins size={ICON_SIZE.metadata} aria-hidden="true" />
+              <span>{t.ledgerTab}</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('disputes')}
+              aria-current={activeTab === 'disputes' ? 'page' : undefined}
+              className={`py-3 px-6 text-caption font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
+                activeTab === 'disputes' ? 'border-[var(--appearance-primary)] text-[var(--appearance-text-primary)] font-extrabold' : 'border-transparent text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'
+              }`}
+            >
+              <HelpCircle size={ICON_SIZE.metadata} aria-hidden="true" />
+              <span>{t.disputesTab}</span>
+            </button>
+            <AdminNavGroupLabel>Operations</AdminNavGroupLabel>
             <button
               onClick={() => setActiveTab('agents')}
               aria-current={activeTab === 'agents' ? 'page' : undefined}
@@ -2873,28 +2963,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
               <Package size={ICON_SIZE.metadata} aria-hidden="true" />
               <span>{'Found Items'}</span>
             </button>
-            <button
-              onClick={() => setActiveTab('disputes')}
-              aria-current={activeTab === 'disputes' ? 'page' : undefined}
-              className={`py-3 px-6 text-caption font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
-                activeTab === 'disputes' ? 'border-[var(--appearance-primary)] text-[var(--appearance-text-primary)] font-extrabold' : 'border-transparent text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'
-              }`}
-            >
-              <HelpCircle size={ICON_SIZE.metadata} aria-hidden="true" />
-              <span>{t.disputesTab}</span>
-            </button>
-            {/* Phase 6F — Claims Administration. Read-only; the surface itself
-                enforces nothing (the server does) and exposes no mutation. */}
-            <button
-              onClick={() => setActiveTab('claims')}
-              aria-current={activeTab === 'claims' ? 'page' : undefined}
-              className={`py-3 px-6 text-caption font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
-                activeTab === 'claims' ? 'border-[var(--appearance-primary)] text-[var(--appearance-text-primary)] font-extrabold' : 'border-transparent text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'
-              }`}
-            >
-              <ClipboardList size={ICON_SIZE.metadata} aria-hidden="true" />
-              <span>{'Claims'}</span>
-            </button>
+            {/* Phase 6F — Lost Reports Administration. Read-only. */}
             <button
               onClick={() => setActiveTab('lost_reports')}
               aria-current={activeTab === 'lost_reports' ? 'page' : undefined}
@@ -2906,16 +2975,6 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
               <span>{'Lost Reports'}</span>
             </button>
             <button
-              onClick={() => setActiveTab('ledger')}
-              aria-current={activeTab === 'ledger' ? 'page' : undefined}
-              className={`py-3 px-6 text-caption font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
-                activeTab === 'ledger' ? 'border-[var(--appearance-primary)] text-[var(--appearance-text-primary)] font-extrabold' : 'border-transparent text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'
-              }`}
-            >
-              <Coins size={ICON_SIZE.metadata} aria-hidden="true" />
-              <span>{t.ledgerTab}</span>
-            </button>
-            <button
               onClick={() => setActiveTab('review')}
               aria-current={activeTab === 'review' ? 'page' : undefined}
               className={`py-3 px-6 text-caption font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
@@ -2925,6 +2984,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
               <FileCheck size={ICON_SIZE.metadata} aria-hidden="true" />
               <span>Manual Review</span>
             </button>
+            <AdminNavGroupLabel>Configuration</AdminNavGroupLabel>
             <button
               onClick={() => setActiveTab('categories')}
               aria-current={activeTab === 'categories' ? 'page' : undefined}
@@ -2947,6 +3007,18 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
             </button>
           </nav>
           <div className="space-y-6 min-w-0">
+
+          {/* BATCH B0 — contextual top bar. Shows the current section (from the
+              shared nav registry), the existing stale-data flag, and the
+              existing refresh handler. Presentation only: no new data, no new
+              endpoint, no invented environment indicator. */}
+          <AdminTopBar
+            activeSection={activeTab}
+            lang="en"
+            dashboardStale={dashboardStale && !!dashboardData}
+            dashboardLoading={dashboardLoading}
+            onRefresh={fetchDashboardData}
+          />
 
           {/* PAGE TITLE — the console's ONE page-level <h1>. The old 3xl title
               above the sidebar was removed, so this band is the single heading
@@ -3030,6 +3102,109 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                   </p>
                 )}
               </div>
+
+              {/* B1 — NEEDS ATTENTION. The Overview is opened to decide what to
+                  do next, so the queues an administrator can act on come first,
+                  each as ONE card: the figure (formatted by the shared read-out
+                  module, so an unreported value is an em dash and never a
+                  zero), what the figure counts in plain words, and the control
+                  that opens the section holding the rows behind it — a count is
+                  never a dead end.
+
+                  Every figure here already exists in this tab's payload: the
+                  validated stats block, the settlement array and the item flags
+                  this console renders elsewhere. No new endpoint, no polling,
+                  no second request. */}
+              <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-4 sm:p-6 shadow-sm space-y-4">
+                <div className="space-y-1">
+                  <h3 className="font-extrabold text-caption text-[var(--appearance-text-muted)] uppercase tracking-widest flex items-center gap-2">
+                    <AlertTriangle size={ICON_SIZE.ui} aria-hidden="true" />
+                    {'Needs attention'}
+                  </h3>
+                  <p className="text-body text-[var(--appearance-text-muted)]">
+                    {'Work waiting on an administrator right now. Each figure opens the section that holds the rows behind it.'}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
+                  <OverviewQueueCard
+                    label={'Pending agent approvals'}
+                    count={formatMetricCount(dashboardData.stats.pendingAgentsCount).text}
+                    description={'Agent applications waiting for a decision.'}
+                    actionLabel={'Review agents'}
+                    onOpen={() => setActiveTab('agents')}
+                  />
+                  <OverviewQueueCard
+                    label={'Settlements awaiting action'}
+                    count={formatMetricCount(Array.isArray(dashboardData.pendingSettlements) ? dashboardData.pendingSettlements.length : undefined).text}
+                    description={'Claims in the dispute window awaiting settlement action.'}
+                    actionLabel={'Open settlements'}
+                    onOpen={() => setActiveTab('ledger')}
+                  />
+                  <OverviewQueueCard
+                    label={'Items flagged for review'}
+                    count={formatMetricCount(Array.isArray(dashboardData.items) ? dashboardData.items.filter((item: any) => item.flaggedForReview).length : undefined).text}
+                    description={'Listings with low-confidence or missing details waiting for a manual check.'}
+                    actionLabel={'Open review queue'}
+                    onOpen={() => setActiveTab('review')}
+                  />
+                  <OverviewQueueCard
+                    label={'Open disputes'}
+                    count={formatMetricCount(dashboardData.stats.disputesOpenCount).text}
+                    description={'Disputes with no recorded resolution yet.'}
+                    actionLabel={'Review disputes'}
+                    onOpen={() => setActiveTab('disputes')}
+                  />
+                  {/* The unresolved-payout figure lives here with the queues —
+                      it counts rows an administrator must reconcile — and keeps
+                      the Batch 2 disclosure at its side, so the count and the
+                      rows behind it are one unit of work. */}
+                  <div className="space-y-2">
+                    <StatCard
+                      icon={AlertTriangle}
+                      label={'Unresolved Payouts'}
+                      value={inFlightCountLabel(dashboardData.stats?.unresolvedPayoutsCount)}
+                      status={
+                        isReported(dashboardData.stats?.unresolvedPayoutsCount) && dashboardData.stats.unresolvedPayoutsCount > 0
+                          ? <Badge variant="warning">Needs provider check</Badge>
+                          : undefined
+                      }
+                      description={isReported(dashboardData.stats?.unresolvedPayoutsCount)
+                        ? (dashboardData.stats.unresolvedPayoutsCount > 0
+                            ? (`${formatKesAmount(dashboardData.stats?.unresolvedPayoutsAmount).text} is neither confirmed paid nor safe to resend automatically. Verify each row with the provider before any manual action.`)
+                            : ('No payout row is awaiting provider reconciliation.'))
+                        : ('Not reported by this server build — treat as unknown, not as zero.')}
+                    />
+                    {/* BATCH 2 — the disclosure. The count above is a figure; this
+                        is how an operator sees WHICH rows it counts. It reveals a
+                        read-only list, so it is a plain button with a real
+                        expanded/collapsed state — no navigation, no new tab. */}
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="w-full"
+                      aria-expanded={payoutReconciliationOpen}
+                      aria-controls={PAYOUT_RECONCILIATION_PANEL_ID}
+                      onClick={() => setPayoutReconciliationOpen((open) => !open)}
+                    >
+                      {payoutReconciliationOpen
+                        ? ('Hide unresolved payout rows')
+                        : ('View unresolved payout rows')}
+                    </Button>
+                  </div>
+                </div>
+
+                {/* B1 — the rows behind the "Unresolved Payouts" figure, mounted
+                    directly below the disclosure that reveals them. Same panel,
+                    same ONE read of GET /api/admin/payout-reconciliation (and
+                    the same cancel on unmount): the dashboard request is still
+                    the only request an operator pays for unless they ask for the
+                    rows. Read-only — it can re-READ the list and nothing else. */}
+                {payoutReconciliationOpen && (
+                  <PayoutReconciliationPanel token={token} />
+                )}
+              </div>
+
               <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4">
                 <StatCard
                   icon={Package}
@@ -3069,6 +3244,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                   icon={Coins}
                   label={t.totalRev}
                   value={formatKesAmount(dashboardData.stats.totalRevenue).text}
+                  description={'Platform-fee ledger entries already marked completed — confirmed money, not the in-flight figures below.'}
                 />
               </div>
 
@@ -3102,7 +3278,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                   </p>
                 </div>
 
-                <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
                   <StatCard
                     icon={Coins}
                     label={'Funds Held (not yet paid out)'}
@@ -3127,52 +3303,74 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                       ? (`Submitted to the provider; ${dashboardData.stats.releasingCount} claim(s) not yet confirmed paid.`)
                       : ('The claim count was not reported by this server build.')}
                   />
-                  <div className="space-y-2">
-                    <StatCard
-                      icon={AlertTriangle}
-                      label={'Unresolved Payouts'}
-                      value={inFlightCountLabel(dashboardData.stats?.unresolvedPayoutsCount)}
-                      status={
-                        isReported(dashboardData.stats?.unresolvedPayoutsCount) && dashboardData.stats.unresolvedPayoutsCount > 0
-                          ? <Badge variant="warning">Needs provider check</Badge>
-                          : undefined
-                      }
-                      description={isReported(dashboardData.stats?.unresolvedPayoutsCount)
-                        ? (dashboardData.stats.unresolvedPayoutsCount > 0
-                            ? (`${formatKesAmount(dashboardData.stats?.unresolvedPayoutsAmount).text} is neither confirmed paid nor safe to resend automatically. Verify each row with the provider before any manual action.`)
-                            : ('No payout row is awaiting provider reconciliation.'))
-                        : ('Not reported by this server build — treat as unknown, not as zero.')}
-                    />
-                    {/* BATCH 2 — the disclosure. The count above is a figure; this
-                        is how an operator sees WHICH rows it counts. It reveals a
-                        read-only list, so it is a plain button with a real
-                        expanded/collapsed state — no navigation, no new tab. */}
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      className="w-full"
-                      aria-expanded={payoutReconciliationOpen}
-                      aria-controls={PAYOUT_RECONCILIATION_PANEL_ID}
-                      onClick={() => setPayoutReconciliationOpen((open) => !open)}
-                    >
-                      {payoutReconciliationOpen
-                        ? ('Hide unresolved payout rows')
-                        : ('View unresolved payout rows')}
-                    </Button>
-                  </div>
                 </div>
               </div>
 
-              {/* BATCH 2 — THE ROWS BEHIND THE "UNRESOLVED PAYOUTS" FIGURE.
-                  Mounted only while disclosed. The panel owns the ONE read of
-                  GET /api/admin/payout-reconciliation (and cancels it on unmount),
-                  so nothing about this tab's existing cost changes: the
-                  dashboard request is still the only request an operator pays
-                  for unless they ask to see the rows. Read-only — it can re-READ
-                  the list and nothing else. */}
-              {payoutReconciliationOpen && (
-                <PayoutReconciliationPanel token={token} />
-              )}
+              <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-6 shadow-sm space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <h3 className="font-extrabold text-caption text-[var(--appearance-text-muted)] uppercase tracking-widest flex items-center gap-2">
+                    <ClipboardList size={ICON_SIZE.ui} aria-hidden="true" />
+                    {'Recent platform activity'}
+                  </h3>
+                  <Button variant="ghost" size="sm" onClick={() => setActiveTab('ledger')}>
+                    {'Open ledger'}
+                    <ArrowRight size={ICON_SIZE.metadata} aria-hidden="true" />
+                  </Button>
+                </div>
+                {dashboardData.ledger.length === 0 ? (
+                  <EmptyState
+                    icon={ClipboardList}
+                    title={'No ledger entries yet'}
+                    description={'Ledger entries appear here as soon as they are recorded.'}
+                  />
+                ) : (
+                  <div className="r4m-scroll-x" role="region" aria-label={'Latest ledger entries'} tabIndex={0}>
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-[var(--appearance-surface-muted)] text-caption font-extrabold text-[var(--appearance-text-muted)] uppercase tracking-widest border-b border-[var(--appearance-border)]">
+                          <th scope="col" className="px-5 py-3 font-bold">{'Time'}</th>
+                          <th scope="col" className="px-5 py-3 font-bold">{'Type'}</th>
+                          <th scope="col" className="px-5 py-3 font-bold">{'Amount'}</th>
+                          <th scope="col" className="px-5 py-3 font-bold">{'Claim'}</th>
+                          <th scope="col" className="px-5 py-3 font-bold">{'Status'}</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[var(--appearance-border)] text-caption text-[var(--appearance-text-muted)]">
+                        {dashboardData.ledger.slice(0, 5).map((entry: any) => (
+                          <tr key={entry.id} className="hover:bg-[var(--appearance-surface-muted)]/50 transition">
+                            <td className="px-5 py-3.5 text-[var(--appearance-text-muted)] whitespace-nowrap">
+                              {entry.created_at ? new Date(entry.created_at).toLocaleString() : '—'}
+                            </td>
+                            <td className="px-5 py-3.5">
+                              <Badge
+                                variant={
+                                  entry.type === 'payment_received' ? 'info' :
+                                    entry.type === 'finder_payout' ? 'success' :
+                                      entry.type === 'agent_payout' ? 'warning' : 'neutral'
+                                }
+                              >
+                                {entry.type.replace('_', ' ')}
+                              </Badge>
+                            </td>
+                            <td className="px-5 py-3.5 font-bold text-[var(--appearance-text-primary)] tabular-nums">{formatKesAmount(entry.amount).text}</td>
+                            <td className="px-5 py-3.5">{entry.claim_id || '—'}</td>
+                            <td className="px-5 py-3.5">
+                              <Badge
+                                variant={
+                                  entry.status === 'completed' ? 'success'
+                                    : entry.status === 'failed' ? 'danger' : 'warning'
+                                }
+                              >
+                                {entry.status.toUpperCase()}
+                              </Badge>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
 
               {/* Admin 2FA / Security */}
               <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-6 shadow-sm space-y-4">

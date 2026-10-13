@@ -36,7 +36,13 @@ import {
 import { NotificationService, buildNotificationIdempotencyKey } from './services/notificationService';
 import { newEmailOtpIssuanceId, sendEmailOtp, emailOtpRecipientIsSafe, EMAIL_OTP_UNAVAILABLE_MESSAGE } from './services/emailOtp';
 import { smsRateLimit } from './services/smsRateLimit';
-import { PaymentService, isDisbursementWalletConfigured, isPlaceholderKey, reconcileWebhookAmount } from './services/payments';
+// BATCH 1 CORRECTION A — the payout preflight in executeClaimSettlement() must
+// ask the SAME two predicates the payout service composes for its simulation
+// branch (isPayoutSimulationRequired = "no usable credentials, this would be
+// simulated" and isPaymentSimulationEnvironment = "simulation is permitted
+// here"), and render the observed NODE_ENV with the same fail-closed helper. One
+// simulation policy, evaluated at two seams - never two policies.
+import { PaymentService, isDisbursementWalletConfigured, isPlaceholderKey, isPayoutSimulationRequired, isPaymentSimulationEnvironment, describeNodeEnvForRefusal, reconcileWebhookAmount } from './services/payments';
 import { OcrService } from './services/ocr';
 import { uploadBase64Image } from './services/storage';
 import { SocialService } from './services/social';
@@ -96,6 +102,12 @@ import { INACTIVE_CLAIM_STATUSES, isPickupEligibleClaimStatus, CLAIM_UNAVAILABLE
 // re-derive "is this payout safe to send?" locally: it asks this predicate,
 // which is also what the data layer's unresolved-payout query uses.
 import { isPayoutSubmittable } from './config/payoutOutcomes';
+// BATCH 1 — the phone-only payout destination policy. Like isPayoutSubmittable
+// above, the executor must not re-derive this rule locally: it asks the ONE
+// pure predicate, which is exhaustively unit-tested without booting this file.
+// It answers a FORMAT/METHOD question only — it does not verify phone
+// ownership, M-Pesa registration or provider eligibility.
+import { resolvePayoutBatchEligibility, describePayoutDestinationRefusal } from './config/payoutDestinations';
 // BATCH 1 — the payout-batch verification path (authoritative provider lookup +
 // exact transaction-to-leg matching + CAS-guarded confirmation). Imported by
 // name so the webhook route receives it as an INJECTED dependency rather than
@@ -5723,6 +5735,36 @@ async function executeClaimSettlement(claimId: string): Promise<{ success: boole
 
   const submittable = candidates.filter(c => isPayoutSubmittable(c.row));
 
+  // BATCH 1 CORRECTION B — EVERY OUTSTANDING REQUIRED LEG, NOT ONLY THE
+  // SUBMITTABLE ONES.
+  //
+  // The phone-only destination policy has to hold for the WHOLE claim, not just
+  // for the rows THIS attempt happens to be able to send. `submittable` selects
+  // only rows whose submission history positively records "never submitted"
+  // (isPayoutSubmittable), so a required leg that is still outstanding but
+  // already 'submitting' / 'accepted' / 'unknown' / 'rejected' is EXCLUDED from
+  // it - and evaluating destination eligibility over that set alone would let
+  // this attempt submit the OTHER, eligible leg while an unpayable leg stayed
+  // outstanding. The claim would then be paid one-sidedly, and the unpayable leg
+  // could never be corrected and paid afterwards, because the money for the
+  // claim would already have left.
+  //
+  // Eligibility is therefore evaluated over EVERY REQUIRED LEG THAT IS NOT YET
+  // COMPLETED. The required legs are exactly the `finder_payout` and
+  // `agent_payout` rows booked for this claim by enterPendingSettlement(), which
+  // books one of each unconditionally - the same two rows the submission
+  // eligibility above and the unresolved-payout check below are built from.
+  //
+  // A 'completed' leg is terminal and is deliberately EXCLUDED here: it is not
+  // re-evaluated and not reclassified by this guard, and it can never be
+  // resubmitted anyway (isPayoutSubmittable requires status 'pending'). This
+  // expression is the same "outstanding" definition used by the unresolved-payout
+  // check below and by finalizeSettlement() in db/database.ts.
+  //
+  // This change only ever WIDENS the set of refusals; it never adds a leg to the
+  // provider batch, which stays exactly `submittable`.
+  const outstandingLegs = candidates.filter(c => c.row.status !== 'completed');
+
   if (submittable.length > 0) {
     // D-2B-B-E — RE-READ THE DECIDING STATE IMMEDIATELY BEFORE SUBMITTING.
     //
@@ -5759,6 +5801,106 @@ async function executeClaimSettlement(claimId: string): Promise<{ success: boole
     }
     if (preSubmitItem.status === 'suspected_stolen' || preSubmitItem.status === 'legal_hold') {
       return await abandonRelease(`the item is under '${preSubmitItem.status}' review.`);
+    }
+    // BATCH 1 CORRECTION A — A WOULD-BE SIMULATED PAYOUT IS REFUSED BEFORE ANY
+    // DURABLE SUBMISSION MARKER.
+    //
+    // The service-level gate in triggerIntasendPayout() refuses to fabricate a
+    // payout success outside an explicitly recognised simulation environment, and
+    // it STAYS exactly where it is as defence in depth. But it runs inside the
+    // provider call, i.e. AFTER this executor has already persisted its durable
+    // pre-submission markers - so its refusal left the claim parked in the
+    // transient 'releasing' lock with both payout rows recorded as 'submitting':
+    // unresolved by design, invisible to the due-claim queue, and therefore
+    // reachable by no automatic recovery. The refusal has to be decided HERE, at
+    // the same seam as the destination and wallet gates below and for the same
+    // reason: BEFORE the per-row markers and BEFORE the request body exists.
+    //
+    // It asks the SAME two predicates the service composes, so there is one
+    // simulation policy rather than a second, conflicting one:
+    //   * isPayoutSimulationRequired() - this attempt would have to be simulated
+    //     (no usable IntaSend secret key: absent, empty, whitespace or
+    //     placeholder-shaped). It is the very condition the service's simulation
+    //     branch is selected by, so the two cannot drift apart.
+    //   * isPaymentSimulationEnvironment() - simulation is permitted in this
+    //     environment (exactly 'development' or 'test').
+    //
+    // WHY A REAL PAYOUT CANNOT BE BLOCKED BY THIS: the refusal is unreachable
+    // whenever a genuine, non-placeholder INTASEND_SECRET_KEY is configured.
+    // isPayoutSimulationRequired() is false in every environment in that case, so
+    // the production HTTP path is untouched - including in a production-like
+    // environment, where no simulation is permitted and none is needed.
+    //
+    // The refusal logs a PII-free reason (the observed NODE_ENV, rendered with
+    // the same fail-closed helper the service uses), writes NO marker, calls NO
+    // provider, fabricates NO success, and gives the release lock back through
+    // abandonRelease() so the claim is not stranded. A row that was already
+    // 'submitting', 'accepted', 'unknown', 'rejected' or 'completed' before this
+    // attempt is not touched or reset: nothing here writes to a payout row at all.
+    const payoutWouldBeSimulated = isPayoutSimulationRequired();
+    if (payoutWouldBeSimulated && !isPaymentSimulationEnvironment(process.env.NODE_ENV)) {
+      const observedEnv = describeNodeEnvForRefusal(process.env.NODE_ENV);
+      await db.logAudit(
+        'SYSTEM',
+        'PAYOUT_SIMULATION_REFUSED',
+        `Claim ${claimId}: payout NOT submitted - the IntaSend secret key is missing or still a placeholder value and NODE_ENV is ${observedEnv}, which is not a payout-simulation environment (only "development" and "test" may simulate). Refused BEFORE any payout row was marked as submitted: no provider request was made, nothing was paid, and the claim was returned to pending_settlement. Configure a real INTASEND_SECRET_KEY, or run with NODE_ENV="development"/"test" for local simulation.`
+      );
+      return await abandonRelease(
+        `this deployment would have to SIMULATE the payout (it holds no usable IntaSend credentials) and NODE_ENV is ${observedEnv}, which is not a payout-simulation environment. A production-like environment must never report a transfer as paid when nothing was sent.`
+      );
+    }
+    // BATCH 1 - PHONE-ONLY PAYOUT DESTINATION ELIGIBILITY (LAUNCH POLICY).
+    //
+    // The launch policy pays PERSONAL M-PESA PHONE DESTINATIONS ONLY, on both
+    // legs. The recipients' stored values are free-form text the platform does
+    // not control: an agent's `mpesa_till_or_paybill` may hold a Till number, a
+    // Paybill number, a Pochi la Biashara handle, a blank value or a malformed
+    // number, and the finder's recorded phone may be anything the report form
+    // accepted. Sending any of those to the B2C disbursement endpoint is a
+    // request the provider cannot execute as intended - at best a refusal, at
+    // worst money to an account nobody verified.
+    //
+    // So the guard runs HERE, on freshly re-read state, BEFORE the per-row
+    // markers and before the request body is built: the same seam, and the same
+    // recovery, as the production wallet gate below. It asks the pure predicate
+    // in config/payoutDestinations.ts, which requires
+    //   * a destination that normalises to exactly `254` followed by nine
+    //     digits, and
+    //   * the single supported method, `Personal M-Pesa`,
+    // and refuses everything else (Till, Paybill, Pochi la Biashara, unknown or
+    // differently-cased methods, missing/malformed/non-Kenyan numbers).
+    //
+    // ALL-OR-NOTHING: eligibility is evaluated across EVERY required leg of the
+    // claim that is not already completed (see `outstandingLegs` above - NOT
+    // only the rows this attempt can submit), and ONE ineligible leg aborts the
+    // whole batch. No
+    // partial or mixed batch is ever sent - a valid finder leg is never paid
+    // alongside an ineligible agent leg. Every refused leg is named in a system
+    // audit row, with a MASKED destination and a reason code, so an operator can
+    // see exactly which recipient to correct. Nothing is marked as submitted, so
+    // a corrected destination can still be paid by a later initiation.
+    //
+    // WHAT THIS GUARD IS NOT: a FORMAT and PERMITTED-METHOD check only. It does
+    // not verify that the number is registered with M-Pesa, that it belongs to
+    // the intended person, or that the provider will accept it for this
+    // transfer - those remain provider and operator responsibilities.
+    // BATCH 1 CORRECTION B: the batch checked here is the set of OUTSTANDING
+    // required legs, not `submittable`. A leg that is outstanding but not
+    // submittable (already 'submitting' / 'accepted' / 'unknown' / 'rejected')
+    // would otherwise be invisible to this guard, which is exactly how an
+    // eligible leg could be paid while an unpayable leg stayed behind. Treating
+    // it as part of the batch makes the policy hold for the claim as a whole.
+    const destinationEligibility = resolvePayoutBatchEligibility(outstandingLegs.map((candidate) => candidate.payload));
+    if (!destinationEligibility.eligible) {
+      const refusal = destinationEligibility.ineligible.map(describePayoutDestinationRefusal).join('; ');
+      await db.logAudit(
+        'SYSTEM',
+        'PAYOUT_DESTINATION_NOT_ELIGIBLE',
+        `Claim ${claimId}: payout NOT submitted - ${refusal}. The launch policy pays Kenyan personal M-Pesa phone destinations only (254 followed by nine digits) and requires the "Personal M-Pesa" method on both legs. No batch was submitted and no payout row was marked as submitted; correct the recipient's payout destination and initiate the payout again.`
+      );
+      return await abandonRelease(
+        `a payout destination is not eligible under the phone-only payout policy (${refusal}).`
+      );
     }
     // PRODUCTION DISBURSEMENT-WALLET CONFIGURATION GUARD
     //

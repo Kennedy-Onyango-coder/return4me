@@ -136,6 +136,53 @@ export function isPlaceholderKey(key: string | undefined | null): boolean {
   );
 }
 
+// =============================================================================
+// BATCH 1 — THE PAYMENT SIMULATION ENVIRONMENT ALLOW-LIST (ONE POLICY).
+// =============================================================================
+//
+// Every money-protocol function in this module has a no-credentials branch that
+// reports a fabricated SUCCESS without a provider request (an STK push that no
+// phone ever saw, a payout batch that never exists, a completed refund). Those
+// branches are a development convenience, and they are only ever safe in an
+// environment that is EXPLICITLY a development or test environment.
+//
+// The defect this closes: two of the three gates (collection and payout) used an
+// exact-string production check —
+//
+//     if (process.env.NODE_ENV === 'production') { throw ... }
+//
+// — which fails OPEN for every value it does not recognise. `NODE_ENV` unset
+// (a plain `node`/`tsx` start, some containers), an empty string, a misspelling
+// ('prod', 'Producton'), a different casing ('Production') or a real deployment
+// label ('staging') all fell through to the simulation branch, which returns
+// `success: true` and books the attempt's payment_received ledger row. The
+// caller reads that as "a payment request is out and may be approved", so in a
+// misconfigured production-like deployment anyone could "pay" for any claim and
+// proceed to collect the item for free, or a finder/agent payout could be
+// reported as paid with nothing sent.
+//
+// The rule is therefore a POSITIVE ALLOW-LIST, applied identically by all three
+// gates (triggerMpesaStkPush, triggerIntasendPayout and triggerIntasendRefund,
+// whose gate already had this shape and is unchanged in behaviour):
+//
+//   * simulation is permitted ONLY when NODE_ENV is exactly 'development' or
+//     exactly 'test';
+//   * every other value — 'production', 'staging', an unset or empty value, a
+//     misspelling, a different casing, or any other unrecognised string —
+//     refuses to simulate and throws before any fabricated success can be
+//     produced;
+//   * an unrecognised value is NEVER treated as a development environment.
+//
+// This is a comparison against literals only, so it can only ever fail closed.
+// It says nothing about real credentials: a configured, non-placeholder key
+// takes the genuine provider path in every environment, exactly as before.
+export const PAYMENT_SIMULATION_ENVS = ['development', 'test'] as const;
+
+/** True only for an environment explicitly recognised as a simulation environment. */
+export function isPaymentSimulationEnvironment(nodeEnv: string | undefined): boolean {
+  return nodeEnv === 'development' || nodeEnv === 'test';
+}
+
 // The observed NODE_ENV, rendered for a fail-closed refusal message: 'unset'
 // when it is absent, otherwise the value sanitised to a short, log-safe token.
 // An environment variable is operator configuration rather than customer data,
@@ -144,6 +191,35 @@ export function isPlaceholderKey(key: string | undefined | null): boolean {
 export function describeNodeEnvForRefusal(nodeEnv: string | undefined): string {
   if (nodeEnv === undefined) return 'unset';
   return `"${String(nodeEnv).replace(/[^A-Za-z0-9_.-]/g, '?').slice(0, 32)}"`;
+}
+
+// =============================================================================
+// BATCH 1 CORRECTION A — "WOULD THIS PAYOUT ATTEMPT HAVE TO BE SIMULATED?"
+// =============================================================================
+//
+// A payout attempt is SIMULATED exactly when this module holds no usable
+// IntaSend secret key: triggerIntasendPayout() selects its simulation branch on
+// this one condition, and that branch reports every leg as 'success' without a
+// provider request.
+//
+// The settlement executor (executeClaimSettlement in server.ts) has to answer
+// the SAME question BEFORE it writes its durable pre-submission markers, because
+// the service-level refusal below is too late to be recoverable: by then the
+// markers are persisted, so the payout rows read 'submitting' and the claim is
+// parked in its transient release lock.
+//
+// Both seams therefore ask THIS function, which is also the condition the branch
+// itself is selected by, so the executor's preflight cannot drift from the
+// branch it protects - and there is still exactly ONE simulation policy
+// (isPaymentSimulationEnvironment above), not a second, conflicting one.
+//
+// It answers a CREDENTIAL question only. A configured, non-placeholder key
+// returns false in every environment, so a genuine provider request is never
+// blocked by it - in production or anywhere else.
+export function isPayoutSimulationRequired(
+  secretKey: string | undefined | null = process.env.INTASEND_SECRET_KEY
+): boolean {
+  return isPlaceholderKey(secretKey);
 }
 
 // P1: webhook amount reconciliation — pure decision logic behind
@@ -314,8 +390,8 @@ export const PaymentService = {
     };
 
     if (!publishableKey || !secretKey || isPlaceholderKey(publishableKey) || isPlaceholderKey(secretKey)) {
-      // PRODUCTION MUST NEVER SIMULATE A PAYMENT. A misconfigured
-      // production deployment (missing or still-placeholder IntaSend
+      // SIMULATION IS A DEVELOPMENT/TEST FACILITY — NEVER A PRODUCTION ONE.
+      // A misconfigured production deployment (missing or still-placeholder IntaSend
       // keys) previously fell straight through to
       // generateMockStkPushSuccess, which does not merely pretend an STK
       // push was sent: it returns `success: true` for a request that
@@ -330,17 +406,25 @@ export const PaymentService = {
       // as "a payment request is out and may be approved". In production
       // that means anyone could "pay" for any claim and proceed straight
       // to collecting the item, for free, with zero real M-Pesa
-      // transaction behind it. Simulated success is NEVER proof that
-      // money moved. Same fail-closed principle as the database
-      // connection guard in db/index.ts: refuse to start faking money
-      // movement rather than silently doing it.
-      if (process.env.NODE_ENV === 'production') {
+      // transaction behind it.
+      // Simulated success is NEVER proof that money moved. Same fail-closed
+      // principle as the database connection guard in db/index.ts: refuse to
+      // start faking money movement rather than silently doing it — and, as of
+      // BATCH 1, refuse for EVERY environment that is not explicitly a
+      // simulation environment (see PAYMENT_SIMULATION_ENVS above). The
+      // production-only check that used to live here failed OPEN for 'staging',
+      // an unset NODE_ENV, a misspelling and any other unrecognised value.
+      if (!isPaymentSimulationEnvironment(process.env.NODE_ENV)) {
         throw new Error(
-          'FATAL: IntaSend payment credentials are missing or still a placeholder value in a production environment. ' +
-          'Refusing to simulate a payment in production — configure real INTASEND_PUBLISHABLE_KEY/INTASEND_SECRET_KEY before accepting payments.'
+          'FATAL: IntaSend payment credentials are missing or still a placeholder value, and NODE_ENV is ' +
+          `${describeNodeEnvForRefusal(process.env.NODE_ENV)}, which is not a payment-simulation environment. ` +
+          'Refusing to simulate a payment: a simulated success is not proof that money moved, and in a ' +
+          'production-like environment it would let a claim be "paid" with no real M-Pesa transaction behind it. ' +
+          'Set NODE_ENV to "development" or "test" for local simulation, or configure real ' +
+          'INTASEND_PUBLISHABLE_KEY/INTASEND_SECRET_KEY before accepting payments.'
         );
       }
-      console.warn('[INTASEND GATEWAY] Configuration missing or placeholder (non-production only). Falling back to simulated payout split.');
+      console.warn('[INTASEND GATEWAY] Configuration missing or placeholder (development/test environment only). Falling back to the built-in payment simulation.');
       return generateMockStkPushSuccess(phone, amount, claimId);
     }
 
@@ -770,22 +854,37 @@ export const PaymentService = {
     payouts: Array<{ destination: string; amount: number; payoutMethodType?: string; recipientType: 'finder' | 'agent' }>
   ): Promise<{ batchId: string | null; results: Array<{ recipientType: 'finder' | 'agent'; destination: string; providerTransactionId: string | null; status: 'success' | 'pending' | 'failed' | 'unknown' }> }> {
     const secretKey = process.env.INTASEND_SECRET_KEY;
-    if (isPlaceholderKey(secretKey)) {
+    // BATCH 1 CORRECTION A — the ONE predicate for "this attempt would have to
+    // be simulated", shared with the executor's preflight so the two cannot
+    // disagree. The branch below is unchanged in behaviour: the condition is the
+    // same one it always was (a missing/empty/placeholder key), and an
+    // unrecognised NODE_ENV still refuses rather than simulating.
+    if (isPayoutSimulationRequired(secretKey)) {
       // Same fail-closed guarantee as triggerMpesaStkPush above — never
-      // fabricate a 'success' payout result in production. Unlike the STK
+      // fabricate a 'success' payout result outside an explicitly recognised
+      // simulation environment. Unlike the STK
       // push path, this doesn't write directly to the ledger itself (the
       // caller does, via recordPayoutAttempt), but reporting 'success'
       // here is exactly as dangerous: it would cause the caller to mark a
       // finder/agent payout as genuinely completed when no real M-Pesa
       // transfer occurred.
-      if (process.env.NODE_ENV === 'production') {
+      // BATCH 1 — the same positive allow-list the collection and refund gates
+      // apply (see PAYMENT_SIMULATION_ENVS above). Simulated legs are reported
+      // 'success' by the branch below, so an environment that merely fails to
+      // say "production" must never reach it: 'staging', an unset or empty
+      // NODE_ENV, a misspelling or any other unrecognised value refuses here,
+      // before any fabricated payout success exists.
+      if (!isPaymentSimulationEnvironment(process.env.NODE_ENV)) {
         throw new Error(
-          'FATAL: IntaSend secret key is missing or still a placeholder value in a production environment. ' +
-          'Refusing to simulate a payout in production — configure a real INTASEND_SECRET_KEY before processing settlements.'
+          'FATAL: IntaSend secret key is missing or still a placeholder value, and NODE_ENV is ' +
+          `${describeNodeEnvForRefusal(process.env.NODE_ENV)}, which is not a payout-simulation environment. ` +
+          'Refusing to simulate a payout in a production-like environment: reporting success for a transfer that ' +
+          "never happened would mark a finder's or agent's money as paid with nothing sent. Set NODE_ENV to " +
+          '"development" or "test" for local simulation, or configure a real INTASEND_SECRET_KEY before processing settlements.'
         );
       }
 
-      console.warn('[INTASEND DISBURSEMENT] Key missing/dummy (non-production only). Emulating disbursement split.');
+      console.warn('[INTASEND DISBURSEMENT] Key missing/dummy (development/test environment only). Emulating disbursement split.');
       const batchId = 'SIM-BATCH-' + Math.random().toString(36).substring(2, 10).toUpperCase();
       return {
         batchId,
@@ -1167,9 +1266,11 @@ export const PaymentService = {
    * 'completed' as "the money moved" — it finalizes the claim as refunded and
    * notifies the customer — so an environment that is not positively recognised
    * as non-production must never reach a simulated completion.
-   * (triggerIntasendPayout and triggerMpesaStkPush still use the older
-   * production-only check; tightening those gates is a separate, owner-approved
-   * change and is deliberately not made here.)
+   * (triggerIntasendPayout and triggerMpesaStkPush used to keep the older
+   * production-only check. BATCH 1 tightened BOTH of them to this same
+   * allow-list — see PAYMENT_SIMULATION_ENVS — so all three money gates now
+   * refuse simulation in every environment that is not exactly 'development'
+   * or 'test'.)
    *
    * R2 reachability note: the caller's `outcome === 'completed'` branch is
    * retained for a future authoritative confirmation, but it is NOT reachable
@@ -1187,7 +1288,11 @@ export const PaymentService = {
     const secretKey = process.env.INTASEND_SECRET_KEY;
     if (isPlaceholderKey(secretKey)) {
       // Fail-closed allow-list; the full rationale is in the docstring above.
-      if (process.env.NODE_ENV !== 'development' && process.env.NODE_ENV !== 'test') {
+      // BATCH 1: this now delegates to the ONE shared predicate so the refund,
+      // collection and payout gates cannot drift apart. Behaviour is unchanged
+      // (it was already exactly this allow-list), so the refusal message below
+      // is kept verbatim.
+      if (!isPaymentSimulationEnvironment(process.env.NODE_ENV)) {
         throw new Error(
           `FATAL: IntaSend secret key is missing or a placeholder and NODE_ENV is ` +
           `${describeNodeEnvForRefusal(process.env.NODE_ENV)}, which is not a non-production simulation environment. ` +

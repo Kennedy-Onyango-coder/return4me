@@ -151,12 +151,26 @@ const e164 = (n: number) => '+2547' + String(numBase + n).slice(-8);
 const OWNER_PHONE = e164(1);
 const FINDER_PHONE = e164(2);
 const PAYER_PHONE = e164(3);
+// BATCH 1 — LAUNCH POLICY: payouts are PERSONAL M-PESA PHONE DESTINATIONS ONLY,
+// on both legs. The fixture agent therefore holds a personal M-Pesa phone number
+// and the supported 'Personal M-Pesa' method, not a Till number: a Till (or
+// Paybill / Pochi / malformed / non-Kenyan) destination is now refused before
+// any provider request is made (config/payoutDestinations.ts). Stage 8.9 below
+// drives the refusal cases with dedicated agent fixtures.
+const AGENT_PAYOUT_PHONE = e164(9);
 
 const AGENT_ID = `E2E-AGENT-${RUN}`;
 const INACTIVE_AGENT_ID = `E2E-AGENT-INACTIVE-${RUN}`;
 // A second, fully ACTIVE agent that is deliberately NOT the assignee. Used to
 // prove the assignment/IDOR boundary: a valid token is not sufficient.
 const OTHER_AGENT_ID = `E2E-AGENT-OTHER-${RUN}`;
+// BATCH 1 — two agents whose payout targets the launch policy REFUSES. Their
+// only purpose is to give stage 8.9 real subjects: one holds a Till number under
+// the Till method, the other holds a perfectly valid phone number under an
+// unsupported method ('Pochi la Biashara'), so the two independent rules are
+// each exercised end-to-end.
+const TILL_AGENT_ID = `E2E-AGENT-TILL-${RUN}`;
+const UNSUPPORTED_METHOD_AGENT_ID = `E2E-AGENT-POCHI-${RUN}`;
 
 // A real PNG header + minimal payload: passes isValidImageSignature() because
 // the magic bytes are genuinely present (the check is not weakened).
@@ -292,7 +306,21 @@ beforeAll(async () => {
   }
   // Agents are prerequisite IDENTITIES. Agent onboarding is an identity concern;
   // agent AUTHORIZATION is exercised for real over HTTP below.
-  for (const [id, status, n] of [[AGENT_ID, 'active', 11], [INACTIVE_AGENT_ID, 'suspended', 12], [OTHER_AGENT_ID, 'active', 13]] as const) {
+  //
+  // BATCH 1 — each fixture agent also carries an explicit PAYOUT TARGET. The
+  // three lifecycle agents hold a personal M-Pesa phone number with the
+  // supported method (the launch policy), and the two stage-8.9 agents hold
+  // targets that policy refuses. This is fixture data, not a bypass of any rule:
+  // the destinations are read by the settlement executor exactly as a real
+  // agent's stored values would be.
+  const agentPayoutTargets: Record<string, { destination: string; method: string }> = {
+    [AGENT_ID]: { destination: AGENT_PAYOUT_PHONE, method: 'Personal M-Pesa' },
+    [INACTIVE_AGENT_ID]: { destination: AGENT_PAYOUT_PHONE, method: 'Personal M-Pesa' },
+    [OTHER_AGENT_ID]: { destination: AGENT_PAYOUT_PHONE, method: 'Personal M-Pesa' },
+    [TILL_AGENT_ID]: { destination: 'E2E-TILL-777', method: 'Till Number' },
+    [UNSUPPORTED_METHOD_AGENT_ID]: { destination: AGENT_PAYOUT_PHONE, method: 'Pochi la Biashara' },
+  };
+  for (const [id, status, n] of [[AGENT_ID, 'active', 11], [INACTIVE_AGENT_ID, 'suspended', 12], [OTHER_AGENT_ID, 'active', 13], [TILL_AGENT_ID, 'active', 14], [UNSUPPORTED_METHOD_AGENT_ID, 'active', 15]] as const) {
     if (!(await db.getAgent(id))) {
       await db.createAgent({
         id,
@@ -305,8 +333,8 @@ beforeAll(async () => {
         status,
         business_name: 'E2E Agency',
         location_address: 'Kenyatta Avenue, Nairobi',
-        mpesa_till_or_paybill: 'E2E-TILL',
-        payout_method_type: 'Till Number',
+        mpesa_till_or_paybill: agentPayoutTargets[id].destination,
+        payout_method_type: agentPayoutTargets[id].method,
         refundable_deposit: 0,
         national_id_hash: `E2E-HASH-${id}`,
         // The REAL AgentMatchingService ranks active agents by county first,
@@ -1853,11 +1881,20 @@ const auditFor = async (action: string, needle: string) =>
  * window and NO approval, which is how the "no payout without approval" tests
  * (8.12-8.14) get their subject.
  *
+ * BATCH 1: `agentId` and `finderPhone` select the payout DESTINATIONS, so stage
+ * 8.9 can build claims whose finder leg, agent leg or both are ineligible under
+ * the phone-only payout policy. The destinations are still read by the
+ * settlement executor from the stored agent/item rows exactly as in production;
+ * nothing about the payout path is stubbed by these options.
+ *
  * Each provider outcome in this stage gets its OWN claim: a payout row's
  * submission state is one-way by design (that is the whole point of E3A), so a
  * single claim cannot be reused to exercise two different outcomes.
  */
-const makeReleasableClaim = async (suffix: string, opts: { approve?: boolean } = {}) => {
+const makeReleasableClaim = async (
+  suffix: string,
+  opts: { approve?: boolean; agentId?: string; finderPhone?: string } = {},
+) => {
   const newClaimId = `E2E-E3A-CLAIM-${RUN}-${suffix}`;
   const newItemId = `E2E-E3A-ITEM-${RUN}-${suffix}`;
   await db.createItem({
@@ -1871,8 +1908,10 @@ const makeReleasableClaim = async (suffix: string, opts: { approve?: boolean } =
     location_description: 'E2E E3A fixture',
     latitude: null,
     longitude: null,
-    finder_phone: e164(20),
-    assigned_agent_id: AGENT_ID,
+    // BATCH 1: the finder destination is overridable so stage 8.9 can build a
+    // claim whose FINDER leg is as ineligible as its agent leg.
+    finder_phone: opts.finderPhone ?? e164(20),
+    assigned_agent_id: opts.agentId ?? AGENT_ID,
     status: 'at_agent',
     flaggedForReview: false,
     isDescriptionOnly: false,
@@ -2756,5 +2795,482 @@ describe('stage 9 — the dev payment simulator confirms only the attempt it sta
     // ...and an unrelated unresolved attempt is left alone.
     expect(rows.find((e: any) => e.id === unrelated.id)!.status).toBe('pending');
     expect((await db.getPaymentSessionById(webhookSession))!.status).toBe('confirmed');
+  });
+});
+
+// =============================================================================
+// BATCH 1 — STAGE 8.9: PHONE-ONLY PAYOUT DESTINATIONS (LAUNCH POLICY).
+// =============================================================================
+// The launch policy pays Kenyan PERSONAL M-PESA PHONE destinations only, on the
+// finder leg and the agent leg alike. The stored recipient values are free text
+// the platform does not control, so the settlement executor now asks
+// config/payoutDestinations.ts BEFORE the provider request is built and refuses
+// the WHOLE batch when any leg is ineligible.
+//
+// What these tests prove over the real HTTP boundary:
+//   1. an ineligible leg produces NO provider request at all — the seam counts
+//      zero IntaSend calls, so a "refusal" cannot be a provider call that merely
+//      failed for some other reason;
+//   2. a valid finder leg is NOT paid alongside an ineligible agent leg: no
+//      partial or mixed batch is ever submitted;
+//   3. the guard runs BEFORE the durable pre-submission markers, so nothing is
+//      left recorded as submitted and the claim can still be paid once the
+//      destination is corrected;
+//   4. the claim is returned to pending_settlement (never stranded in the
+//      transient 'releasing' lock), with an actionable, PII-free audit reason;
+//   5. a DISALLOWED environment cannot use the built-in payout simulation to
+//      complete ledger entries or close a claim — the mirror image of 8.7, which
+//      reaches `released` only because NODE_ENV is exactly 'test'.
+//
+//   6. CORRECTION A — a would-be SIMULATED payout is refused by the settlement
+//      executor ITSELF, before any durable submission marker exists, so a
+//      disallowed environment can neither fabricate a completion nor leave the
+//      claim parked in the transient 'releasing' lock with rows recorded as
+//      'submitting';
+//   7. CORRECTION B — the policy is evaluated over EVERY required leg that is not
+//      already completed, so an outstanding-but-unpayable leg blocks the WHOLE
+//      claim instead of letting the other, eligible leg be paid on its own.
+//
+// WHAT THESE TESTS DO NOT CLAIM: that a well-formed number is registered with
+// M-Pesa, or that it belongs to the intended person. The policy is a format and
+// permitted-method decision; that limitation is pinned in
+// src/config/__tests__/payoutDestinations.test.ts and stated in the report.
+// =============================================================================
+describe('stage 8.9 — phone-only payout destinations (BATCH 1 launch policy)', () => {
+  // The provider seam and a REAL (non-placeholder, test-only) key are installed
+  // for this whole stage. Two reasons, both safety-relevant:
+  //   * every "nothing reached the provider" assertion below is decided on the
+  //     WIRE - the stub counts the requests - rather than inferred from the
+  //     ledger, so a refusal cannot be a provider call that failed for some
+  //     other reason; and
+  //   * a test that wrongly let a request through hits the stub instead of a
+  //     live IntaSend endpoint.
+  // Both are restored in afterAll, so no other test file sees them.
+  let prevStageKey: string | undefined;
+  beforeAll(() => {
+    prevStageKey = process.env.INTASEND_SECRET_KEY;
+    process.env.INTASEND_SECRET_KEY = FAKE_INTASEND_KEY;
+    installPayoutProviderSeam();
+  });
+  afterAll(() => {
+    vi.unstubAllGlobals();
+    if (prevStageKey === undefined) delete process.env.INTASEND_SECRET_KEY;
+    else process.env.INTASEND_SECRET_KEY = prevStageKey;
+  });
+
+  const notEligibleAudits = (claimId: string) => auditFor('PAYOUT_DESTINATION_NOT_ELIGIBLE', claimId);
+  // CORRECTION A — the executor's own pre-submission simulation refusal.
+  const simulationRefusals = (claimId: string) => auditFor('PAYOUT_SIMULATION_REFUSED', claimId);
+
+  /** The two REQUIRED payout legs of a claim, as the executor reads them. */
+  const legRows = async (claimId: string) => {
+    const rows = (await db.getLedgerEntriesForClaim(claimId)) as any[];
+    return {
+      finder: rows.find((r) => r.type === 'finder_payout'),
+      agent: rows.find((r) => r.type === 'agent_payout'),
+    };
+  };
+
+  /**
+   * Applies `vars` to process.env for the duration of `fn` and then restores
+   * EVERY key to its previous state - including "it was not set at all" (deleted
+   * rather than left as the empty string, which is a different fact). No
+   * environment change made by this stage can outlive its own test.
+   */
+  const withEnv = async <T>(vars: Record<string, string | undefined>, fn: () => Promise<T>): Promise<T> => {
+    const previous: Record<string, string | undefined> = {};
+    for (const [key, value] of Object.entries(vars)) {
+      previous[key] = process.env[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    try {
+      return await fn();
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  };
+
+  it('8.9.1 a valid finder leg plus an INELIGIBLE agent leg sends nothing to the provider', async () => {
+    // The agent holds a Till destination, so the finder leg on its own is
+    // perfectly payable. That is exactly why the all-or-nothing rule has to be
+    // asserted on the WIRE — the count of provider requests — rather than
+    // inferred from the ledger.
+    const { claimId: c } = await makeReleasableClaim('DEST-AGENT-TILL', { agentId: TILL_AGENT_ID });
+    payout.reset();
+    const before = await financialSnapshot(c);
+
+    const r = await http(RELEASE(c), { token: adminToken, body: {} });
+    expect(r.status).toBe(500);
+
+    // (1) THE core assertion: not one request reached the provider.
+    expect(payout.calls.length, 'an ineligible leg must not produce any provider request').toBe(0);
+
+    const after = await financialSnapshot(c);
+    // (4) The release lock was given back: the claim is NOT stranded.
+    expect(after.status).toBe('pending_settlement');
+    // (3) Nothing was durably marked as submitted, so a corrected destination can
+    // still be paid by a later initiation — both payout rows are untouched.
+    expect(after.ledger.filter((l) => l.type !== 'platform_fee').every((l) => l.payout_outcome === 'not_submitted')).toBe(true);
+    expect(after.ledger.every((l) => l.status === 'pending')).toBe(true);
+    expect(after.ledger.every((l) => l.provider_transaction_id === null)).toBe(true);
+    expect(after.paid_at).toBe(before.paid_at);
+    // Nothing was recorded as submitted, ambiguous or refused, and nothing was
+    // finalized: this is a pre-submission refusal, not a failed payout attempt.
+    expect((await auditFor('PAYOUT_NOT_CONFIRMED', c)).length).toBe(0);
+    expect((await auditFor('PAYOUT_RECONCILIATION_REQUIRED', c)).length).toBe(0);
+    expect((await auditFor('FINALIZE_SETTLEMENT', c)).length).toBe(0);
+
+    // (4) The operator-facing evidence: one audit row naming the refused leg and
+    // the rule, the administrator sees the reason, and the refused destination is
+    // never written in the clear.
+    const refusals = await notEligibleAudits(c);
+    expect(refusals.length).toBe(1);
+    const details = String(refusals[0].details);
+    expect(details).toContain('agent');
+    expect(details).toContain('254 followed by nine digits');
+    expect(details).not.toContain('E2E-TILL-777');
+    expect(String(r.body?.error)).toMatch(/phone-only payout policy/i);
+    expect(String(r.body?.error)).toContain('agent');
+  });
+
+  it('8.9.2 an agent under an UNSUPPORTED method is refused even though its value is a valid phone', async () => {
+    // The destination is a perfectly normal Kenyan phone number; the METHOD is
+    // 'Pochi la Biashara'. The two rules are independent, and this proves the
+    // method half is enforced on the real payout path and not merely in a unit
+    // test.
+    const { claimId: c } = await makeReleasableClaim('DEST-AGENT-METHOD', { agentId: UNSUPPORTED_METHOD_AGENT_ID });
+    payout.reset();
+
+    const r = await http(RELEASE(c), { token: adminToken, body: {} });
+    expect(r.status).toBe(500);
+    expect(payout.calls.length).toBe(0);
+    expect((await financialSnapshot(c)).status).toBe('pending_settlement');
+
+    const details = String((await notEligibleAudits(c))[0]?.details ?? '');
+    expect(details).toContain('agent');
+    expect(details).toContain('Personal M-Pesa');
+    expect(details).toContain('Pochi la Biashara');
+    expect(String(r.body?.error)).toMatch(/phone-only payout policy/i);
+  });
+
+  it('8.9.3 BOTH legs ineligible: no provider request, claim returned, nothing marked submitted', async () => {
+    // A finder whose recorded value is not a phone at all, and an agent holding a
+    // Till destination. Both legs are refused, and the audit names BOTH — an
+    // operator does not have to guess which recipient to fix.
+    const { claimId: c } = await makeReleasableClaim('DEST-BOTH', {
+      agentId: TILL_AGENT_ID,
+      finderPhone: 'E2E-NO-PHONE',
+    });
+    payout.reset();
+    const before = await financialSnapshot(c);
+
+    const r = await http(RELEASE(c), { token: adminToken, body: {} });
+    expect(r.status).toBe(500);
+    expect(payout.calls.length, 'no leg was eligible, so nothing may be sent').toBe(0);
+
+    const after = await financialSnapshot(c);
+    expect(after.status).toBe('pending_settlement');
+    expect(after.ledger.filter((l) => l.type !== 'platform_fee').every((l) => l.payout_outcome === 'not_submitted')).toBe(true);
+    expect(after.ledger.every((l) => l.status === 'pending')).toBe(true);
+    expect(after.paid_at).toBe(before.paid_at);
+    expect((await auditFor('FINALIZE_SETTLEMENT', c)).length).toBe(0);
+
+    const details = String((await notEligibleAudits(c))[0]?.details ?? '');
+    expect(details).toContain('finder');
+    expect(details).toContain('agent');
+    expect(details).not.toContain('E2E-NO-PHONE');
+    expect(details).not.toContain('E2E-TILL-777');
+  });
+
+  it('8.9.4 a DISALLOWED environment refuses a simulated payout BEFORE any durable submission marker', async () => {
+    // The mirror image of 8.7. There, NODE_ENV is exactly 'test', so the
+    // documented non-production disbursement branch reports the legs 'success'
+    // and the claim genuinely reaches `released`. Here the environment is NOT a
+    // simulation environment ('staging', with no credentials at all), so the
+    // attempt can only ever be a SIMULATION - and the executor now refuses it
+    // before it writes a single marker.
+    //
+    // CORRECTION A: this refusal used to come from the service-level gate, i.e.
+    // AFTER the executor's durable pre-submission markers had been persisted. The
+    // claim was then left in the transient 'releasing' lock with both payout rows
+    // recorded as 'submitting' - a state no automatic recovery reaches. The
+    // preflight decides it at the executor's own seam instead.
+    const { claimId: c } = await makeReleasableClaim('DEST-DISALLOWED-ENV');
+    const before = await financialSnapshot(c);
+
+    await withEnv({ NODE_ENV: 'staging', INTASEND_SECRET_KEY: '' }, async () => {
+      payout.reset();
+      const r = await http(RELEASE(c), { token: adminToken, body: {} });
+      expect(r.status).toBe(500);
+
+      // No simulation ran, and nothing reached the provider.
+      expect(payout.calls.length).toBe(0);
+
+      const after = await financialSnapshot(c);
+      expect(after.status).not.toBe('released');
+      // No ledger entry was completed and no provider reference was invented.
+      expect(after.ledger.every((l) => l.status === 'pending')).toBe(true);
+      expect(after.ledger.every((l) => l.provider_transaction_id === null)).toBe(true);
+      expect(after.ledger.every((l) => l.payout_outcome !== 'completed')).toBe(true);
+      expect((await auditFor('FINALIZE_SETTLEMENT', c)).length).toBe(0);
+
+      // CORRECTION A - the states that made this unrecoverable are gone: no row
+      // was ever marked 'submitting' (not one), and the claim is not parked in
+      // the transient release lock. The lock came back through the same
+      // abandonRelease() path every other pre-submission refusal uses, so an
+      // operator can correct the deployment and initiate the payout again
+      // instead of having to reconcile a stranded claim.
+      expect(after.status).toBe('pending_settlement');
+      expect(after.ledger.some((l) => l.payout_outcome === 'submitting')).toBe(false);
+      expect(after.ledger.filter((l) => l.type !== 'platform_fee').every((l) => l.payout_outcome === 'not_submitted')).toBe(true);
+      // Nothing about the ledger changed at all: it is byte-identical to the
+      // booked state (the collection evidence in `before` is untouched too).
+      expect(after).toEqual(before);
+
+      // The refusal is recorded as its own, actionable event: the observed
+      // NODE_ENV is named, and no destination or phone number appears in it.
+      const refusals = await simulationRefusals(c);
+      expect(refusals.length, 'exactly one refusal for this attempt').toBe(1);
+      const details = String(refusals[0].details);
+      expect(details).toContain('NODE_ENV is "staging"');
+      expect(details).toContain('not a payout-simulation environment');
+      expect(details).not.toContain(AGENT_PAYOUT_PHONE);
+      expect(details).not.toContain(String(FINDER_PHONE));
+      // Nothing was submitted, so the destination policy has nothing to refuse:
+      // the two refusals are independent and are not reported as each other.
+      expect((await notEligibleAudits(c)).length).toBe(0);
+    });
+  });
+
+  it('8.9.5 unset, empty and unrecognised NODE_ENV values are all refused the same way', async () => {
+    // The values a genuinely misconfigured deployment produces, including the
+    // two a deny-list misses ('prod', 'Production') and a casing drift ('DEV').
+    // Each case gets its OWN claim so it is independent, and every claim is
+    // asserted to be left in exactly the booked state.
+    const cases: Array<[string, string | undefined]> = [
+      ['unset', undefined],
+      ['empty', ''],
+      ['prod', 'prod'],
+      ['Production', 'Production'],
+      ['DEV', 'DEV'],
+    ];
+
+    for (const [label, value] of cases) {
+      const { claimId: c } = await makeReleasableClaim(`DEST-DISALLOWED-${label}`);
+      const before = await financialSnapshot(c);
+
+      await withEnv({ NODE_ENV: value, INTASEND_SECRET_KEY: '' }, async () => {
+        payout.reset();
+        const r = await http(RELEASE(c), { token: adminToken, body: {} });
+        expect(r.status, `${label}: the payout attempt must fail`).toBe(500);
+        expect(payout.calls.length, `${label}: no provider request`).toBe(0);
+
+        const after = await financialSnapshot(c);
+        expect(after.status, `${label}: the release lock must be given back`).toBe('pending_settlement');
+        expect(after, `${label}: no marker, no ledger write, no completion`).toEqual(before);
+        expect((await auditFor('FINALIZE_SETTLEMENT', c)).length, `${label}: nothing may finalize`).toBe(0);
+
+        const details = String((await simulationRefusals(c))[0]?.details ?? '');
+        expect(details, `${label}: the observed NODE_ENV is named`).toContain(
+          value === undefined ? 'NODE_ENV is unset' : `NODE_ENV is "${value}"`
+        );
+        expect(details, `${label}: no destination may appear`).not.toContain(AGENT_PAYOUT_PHONE);
+      });
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // CORRECTION B - EVERY OUTSTANDING REQUIRED LEG IS CHECKED.
+  //
+  // `submittable` contains only rows whose submission history positively records
+  // "never submitted". A required leg that is outstanding in ANY other state is
+  // excluded from that set, so before this correction the destination guard never
+  // looked at it - and the OTHER, eligible leg was sent on its own. These tests
+  // pin the widened rule, and just as importantly that nothing about an existing
+  // unresolved or completed leg is rewritten, reset, reclassified or retried.
+  //
+  // Every pre-existing state below is produced through the REAL data-layer APIs
+  // (recordPayoutAttempt / markPayoutSubmissionStarted), not by poking columns,
+  // so what is asserted is a real ledger state the executor must respect.
+  // ---------------------------------------------------------------------------
+
+  it('8.9.6 B1 both outstanding legs eligible: they are submitted together', async () => {
+    // The positive control: nothing about the widened rule may narrow this path.
+    const { claimId: c } = await makeReleasableClaim('DEST-BOTH-ELIGIBLE');
+    payout.reset();
+
+    const r = await http(RELEASE(c), { token: adminToken, body: {} });
+
+    // The provider ACCEPTED the batch, which is not a completion, so the claim
+    // is returned to pending_settlement - exactly as before the correction.
+    expect(r.status).toBe(500);
+    expect(payout.calls.length, 'one batch, both legs').toBe(1);
+    const txns = payout.calls[0].payload?.transactions ?? [];
+    expect(txns.length).toBe(2);
+    const roles = txns.map((t: any) => (String(t.narrative).includes('FINDER') ? 'finder' : 'agent')).sort();
+    expect(roles).toEqual(['agent', 'finder']);
+
+    const rows = await legRows(c);
+    expect(rows.finder.payout_outcome).toBe('accepted');
+    expect(rows.agent.payout_outcome).toBe('accepted');
+    expect((await financialSnapshot(c)).status).toBe('pending_settlement');
+    expect((await notEligibleAudits(c)).length, 'both legs are eligible').toBe(0);
+  });
+
+  it('8.9.7 B2 an outstanding, UNRESOLVED agent leg blocks the eligible finder leg', async () => {
+    // THE BYPASS THIS CORRECTION CLOSES. The agent leg is already in an
+    // ambiguous ('unknown') state from an earlier submission, so it is NOT
+    // submittable; the finder leg is brand new and perfectly payable. Before the
+    // correction the guard only saw the submittable set, so it sent the finder
+    // leg alone while the agent leg - pointing at a Till number the launch policy
+    // can never pay - stayed behind.
+    const { claimId: c } = await makeReleasableClaim('DEST-AGENT-UNRESOLVED', { agentId: TILL_AGENT_ID });
+    const booked = await legRows(c);
+    await db.recordPayoutAttempt(booked.agent.id, {
+      status: 'unknown',
+      providerBatchId: null,
+      providerTransactionId: null,
+      failureReason: 'E2E fixture: pre-existing ambiguous submission.',
+    });
+    const before = await financialSnapshot(c);
+    payout.reset();
+
+    const r = await http(RELEASE(c), { token: adminToken, body: {} });
+    expect(r.status).toBe(500);
+
+    // No additional leg was submitted, so no new submission marker exists.
+    expect(payout.calls.length, 'no leg may be sent while an outstanding leg is unpayable').toBe(0);
+
+    const after = await financialSnapshot(c);
+    expect(after).toEqual(before);
+    expect(after.status).toBe('pending_settlement');
+    const rows = await legRows(c);
+    // The pre-existing unresolved state was neither reset nor retried...
+    expect(rows.agent.payout_outcome).toBe('unknown');
+    expect(rows.agent.status).toBe('pending');
+    // ...and the eligible finder leg was NOT marked as submitted either.
+    expect(rows.finder.payout_outcome).toBe('not_submitted');
+    expect(after.ledger.some((l) => l.payout_outcome === 'submitting')).toBe(false);
+    // The refusal is the DESTINATION policy's, not the generic reconciliation
+    // path: this claim was never submitted to anyone.
+    expect((await auditFor('PAYOUT_RECONCILIATION_REQUIRED', c)).length).toBe(0);
+
+    // Actionable and PII-free: the refused ROLE and the policy reason are named,
+    // and the destination itself is masked.
+    const details = String((await notEligibleAudits(c))[0]?.details ?? '');
+    expect(details).toContain('the agent payout destination is not a personal M-Pesa phone number');
+    expect(details).not.toContain('E2E-TILL-777');
+  });
+
+  it('8.9.8 B3 an outstanding, IN-FLIGHT finder leg blocks the eligible agent leg', async () => {
+    // The mirror of B2, using the other non-submittable state - 'submitting', the
+    // durable pre-submission marker of an attempt whose result was never recorded
+    // - and the other role.
+    const { claimId: c } = await makeReleasableClaim('DEST-FINDER-INFLIGHT', { finderPhone: 'E2E-NO-PHONE' });
+    const booked = await legRows(c);
+    // A REAL marker, taken through the same compare-and-swap the executor uses.
+    expect(await db.markPayoutSubmissionStarted(booked.finder.id)).toBe(true);
+    const before = await financialSnapshot(c);
+    payout.reset();
+
+    const r = await http(RELEASE(c), { token: adminToken, body: {} });
+    expect(r.status).toBe(500);
+    expect(payout.calls.length).toBe(0);
+    expect(await financialSnapshot(c)).toEqual(before);
+
+    const rows = await legRows(c);
+    expect(rows.finder.payout_outcome, 'the pre-existing in-flight marker is not reset').toBe('submitting');
+    expect(rows.agent.payout_outcome, 'the eligible agent leg was not submitted').toBe('not_submitted');
+
+    const details = String((await notEligibleAudits(c))[0]?.details ?? '');
+    expect(details).toContain('the finder payout destination is not a personal M-Pesa phone number');
+    expect(details).not.toContain('E2E-NO-PHONE');
+  });
+
+  it('8.9.9 B4 a COMPLETED finder leg is left alone and the remaining eligible agent leg is submitted', async () => {
+    const { claimId: c } = await makeReleasableClaim('DEST-FINDER-COMPLETED');
+    const booked = await legRows(c);
+    await db.recordPayoutAttempt(booked.finder.id, {
+      status: 'success',
+      providerBatchId: 'E2E-PRIOR-BATCH',
+      providerTransactionId: 'E2E-PRIOR-FINDER-TXN',
+    });
+
+    payout.reset();
+    const r = await http(RELEASE(c), { token: adminToken, body: {} });
+
+    // The agent leg is only ACCEPTED, not confirmed, so the claim is not closed.
+    expect(r.status).toBe(500);
+    expect(payout.calls.length).toBe(1);
+    const txns = payout.calls[0].payload?.transactions ?? [];
+    // Exactly ONE transaction: the completed leg is not re-sent.
+    expect(txns.length).toBe(1);
+    expect(String(txns[0].narrative)).toContain('AGENT');
+
+    const rows = await legRows(c);
+    // The completed leg is untouched: same status, same outcome, same
+    // authoritative provider reference, no reclassification.
+    expect(rows.finder.status).toBe('completed');
+    expect(rows.finder.payout_outcome).toBe('completed');
+    expect(rows.finder.provider_transaction_id).toBe('E2E-PRIOR-FINDER-TXN');
+    expect(rows.finder.provider_batch_id).toBe('E2E-PRIOR-BATCH');
+    expect(rows.agent.payout_outcome).toBe('accepted');
+    expect((await financialSnapshot(c)).status).toBe('pending_settlement');
+    expect((await notEligibleAudits(c)).length).toBe(0);
+  });
+
+  it('8.9.10 B5 a COMPLETED finder leg plus an ineligible agent leg submit nothing at all', async () => {
+    const { claimId: c } = await makeReleasableClaim('DEST-FINDER-DONE-AGENT-TILL', { agentId: TILL_AGENT_ID });
+    const booked = await legRows(c);
+    await db.recordPayoutAttempt(booked.finder.id, {
+      status: 'success',
+      providerBatchId: 'E2E-PRIOR-BATCH-2',
+      providerTransactionId: 'E2E-PRIOR-FINDER-TXN-2',
+    });
+    const before = await financialSnapshot(c);
+    payout.reset();
+
+    const r = await http(RELEASE(c), { token: adminToken, body: {} });
+    expect(r.status).toBe(500);
+    expect(payout.calls.length).toBe(0);
+    // The outstanding leg is refused AND the completed leg is not disturbed to
+    // refuse it: the whole ledger is unchanged.
+    expect(await financialSnapshot(c)).toEqual(before);
+
+    const rows = await legRows(c);
+    expect(rows.finder.status).toBe('completed');
+    expect(rows.finder.payout_outcome).toBe('completed');
+    expect(rows.finder.provider_transaction_id).toBe('E2E-PRIOR-FINDER-TXN-2');
+    expect(rows.agent.payout_outcome).toBe('not_submitted');
+    expect((await financialSnapshot(c)).status).toBe('pending_settlement');
+  });
+
+  it('8.9.11 B6 an outstanding REJECTED agent leg is neither retried nor reset, and blocks the finder leg', async () => {
+    const { claimId: c } = await makeReleasableClaim('DEST-AGENT-REJECTED-TILL', { agentId: TILL_AGENT_ID });
+    const booked = await legRows(c);
+    // A provider REFUSAL recorded before execution: not submittable, not
+    // completed, and never retried automatically.
+    await db.recordPayoutAttempt(booked.agent.id, {
+      status: 'failed',
+      providerBatchId: 'E2E-PRIOR-BATCH-3',
+      providerTransactionId: null,
+      failureReason: 'E2E fixture: provider refused this transfer.',
+    });
+    const before = await financialSnapshot(c);
+    payout.reset();
+
+    const r = await http(RELEASE(c), { token: adminToken, body: {} });
+    expect(r.status).toBe(500);
+    expect(payout.calls.length).toBe(0);
+    expect(await financialSnapshot(c)).toEqual(before);
+
+    const rows = await legRows(c);
+    expect(rows.agent.status).toBe('failed');
+    expect(rows.agent.payout_outcome).toBe('rejected');
+    expect(rows.finder.payout_outcome).toBe('not_submitted');
   });
 });

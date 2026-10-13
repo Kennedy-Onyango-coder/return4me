@@ -457,6 +457,35 @@ body {
   }
 }
 
+/* BATCH B0 — grouped sidebar labels + contextual top bar.
+   Additive only: the nav buttons above are untouched. Group labels are hidden
+   on the mobile strip (they would repeat on every horizontal scroll pass) and
+   shown as quiet eyebrows in the desktop sidebar. The top bar reuses the
+   card surface, border, radius and shadow tokens — no new palette. */
+.r4m-admin-nav-group {
+  display: none;
+}
+
+.r4m-admin-topbar {
+  scroll-margin-top: 1rem;
+}
+
+@media (min-width: 1024px) {
+  .r4m-admin-nav-group {
+    display: block;
+  }
+  .r4m-admin-nav-group:first-child {
+    padding-top: 0.25rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .r4m-admin-topbar {
+    scroll-behavior: auto;
+  }
+}
+
+
 /* HORIZONTALLY SCROLLABLE DATA REGIONS (Batch C — responsive hardening)
    A wide operational table is the one case where horizontal scrolling is the
    RIGHT answer: shrinking a nine-column ledger until the columns fit would make
