@@ -584,7 +584,11 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
     } else if (mode === 'edit' && cat) {
       setCatFormId(cat.id);
       setCatFormNameEn(cat.name_en);
-      setCatFormNameSw(cat.name_sw);
+      // C1-D — the prefill must stay a string: `name_sw` is retained bilingual
+      // data (see the C1 audit) and the field is required in order to save, so an
+      // absent value would otherwise leave this input uncontrolled and make the
+      // category uneditable until an admin invented a Swahili name.
+      setCatFormNameSw(cat.name_sw ?? '');
       setCatFormTotalFee(typeof cat.total_fee === 'string' ? parseFloat(cat.total_fee) : cat.total_fee);
       setCatFormFinderShare(typeof cat.finder_share === 'string' ? parseFloat(cat.finder_share) : cat.finder_share);
       setCatFormAgentShare(typeof cat.agent_share === 'string' ? parseFloat(cat.agent_share) : cat.agent_share);
@@ -4795,10 +4799,15 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                               // current category with no matching <option>: the browser then
                               // rendered the control blank while the form still submitted
                               // the (correct) state value — a display/state mismatch.
-                              const selectable = adminCategories.filter(cat => cat.name_en && cat.name_sw);
+                              // C1-A — availability follows what this control
+                              // renders: the English name. `name_sw` is retained
+                              // bilingual data that no customer surface reads (see
+                              // the C1 audit), so an absent/empty Swahili name must
+                              // not hide a category the review panel may assign.
+                              const selectable = adminCategories.filter(cat => cat.name_en);
                               const invalidCount = adminCategories.length - selectable.length;
                               if (invalidCount > 0) {
-                                console.warn(`[AdminView] Filtered out ${invalidCount} incomplete categories from rendering.`);
+                                console.warn(`[AdminView] Filtered out ${invalidCount} categories with no English name from rendering.`);
                               }
                               // Belt and braces: if the item's current category is not in
                               // the fetched list at all, still render it so the control can

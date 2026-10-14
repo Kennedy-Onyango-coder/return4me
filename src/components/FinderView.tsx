@@ -821,10 +821,15 @@ export default function FinderView({ categories, categoriesLoading = false, cate
                       <option value="">{'Categories unavailable — please refresh'}</option>
                     ) : (
                       (() => {
-                        const validCategories = categories.filter(cat => cat.name_en && cat.name_sw);
+                        // C1-A — availability follows what this control actually
+                        // renders: the English name. `name_sw` is retained bilingual
+                        // data that no customer surface reads (see the C1 audit), so
+                        // an absent/empty Swahili name must not hide an otherwise
+                        // usable category from the Finder.
+                        const validCategories = categories.filter(cat => cat.name_en);
                         const invalidCount = categories.length - validCategories.length;
                         if (invalidCount > 0) {
-                          console.warn(`[FinderView] Filtered out ${invalidCount} incomplete categories from rendering.`);
+                          console.warn(`[FinderView] Filtered out ${invalidCount} categories with no English name from rendering.`);
                         }
                         return [
                           <option key="select-category" value="">{'-- Select Category --'}</option>,

@@ -179,6 +179,28 @@ export interface SocialCategory {
 }
 
 /**
+ * C1-B — the category label used in published social copy.
+ *
+ * The bilingual "English / Swahili" label is preserved EXACTLY whenever a
+ * usable Swahili name exists. `name_sw` is retained bilingual DATA (the product
+ * is English-only and the column is not enforced against an empty string — see
+ * the C1 audit), so a missing / null / blank Swahili name must degrade to the
+ * English name alone rather than publish a dangling "English / " separator to a
+ * public channel.
+ *
+ * Only the USABILITY decision trims; a usable Swahili name is rendered exactly
+ * as stored, so no existing published text changes.
+ *
+ * Deliberately NOT used by postToTwitter: that channel's long-standing label
+ * policy is the English name alone, and it must stay that way.
+ */
+export function buildCategoryLabel(category?: SocialCategory, fallback: string = 'Lost Item'): string {
+  if (!category) return fallback;
+  const swahiliName = typeof category.name_sw === 'string' ? category.name_sw.trim() : '';
+  return swahiliName ? `${category.name_en} / ${category.name_sw}` : category.name_en;
+}
+
+/**
  * Utility functions for protecting PII (Personally Identifiable Information)
  * in compliance with Kenya Data Protection Act 2019 (Section 40)
  */
@@ -288,7 +310,7 @@ export const SocialService = {
     const channelId = sanitizeTelegramEnvValue(process.env.TELEGRAM_CHANNEL_ID);
 
     const isSensitive = item.is_sensitive_document || (category ? category.is_sensitive_document : false);
-    const categoryName = category ? `${category.name_en} / ${category.name_sw}` : 'Lost Item';
+    const categoryName = buildCategoryLabel(category);
     const fee = item.locked_total_fee || (category ? category.total_fee : '200');
 
     // P0 FAIL-CLOSED GUARANTEE: called unconditionally, for BOTH sensitive
@@ -445,7 +467,7 @@ export const SocialService = {
     const pageAccessToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
 
     const isSensitive = item.is_sensitive_document || (category ? category.is_sensitive_document : false);
-    const categoryName = category ? `${category.name_en} / ${category.name_sw}` : 'Lost Item';
+    const categoryName = buildCategoryLabel(category);
     const fee = item.locked_total_fee || (category ? category.total_fee : '200');
 
     // P0 FAIL-CLOSED GUARANTEE: see the matching comment in postToTelegram
@@ -835,7 +857,7 @@ export const SocialService = {
       console.log(`[SOCIAL SERVICE] Publishing is paused — skipping reunited-notice for item ID: ${item.id}.`);
       return;
     }
-    const categoryName = category ? `${category.name_en} / ${category.name_sw}` : 'Item';
+    const categoryName = buildCategoryLabel(category, 'Item');
     const safeLocation = sanitizeSocialText(item.location_description);
     const text = `UPDATE: NOTICE CLOSED\n\n` +
       `The ${categoryName} previously reported found near ${safeLocation} has been verified and returned to its rightful owner.\n\n` +

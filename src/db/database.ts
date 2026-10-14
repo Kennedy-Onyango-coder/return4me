@@ -638,7 +638,13 @@ function parseCategory(row: any): Category {
   return {
     id: row.id,
     name_en: row.name_en,
-    name_sw: row.name_sw,
+    // C1-C — `name_sw` is retained bilingual data (see the C1 audit); the product
+    // is English-only and the column is not enforced against an empty string, so
+    // the read path must never hand back a null for a field typed as `string`.
+    // Same defensive shape as public_clue_style / sort_order / is_active below,
+    // and the identical `?? ''` the public DTO (services/categoryPublicView.ts)
+    // and the claims hydration already apply.
+    name_sw: row.name_sw ?? '',
     total_fee: parseFloat(row.total_fee),
     finder_share: parseFloat(row.finder_share),
     agent_share: parseFloat(row.agent_share),

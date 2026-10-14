@@ -1215,7 +1215,7 @@ export default function OwnerView({ categories, categoriesLoading = false, categ
                 <label className="grid gap-1.5">
                   <span className="text-xs font-bold text-ink-muted">{'Category'}</span>
                   <select value={selectedCat} onChange={e => setSelectedCat(e.target.value)} aria-label={'Filter by category'} className="w-full rounded-2xl border border-line-subtle bg-white px-3 py-3 text-sm focus:border-accent-orange disabled:bg-brand-light-gray disabled:text-brand-muted-text" disabled={categoriesLoading || categoriesError}>
-                    {categoriesLoading ? <option value="">{'Loading categories...'}</option> : categoriesError ? <option value="">{'Categories unavailable — please refresh'}</option> : [<option key="all-categories" value="">{'All categories'}</option>, ...categories.filter(cat => cat.name_en && cat.name_sw).map(cat => <option key={cat.id} value={cat.id}>{cat.name_en}</option>)]}
+                    {categoriesLoading ? <option value="">{'Loading categories...'}</option> : categoriesError ? <option value="">{'Categories unavailable — please refresh'}</option> : [<option key="all-categories" value="">{'All categories'}</option>, ...categories.filter(cat => cat.name_en).map(cat => <option key={cat.id} value={cat.id}>{cat.name_en}</option>)]}
                   </select>
                 </label>
                 <label className="grid gap-1.5">
