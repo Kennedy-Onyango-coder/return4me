@@ -33,7 +33,8 @@ import path from 'path';
 //
 // There is no jsdom/React harness in this repository, so — exactly as the
 // UX-06 … UX-15H suites do — the contract is asserted against the shipped source
-// with the same comment stripper and the same `sliceBetween` helper.
+// with the same comment stripper and the same marker-slice helper the other
+// suites use; the claimant panel itself is sliced by its own braces (AD1).
 // =============================================================================
 
 const repoRoot = path.resolve(__dirname, '../..');
@@ -53,12 +54,48 @@ function sliceBetween(source: string, from: string, to: string): string {
   return source.slice(start, end);
 }
 
+/**
+ * Slices a top-level function out of AdminView.tsx by ITS OWN braces.
+ *
+ * The other batch suites slice between two markers, but AD1 moved the console's
+ * section metadata (this slice's old `const CONSOLE_SECTIONS` endpoint) into the
+ * nav registry, so there is no longer a marker to stop at. Brace matching ends
+ * the slice at the function's own closing brace — and that boundary is asserted
+ * in section A, so a neighbouring declaration can never be swept into the audit
+ * unnoticed.
+ *
+ * The body opens at the first `{` AFTER the parameter list's closing `)`: this
+ * signature's typed parameter object (`({ ... }: { ... })`) balances back to
+ * depth 0 before the body ever opens, so plain depth counting would return the
+ * parameter list and stop there.
+ */
+function functionBody(anchor: string): string {
+  const start = ADMIN_VIEW_TSX.indexOf(anchor);
+  if (start === -1) throw new Error(`UX-15 closure declaration not found: ${anchor}`);
+  let parens = 0;
+  let bodyStart = -1;
+  for (let i = start; i < ADMIN_VIEW_TSX.length; i++) {
+    const c = ADMIN_VIEW_TSX[i];
+    if (c === '(') parens++;
+    else if (c === ')' && --parens === 0) {
+      bodyStart = ADMIN_VIEW_TSX.indexOf('{', i);
+      break;
+    }
+  }
+  if (bodyStart === -1) throw new Error(`UX-15 closure body not found: ${anchor}`);
+  let depth = 0;
+  for (let i = bodyStart; i < ADMIN_VIEW_TSX.length; i++) {
+    const c = ADMIN_VIEW_TSX[i];
+    if (c === '{') depth++;
+    else if (c === '}' && --depth === 0) return ADMIN_VIEW_TSX.slice(start, i + 1);
+  }
+  throw new Error(`UX-15 closure unbalanced body: ${anchor}`);
+}
+
 /** The whole file, comments removed. */
 const CODE = stripComments(ADMIN_VIEW_TSX);
-/** The one component this audit changed. */
-const CLAIMANT = stripComments(
-  sliceBetween(ADMIN_VIEW_TSX, 'function DisputeClaimantPanel({', 'const CONSOLE_SECTIONS'),
-);
+/** The one component this audit changed — bound by its own braces (AD1). */
+const CLAIMANT = stripComments(functionBody('function DisputeClaimantPanel({'));
 /** The viewer UX-15H owns — changed by nothing here. */
 const LIGHTBOX_TSX = ADMIN_VIEW_TSX.slice(
   ADMIN_VIEW_TSX.indexOf('{/* Lightbox Image Zoom Portal */}'),
@@ -93,6 +130,17 @@ const offLadderRadius = (source: string): string[] =>
 // -----------------------------------------------------------------------------
 
 describe('the dispute claimant evidence-photo opener is reachable from the keyboard', () => {
+  it('is bound by its own braces, not by whatever follows it', () => {
+    // AD1 retired the `const CONSOLE_SECTIONS` marker this slice used to stop at,
+    // so the boundary is now the function's own closing brace — asserted here so
+    // the extraction can never quietly swallow a neighbouring declaration.
+    expect(CLAIMANT.startsWith('function DisputeClaimantPanel({')).toBe(true);
+    expect(CLAIMANT.trimEnd().endsWith('}')).toBe(true);
+    expect(count(CLAIMANT, /^function\s/gm)).toBe(1);
+    expect(CLAIMANT).not.toContain('interface OverviewQueueCardProps');
+    expect(CLAIMANT).not.toContain('CONSOLE_SECTIONS');
+  });
+
   it('is a button with a tab stop and an accessible name', () => {
     expect(CLAIMANT).toContain('role="button"');
     expect(CLAIMANT).toContain('tabIndex={0}');

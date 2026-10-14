@@ -4,6 +4,13 @@
 // current section (from the nav registry), surfaces the existing stale-data
 // flag, and reuses the existing refresh handler. Presentation only: it holds
 // no data, makes no requests, and never triggers a financial action.
+//
+// AD1 removed the `lang` prop: the console's only call site always passed the
+// literal 'en', so every `lang === 'en' ? ... : ...` ternary here could only
+// ever take its first branch. The prop decided nothing, and this bar's copy is
+// fixed-English like the rest of the console's older strings (no NEW bilingual
+// string is lost — 'Refresh', 'Stale data' and 'Return4me Admin' were English
+// at every render). The bar's headings stay registry-driven.
 import React from 'react';
 import { RefreshCw, ShieldCheck } from 'lucide-react';
 import Button from '../../ui/Button';
@@ -14,7 +21,6 @@ import { describeAdminSection } from './adminNavRegistry';
 
 interface AdminTopBarProps {
   activeSection: AdminSectionId;
-  lang: 'en' | 'sw';
   dashboardStale: boolean;
   dashboardLoading: boolean;
   onRefresh: () => void;
@@ -22,7 +28,6 @@ interface AdminTopBarProps {
 
 export default function AdminTopBar({
   activeSection,
-  lang,
   dashboardStale,
   dashboardLoading,
   onRefresh,
@@ -34,7 +39,7 @@ export default function AdminTopBar({
     <div className="r4m-admin-topbar flex flex-wrap items-center gap-3 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface)] px-4 py-3 shadow-[var(--shadow-raised)]">
       <span className="inline-flex items-center gap-2 text-body font-extrabold text-[var(--appearance-text-primary)]">
         <ShieldCheck size={ICON_SIZE.ui} aria-hidden="true" className="text-primary-green" />
-        {lang === 'en' ? 'Return4me Admin' : 'Msimamizi wa Return4me'}
+        {'Return4me Admin'}
       </span>
       <span aria-hidden="true" className="text-[var(--appearance-text-muted)]">/</span>
       {/* Deliberately a paragraph, not a heading: the console keeps its ONE h1
@@ -45,17 +50,17 @@ export default function AdminTopBar({
       </p>
       <span className="flex-1" aria-hidden="true" />
       {dashboardStale ? (
-        <Badge variant="warning">{lang === 'en' ? 'Stale data' : 'Data ya zamani'}</Badge>
+        <Badge variant="warning">{'Stale data'}</Badge>
       ) : null}
       <Button
         variant="secondary"
         size="sm"
         loading={dashboardLoading}
-        loadingLabel={lang === 'en' ? 'Refreshing dashboard' : 'Inapakua upya'}
+        loadingLabel="Refreshing dashboard"
         onClick={onRefresh}
       >
         <RefreshCw size={ICON_SIZE.metadata} aria-hidden="true" />
-        {lang === 'en' ? 'Refresh' : 'Pakua upya'}
+        {'Refresh'}
       </Button>
     </div>
   );

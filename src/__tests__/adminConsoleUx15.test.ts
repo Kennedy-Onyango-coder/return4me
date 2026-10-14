@@ -373,7 +373,11 @@ describe('UX-15B: the console section heading band', () => {
   it('keeps the section copy and the routing behind it untouched', () => {
     expect(HEADING).toContain('{sectionCopy.title}');
     expect(HEADING).toContain('{sectionCopy.description}');
-    expect(ADMIN_VIEW_TSX).toContain('const sectionCopy = CONSOLE_SECTIONS[activeTab][lang];');
+    // AD1 moved this copy into the shared nav registry — the one list the shell
+    // chrome (sidebar groups + top bar) already reads — so the pin is now that
+    // registry lookup, and the retired local table must not come back.
+    expect(ADMIN_VIEW_TSX).toContain('const sectionCopy = describeAdminSectionCopy(activeTab);');
+    expect(ADMIN_VIEW_TSX).not.toContain('const CONSOLE_SECTIONS');
   });
 
   it('keeps the dashboard refresh in the chrome, now at the 44px floor', () => {

@@ -89,9 +89,12 @@ import SettlementPayoutConfirmation from './admin/settlement/SettlementPayoutCon
 // BATCH B0 — modern shell chrome (sidebar groups + contextual top bar). These
 // are presentation components only: they hold no data, make no requests and
 // change no behaviour. The nav registry mirrors the ten existing sections so
-// the shell cannot invent or drop a section.
+// the shell cannot invent or drop a section — and since AD1 it is also the ONE
+// owner of each section's page-level title + description, which this file used
+// to keep in a second table of its own.
 import AdminTopBar from './admin/shell/AdminTopBar';
 import AdminNavGroupLabel from './admin/shell/AdminNavGroupLabel';
+import { describeAdminSectionCopy } from './admin/shell/adminNavRegistry';
 
 // P14A (P14-05) — human-readable labels for the canonical masking styles. Keyed
 // by the values in PUBLIC_CLUE_STYLES (the single source); an unmapped value
@@ -254,29 +257,6 @@ function DisputeClaimantPanel({
   );
 }
 
-
-// Console section metadata, keyed by the EXISTING activeTab union. This is the
-// ONE place the console's page-level <h1> and its supporting description come
-// from; nothing about a section's data, permissions or behaviour is derived
-// from it. Kept as one table rather than twenty literals so the heading, the
-// description and the navigation label for a section cannot drift apart.
-type ConsoleSectionKey =
-  | 'stats' | 'agents' | 'found_items' | 'disputes' | 'claims'
-  | 'lost_reports' | 'ledger' | 'review' | 'categories' | 'strikes';
-interface ConsoleSectionCopy { title: string; description: string }
-const CONSOLE_SECTIONS: Record<ConsoleSectionKey, ConsoleSectionCopy> = {
-  stats: { title: 'Overview', description: 'Monitor platform activity, recovery performance, and operational health.' },
-  agents: { title: 'Agents Hub', description: 'Review agent activity, verification, and operational status.' },
-  found_items: { title: 'Found Items', description: 'Review recovered items and their current recovery state.' },
-  disputes: { title: 'Disputes', description: 'Investigate claims requiring administrative resolution.' },
-  claims: { title: 'Claims', description: 'Monitor and administer active and completed recovery claims.' },
-  lost_reports: { title: 'Lost Reports', description: 'Review submitted lost-item reports and their discovery status.' },
-  ledger: { title: 'Ledger', description: 'Review settlement and financial ledger activity.' },
-  review: { title: 'Manual Review', description: 'Review operational items requiring administrative attention.' },
-  categories: { title: 'Categories & Fees', description: 'Configure recovery categories, fees, and finder/agent/platform allocation.' },
-  strikes: { title: 'Payment Strikes', description: 'Review agent strikes and enforcement history.' },
-};
-
 // ---------------------------------------------------------------------------
 // B1 — THE OVERVIEW'S "NEEDS ATTENTION" QUEUE CARD.
 //
@@ -373,8 +353,10 @@ function isReported(value: unknown): boolean {
 export default function AdminView({ token, setToken, onCategoriesChanged }: AdminViewProps) {
   const t = translations.en;
   // B0 FIX — the console is fixed-English (translations.en above); this is the
-  // same literal the bilingual nav label and AdminTopBar already expected, so
-  // the pinned `lang === 'en' ? ...` contract holds without new language state.
+  // same literal the bilingual nav label already expected, so the pinned
+  // `lang === 'en' ? ...` contract holds without new language state. (AD1 removed
+  // the AdminTopBar prop that carried the same literal: it was the only other
+  // reader and it decided nothing.)
   const lang = 'en' as const;
   // BATCH 2 — the file's own bilingual shorthand (see DisputeClaimantPanel),
   // used by the 2FA enrollment UX below so its long English/Swahili strings stay
@@ -2518,8 +2500,9 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
   const catFormAmountEntered =
     (Number(catFormBaseFee) || 0) + (Number(catFormComplexityFee) || 0) + (Number(catFormDelayFee) || 0) > 0;
 
-  // The single page-level heading + description for whichever section is open.
-  const sectionCopy = CONSOLE_SECTIONS[activeTab];
+  // The single page-level heading + description for whichever section is open,
+  // read from the shared nav registry (AD1 — this file's own table is gone).
+  const sectionCopy = describeAdminSectionCopy(activeTab);
 
   // UX-14 — the admin authentication gate's single "a request is in flight"
   // flag. The credential step and the 2FA step are mutually exclusive, so the
@@ -3014,7 +2997,6 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
               endpoint, no invented environment indicator. */}
           <AdminTopBar
             activeSection={activeTab}
-            lang="en"
             dashboardStale={dashboardStale && !!dashboardData}
             dashboardLoading={dashboardLoading}
             onRefresh={fetchDashboardData}
@@ -3022,8 +3004,8 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
 
           {/* PAGE TITLE — the console's ONE page-level <h1>. The old 3xl title
               above the sidebar was removed, so this band is the single heading
-              owner; its title and description come from the shared
-              CONSOLE_SECTIONS table and change with the active section. The
+              owner; its title and description come from the shared nav registry
+              and change with the active section. The
               dashboard refresh control lives here because it refreshes the
               whole console payload, not any one section. */}
           <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 pb-3 border-b border-[var(--appearance-border)]">
@@ -4762,8 +4744,8 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
           {activeTab === 'review' && (
             <div className="space-y-6">
               {/* Supporting context for the review queue. The page-level h1 and
-                  section description come from the console title band
-                  (CONSOLE_SECTIONS), so this is deliberately NOT a heading. */}
+                  section description come from the console title band (the nav
+                  registry), so this is deliberately NOT a heading. */}
               <p className="text-caption text-[var(--appearance-text-muted)] max-w-2xl">
                 These items have low OCR confidence, missing details, or require administrator correction.
               </p>
