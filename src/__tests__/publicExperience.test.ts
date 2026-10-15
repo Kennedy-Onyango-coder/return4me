@@ -30,6 +30,9 @@ const ownerViewTsx = read('src/components/OwnerView.tsx');
 const homeViewTsx = read('src/components/HomeView.tsx');
 const finderViewTsx = read('src/components/FinderView.tsx');
 const publicItemTsx = read('src/components/PublicItemView.tsx');
+// Phase 8.5 — the camera overlay owns the Capture/Cancel copy; FinderView only
+// delegates to it, so the labels are pinned where they are actually written.
+const foundItemCameraTsx = read('src/components/customer/FoundItemCamera.tsx');
 
 describe('claim progress (Phase 8.2)', () => {
   it('the shared Stepper primitive is actually used by the claim journey', () => {
@@ -37,7 +40,7 @@ describe('claim progress (Phase 8.2)', () => {
     expect(ownerViewTsx).toContain('<Stepper');
     // Wired to the EXISTING step state — presentation only.
     expect(ownerViewTsx).toContain('CLAIM_STEP_INDEX[verificationStep]');
-    expect(ownerViewTsx).toMatch(/label=\{lang === 'en' \? 'Claim progress'/);
+    expect(ownerViewTsx).toContain("label={'Claim progress'}");
     // Hidden on the search screen and on the terminal expired state.
     expect(ownerViewTsx).toContain("verificationStep !== 'search' && verificationStep !== 'payment_window_expired'");
   });
@@ -218,18 +221,20 @@ describe('public discovery surfaces (Phase 8.4)', () => {
     expect(finderViewTsx).toMatch(/apiMessage \|\| submitErrorMessage/);
   });
 
-  it('the finder report flow is bilingual throughout', () => {
-    // These three were rendered as plain JSX text (always English) until 8.4.
-    expect(finderViewTsx).toMatch(/lang === 'en' \? 'Report Another Item' : 'Ripoti Kitu Kingine'/);
-    expect(finderViewTsx).toMatch(/lang === 'en' \? 'Take a photo or upload file' : 'Piga picha au weka faili ya picha'/);
-    expect(finderViewTsx).toMatch(/lang === 'en' \? 'Phone' : 'Simu'/);
+  it('the finder report flow names every one of its actions in the shipped copy', () => {
+    // The application ships ONE language, so these are pinned as the literals
+    // the component actually renders, not as translated two-language ternaries.
+    expect(finderViewTsx).toContain("{'Report Another Item'}");
+    expect(finderViewTsx).toContain("{'Take a photo or upload file'}");
+    // The payout phone field is driven by the dictionary, not by a bare node.
+    expect(finderViewTsx).toContain('label={t.phonePayout}');
   });
 });
 
 describe('claim entry from the public item page (Phase 8.4)', () => {
   it("renders \"It's Mine\" only on the ready item and wires it to the session gate", () => {
     expect(publicItemTsx).toContain('{state === \'ready\' && item && (');
-    expect(publicItemTsx).toContain('{t("It\'s Mine", \'Ni Yangu\')}');
+    expect(publicItemTsx).toContain('{"It\'s Mine"}');
     expect(publicItemTsx).toContain('onClick={handleClaimClick}');
   });
 
@@ -303,13 +308,17 @@ describe('homepage found-item discovery (Phase 8.4)', () => {
 describe('finder report flow (Phase 8.5)', () => {
   it('renders no English-only user-facing string', () => {
     // These were hard-coded English text nodes until 8.5, including the two
-    // camera-overlay actions, the terms sentence and the privacy note.
-    expect(finderViewTsx).toMatch(/lang === 'en' \? 'Capture' : 'Piga Picha'/);
-    expect(finderViewTsx).toMatch(/lang === 'en' \? 'Cancel' : 'Ghairi'/);
-    expect(finderViewTsx).toMatch(/lang === 'en' \? 'Terms of Service' : 'Vigezo na Masharti'/);
-    expect(finderViewTsx).toMatch(/lang === 'en' \? 'Privacy Policy' : 'Sera ya Faragha'/);
-    expect(finderViewTsx).toMatch(/'I have read and agree to the Return4me' : 'Nimesoma na nakubali'/);
-    expect(finderViewTsx).toContain('Fungua Akaunti ya Msingi wa Return4me');
+    // camera-overlay actions, the terms sentence and the privacy note. The
+    // application ships ONE language, so each is pinned by the literal that is
+    // rendered — and the overlay now belongs to FoundItemCamera, which
+    // FinderView embeds rather than re-implementing.
+    expect(finderViewTsx).toContain('<FoundItemCamera');
+    expect(foundItemCameraTsx).toContain('<span>Capture</span>');
+    expect(foundItemCameraTsx).toContain('<span>Cancel</span>');
+    expect(finderViewTsx).toContain("{'Terms of Service'}");
+    expect(finderViewTsx).toContain("{'Privacy Policy'}");
+    expect(finderViewTsx).toContain("{'I have read and agree to the Return4me'}");
+    expect(finderViewTsx).toContain("{'Create a Return4me Finder Account with this phone number (to track history & payouts)'}");
     // No bare English text nodes survive as JSX children.
     expect(finderViewTsx).not.toMatch(/\n\s+Capture\n/);
     expect(finderViewTsx).not.toMatch(/\n\s+Cancel\n/);
@@ -367,8 +376,8 @@ describe('finder report flow (Phase 8.5)', () => {
     expect(finderViewTsx).not.toMatch(/<label className="block text-sm font-extrabold text-primary-green">\{t\.capturePhoto\}/);
     expect(finderViewTsx).toMatch(/<p className="block text-sm font-extrabold text-primary-green">\{t\.capturePhoto\} \*<\/p>/);
     // The icon-only upload control names its file input, and the preview alt is
-    // bilingual and item-typed instead of the hard-coded "Found item document".
-    expect(finderViewTsx).toMatch(/aria-label=\{lang === 'sw' \? 'Pakia picha' : 'Upload a photo'\}/);
+    // item-typed instead of the hard-coded "Found item document".
+    expect(finderViewTsx).toContain("aria-label={'Upload a photo'}");
     expect(finderViewTsx).not.toContain('alt="Found item document"');
     expect(finderViewTsx).toMatch(/Photo of the \$\{categories\.find/);
   });
@@ -415,8 +424,11 @@ describe('finder report flow (Phase 8.5)', () => {
     expect(gpsCopy).not.toContain('Mahali Pamehifadhiwa');
     expect(gpsCopy).toContain('not necessarily where you found the item');
     expect(gpsCopy).toContain('describe where you found it');
-    expect(gpsCopy).toContain('si lazima hapo ulipopata kitu');
-    expect(gpsCopy).toContain('yanayoeleza ulipopata kitu');
+    // The second half of the LocationFirstField copy is a tuple member that is
+    // still rendered (sr-only, and as the loading label), so it is pinned by the
+    // words it actually ships rather than by a wording that never did.
+    expect(gpsCopy).toContain('huenda si mahali ulipoona kitu');
+    expect(gpsCopy).toContain('yanayoeleza mahali ulipoona');
   });
 });
 
@@ -436,11 +448,12 @@ describe('homepage batch 1 CTA and discovery contracts', () => {
   //   * the hero's lost action still goes to `view: 'owner'` (/lost)
   //   * the found action is still secondary and still goes to `view: 'finder'`
   //   * the Agent Portal is still not a homepage destination
-  // The exact hero label is now pinned by homepageCtaJourneyBatch5.test.ts,
-  // which asserts the canonical `t.ownerBtn` in both languages.
+  // The hero's own label is pinned here by the literal the hero renders — with one
+  // shipped language `t.ownerBtn` resolves from the single dictionary, and the
+  // sibling label is written out in the slide table.
   it('routes the hero primary to the owner/lost view and keeps Finder as secondary', () => {
     expect(homeViewTsx).toContain("{ label: t.ownerBtn, view: 'owner' }");
-    expect(homeViewTsx).toContain("label: lang === 'en' ? 'Report a Found Item' : 'Ripoti Kitu Kilichopatikana', view: 'finder'");
+    expect(homeViewTsx).toContain("{ label: 'Report a Found Item', view: 'finder' }");
     expect(homeViewTsx).toContain("view: 'owner'");
     expect(homeViewTsx).not.toMatch(/view: 'agent'/);
   });
@@ -450,7 +463,7 @@ describe('homepage batch 1 CTA and discovery contracts', () => {
     // actually done — it opens the public found-item search (OwnerView at /lost),
     // it never reported a loss. Batch 5 later relabelled the hero's own CTA
     // (MF-3) but left this discovery CTA, and this section, untouched.
-    expect(homeViewTsx).toContain("lang === 'en' ? 'Browse Found Items' : 'Vinjari Vitu Vilivyopatikana'");
+    expect(homeViewTsx).toContain("{'Browse Found Items'}");
     expect(homeViewTsx).toContain("onClick={() => setView('owner')}");
     expect(homeViewTsx).toContain('href={`/item/${encodeURIComponent(item.id)}`}');
     expect(homeViewTsx).toContain('onOpenItem(item.id)');

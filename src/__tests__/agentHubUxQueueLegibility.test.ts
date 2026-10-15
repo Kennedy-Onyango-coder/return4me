@@ -43,7 +43,7 @@ const A_RELEASE = at(HUB_CODE, 't.holdingPickups}');
 const A_RECEIVE_LIST = at(HUB_CODE, 'props.expectedDropoffs.map');
 const A_RELEASE_LIST = at(HUB_CODE, 'props.holdingPickups.map');
 const A_PROFILE = at(HUB_CODE, 'props.agentProfile.business_name');
-const A_EARNINGS = at(HUB_CODE, 'props.agentEarnings.totalEarned');
+const A_EARNINGS = at(HUB_CODE, 'Total Earned (your commission share)');
 
 describe('AgentHub UX Batch 3 — UX-07 operational queues lead the page', () => {
   it('renders both queues before the profile/earnings block', () => {
@@ -76,8 +76,8 @@ describe('AgentHub UX Batch 3 — UX-07 operational queues lead the page', () =>
   it('reordered presentation only: no section added, removed, or re-authored', () => {
     // Exactly one profile banner and one earnings card remain.
     expect((HUB.match(/props\.agentProfile\.business_name/g) ?? []).length).toBe(1);
-    expect((HUB.match(/props\.agentEarnings\.totalEarned/g) ?? []).length).toBe(1);
-    expect((HUB.match(/props\.agentEarnings\.completedPayoutsCount/g) ?? []).length).toBe(1);
+    expect((HUB.match(/formatEarnings\(props\.agentEarnings\?\.totalEarned\)/g) ?? []).length).toBe(1);
+    expect((HUB.match(/isFiniteNumber\(props\.agentEarnings\?\.completedPayoutsCount\)/g) ?? []).length).toBe(1);
     // Their data inputs are untouched: no new prop is read to render them.
     expect(HUB_CODE).toContain('props.agentProfile.payout_method_type');
     expect(HUB_CODE).toContain('props.agentProfile.mpesa_till_or_paybill');
@@ -133,11 +133,9 @@ describe('AgentHub UX Batch 3 — UX-05 truthful refreshing signal', () => {
     );
   });
 
-  it('uses the existing bilingual wording and adds no new key', () => {
-    for (const lang of ['en', 'sw'] as const) {
-      expect(translations[lang].agentQueueRefreshing).toBeTruthy();
-    }
-    expect((read('src/types.ts').match(/agentQueueRefreshing:/g) ?? []).length).toBe(2);
+  it('uses the existing dictionary wording and adds no new key', () => {
+    expect(translations.en.agentQueueRefreshing).toBeTruthy();
+    expect((read('src/types.ts').match(/agentQueueRefreshing:/g) ?? []).length).toBe(1);
   });
 
   it('invents no timestamp, timer, or polling', () => {

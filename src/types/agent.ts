@@ -1,4 +1,4 @@
-import type { Agent, FoundItem } from '../db/database';
+import type { FoundItem } from '../db/database';
 
 export type AgentAssociatedClaimStatus =
   | 'escrow_held'
@@ -45,8 +45,20 @@ export interface AgentEarnings {
   pendingSettlementsCount: number;
 }
 
+/**
+ * B2 — the signed-in agent's own identity, as the dashboard actually consumes
+ * it. This is the explicit allowlist for GET /api/agents/queue's `agent` field;
+ * nothing else from the database agent record is serialized.
+ */
+export interface AgentQueueSelf {
+  business_name: string;
+  location_address: string;
+  payout_method_type: string;
+  mpesa_till_or_paybill: string;
+}
+
 export interface AgentQueueResponse {
-  agent: Agent;
+  agent: AgentQueueSelf;
   earnings: AgentEarnings;
   pendingDropoffs: AgentPendingDropoff[];
   holdingItems: AgentHoldingPickup[];

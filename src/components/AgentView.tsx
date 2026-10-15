@@ -193,7 +193,7 @@ export default function AgentView({ token, setToken, categories, refreshCategori
       : undefined;
 
   const {
-    agentStatus, queueError, queueLoading, expectedDropoffs, holdingPickups, agentProfile, agentEarnings,
+    agentStatus, queueErrorCode, queueError, queueLoading, expectedDropoffs, holdingPickups, agentProfile, agentEarnings,
     dropoffCodeInput, setDropoffCodeInput, operationError, setOperationError, actionSuccessMsg,
     actionProcessing, processingItemId, verifyingItemId, setVerifyingItemId, verifyCategoryId,
     setVerifyCategoryId, verifyName, setVerifyName, verifyDocNumber, setVerifyDocNumber,
@@ -1078,14 +1078,13 @@ export default function AgentView({ token, setToken, categories, refreshCategori
           PHASE 16.1 BATCH 3 (F-5 / H-3). This replaces the old behaviour where
           ANY failed queue request rendered the "Vetting Pending" screen.
 
-          The server's own explanation is shown when it supplied one: both guards
-          on /api/agents/queue answer with deliberate, user-facing bilingual copy,
-          so an agent whose application really is still under review reads that
-          ("Akaunti yako ya Agent bado haijaidhinishwa au imesitishwa."), and an
-          agent whose session merely expired reads THAT instead — rather than
-          both being told their account status changed when it may not have.
-          Nothing here asserts, grants or withholds any status: the server stays
-          the sole authority. */}
+          The heading is derived from the typed `queueErrorCode` the server
+          returns: a pending application reads "Application pending approval",
+          a suspended account reads "Account suspended", and anything else
+          (expired session, network failure, unapproved account) keeps the
+          generic "Agent Hub unavailable" heading. The server's own message is
+          always shown as the body, and the server stays the sole authority on
+          the account's status. */}
       {token && !queueLoading && queueError && !agentProfile && (
         <div className="bg-[var(--appearance-surface)] rounded-panel border border-[var(--appearance-border)] p-8 shadow-raised max-w-md mx-auto text-center space-y-5 fade-in">
           <div className="w-16 h-16 bg-[var(--appearance-surface-muted)] text-[var(--appearance-danger)] rounded-full flex items-center justify-center mx-auto">
@@ -1093,7 +1092,11 @@ export default function AgentView({ token, setToken, categories, refreshCategori
           </div>
           <div className="space-y-2">
             <h2 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">
-              {'Agent Hub unavailable'}
+              {queueErrorCode === 'AGENT_PENDING_APPROVAL'
+                ? 'Application pending approval'
+                : queueErrorCode === 'AGENT_SUSPENDED'
+                  ? 'Account suspended'
+                  : 'Agent Hub unavailable'}
             </h2>
             <p className="text-body text-[var(--appearance-text-secondary)] font-semibold" role="alert" aria-live="assertive">
               {queueError}
@@ -1327,7 +1330,7 @@ export default function AgentView({ token, setToken, categories, refreshCategori
                   {'Confirm Handover'}
                 </h3>
                 <p className="text-small text-[var(--appearance-text-muted)] leading-relaxed font-semibold">
-                  {'Ask the owner to read out their secret pickup code (emailed to them when they paid). Enter it below to release payment. This cannot be undone.'}
+                  {'Ask the owner to read out their secret pickup code (emailed to them when they paid). Enter it below to confirm the handover. This records your payout as pending settlement — funds are not released until the dispute window closes and settlement is approved and initiated.'}
                 </p>
               </div>
             </div>
@@ -1344,7 +1347,7 @@ export default function AgentView({ token, setToken, categories, refreshCategori
 
             <div className="space-y-2">
               <p className="text-caption font-bold text-[var(--appearance-text-secondary)]">
-                {'Photo of claimant with the item (required)'}
+                {'Photo of claimant with the item (optional — recommended for dispute protection)'}
               </p>
               <input
                 ref={handoverPhotoInputRef}
@@ -1439,8 +1442,8 @@ export default function AgentView({ token, setToken, categories, refreshCategori
               <canvas ref={handoverCanvasRef} className="hidden" />
             </div>
             {/* PHASE 16.1 BATCH 3 (F-1) — the modal now shows OPERATIONAL
-                failures (a wrong/absent owner pickup code, a missing photo, a
-                failed upload), which is where the agent is actually looking when
+                failures (a wrong/absent owner pickup code, a failed upload),
+                which is where the agent is actually looking when
                 the action fails. This used to read `authError`, which no
                 operational failure writes any more.
 
@@ -1467,7 +1470,7 @@ export default function AgentView({ token, setToken, categories, refreshCategori
               >
                 {actionProcessing
                   ? ('Confirming…')
-                  : ('Confirm & Release Payment')}
+                  : ('Confirm Handover')}
               </button>
             </div>
           </div>

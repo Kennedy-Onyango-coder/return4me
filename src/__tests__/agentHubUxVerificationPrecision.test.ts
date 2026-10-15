@@ -98,7 +98,7 @@ describe('AGENTHUB UX BATCH 4 - verification form precision', () => {
     expect(PANEL).not.toMatch(/useLang|setLang/);
   });
 
-  it('adds every new key to both translation bundles with parity', () => {
+  it('adds every new key to the single translation bundle', () => {
     for (const key of [
       'agentVerifyConfirmReported',
       'agentVerifySaveCorrections',
@@ -107,7 +107,7 @@ describe('AGENTHUB UX BATCH 4 - verification form precision', () => {
       'agentVerifySubmitHint',
     ]) {
       const occurrences = TRANSLATIONS.split(`${key}:`).length - 1;
-      expect(occurrences).toBe(2); // English + Kiswahili
+      expect(occurrences).toBe(1); // English, single bundle
     }
   });
 

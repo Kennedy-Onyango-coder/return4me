@@ -101,12 +101,10 @@ describe('AgentHub UX Batch 2 — UX-03 consequence statement', () => {
     expect(submitAt).toBeGreaterThan(copyAt);
   });
 
-  it('is bilingual through the existing translation architecture, with no new dictionary', () => {
-    for (const lang of ['en', 'sw'] as const) {
-      expect(translations[lang].agentRejectConsequence).toBeTruthy();
-    }
-    // Both languages exist in the ONE existing bundle — no parallel dictionary.
-    expect((TYPES.match(/agentRejectConsequence:/g) ?? []).length).toBe(2);
+  it('uses the single translation dictionary, with no new dictionary', () => {
+    expect(translations.en.agentRejectConsequence).toBeTruthy();
+    // The string exists in the ONE existing English bundle — no parallel dictionary.
+    expect((TYPES.match(/agentRejectConsequence:/g) ?? []).length).toBe(1);
     expect(TYPES).not.toMatch(/agentTranslations|agentI18n/);
     // The key is passed explicitly; nothing is spread.
     const rejCall = HUB.slice(
@@ -185,8 +183,8 @@ describe('AgentHub UX Batch 2 — Batch 1 regression', () => {
   });
 
   it('adds no new state, store, or transport surface', () => {
-    // Exactly one new key per language, in the existing bundle.
-    expect((TYPES.match(/agentRejectConsequence:/g) ?? []).length).toBe(2);
+    // Exactly one new key, in the single existing bundle.
+    expect((TYPES.match(/agentRejectConsequence:/g) ?? []).length).toBe(1);
     expect(HUB_CODE).not.toMatch(/createContext|zustand|redux/i);
   });
 });

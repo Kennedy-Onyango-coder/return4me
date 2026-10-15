@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { AgentApiError, agentApi } from '../services/agentApi';
+import type { AgentQueueSelf } from '../types/agent';
 
 type Language = 'en' | 'sw';
 
@@ -14,10 +15,11 @@ export function useAgentOperations({ token, refreshCategories }: {
 }) {
   const [agentStatus, setAgentStatus] = useState<string>('pending');
   const [queueError, setQueueError] = useState('');
+  const [queueErrorCode, setQueueErrorCode] = useState<string | null>(null);
   const [queueLoading, setQueueLoading] = useState(false);
   const [expectedDropoffs, setExpectedDropoffs] = useState<any[]>([]);
   const [holdingPickups, setHoldingPickups] = useState<any[]>([]);
-  const [agentProfile, setAgentProfile] = useState<any | null>(null);
+  const [agentProfile, setAgentProfile] = useState<AgentQueueSelf | null>(null);
   // Issue B — the Agent Hub's earnings projection carries BOTH states: completed
   // (paid) earnings and settlement-window pending earnings. The server computes
   // both from authoritative ledger rows; the browser never derives money.
@@ -69,15 +71,17 @@ export function useAgentOperations({ token, refreshCategories }: {
     setQueueLoading(true);
     try {
       const data = await agentApi.getQueue(token);
-      setQueueError(''); setAgentStatus('active'); setAgentProfile(data.agent);
+      setQueueError(''); setQueueErrorCode(null); setAgentStatus('active'); setAgentProfile(data.agent);
       setAgentEarnings(data.earnings || null); setExpectedDropoffs(data.pendingDropoffs); setHoldingPickups(data.holdingItems);
     } catch (e) {
       console.error(e);
       const serverMessage = e instanceof AgentApiError ? e.message.trim() : '';
+      const serverCode = e instanceof AgentApiError ? (e.code ?? null) : null;
+      setQueueErrorCode(serverCode);
       setQueueError(serverMessage || ("We couldn't load your agent hub right now. Check your connection and try again."));
     } finally { setQueueLoading(false); }
   };
-  const retryQueue = () => { setQueueError(''); void fetchQueues(); };
+  const retryQueue = () => { setQueueError(''); setQueueErrorCode(null); void fetchQueues(); };
   useEffect(() => { void fetchQueues(); }, [token]);
 
   const openVerificationPanel = (item: any) => {
@@ -139,7 +143,6 @@ export function useAgentOperations({ token, refreshCategories }: {
     if (!pickupCodeModal) return;
     const { claimId, code, photoBase64 } = pickupCodeModal;
     if (!code || code.trim() === '') { setOperationError('Ask the owner for their secret pickup code first.'); return; }
-    if (!photoBase64) { setOperationError('Take a photo of the claimant with the item before confirming handover — this protects both of you if a dispute comes up later.'); return; }
     setOperationError(''); setActionProcessing(true); setProcessingItemId(claimId);
     try { const data = await agentApi.confirmHandover(token!, { claimId, pickupCode: code.trim(), handoverPhotoBase64: photoBase64 }); setActionSuccessMsg(data.message); setPickupCodeModal(null); void fetchQueues(); }
     catch (e: any) { setOperationError(e.message); } finally { finishProcessing(); }
@@ -177,5 +180,5 @@ export function useAgentOperations({ token, refreshCategories }: {
     };
   }, [anyModalOpen, modalBusy]);
 
-  return { agentStatus, queueError, queueLoading, expectedDropoffs, holdingPickups, agentProfile, agentEarnings, dropoffCodeInput, setDropoffCodeInput, operationError, setOperationError, actionSuccessMsg, setActionSuccessMsg, actionProcessing, processingItemId, verifyingItemId, setVerifyingItemId, verifyCategoryId, setVerifyCategoryId, verifyName, setVerifyName, verifyDocNumber, setVerifyDocNumber, verifyDescription, setVerifyDescription, verifyFoundArea, setVerifyFoundArea, verifyPhysicallyChecked, setVerifyPhysicallyChecked, verifyReason, setVerifyReason, verifyReasonDetail, setVerifyReasonDetail, verifyError, rejectingItemId, setRejectingItemId, rejectionReason, setRejectionReason, rejectionCustomText, setRejectionCustomText, confirmModal, setConfirmModal, modalBusy, setModalBusy, pickupCodeModal, setPickupCodeModal, useHandoverCamera, handoverPhotoInputRef, handoverVideoRef, handoverCanvasRef, dialogRef, retryQueue, openVerificationPanel, hasCorrections, handleSubmitVerification, handleLookupDropoff, handleRejectDropoff, handleConfirmHandover, handleHandoverPhotoCapture, startHandoverCamera, stopHandoverCamera, captureHandoverFrame, submitConfirmHandover, handleConfirmViewing };
+  return { agentStatus, queueErrorCode, queueError, queueLoading, expectedDropoffs, holdingPickups, agentProfile, agentEarnings, dropoffCodeInput, setDropoffCodeInput, operationError, setOperationError, actionSuccessMsg, setActionSuccessMsg, actionProcessing, processingItemId, verifyingItemId, setVerifyingItemId, verifyCategoryId, setVerifyCategoryId, verifyName, setVerifyName, verifyDocNumber, setVerifyDocNumber, verifyDescription, setVerifyDescription, verifyFoundArea, setVerifyFoundArea, verifyPhysicallyChecked, setVerifyPhysicallyChecked, verifyReason, setVerifyReason, verifyReasonDetail, setVerifyReasonDetail, verifyError, rejectingItemId, setRejectingItemId, rejectionReason, setRejectionReason, rejectionCustomText, setRejectionCustomText, confirmModal, setConfirmModal, modalBusy, setModalBusy, pickupCodeModal, setPickupCodeModal, useHandoverCamera, handoverPhotoInputRef, handoverVideoRef, handoverCanvasRef, dialogRef, retryQueue, openVerificationPanel, hasCorrections, handleSubmitVerification, handleLookupDropoff, handleRejectDropoff, handleConfirmHandover, handleHandoverPhotoCapture, startHandoverCamera, stopHandoverCamera, captureHandoverFrame, submitConfirmHandover, handleConfirmViewing };
 }

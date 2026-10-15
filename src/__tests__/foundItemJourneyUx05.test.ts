@@ -1,6 +1,6 @@
 // =============================================================================
 // RETURN4ME UX-05 — REPORT-A-FOUND-ITEM JOURNEY: FIVE GUIDED STAGES, THE SAME
-// BUSINESS LOGIC, BILINGUAL COPY AND TOUCH ERGONOMICS
+// BUSINESS LOGIC, ONE-LANGUAGE COPY AND TOUCH ERGONOMICS
 // =============================================================================
 // Source-level tripwires, matching this repository's other UX batches
 // (lostReportWizardUx04, homepageUx03Hierarchy, publicChromeUx02): there is no
@@ -24,7 +24,9 @@
 //   * the chrome UX-05 authored sits on the UX-01 ladders (type, radius, icon,
 //     appearance) and on the shared primitives, and every control the Finder
 //     presses clears the 44px target floor;
-//   * every new visible string is bilingual.
+//   * every new visible string exists once, in the shipped English copy (the
+//     application ships ONE language, so a string is pinned by its own literal
+//     rather than by a two-argument translate call).
 //
 // SCOPE: presentation contracts only. The payload/validation/endpoint contract
 // is pinned by publicExperience, countySelectorExactPlace, p14aUiBoundary,
@@ -60,20 +62,20 @@ const FINDER = stripComments(FINDER_TSX);
 const STEPPER_TSX = read('src/components/ui/Stepper.tsx');
 const BUTTON_TSX = read('src/components/ui/Button.tsx');
 
-/** One bilingual literal, written the way this component writes its copy. */
-const copy = (en: string, sw: string) => `tr('${en}', '${sw}')`;
+/** One English copy literal, written the way this component writes its copy. */
+const copy = (en: string) => `'${en}'`;
 
 /* The four data-entry stages as ONE slice, cut on RENDERED anchors rather than
    on comment markers (comment stripping removes those): from the first stage
    heading to the review heading. A rule asserted here can therefore never be
    satisfied by markup belonging to the review stage or the footer. */
 const STAGES = FINDER.slice(
-  FINDER.indexOf(copy('What did you find?', 'Ulipata nini?')),
-  FINDER.indexOf(copy('Check your report', 'Hakiki ripoti yako')),
+  FINDER.indexOf("title={'What did you find?'}"),
+  FINDER.indexOf("title={'Check your report'}"),
 );
 /* The review stage: its heading to the navigation footer that follows it. */
 const REVIEW = FINDER.slice(
-  FINDER.indexOf(copy('Check your report', 'Hakiki ripoti yako')),
+  FINDER.indexOf("title={'Check your report'}"),
   FINDER.indexOf('flex flex-col-reverse sm:flex-row'),
 );
 /* The footer itself (back / continue), plus the submit block below it. */
@@ -107,16 +109,15 @@ describe('UX-05 the slices this suite asserts against are real', () => {
 
 describe('UX-05 the found-item report is a five-stage machine', () => {
   it('declares the five stages once, in the order the journey asks them', () => {
-    expect(FINDER).toContain('const FINDER_STEPS: { en: string; sw: string }[] = [');
-    expect((FINDER.match(/\{\s+en: '/g) || []).length).toBe(5);
+    expect(FINDER).toContain('const FINDER_STEPS: { en: string }[] = [');
+    expect((FINDER.match(/\{\s*en: '[^']+'\s*\}/g) || []).length).toBe(5);
     const declared = FINDER.slice(FINDER.indexOf('const FINDER_STEPS'), FINDER.indexOf('const STEP_HEADING_ID'));
     for (const label of ['What', 'Identify', 'Where', 'Contact', 'Review & Submit']) {
       expect(declared, `stage ${label} is missing`).toContain(`en: '${label}'`);
     }
-    // A real translation per stage, never the English label reused.
-    for (const label of ['Nini', 'Tambua', 'Wapi', 'Mawasiliano', 'Hakiki na Tuma']) {
-      expect(declared, `stage translation ${label} is missing`).toContain(`sw: '${label}'`);
-    }
+    // ONE label per stage, declared once: the rail and the polite announcement
+    // both read this list, so a stage can never be named in one place and
+    // numbered in another.
   });
 
   it('renders exactly one bounded stage per entry, and the review last', () => {
@@ -132,13 +133,13 @@ describe('UX-05 the found-item report is a five-stage machine', () => {
     expect((FINDER.match(/\{isLastStep && \(/g) || []).length).toBe(2);
   });
 
-  it('drives the shared Stepper from the stage list, bilingually', () => {
-    expect(FINDER).toContain('const stepperSteps = FINDER_STEPS.map((s) => ({ label: tr(s.en, s.sw) }));');
+  it('drives the shared Stepper from the stage list', () => {
+    expect(FINDER).toContain('const stepperSteps = FINDER_STEPS.map((s) => ({ label: s.en }));');
     expect(FINDER).toContain('const currentStepLabel = stepperSteps');
     expect(FINDER).toContain('<Stepper');
     expect(FINDER).toContain('steps={stepperSteps}');
     expect(FINDER).toContain('currentStep={step}');
-    expect(FINDER).toContain(copy('Report a found item progress', 'Maendeleo ya kuripoti kitu kilichopatikana'));
+    expect(FINDER).toContain("label={'Report a found item progress'}");
     // The rail keeps marking the current stage for assistive tech.
     expect(STEPPER_TSX).toContain("aria-current={isCurrent ? 'step' : undefined}");
   });
@@ -162,20 +163,16 @@ describe('UX-05 the found-item report is a five-stage machine', () => {
 });
 
 describe('UX-05 the workflow enforces exactly the rules it always enforced', () => {
-  it('keeps every validation message verbatim, in both languages', () => {
+  it('keeps every validation message verbatim, in the one shipped language', () => {
     for (const message of [
       'Please fill out all required fields and upload/capture a photo.',
-      'Tafadhali jaza sehemu zote na uweke picha.',
-      'Please choose the county where you found the item.',
-      'Tafadhali chagua kaunti ulipopata kitu.',
-      'Please choose the sub-county where you found the item.',
-      'Tafadhali chagua kaunti ndogo ulipopata kitu.',
       'Please provide a title and description.',
-      'Tafadhali weka kichwa cha habari na maelezo.',
+      'Please choose the county where you found the item.',
+      'Please choose the sub-county where you found the item.',
+      'Please enter the exact place where you found the item.',
+      'Please enter the phone number for your M-Pesa payout.',
       'You must agree to the Terms of Service and Privacy Policy to create an account.',
-      'Ni lazima ukubali Vigezo na Masharti ili kufungua akaunti.',
       'Please enter a valid email address.',
-      'Tafadhali weka barua pepe sahihi.',
     ]) {
       expect(FINDER_TSX, `missing message: ${message}`).toContain(message);
     }
@@ -293,14 +290,14 @@ describe('UX-05 the review stage recaps the report and promises nothing', () => 
       expect(REVIEW, `no edit affordance for stage ${target}`).toContain(`onEdit={() => goToStep(${target})}`);
     }
     for (const title of [
-      copy('What you found', 'Ulipata nini'),
-      copy('Identifying details', 'Maelezo ya kutambua'),
-      copy('Where you found it', 'Ulipopata kitu'),
-      copy('How we reach you', 'Tunavyowasiliana nawe'),
+      copy('What you found'),
+      copy('Identifying details'),
+      copy('Where you found it'),
+      copy('How we reach you'),
     ]) {
       expect(REVIEW, `missing review group ${title}`).toContain(title);
     }
-    expect((REVIEW.match(/editLabel=\{tr\('Edit', 'Badilisha'\)\}/g) || []).length).toBe(4);
+    expect((REVIEW.match(/editLabel=\{'Edit'\}/g) || []).length).toBe(4);
   });
 
   it('reads every value from the live report, not from a fixed template', () => {
@@ -320,16 +317,16 @@ describe('UX-05 the review stage recaps the report and promises nothing', () => 
     ]) {
       expect(REVIEW, `the recap no longer reads ${live}`).toContain(live);
     }
-    // The recap names the live category, in whichever language is on screen.
+    // The recap names the live category from its canonical English name.
     expect(FINDER).toContain('const selectedCategoryLabel = selectedCategory');
-    expect(FINDER).toContain("(lang === 'sw' ? selectedCategory.name_sw : selectedCategory.name_en)");
+    expect(FINDER).toContain('selectedCategory.name_en || categoryId');
     // The sensitivity split is the same single rule the fields use.
     expect(FINDER).toContain('const isSensitiveCategory = isSelectedCategorySensitive();');
     expect(REVIEW).toContain('{isSensitiveCategory ? (');
   });
 
   it('states what happens next with only what the backend actually does', () => {
-    expect(REVIEW).toContain(copy('What happens next', 'Kinachofuata'));
+    expect(REVIEW).toContain(copy('What happens next'));
     expect(REVIEW).toContain('Your report is saved with a drop-off code');
     expect(REVIEW).toContain('the coordinates are used to look for a real active Return4me Agent near you');
     expect(REVIEW).toContain('our team will assign one for you.');
@@ -362,69 +359,93 @@ describe('UX-05 focus moves once per stage change and nowhere else', () => {
 
   it('announces the stage change politely as well as moving focus', () => {
     expect(FINDER).toContain('className="sr-only" role="status" aria-live="polite"');
-    expect(FINDER).toContain("{tr('Step', 'Hatua')} {step + 1} {tr('of', 'kati ya')} {FINDER_STEPS.length}: {currentStepLabel}");
+    expect(FINDER).toContain("{'Step'} {step + 1} {'of'} {FINDER_STEPS.length}: {currentStepLabel}");
   });
 });
 
-describe('UX-05 every new string is bilingual', () => {
-  it('passes two inline source strings to every translate call', () => {
-    const calls = (FINDER.match(/\btr\(/g) || []).length;
-    // The literal form may wrap onto a second line, so the separator is allowed
-    // to carry whitespace.
-    const literalPairs = (FINDER.match(/\btr\(\s*'[^']*',\s*'[^']*'\s*\)/g) || []).length;
-    expect(calls).toBeGreaterThan(30);
-    // Every call pairs two inline literals except the one that walks the step
-    // list — a copy string that existed in one language only would break this.
-    expect(FINDER).toContain('{ label: tr(s.en, s.sw) }');
-    expect(literalPairs + 1).toBe(calls);
+describe('UX-05 the copy is ONE language, pinned by its own literal', () => {
+  it('ships no second language and keeps the stage labels single-sourced', () => {
+    // The application ships ONE language. The retired two-argument translate
+    // call, the `lang` switch it read and the `name_sw` column it fell back to
+    // must not come back: a string is pinned by the literal that renders, so a
+    // translated copy can never drift away from the English one beside it.
+    expect(FINDER).not.toMatch(/\btr\(/);
+    expect(FINDER).not.toContain('name_sw');
+    expect(FINDER).not.toMatch(/\blang\b/);
+    // The rail and the polite announcement both read the ONE stage list, so a
+    // stage can never be named in one place and numbered in another.
+    expect(FINDER).toContain('const stepperSteps = FINDER_STEPS.map((s) => ({ label: s.en }));');
+    expect(FINDER).toContain('const currentStepLabel = stepperSteps');
   });
 
-  it('has no hard-coded English in a copy-bearing attribute of the authored chrome', () => {
-    expect(AUTHORED).not.toMatch(/\b(?:label|hint|placeholder|aria-label|title)=(?:"|')/);
+  it('names every authored heading and action in the shipped English copy', () => {
+    for (const literal of [
+      "title={'What did you find?'}",
+      "title={'Identify the item'}",
+      "title={'Where did you find it?'}",
+      "title={'How can we reach you?'}",
+    ]) {
+      expect(STAGES, `missing stage copy ${literal}`).toContain(literal);
+    }
+    for (const literal of [
+      "title={'Check your report'}",
+      "title={'What you found'}",
+      "title={'Identifying details'}",
+      "title={'Where you found it'}",
+      "title={'How we reach you'}",
+      "editLabel={'Edit'}",
+    ]) {
+      expect(REVIEW, `missing review copy ${literal}`).toContain(literal);
+    }
+    // The primitives take their copy through props, never from a literal…
+    expect(PRIMITIVES).not.toMatch(/\b(?:label|editLabel|title)=(?:"|')/);
+    // …and no Swahili string survives anywhere in the component, comment or
+    // markup: the retired copy is asserted against the RAW source on purpose.
+    expect(FINDER_TSX).not.toMatch(
+      /'(?:Ulipata|Hakiki|Maendeleo|Tafadhali|Hatua|Badilisha|Rudi|Endelea|Kinachofuata)[^']*'/,
+    );
   });
 
-  it('names every stage, group, row and action in both languages', () => {
-    const pairs: Array<[string, string]> = [
-      // Stage headings and their one-line explanations.
-      ['What did you find?', 'Ulipata nini?'],
-      ['Identify the item', 'Tambua kitu'],
-      ['Where did you find it?', 'Ulipata kitu wapi?'],
-      ['How can we reach you?', 'Tunaweza kukufikia vipi?'],
-      ['Check your report', 'Hakiki ripoti yako'],
+  it('names every stage, group, row, value and action in the shipped English copy', () => {
+    const strings = [
+      // Stage headings.
+      'What did you find?',
+      'Identify the item',
+      'Where did you find it?',
+      'How can we reach you?',
+      'Check your report',
       // Progress rail and the polite announcement.
-      ['Report a found item progress', 'Maendeleo ya kuripoti kitu kilichopatikana'],
-      ['Step', 'Hatua'],
-      ['of', 'kati ya'],
+      'Report a found item progress',
+      'Step',
+      'of',
       // Review groups, rows and their values.
-      ['What you found', 'Ulipata nini'],
-      ['Identifying details', 'Maelezo ya kutambua'],
-      ['Where you found it', 'Ulipopata kitu'],
-      ['How we reach you', 'Tunavyowasiliana nawe'],
-      ['Photograph attached', 'Picha imewekwa'],
-      ['No photograph yet', 'Hakuna picha bado'],
-      ['Not chosen', 'Hakujachagua'],
-      ['Item title', 'Kichwa cha bidhaa'],
-      ['Description', 'Maelezo'],
-      ['Not provided', 'Hakujatoa'],
-      ['Place', 'Mahali'],
-      ['Coordinates shared', 'Viwianishi vimetolewa'],
-      ['No', 'Hapana'],
-      ['Yes', 'Ndiyo'],
-      ['Email', 'Barua pepe'],
-      ['Finder account', 'Akaunti ya msingi'],
-      ['To be created', 'Itafunguliwa'],
-      ['Not requested', 'Hakukuomba'],
-      ['What happens next', 'Kinachofuata'],
+      'What you found',
+      'Identifying details',
+      'Where you found it',
+      'How we reach you',
+      'Photograph attached',
+      'No photograph yet',
+      'Not chosen',
+      'Item title',
+      'Description',
+      'Not provided',
+      'Place',
+      'Coordinates shared',
+      'No',
+      'Yes',
+      'Email',
+      'Finder account',
+      'To be created',
+      'Not requested',
+      'What happens next',
       // Actions.
-      ['Continue', 'Endelea'],
-      ['Back', 'Rudi'],
-      ['Edit', 'Badilisha'],
+      'Continue',
+      'Back',
+      'Edit',
     ];
-    expect(pairs.length).toBeGreaterThan(25);
-    for (const [en, sw] of pairs) {
-      expect(FINDER, `missing copy: ${en}`).toContain(copy(en, sw));
-      // A real translation, never the English string reused as its own Swahili.
-      expect(sw, `untranslated: ${en}`).not.toBe(en);
+    expect(strings.length).toBeGreaterThan(25);
+    for (const literal of strings) {
+      expect(FINDER, `missing copy: ${literal}`).toContain(copy(literal));
     }
   });
 });
@@ -492,7 +513,7 @@ describe('UX-05 the chrome sits on the UX-01 ladders and the shared primitives',
     // The photograph group heading and its icon-only upload control stay as
     // publicExperience pins them, so the photo stage was moved, not restyled.
     expect(FINDER_TSX).toContain('<p className="block text-sm font-extrabold text-primary-green">{t.capturePhoto} *</p>');
-    expect(FINDER_TSX).toContain("aria-label={lang === 'sw' ? 'Pakia picha' : 'Upload a photo'}");
+    expect(FINDER_TSX).toContain("aria-label={'Upload a photo'}");
   });
 });
 

@@ -890,12 +890,27 @@ const customerAuthLimiter = rateLimit({
 // re-query.
 function requireActiveAgent(req: Request, res: Response, next: NextFunction) {
   if (req.user?.role !== 'agent' || !req.user.agentId) {
-    return res.status(403).json({ error: 'Access denied. This is not an approved Return4me Agent.' });
+    return res.status(403).json({ code: 'AGENT_NOT_APPROVED', error: 'Access denied. This is not an approved Return4me Agent.' });
   }
   db.getAgent(req.user.agentId)
     .then(agent => {
+      if (!agent) {
+        return res.status(403).json({ code: 'AGENT_NOT_FOUND', error: 'Access denied. This is not an approved Return4me Agent.' });
+      }
+      // AW batch — distinguish the specific inactive states with a typed `code`
+      // so the dashboard can say "your application is pending" versus "your
+      // account is suspended" instead of one misleading "Agent unavailable"
+      // message. Order matters: pending and suspended are specific; anything
+      // else that fails isAgentActionable (e.g. approved but unverified email)
+      // is deliberately generic and never reads as a pending approval.
+      if (agent.status === 'pending') {
+        return res.status(403).json({ code: 'AGENT_PENDING_APPROVAL', error: 'Your agent application is still under review. You will be able to access your hub once an administrator approves it.' });
+      }
+      if (agent.status === 'suspended') {
+        return res.status(403).json({ code: 'AGENT_SUSPENDED', error: 'Your agent account has been suspended. Contact Return4me support for assistance.' });
+      }
       if (!isAgentActionable(agent)) {
-        return res.status(403).json({ error: 'Your Agent account has not been approved yet, or it has been suspended.' });
+        return res.status(403).json({ code: 'AGENT_INACTIVE', error: 'Your agent account is not active.' });
       }
       req.activeAgent = agent;
       next();

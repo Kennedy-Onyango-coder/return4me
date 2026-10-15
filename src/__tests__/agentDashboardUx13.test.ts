@@ -55,7 +55,7 @@ const offLadderType = (src: string) => src.match(/text-\[(?:9|10|11)px\]/g) ?? [
  */
 const LEGACY_SURFACE = /bg-white(?![/\w-])|rounded-(?:xl|2xl|3xl)(?![\w-])|shadow-(?:sm|md|lg)(?![\w-])/;
 
-/** Every visible string UX-13 introduces, in both bundles. */
+/** Every visible string UX-13 introduces, in the single English bundle. */
 const NEW_KEYS = [
   'agentWorkspaceEyebrow',
   'agentWorkspaceTitle',
@@ -131,7 +131,7 @@ describe('UX-13 — the action queue', () => {
     // Identity and compensation stay secondary, exactly as the queue-legibility
     // batch established: they are not what the agent came here to do.
     expect(at(HUB, 'props.agentProfile.business_name')).toBeGreaterThan(releaseList);
-    expect(at(HUB, 'props.agentEarnings.totalEarned')).toBeGreaterThan(releaseList);
+    expect(at(HUB, 'Total Earned (your commission share)')).toBeGreaterThan(releaseList);
   });
 
   it('keeps one real next-step control per item, from the shared Button', () => {
@@ -221,9 +221,9 @@ describe('UX-13 — empty, loading and error states', () => {
 // -----------------------------------------------------------------------------
 
 describe('UX-13 — bilingual, appearance and accessibility', () => {
-  it('adds every new visible string to BOTH translation bundles', () => {
+  it('adds every new visible string to the single translation bundle', () => {
     for (const key of NEW_KEYS) {
-      expect(count(TYPES, `${key}: `), `translation bundle missing ${key}`).toBe(2);
+      expect(count(TYPES, `${key}: `), `translation bundle missing ${key}`).toBe(1);
       expect(HUB).toContain(`t.${key}`);
     }
   });
@@ -287,7 +287,7 @@ describe('UX-13 — no regression to UX-11 / UX-12', () => {
     expect(VIEW_RAW).toContain('{/* 1. AGENT SIGN-IN CARD');
     expect(VIEW_RAW).toContain('{/* 2. QUEUE LOADING');
     expect(count(VIEW, 'aria-pressed=')).toBeGreaterThanOrEqual(2);
-    expect(VIEW).toContain("import { Banner, Button, ICON_SIZE, Input } from './ui';");
+    expect(VIEW).toContain("import { Banner, Button, ICON_SIZE, Input, LocationFirstField } from './ui';");
     expect(VIEW).toContain('<span>{authError}</span>');
   });
 
@@ -366,7 +366,7 @@ describe('UX-13 guards are live, not decorative (mutation checks)', () => {
   });
 
   it('detects a stripped translation key', () => {
-    expect(count(TYPES, 'agentWorkspaceTitle: ')).toBe(2);
+    expect(count(TYPES, 'agentWorkspaceTitle: ')).toBe(1);
     expect(
       count(TYPES.replace(/agentWorkspaceTitle: /g, 'agentWorkspaceTitleRenamed: '), 'agentWorkspaceTitle: '),
     ).toBe(0);

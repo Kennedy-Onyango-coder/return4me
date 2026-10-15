@@ -180,7 +180,7 @@ describe('Batch C: completed earnings and pending settlement stay distinct', () 
   });
 
   it('renders the pending card only when a payout is actually pending', () => {
-    expect(hub).toMatch(/agentEarnings\.pendingSettlementsCount\s*>\s*0/);
+    expect(hub).toMatch(/agentEarnings\?\.pendingSettlementsCount\s*>\s*0/);
   });
 });
 

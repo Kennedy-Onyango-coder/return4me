@@ -1485,13 +1485,15 @@ describe('stage 7A â€” owner-bound pickup-code resend over real HTTP', () =
 //   claim.status !== 'escrow_held' 400 | stolen/hold/dispute 423 |
 //   pickupCode missing 400 | pickup record missing 400 |
 //   timingSafeEqualHex(hashCode(code), code_hash) 400 |
-//   markPickupCodeVerified | handoverPhotoBase64 missing 400 |
-//   uploadBase64Image -> setHandoverPhoto |
+//   markPickupCodeVerified | handoverPhotoBase64 OPTIONAL (uploaded and stored
+//   only when supplied) -> setHandoverPhoto |
 //   enterPendingSettlement (CAS) -> pending_settlement
 //
-// NOTE the real ordering: the pickup code is VERIFIED BEFORE the photo is
-// required, so a photo-less request legitimately marks the code verified. The
-// tests below assert the ACTUAL behaviour rather than an assumed rollback.
+// NOTE the real ordering: the pickup code is VERIFIED BEFORE any photo is
+// uploaded, so a wrong code never leaves evidence behind. The photo is now
+// OPTIONAL, so a photo-less request legitimately marks the code verified and
+// proceeds to settlement (7B.7). The tests below assert the ACTUAL behaviour
+// rather than an assumed rollback.
 // The route deliberately does NOT pay: the payout stays in the ledger for the
 // administrator-initiated settlement path, which the sweep never reaches.
 // Stage 7 must end at pending_settlement.
@@ -1595,20 +1597,66 @@ describe('stage 7 â€” pickup-code handover to pending_settlement', () => {
     expect(await moneySnapshot(claimId)).toEqual(before);
   });
 
-  it('7B.7 refuses a MISSING handover photo, having already verified the code', async () => {
-    const before = await moneySnapshot(claimId);
+  it('7B.7 accepts a handover WITHOUT a photo — no evidence, still reaches pending_settlement', async () => {
+    // AW batch — the photo is now optional. This builds a FRESH escrow_held claim
+    // (and its pickup code) so the no-photo path is proven over the real HTTP
+    // route without disturbing claim-1, which 7C hands over WITH a photo next.
+    const cid = `E2E-AW-NOPHOTO-${RUN}`;
+    const iid = `E2E-AW-NOPHOTO-ITEM-${RUN}`;
+    await db.createItem({
+      id: iid,
+      category_id: CATEGORY,
+      photo_url: 'e2e-nophoto.jpg',
+      ocr_extracted_number: null,
+      ocr_extracted_name: null,
+      document_number_hash: null,
+      document_name_fuzzy: null,
+      location_description: 'E2E no-photo fixture',
+      latitude: null,
+      longitude: null,
+      finder_phone: e164(30),
+      assigned_agent_id: AGENT_ID,
+      status: 'at_agent',
+      flaggedForReview: false,
+      isDescriptionOnly: false,
+      description: null,
+      is_sensitive_document: false,
+      rejection_reason: null,
+      locked_total_fee: TOTAL_FEE,
+      locked_finder_share: 100,
+      locked_agent_share: 150,
+      locked_platform_share: 250,
+    } as any);
+    await db.createClaim({
+      id: cid,
+      item_id: iid,
+      owner_phone: OWNER_PHONE,
+      security_answers: { lastDigits: '0000', color: 'black', lostDetails: 'no-photo fixture' },
+      verification_tier: 1,
+      status: 'escrow_held',
+      owner_id_proof_url: null,
+      payment_reference: 'E2E-AW-NOPHOTO-PAYREF',
+      owner_identifying_details: null,
+    } as any);
+    const plain = '654321';
+    await db.createPickupCode(cid, hashCode(plain));
+
     const r = await http(HANDOVER, {
-      token: agentToken(AGENT_ID), body: { claimId, pickupCode: pickupPlain },
+      token: agentToken(AGENT_ID),
+      body: { claimId: cid, pickupCode: plain }, // no handoverPhotoBase64 at all
     });
-    // The real route verifies the pickup code BEFORE requiring the photo, so
-    // this request legitimately marks the code verified and then 400s on the
-    // photo. We assert exactly that, not an assumed rollback.
-    expect(r.status).toBe(400);
-    const after = await moneySnapshot(claimId);
-    expect(after.status).toBe('escrow_held');
-    expect(after.photo).toBeNull();
-    expect(after.paid_at).toBe(before.paid_at);
-    expect(after.payment_reference).toBe(before.payment_reference);
+    expect(r.status).toBe(200);
+
+    const claim: any = await db.getClaim(cid);
+    expect(claim.status).toBe('pending_settlement');
+    // No photo was fabricated, uploaded, or persisted.
+    expect(claim.handover_photo_url ?? null).toBeNull();
+    // Money still does NOT move at handover.
+    expect(claim.paid_at).toBeNull();
+    expect(claim.payment_reference).toBe('E2E-AW-NOPHOTO-PAYREF');
+    // The pickup code was verified.
+    const pickup: any = await db.getPickupCode(cid);
+    expect(pickup?.verified_at).toBeTruthy();
   });
 
   it('7C succeeds for the ASSIGNED agent and reaches pending_settlement', async () => {

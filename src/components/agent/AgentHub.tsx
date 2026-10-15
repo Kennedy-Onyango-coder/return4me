@@ -14,6 +14,7 @@ import AgentRejectionPanel from './AgentRejectionPanel';
 // BATCH 1 (UX-02): focus-return target ids for the inline panels. Pure DOM
 // helpers only; the Hub remains hook-free and presentation-only.
 import { panelTriggerId } from './panelFocus';
+import { formatEarnings, isFiniteNumber } from '../../utils/formatMoney';
 
 /**
  * AGENTHUB STRUCTURAL EXTRACTION — BATCH A (typed domain prop contracts).
@@ -718,36 +719,36 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
               for this agent's items (pending vs completed). Failed payouts are in
               neither. No payment timing changed — this is presentation of what the
               ledger already holds. */}
-          {props.agentEarnings && (
-            <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-panel p-6 shadow-raised flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
-              <div>
-                <span className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)] block">
-                  {'Total Earned (your commission share)'}
-                </span>
-                <span className="text-section font-black text-[var(--appearance-primary)] tabular-nums block mt-1">
-                  KES {props.agentEarnings.totalEarned.toLocaleString()}
-                </span>
-              </div>
-              <div className="bg-[var(--appearance-surface-muted)] text-[var(--appearance-success)] border border-[var(--appearance-border)] rounded-standard px-4 py-2 text-caption font-bold">
-                {props.agentEarnings.completedPayoutsCount} {'completed handovers paid out'}
-              </div>
+          <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-panel p-6 shadow-raised flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+            <div>
+              <span className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)] block">
+                {'Total Earned (your commission share)'}
+              </span>
+              <span className="text-section font-black text-[var(--appearance-primary)] tabular-nums block mt-1">
+                {formatEarnings(props.agentEarnings?.totalEarned)}
+              </span>
             </div>
-          )}
+            {isFiniteNumber(props.agentEarnings?.completedPayoutsCount) && (
+              <div className="bg-[var(--appearance-surface-muted)] text-[var(--appearance-success)] border border-[var(--appearance-border)] rounded-standard px-4 py-2 text-caption font-bold">
+                {props.agentEarnings?.completedPayoutsCount} {'completed handovers paid out'}
+              </div>
+            )}
+          </div>
 
           {/* Pending settlement — booked, not yet disbursed. Separate card so a
               figure that has NOT been paid is never presented as earnings. */}
-          {props.agentEarnings && props.agentEarnings.pendingSettlementsCount > 0 && (
+          {isFiniteNumber(props.agentEarnings?.pendingSettlementsCount) && props.agentEarnings?.pendingSettlementsCount > 0 && (
             <div className="bg-[var(--appearance-surface-muted)] border border-[var(--appearance-border)] rounded-panel p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
               <div>
                 <span className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)] block">
                   {'Pending settlement (not yet paid — dispute window running)'}
                 </span>
                 <span className="text-subsection font-extrabold text-[var(--appearance-text-primary)] tabular-nums block mt-1">
-                  KES {props.agentEarnings.pendingSettlementEarnings.toLocaleString()}
+                  {formatEarnings(props.agentEarnings?.pendingSettlementEarnings)}
                 </span>
               </div>
               <div className="bg-[var(--appearance-surface)] text-[var(--appearance-text-primary)] border border-[var(--appearance-border)] rounded-standard px-4 py-2 text-caption font-bold">
-                {props.agentEarnings.pendingSettlementsCount} {'handovers awaiting settlement'}
+                {props.agentEarnings?.pendingSettlementsCount} {'handovers awaiting settlement'}
               </div>
             </div>
           )}

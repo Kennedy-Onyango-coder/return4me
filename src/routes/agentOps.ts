@@ -52,6 +52,7 @@ import { authenticateJWT, hashCode, timingSafeEqualHex } from '../services/auth'
 import { SocialService } from '../services/social';
 import { toAgentVerificationEvidence } from '../services/verificationValidation';
 import { resolveCategoryId } from '../services/categoryValidation';
+import { toAgentQueueSelf } from '../services/agentQueueProjection';
 // P2-A3.4B: confirm-handover. uploadBase64Image stores the handover evidence
 // photo; EmailService sends the owner / finder / admin notifications that
 // already exist for this event (NOT a new notification architecture â€” N5 owns
@@ -136,7 +137,7 @@ export function registerAgentOperationalRoutes(
       const earnings = await db.getAgentEarnings(agentId);
 
       res.json({
-        agent: req.activeAgent,
+        agent: toAgentQueueSelf(req.activeAgent),
         earnings,
         pendingDropoffs: items.filter(i => i.status === 'awaiting_dropoff'),
         holdingItems: items.filter(i => i.status === 'at_agent').map(item => {
@@ -502,26 +503,21 @@ export function registerAgentOperationalRoutes(
       }
       await db.markPickupCodeVerified(claimId);
 
-      // Require a handover evidence photo (the claimant holding the item,
-      // ideally alongside their own ID) before any payout can be triggered.
-      // This is the platform's main defense against an agent colluding with
-      // someone who is not the real owner: a colluding agent now has to
-      // actively produce and submit fabricated evidence rather than simply
-      // clicking a button with no record at all, and a genuine dispute later
-      // has something concrete to review. Only reached now that the pickup
-      // code has already been confirmed correct â€” see the comment above.
+      // AW batch: the handover photo is now OPTIONAL, not required. Supplying
+      // one is still recommended as additional dispute evidence: when present
+      // it is validated and stored exactly as before, and when absent the
+      // handover proceeds with no fabricated or placeholder evidence record.
       const { handoverPhotoBase64 } = req.body;
-      if (!handoverPhotoBase64 || typeof handoverPhotoBase64 !== 'string' || handoverPhotoBase64.trim() === '') {
-        return res.status(400).json({ error: 'Take a photo of the claimant with the item before handing it over. This protects against fraud.' });
+      if (handoverPhotoBase64 && typeof handoverPhotoBase64 === 'string' && handoverPhotoBase64.trim() !== '') {
+        let handoverPhotoUrl: string;
+        try {
+          handoverPhotoUrl = await uploadBase64Image(handoverPhotoBase64, 'handover-evidence');
+        } catch (uploadErr: any) {
+          console.error('[HANDOVER PHOTO UPLOAD ERROR]:', uploadErr);
+          return res.status(500).json({ error: 'Failed to upload photo. Please try again.' });
+        }
+        await db.setHandoverPhoto(claimId, handoverPhotoUrl);
       }
-      let handoverPhotoUrl: string;
-      try {
-        handoverPhotoUrl = await uploadBase64Image(handoverPhotoBase64, 'handover-evidence');
-      } catch (uploadErr: any) {
-        console.error('[HANDOVER PHOTO UPLOAD ERROR]:', uploadErr);
-        return res.status(500).json({ error: 'Failed to upload photo. Please try again.' });
-      }
-      await db.setHandoverPhoto(claimId, handoverPhotoUrl);
 
       // Atomically claim the exclusive right to move this claim into
       // settlement. If two (or more) confirm-handover requests arrive

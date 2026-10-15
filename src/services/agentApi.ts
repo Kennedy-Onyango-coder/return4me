@@ -9,11 +9,13 @@ import type {
 
 export class AgentApiError extends Error {
   readonly status: number;
+  readonly code: string | null;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code: string | null = null) {
     super(message);
     this.name = 'AgentApiError';
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -38,7 +40,8 @@ async function request<T>(token: string, path: string, init: RequestInit, fallba
   const data = await parseJson(response);
   if (!response.ok) {
     const message = typeof data?.error === 'string' && data.error.trim() ? data.error.trim() : fallbackMessage;
-    throw new AgentApiError(message, response.status);
+    const code = typeof data?.code === 'string' ? data.code : null;
+    throw new AgentApiError(message, response.status, code);
   }
   if (data === null) throw new AgentApiError(fallbackMessage, response.status);
   return data as T;

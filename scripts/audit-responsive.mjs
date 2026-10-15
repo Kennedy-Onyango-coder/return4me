@@ -146,7 +146,23 @@ const server = http.createServer((req, res) => {
     if (p === '/api/customer/notifications') return json(res, { notifications: [{ id: 'N-1', title: 'Claim update', body: 'Your claim is in escrow.', created_at: '2026-02-11T10:00:00.000Z', read: false }] });
     if (p.startsWith('/api/lost-reports')) return json(res, { reports: [], matches: [] });
 
-    if (p === '/api/agent/queue') return json(res, { items: [itemRow(2, 'at_agent'), itemRow(3, 'verified')], dropoffs: [itemRow(1, 'awaiting_dropoff')] });
+    // GET /api/agents/queue — the real agent-hub contract (src/routes/agentOps.ts):
+    // `agent`, `earnings`, `pendingDropoffs`, `holdingItems`. Deterministic mock
+    // matching AgentQueueResponse (src/types/agent.ts); no live data, no auth.
+    if (p === '/api/agents/queue') {
+      return json(res, {
+        agent: {
+          id: 'AGENT-1', business_name: 'Umoja Handover Hub 1 Ltd', contact_phone: '+254711000000',
+          location_address: 'Moi Avenue, Nairobi CBD', latitude: -1.286389, longitude: 36.817223,
+          mpesa_till_or_paybill: '1234567', status: 'active', refundable_deposit: 5000,
+          national_id_hash: 'audit-national-id-hash', rating: 4.6, rating_count: 12,
+          needs_manual_geocoding: false,
+        },
+        earnings: { totalEarned: 0, completedPayoutsCount: 0, pendingSettlementEarnings: 0, pendingSettlementsCount: 0 },
+        pendingDropoffs: [itemRow(1, 'awaiting_dropoff')],
+        holdingItems: [{ ...itemRow(2, 'at_agent'), associatedClaim: { id: 'CLAIM-2', status: 'escrow_held', agent_confirmed_at: null, owner_identifying_details: null, security_answers: {} } }],
+      });
+    }
     if (p.startsWith('/api/agent/')) return json(res, {});
 
     if (p === '/api/admin/dashboard') return json(res, dashboardPayload());
@@ -629,8 +645,19 @@ try {
     console.log(`${String(score(r)).padStart(5)}  ${r.viewport.padEnd(24)} ${r.screen.padEnd(30)} ovf=${num(r.pageOverflowPx)}px off=${num(r.overflowCount)} clip=${num(r.clippedCount)} tap=${num(r.smallTargetCount)} tiny=${num(r.tinyTextCount)}`);
   }
 
-  fs.writeFileSync(path.join(root, 'docs/responsive-audit-results.json'), JSON.stringify(results, null, 2));
-  console.log('\n[audit] wrote docs/responsive-audit-results.json');
+  // Output destination. The default stays the tracked baseline file, so an
+  // unattended run behaves exactly as before. R4M_RESPONSIVE_AUDIT_OUTPUT lets a
+  // verification run redirect results to a non-tracked location (e.g. %TEMP%).
+  const outputPath = process.env.R4M_RESPONSIVE_AUDIT_OUTPUT
+    ? path.resolve(process.env.R4M_RESPONSIVE_AUDIT_OUTPUT)
+    : path.join(root, 'docs/responsive-audit-results.json');
+  try {
+    fs.writeFileSync(outputPath, JSON.stringify(results, null, 2));
+  } catch (error) {
+    console.error(`[audit] could not write audit results to ${outputPath}: ${error.message}`);
+    throw error;
+  }
+  console.log(`\n[audit] wrote ${outputPath}`);
 } finally {
   ws?.close();
   edge.kill();

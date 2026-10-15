@@ -198,7 +198,10 @@ describe('B3-F2/F3: dead handover input and dead registration payload removed', 
     // ΓÇªwhile the REAL handover action and its pickup-code dialog are untouched.
     expect(AGENTVIEW).toContain('const submitConfirmHandover = async () => {');
     expect(AGENTVIEW).toContain("if (!code || code.trim() === '') {");
-    expect(AGENTVIEW).toContain('if (!photoBase64) {');
+    // AW batch — the handover photo is now optional: the blocking `!photoBase64`
+    // guard is gone, while the handler still sends the same typed payload with
+    // photoBase64 allowed to be null.
+    expect(AGENTVIEW).not.toContain('if (!photoBase64) {');
     expect(AGENTVIEW).toContain('agentApi.confirmHandover(token!, { claimId, pickupCode: code.trim(), handoverPhotoBase64: photoBase64 });');
     // Failure retains the dialog; only the success path closes it and reloads.
     expect(AGENTVIEW).toContain('setPickupCodeModal(null); void fetchQueues();');
@@ -519,8 +522,10 @@ describe('B3-invariants: server authorization, ordering and projection are intac
     expect(codeCheck).toBeGreaterThan(-1);
     expect(upload).toBeGreaterThan(codeCheck);
     expect(settle).toBeGreaterThan(upload);
-    // The handover photo is still mandatory.
-    expect(AGENT_OPS).toContain("if (!handoverPhotoBase64 || typeof handoverPhotoBase64 !== 'string' || handoverPhotoBase64.trim() === '') {");
+    // AW batch — the handover photo is now OPTIONAL: a supplied photo is still
+    // uploaded and stored, but a missing one no longer blocks settlement.
+    expect(AGENT_OPS).toContain("if (handoverPhotoBase64 && typeof handoverPhotoBase64 === 'string' && handoverPhotoBase64.trim() !== '') {");
+    expect(AGENT_OPS).not.toContain("if (!handoverPhotoBase64 || typeof handoverPhotoBase64 !== 'string'");
     // The dispute / stolen / legal-hold fail-safe survives.
     expect(AGENT_OPS).toContain("claimability.reason === 'suspected_stolen'");
     expect(AGENT_OPS).toContain("claimability.reason === 'legal_hold'");

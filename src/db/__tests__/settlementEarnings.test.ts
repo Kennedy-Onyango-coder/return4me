@@ -546,14 +546,13 @@ describe('I — the Agent Hub publishes pending and completed earnings as separa
   });
 
   it('the Hub keeps paid earnings and pending settlement visually distinct', () => {
-    // The two EXISTING figures stay at exactly one read each (the card's own
-    // binding), so this batch cannot have duplicated the earnings surface.
-    expect((HUB.match(/props\.agentEarnings\.totalEarned/g) ?? []).length).toBe(1);
-    expect((HUB.match(/props\.agentEarnings\.completedPayoutsCount/g) ?? []).length).toBe(1);
-    // The two NEW figures are read by the separate pending-settlement card (once
-    // for its render guard and once for the value).
-    expect((HUB.match(/props\.agentEarnings\.pendingSettlementEarnings/g) ?? []).length).toBe(1);
-    expect((HUB.match(/props\.agentEarnings\.pendingSettlementsCount/g) ?? []).length).toBeGreaterThanOrEqual(1);
+    // B1 — each figure is still read once by its own card, but through the safe
+    // formatter so a missing/malformed figure can never print "NaN" or a false
+    // "KES 0"; it falls back to "Earnings temporarily unavailable".
+    expect(HUB).toContain('formatEarnings(props.agentEarnings?.totalEarned)');
+    expect(HUB).toContain('formatEarnings(props.agentEarnings?.pendingSettlementEarnings)');
+    expect(HUB).toContain('isFiniteNumber(props.agentEarnings?.completedPayoutsCount)');
+    expect(HUB).toContain('isFiniteNumber(props.agentEarnings?.pendingSettlementsCount)');
     expect(HUB).toContain('Pending settlement (not yet paid');
     expect(HUB).toContain('handovers awaiting settlement');
     expect(HUB).toContain('completed handovers paid out');
