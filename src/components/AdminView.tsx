@@ -3822,8 +3822,14 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                                 <Badge variant={agent.status === 'active' ? 'success' : agent.status === 'pending' ? 'warning' : 'danger'}>
                                   {agent.status}
                                 </Badge>
+                                {/* Operational data-quality flag, not a failure:
+                                     this hub's location still needs a manual
+                                     geocoding pass. `warning` is the
+                                     action-required severity; `danger` stays
+                                     reserved for suspensions and payout
+                                     refusals in this row. */}
                                 {agent.needs_manual_geocoding && (
-                                  <Badge variant="danger">Needs Geocoding</Badge>
+                                  <Badge variant="warning">Needs Geocoding</Badge>
                                 )}
                                 <Badge variant="code">ID: {agent.id}</Badge>
                                 {/* PROGRAMME 1 / WS1 + WS2 — can this hub be paid
@@ -4224,23 +4230,50 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                   return matchesSearch && matchesStatus && matchesCategory && matchesFlag;
                 });
 
+                // ACCESSIBLE RESULT-COUNT ANNOUNCEMENT — derived from the SAME
+                // `filteredItems` the grid renders, so the announced count is
+                // always the currently displayed filtered set, never an
+                // unfiltered backend total. It is the first child of both
+                // return branches, so the live region stays mounted while only
+                // its text changes (`aria-atomic` re-reads the full sentence).
+                const totalItems = dashboardData.items.length;
+                const resultAnnouncement = (
+                  <p
+                    className="text-caption text-[var(--appearance-text-muted)]"
+                    role="status"
+                    aria-live="polite"
+                    aria-atomic="true"
+                  >
+                    {totalItems === 0
+                      ? 'No found items available'
+                      : filteredItems.length === 0
+                        ? 'No items match your current search and filters'
+                        : `Showing ${filteredItems.length} of ${totalItems} found items`}
+                  </p>
+                );
+
                 if (filteredItems.length === 0) {
                   return (
-                    <EmptyState
-                      icon={Package}
-                      title={'No found items match your filters'}
-                      description={'Adjust the search, status, category or review-flag filters to see recovered items.'}
-                    />
+                    <>
+                      {resultAnnouncement}
+                      <EmptyState
+                        icon={Package}
+                        title={'No found items match your filters'}
+                        description={'Adjust the search, status, category or review-flag filters to see recovered items.'}
+                      />
+                    </>
                   );
                 }
 
                 return (
-                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                  <>
+                    {resultAnnouncement}
+                  <ul className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                     {filteredItems.map((item: any) => {
                       // Lookup agent
                       const agentObj = dashboardData.agents.find((a: any) => a.id === item.assigned_agent_id);
                       return (
-                        <div key={item.id} className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-5 shadow-sm hover:shadow-md transition flex flex-col md:flex-row gap-5">
+                        <li key={item.id} className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-5 shadow-sm hover:shadow-md transition flex flex-col md:flex-row gap-5">
                           {/* Image Thumbnail with zoom trigger */}
                           <div 
                             onClick={() => setLightboxImage(item.photo_url)}
@@ -4446,10 +4479,11 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                               )}
                             </div>
                           </div>
-                        </div>
+                        </li>
                       );
                     })}
-                  </div>
+                  </ul>
+                  </>
                 );
               })()}
             </div>
