@@ -23,6 +23,10 @@ import { testRunId } from '../db/__tests__/ensureTestCategory';
 import { resolveCountyName } from '../config/kenyaCounties';
 import { administrativeUnitsForCounty } from '../config/kenyaAdministrativeUnits';
 import { EMAIL_OTP_UNAVAILABLE_MESSAGE } from '../services/emailOtp';
+// B1 — the ONE supported payout method. The onboarding fixture must send a valid
+// personal M-Pesa phone destination and this exact method, because registration
+// now refuses anything the launch payout policy refuses.
+import { PERSONAL_MPESA_PAYOUT_METHOD } from '../config/payoutDestinations';
 
 // --- ONLY THE PROVIDER IS DOUBLED. EVERYTHING ELSE IS REAL. ------------------
 const emails = vi.hoisted(() => ({
@@ -137,7 +141,8 @@ async function onboardAndRegister(email: string) {
       businessName: 'E1 Test Shop',
       locationAddress: 'Kenyatta Avenue, Nairobi',
       county: 'Nairobi', administrativeUnitId: UNIT_ID,
-      tillNumber: '123456', nationalId: '12345678',
+      tillNumber: '0712345678', payoutMethodType: PERSONAL_MPESA_PAYOUT_METHOD,
+      nationalId: '12345678',
       termsAccepted: true,
       contactEmail: email,
     },

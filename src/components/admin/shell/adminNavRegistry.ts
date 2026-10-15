@@ -6,7 +6,22 @@
 // behaviour. AdminView renders the console title band from here — AD1 retired the
 // local table it used to keep, so a section's page-level <h1>, its supporting
 // description and the sidebar/top-bar label can no longer drift apart across two
-// lists. All ten sections are backed by existing endpoints.
+// lists. Every section is backed by an existing endpoint.
+//
+// PROGRAMME 1 added two sections, both of them surfaces over endpoints that
+// already existed or that this programme added as READ-ONLY reads:
+//   * `payouts` — Payout Integrity: the unresolved-payout rows
+//     (GET /api/admin/payout-reconciliation, Batch 2) plus the launch-policy
+//     verdict per hub from the dashboard payload already in hand (WS1/WS2). It
+//     is promoted from a collapsed disclosure on the Overview to its own
+//     section because the work behind it — checking each unresolved payout with
+//     the provider, and correcting hubs that cannot be paid at all — is a queue
+//     an operator works, not a figure they glance at.
+//   * `audit` — Audit Log: a bounded, filterable read of the admin audit trail
+//     (GET /api/admin/audit-logs, WS4). Read-only; there is no way to edit or
+//     delete an audit entry from the console.
+// Both sit in the group they belong to (Money / Configuration) and neither adds
+// a mutation to the console.
 import {
   BarChart2,
   Users,
@@ -18,6 +33,8 @@ import {
   FileCheck,
   ShieldCheck,
   AlertTriangle,
+  Banknote,
+  ScrollText,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -31,7 +48,9 @@ export type AdminSectionId =
   | 'ledger'
   | 'review'
   | 'categories'
-  | 'strikes';
+  | 'strikes'
+  | 'payouts'
+  | 'audit';
 
 /** The console's page-level heading copy for one section. */
 export interface AdminSectionCopy {
@@ -56,10 +75,11 @@ export interface AdminNavGroup {
   items: AdminNavItem[];
 }
 
-/** All ten existing sections, grouped for the B0 sidebar. Order within each
- *  group follows the pre-existing console order, and every item carries the
- *  page-level heading copy the console title band renders — AD1 moved these ten
- *  title/description pairs here byte for byte from AdminView's retired table. */
+/** All existing sections, grouped for the B0 sidebar, plus the two surfaces
+ *  PROGRAMME 1 added (`payouts`, `audit`). Order within each group follows the
+ *  pre-existing console order, and every item carries the page-level heading copy
+ *  the console title band renders — AD1 moved the original ten title/description
+ *  pairs here byte for byte from AdminView's retired table. */
 export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
   {
     id: 'overview',
@@ -98,6 +118,13 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         icon: HelpCircle,
         title: 'Disputes',
         description: 'Investigate claims requiring administrative resolution.',
+      },
+      {
+        id: 'payouts',
+        label: 'Payout Integrity',
+        icon: Banknote,
+        title: 'Payout Integrity',
+        description: 'Reconcile unresolved payouts and review every hub that cannot be paid.',
       },
     ],
   },
@@ -153,6 +180,13 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         title: 'Payment Strikes',
         description: 'Review agent strikes and enforcement history.',
       },
+      {
+        id: 'audit',
+        label: 'Audit Log',
+        icon: ScrollText,
+        title: 'Audit Log',
+        description: 'Read the bounded, newest-first record of administrative actions.',
+      },
     ],
   },
 ];
@@ -185,5 +219,5 @@ export function describeAdminSectionCopy(id: AdminSectionId): AdminSectionCopy {
   return described.item;
 }
 
-/** The ten section ids in registry order — the shell renders exactly these. */
+/** The section ids in registry order — the shell renders exactly these. */
 export const ADMIN_SECTION_IDS: AdminSectionId[] = ADMIN_NAV_GROUPS.flatMap((g) => g.items.map((i) => i.id));

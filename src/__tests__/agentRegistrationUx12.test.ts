@@ -487,13 +487,39 @@ describe('UX-12 leaves the location, verification and payout behaviour intact', 
     );
   });
 
-  it('keeps the payout method options, values included', () => {
-    for (const value of ['Till Number', 'Paybill Number', 'Pochi la Biashara', 'Personal M-Pesa']) {
-      expect(PANEL, `payout option ${value}`).toContain(`<option value="${value}">`);
+  it('offers exactly the ONE supported payout method, and no unsupported choice', () => {
+    // B1 — DELIBERATE RECONCILIATION, NOT A WEAKENING.
+    //
+    // This test previously pinned all four option VALUES ('Till Number',
+    // 'Paybill Number', 'Pochi la Biashara', 'Personal M-Pesa') as an
+    // invaluability guarantee: the M-Pesa payout option set was not supposed to
+    // change during a presentation refactor.
+    //
+    // The PRODUCT CONTRACT has since changed, under authorisation:
+    // config/payoutDestinations.ts pays Kenyan PERSONAL M-PESA PHONE
+    // destinations only, so offering the other three was a promise the executor
+    // refuses to keep — and refusing one leg refuses the WHOLE payout batch,
+    // which blocked the paired finder leg as well.
+    //
+    // What is asserted here is therefore STRONGER than before: the step offers
+    // exactly ONE option, its value is the SHARED POLICY CONSTANT rather than a
+    // literal, none of the unsupported values survives as an option anywhere, and
+    // the form's DEFAULT is the constant too. The wiring the original test exists
+    // to protect (this step owns the method control, the destination field and
+    // their state) is unchanged.
+    const step = STEP(3);
+    expect(count(step, /<option\b/g)).toBe(1);
+    expect(step).toContain('<option value={PERSONAL_MPESA_PAYOUT_METHOD}>');
+    for (const unsupported of ['Till Number', 'Paybill Number', 'Pochi la Biashara']) {
+      expect(step, `unsupported payout option ${unsupported}`).not.toContain(
+        `<option value="${unsupported}">`,
+      );
     }
     expect(PANEL).toContain('value={payoutMethodType}');
     expect(PANEL).toContain('setPayoutMethodType(e.target.value)');
     expect(PANEL).toContain('value={tillNumber}');
+    // The default cannot name a method the policy does not pay.
+    expect(VIEW_TSX).toContain('useState(PERSONAL_MPESA_PAYOUT_METHOD)');
   });
 
   it('keeps the document handling: a local file read into the same payload fields', () => {

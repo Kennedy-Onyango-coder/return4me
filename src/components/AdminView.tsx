@@ -4,7 +4,10 @@ import { translations } from '../types';
 // SAME authoritative engine the server uses, so the numbers an admin sees in
 // the console are the numbers the claim will actually be priced from.
 import { computeRecoveryFee } from '../services/feeEngine';
-import { ShieldCheck, BarChart2, Users, FileCheck, Coins, HelpCircle, Loader2, ArrowRight, AlertTriangle, RefreshCw, CheckCircle, ShieldAlert, Copy, Package, ClipboardList, FileSearch, X } from 'lucide-react';
+// PROGRAMME 1 — `Banknote` and `ScrollText` are the two icons the nav registry
+// already uses for the two sections this batch adds (Payout Integrity, Audit
+// Log). They are imported here because the sidebar renders its own buttons.
+import { ShieldCheck, BarChart2, Users, FileCheck, Coins, HelpCircle, Loader2, ArrowRight, AlertTriangle, RefreshCw, CheckCircle, ShieldAlert, Copy, Package, ClipboardList, FileSearch, X, Banknote, ScrollText } from 'lucide-react';
 // BATCH 1 (shared admin visual language) — the console reuses the SAME design
 // system every other surface uses. These are presentation primitives only:
 // they hold no data, make no requests and change no behaviour.
@@ -95,6 +98,23 @@ import SettlementPayoutConfirmation from './admin/settlement/SettlementPayoutCon
 import AdminTopBar from './admin/shell/AdminTopBar';
 import AdminNavGroupLabel from './admin/shell/AdminNavGroupLabel';
 import { describeAdminSectionCopy } from './admin/shell/adminNavRegistry';
+// PROGRAMME 1 — the two sections this batch adds, each a READ-ONLY surface over
+// an endpoint that already exists:
+//   * Payout Integrity (WS1/WS2/WS5) reads the agent rows of the dashboard
+//     payload already in hand (payout_eligibility, pending_earnings) plus the
+//     Batch 2 unresolved-payout disclosure, whose rows come from
+//     GET /api/admin/payout-reconciliation.
+//   * Audit Log (WS4) reads GET /api/admin/audit-logs — a bounded, newest-first
+//     window. Nothing on either surface can write, retry or delete anything.
+import PayoutIntegrityHubsTable from './admin/payouts/PayoutIntegrityHubsTable';
+import {
+  describePayoutIntegritySourceSentence,
+  readPayoutIntegrityHubRow,
+  readPayoutIntegrityHubs,
+  readPayoutIntegritySourceState,
+  summarizePayoutIntegrity,
+} from './admin/payouts/payoutIntegrityPresentation';
+import AuditLogPanel from './admin/audit/AuditLogPanel';
 
 // P14A (P14-05) — human-readable labels for the canonical masking styles. Keyed
 // by the values in PUBLIC_CLUE_STYLES (the single source); an unmapped value
@@ -376,7 +396,11 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
   const [authLoading, setAuthLoading] = useState(false);
 
   // Dashboard Stats & Lists states
-  const [activeTab, setActiveTab] = useState<'stats' | 'agents' | 'disputes' | 'ledger' | 'review' | 'categories' | 'strikes' | 'found_items' | 'claims' | 'lost_reports'>('stats');
+  // PROGRAMME 1 — the two sections this batch adds are part of the console's
+  // own section state: `payouts` (Payout Integrity, WS1/WS2/WS5) and `audit`
+  // (Audit Log, WS4). Both ids exist in the shared nav registry, so the sidebar,
+  // the top bar and this state cannot disagree about what a section is called.
+  const [activeTab, setActiveTab] = useState<'stats' | 'agents' | 'disputes' | 'ledger' | 'review' | 'categories' | 'strikes' | 'found_items' | 'claims' | 'lost_reports' | 'payouts' | 'audit'>('stats');
   const [dashboardData, setDashboardData] = useState<any | null>(null);
   const [dashboardLoading, setDashboardLoading] = useState(false);
   // Guards against duplicate concurrent /api/admin/dashboard fetches (e.g. the
@@ -2508,6 +2532,29 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
   // read from the shared nav registry (AD1 — this file's own table is gone).
   const sectionCopy = describeAdminSectionCopy(activeTab);
 
+  // PROGRAMME 1 / WS1 + WS2 + WS5 — the hub rows the Payout Integrity section
+  // renders, read from the agent rows of the payload already in hand: this adds
+  // no request, and the same pure mapper decides the Agents Hub badge, so one
+  // hub cannot be payable on one screen and refused on another. Before the first
+  // reading arrives the list is empty, which is the honest state — no rows, no
+  // claims — and the table renders no rows rather than an invented verdict.
+  //
+  // F3 — MISSING IS NOT ZERO, AND ZERO IS NOT MISSING. A payload that carried no
+  // agent list and a payload that carried an empty one both produce zero rows, so
+  // the LIST'S OWN STATE is read alongside the rows and the section's sentence is
+  // chosen from it. When the list was unreadable the section states that in words
+  // and prints no count at all: "0 hub row(s) read" under an absent payload would
+  // claim this build had learned that there is nothing to see.
+  const payoutIntegrityRows = readPayoutIntegrityHubs(dashboardData?.agents);
+  const payoutIntegritySource = readPayoutIntegritySourceState(dashboardData?.agents);
+  const payoutIntegritySummary = summarizePayoutIntegrity(payoutIntegrityRows);
+  // The section's own sentence, chosen from the LIST'S state rather than from the
+  // row count alone: an unread list states that it is unknown and prints no count.
+  const payoutIntegritySentence = describePayoutIntegritySourceSentence(
+    payoutIntegritySource,
+    payoutIntegritySummary,
+  );
+
   // UX-14 — the admin authentication gate's single "a request is in flight"
   // flag. The credential step and the 2FA step are mutually exclusive, so the
   // submit control, the form's aria-busy state and the disabled state all read
@@ -2880,11 +2927,14 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
             className="r4m-admin-nav flex border-b border-[var(--appearance-border)] overflow-x-auto scrollbar-none"
             aria-label={lang === 'en' ? 'Admin sections' : 'Sehemu za msimamizi'}
           >
-            {/* BATCH B0 — grouped sidebar. The ten buttons below are exactly the
-                ten pre-existing sections in grouped order (Overview / Money /
-                Operations / Configuration, mirroring ADMIN_NAV_GROUPS in
-                admin/shell). No section added, removed or renamed; only their
-                order changed to match the groups. */}
+            {/* BATCH B0 — grouped sidebar, extended by PROGRAMME 1. The twelve
+                buttons below are the ten pre-existing sections plus the two
+                sections this batch adds — Payout Integrity (Money, WS1/WS2/WS5)
+                and Audit Log (Configuration, WS4) — in grouped order (Overview
+                / Money / Operations / Configuration, mirroring ADMIN_NAV_GROUPS
+                in admin/shell). Both additions are backed by endpoints that
+                really exist, and both are read-only: neither adds a mutation to
+                the console. */}
             <AdminNavGroupLabel>Overview</AdminNavGroupLabel>
             <button
               onClick={() => setActiveTab('stats')}
@@ -2928,6 +2978,19 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
             >
               <HelpCircle size={ICON_SIZE.metadata} aria-hidden="true" />
               <span>{t.disputesTab}</span>
+            </button>
+            {/* PROGRAMME 1 — Payout Integrity. Read-only: the launch-policy
+                verdict per hub and the unresolved-payout rows. It adds no
+                mutation; correcting a hub happens in the Agents Hub. */}
+            <button
+              onClick={() => setActiveTab('payouts')}
+              aria-current={activeTab === 'payouts' ? 'page' : undefined}
+              className={`py-3 px-6 text-caption font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
+                activeTab === 'payouts' ? 'border-[var(--appearance-primary)] text-[var(--appearance-text-primary)] font-extrabold' : 'border-transparent text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'
+              }`}
+            >
+              <Banknote size={ICON_SIZE.metadata} aria-hidden="true" />
+              <span>Payout Integrity</span>
             </button>
             <AdminNavGroupLabel>Operations</AdminNavGroupLabel>
             <button
@@ -2991,6 +3054,19 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
             >
               <ShieldAlert size={ICON_SIZE.metadata} aria-hidden="true" />
               <span>Payment Strikes</span>
+            </button>
+            {/* PROGRAMME 1 — Audit Log. A bounded, newest-first READ of the
+                administrative trail (WS4). There is no control anywhere on it
+                that can write, edit or delete an entry. */}
+            <button
+              onClick={() => setActiveTab('audit')}
+              aria-current={activeTab === 'audit' ? 'page' : undefined}
+              className={`py-3 px-6 text-caption font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
+                activeTab === 'audit' ? 'border-[var(--appearance-primary)] text-[var(--appearance-text-primary)] font-extrabold' : 'border-transparent text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'
+              }`}
+            >
+              <ScrollText size={ICON_SIZE.metadata} aria-hidden="true" />
+              <span>Audit Log</span>
             </button>
           </nav>
           <div className="space-y-6 min-w-0">
@@ -3142,9 +3218,14 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                     onOpen={() => setActiveTab('disputes')}
                   />
                   {/* The unresolved-payout figure lives here with the queues —
-                      it counts rows an administrator must reconcile — and keeps
-                      the Batch 2 disclosure at its side, so the count and the
-                      rows behind it are one unit of work. */}
+                      it counts rows an administrator must reconcile. PROGRAMME 1
+                      promoted the rows behind it into their own section (Payout
+                      Integrity), so the figure now opens that section instead of
+                      expanding in place: the count is still never a dead end, and
+                      the rows now sit with the launch-policy verdict per hub, in
+                      the one place an operator works them. The rows are still
+                      read only when asked for — the section's own disclosure gates
+                      the single read of GET /api/admin/payout-reconciliation. */}
                   <div className="space-y-2">
                     <StatCard
                       icon={AlertTriangle}
@@ -3161,34 +3242,19 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                             : ('No payout row is awaiting provider reconciliation.'))
                         : ('Not reported by this server build — treat as unknown, not as zero.')}
                     />
-                    {/* BATCH 2 — the disclosure. The count above is a figure; this
-                        is how an operator sees WHICH rows it counts. It reveals a
-                        read-only list, so it is a plain button with a real
-                        expanded/collapsed state — no navigation, no new tab. */}
+                    {/* PROGRAMME 1 — the figure's own control. It opens the
+                        section that holds the rows, so the count an operator
+                        reads here always has somewhere to go. */}
                     <Button
                       variant="secondary"
                       size="sm"
                       className="w-full"
-                      aria-expanded={payoutReconciliationOpen}
-                      aria-controls={PAYOUT_RECONCILIATION_PANEL_ID}
-                      onClick={() => setPayoutReconciliationOpen((open) => !open)}
+                      onClick={() => setActiveTab('payouts')}
                     >
-                      {payoutReconciliationOpen
-                        ? ('Hide unresolved payout rows')
-                        : ('View unresolved payout rows')}
+                      {'Open payout integrity'}
                     </Button>
                   </div>
                 </div>
-
-                {/* B1 — the rows behind the "Unresolved Payouts" figure, mounted
-                    directly below the disclosure that reveals them. Same panel,
-                    same ONE read of GET /api/admin/payout-reconciliation (and
-                    the same cancel on unmount): the dashboard request is still
-                    the only request an operator pays for unless they ask for the
-                    rows. Read-only — it can re-READ the list and nothing else. */}
-                {payoutReconciliationOpen && (
-                  <PayoutReconciliationPanel token={token} />
-                )}
               </div>
 
               <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4">
@@ -3231,6 +3297,19 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                   label={t.totalRev}
                   value={formatKesAmount(dashboardData.stats.totalRevenue).text}
                   description={'Platform-fee ledger entries already marked completed — confirmed money, not the in-flight figures below.'}
+                />
+                {/* PROGRAMME 1 / WS2 — hubs the launch policy would refuse at
+                    settlement time. Read through the same read-out module as
+                    every other Overview figure, so a build that does not report
+                    it shows the em dash rather than a reassuring 0. This figure
+                    counts hubs; this build provides NO control that corrects a
+                    stored destination or method, and the verdict per hub is
+                    stated in Payout Integrity. */}
+                <StatCard
+                  icon={Banknote}
+                  label={'Hubs That Cannot Be Paid'}
+                  value={formatMetricCount(dashboardData.stats?.payoutIneligibleAgentsCount).text}
+                  description={'Registered hubs whose stored payout destination or method the launch policy refuses at settlement time. Open Payout Integrity for the verdict per hub.'}
                 />
               </div>
 
@@ -3714,6 +3793,10 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                   <div className="space-y-3">
                     {filteredAgents.map((agent: any) => {
                       const isExpanded = expandedAgentId === agent.id;
+                      // PROGRAMME 1 / WS1 + WS5 — this hub's payout verdict and
+                      // what it is still owed, read from the row already in hand
+                      // by the same pure mapper the Payout Integrity table uses.
+                      const payoutVerdict = readPayoutIntegrityHubRow(agent);
                       return (
                         <div 
                           key={agent.id} 
@@ -3743,14 +3826,44 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                                   <Badge variant="danger">Needs Geocoding</Badge>
                                 )}
                                 <Badge variant="code">ID: {agent.id}</Badge>
+                                {/* PROGRAMME 1 / WS1 + WS2 — can this hub be paid
+                                    as it stands? The verdict is the server's own,
+                                    rendered by the shared mapper: a verdict this
+                                    console cannot read is neutral-and-explicit,
+                                    never green, and an eligible hub is never
+                                    described as verified — only that its format
+                                    and method pass the launch policy. */}
+                                {payoutVerdict && (
+                                  <Badge variant={payoutVerdict.eligible ? 'success' : payoutVerdict.verdictUnreadable ? 'neutral' : 'danger'}>
+                                    {payoutVerdict.riskLabel}
+                                  </Badge>
+                                )}
                               </div>
                               <h3 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">{agent.business_name}</h3>
                               <p className="text-[var(--appearance-text-muted)] text-caption line-clamp-1">{agent.location_address}</p>
                             </div>
 
                             <div className="flex items-center gap-3 self-stretch md:self-auto justify-between md:justify-end">
+                              {/* PROGRAMME 1 / WS5 — MISSING IS NOT ZERO. This
+                                  block used to zero-default this hub's earnings,
+                                  so a figure the server did not report read as
+                                  "KES 0 earned" — a money-shaped claim about a
+                                  hub's earnings. The read-out module states the
+                                  missing marker instead, and a genuine 0 still
+                                  reads as 0. "Owed, not yet paid" is the separate
+                                  fact (pending payout rows), and an unstatable
+                                  total is said in words, never as a smaller sum. */}
                               <div className="text-right hidden md:block">
-                                <div className="text-caption font-bold text-status-success">KES {(agent.total_earned || 0).toLocaleString()} {'earned'}</div>
+                                <div className="text-caption font-bold text-status-success">
+                                  {isReported(agent.total_earned)
+                                    ? `${formatKesAmount(agent.total_earned).text} earned`
+                                    : 'Earnings not recorded'}
+                                </div>
+                                <div className="text-caption text-[var(--appearance-text-muted)]">
+                                  {payoutVerdict?.pendingEarningsReported
+                                    ? `${payoutVerdict.pendingEarningsLabel} owed, not yet paid`
+                                    : 'Owed total not recorded'}
+                                </div>
                                 <div className="text-caption text-[var(--appearance-text-muted)] font-mono">{agent.contact_phone} · Till: {agent.mpesa_till_or_paybill}</div>
                               </div>
                               <div className="flex items-center gap-2">
@@ -3778,10 +3891,25 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                                   <p><b>Business Name:</b> {agent.business_name}</p>
                                   <p><b>Contact Phone:</b> {agent.contact_phone}</p>
                                   <p><b>Contact Email:</b> {agent.contact_email || 'Not Provided'}</p>
+                                  {/* PROGRAMME 1 / WS5 — the same rule as the row
+                                      header above: a figure this server build did
+                                      not report is stated as unrecorded, never as
+                                      a zero. `completed_payouts_count` is NULL for
+                                      a caller that did not supply it, so it is read
+                                      through the same read-out module as every
+                                      other count in the console. */}
                                   <p className="pt-1">
                                     <b>Total Earned:</b>{' '}
-                                    <span className="text-[var(--appearance-success)] font-extrabold">KES {(agent.total_earned || 0).toLocaleString()}</span>
-                                    {' '}<span className="text-[var(--appearance-text-muted)]">({agent.completed_payouts_count || 0} completed handovers)</span>
+                                    <span className="text-[var(--appearance-success)] font-extrabold">
+                                      {isReported(agent.total_earned)
+                                        ? formatKesAmount(agent.total_earned).text
+                                        : 'Not recorded'}
+                                    </span>
+                                    {' '}<span className="text-[var(--appearance-text-muted)]">
+                                      {isReported(agent.completed_payouts_count)
+                                        ? `(${formatMetricCount(agent.completed_payouts_count).text} completed handovers)`
+                                        : '(completed handovers not recorded)'}
+                                    </span>
                                   </p>
                                 </div>
 
@@ -5954,6 +6082,108 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
           />
         </div>
       </Modal>
+
+      {/* ====================================================================
+          PROGRAMME 1 — SECTION: PAYOUT INTEGRITY (WS1 / WS2 / WS5)
+          ====================================================================
+          Two questions this console could not answer, from ONE payload it
+          already holds (the dashboard's agent rows — no new request):
+            * CAN THIS HUB BE PAID AT ALL? The launch policy refuses a payout
+              whose stored destination is a Till, a Paybill, a Pochi la Biashara
+              number or a free-form value, or whose method is not Personal
+              M-Pesa. The verdict shown is the server's own `payout_eligibility`
+              object, built by the settlement executor's own resolver, so this
+              screen cannot disagree with the refusal that actually happens.
+            * WHAT IS STILL OWED? `pending_earnings` is money recorded as owed
+              and not yet paid out. Its NULL is a real state — at least one row
+              carried an amount this build cannot read — and is stated in words,
+              never as 0.
+          READ-ONLY BY CONSTRUCTION: this build provides no control that corrects
+          a hub's destination or method (no database edit, no correction endpoint),
+          and retrying a refused payout does not correct it — the same stored value
+          is refused again. The rows below can re-READ a list and nothing else. */}
+      {activeTab === 'payouts' && (
+        <div className="space-y-6">
+          {/* F6 — FRESHNESS OF THE VERDICTS ON THIS SCREEN. Every verdict below is
+              read out of the dashboard payload in hand, so its age is the
+              payload's age. A reading whose refresh FAILED stays on screen (an
+              operator mid-read must not lose the figures) but is labelled as
+              older, never as fresh; and when the reading's age cannot be
+              established that is said too, rather than a timestamp being implied.
+              No new request and no polling: the only refresh control is the
+              Overview's existing one, which re-reads the same payload. */}
+          {!dashboardData ? (
+            <p className="text-caption text-[var(--appearance-text-muted)]">
+              {'Waiting for the first dashboard reading — no hub verdict is available yet. The age of every verdict below is unknown until it arrives.'}
+            </p>
+          ) : (
+            <p className="text-caption text-[var(--appearance-text-muted)]" aria-live="polite">
+              {dashboardLoadedAt
+                ? `Verdicts read from the dashboard at ${new Date(dashboardLoadedAt).toLocaleTimeString()}${dashboardStale ? ' — the latest refresh failed, so these are an older reading and may be out of date' : ''}.`
+                : 'These verdicts come from the last dashboard reading, whose time was not recorded. Treat their age as unknown rather than as current.'}
+            </p>
+          )}
+
+          <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-panel shadow-raised p-4 sm:p-6 space-y-2">
+            <h3 className="font-extrabold text-caption text-[var(--appearance-text-muted)] uppercase tracking-widest flex items-center gap-2">
+              <Banknote size={ICON_SIZE.ui} aria-hidden="true" />
+              {'Launch payout policy'}
+            </h3>
+            <p className="text-body text-[var(--appearance-text-muted)]">
+              {isReported(dashboardData.stats?.payoutIneligibleAgentsCount)
+                ? (`${inFlightCountLabel(dashboardData.stats?.payoutIneligibleAgentsCount)} registered hub(s) cannot be paid as they stand. The table below states the verdict for every hub in the payload.`)
+                : ('This server build does not report how many hubs the launch policy refuses. The table below is the statement of record — read it as unknown, not as zero.')}
+            </p>
+          </div>
+
+          <PayoutIntegrityHubsTable rows={payoutIntegrityRows} />
+
+          <p className="text-caption text-[var(--appearance-text-muted)]">
+            {payoutIntegritySentence}
+          </p>
+
+          <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-panel shadow-raised p-4 sm:p-6 space-y-3">
+            <h3 className="font-extrabold text-caption text-[var(--appearance-text-muted)] uppercase tracking-widest">
+              {'Unresolved payouts'}
+            </h3>
+            <p className="text-body text-[var(--appearance-text-muted)]">
+              {'Rows whose provider outcome is not confirmed complete and which are never resubmitted automatically. Verify each row with the provider before any manual action.'}
+            </p>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="w-full sm:w-auto"
+              aria-expanded={payoutReconciliationOpen}
+              aria-controls={PAYOUT_RECONCILIATION_PANEL_ID}
+              onClick={() => setPayoutReconciliationOpen((open) => !open)}
+            >
+              {payoutReconciliationOpen
+                ? ('Hide unresolved payout rows')
+                : ('View unresolved payout rows')}
+            </Button>
+            {payoutReconciliationOpen && (
+              <PayoutReconciliationPanel token={token} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          PROGRAMME 1 — SECTION: AUDIT LOG (WS4)
+          ====================================================================
+          The bounded, newest-first read of the administrative trail: who acted,
+          which action code was recorded, and when. READ-ONLY — the client it
+          uses exposes GET only and the table renders no control.
+
+          MISSING IS NEVER EMPTY: a failed read keeps the last window that was
+          read and says it may be out of date; a FIRST read that failed shows the
+          error and no empty statement, because "no audit entries" would be a
+          claim this console did not earn. */}
+      {activeTab === 'audit' && (
+        <div className="space-y-6">
+          <AuditLogPanel token={token} />
+        </div>
+      )}
 
       {/* Custom Confirmation Modal */}
       {/* UX-15G — this confirmation overlay is the SHARED ui/Modal, not bespoke

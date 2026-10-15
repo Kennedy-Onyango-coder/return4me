@@ -106,7 +106,7 @@ export default function BecomeAgentView({ onContinueToAgentPortal, onSignIn }: B
     },
     {
       icon: Smartphone,
-      text: 'An M-Pesa payout number — Till, Paybill, Pochi la Biashara or personal M-Pesa',
+      text: 'An M-Pesa payout number — a personal M-Pesa phone number (Send Money). Buy Goods till numbers, paybill numbers and Pochi la Biashara are not supported at launch',
     },
     {
       icon: IdCard,

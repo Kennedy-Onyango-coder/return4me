@@ -75,7 +75,7 @@ CREATE TABLE agents (
     rating NUMERIC(3, 2) DEFAULT 5.00 CHECK (rating BETWEEN 1.00 AND 5.00),
     rating_count INT DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    payout_method_type VARCHAR(50) NOT NULL DEFAULT 'Till Number',
+    payout_method_type VARCHAR(50) NOT NULL DEFAULT 'Personal M-Pesa',
     terms_accepted_at TIMESTAMP WITH TIME ZONE,
     needs_manual_geocoding BOOLEAN NOT NULL DEFAULT FALSE,
     -- N4: agent EMAIL ACTIVATION. `status` above is the BUSINESS APPROVAL axis

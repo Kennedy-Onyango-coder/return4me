@@ -167,6 +167,58 @@ be closed out from the console — that reconciliation workflow is the next piec
 of work, and until it exists these rows stay visible and unresent rather than
 being guessed either way.
 
+### A hub cannot be paid: the stored payout destination fails the launch policy
+
+Settlement refuses an agent payout leg whose stored destination does not normalise
+to a Kenyan personal M-Pesa number (`254` + nine digits) and whose stored method is
+not exactly `Personal M-Pesa` — see `config/payoutDestinations.ts`. Every hub that
+registered before that policy existed still carries a Till Number, a Paybill, a
+Pochi la Biashara number or a free-form method string, and the refusal was
+otherwise discoverable ONLY by attempting the payout, at settlement time, with the
+claim already in `releasing`.
+
+Where to see it BEFORE any money is attempted:
+
+- The console's **Payout Integrity** section lists every hub in the dashboard
+  payload with the launch-policy verdict produced by the SETTLEMENT EXECUTOR's own
+  resolver (`services/agentPayoutEligibility.ts` re-uses
+  `resolvePayoutLegEligibility`), the destination in MASKED form only, and how much
+  that hub is recorded as owed but not yet paid (`pending_earnings`).
+- The **Agents Hub** rows carry the same verdict as a badge, and the expanded row
+  states the hub's lifetime earnings and its owed-but-unpaid figure.
+- The Overview's **Hubs That Cannot Be Paid** card counts the same set. An em dash
+  means this build did not report the figure — read it as unknown, NOT as zero.
+
+The four classes the console prints verbatim (the dashboard publishes the verdict
+under `payout_eligibility`):
+
+- `refused_destination_missing` — no destination is recorded for the hub at all.
+- `refused_destination_not_a_personal_mpesa_phone` — a Till, a Paybill, a Pochi la
+  Biashara number, or anything else that is not `254` + nine digits.
+- `refused_unsupported_payout_method` — the destination may be usable, but the
+  stored method is not `Personal M-Pesa`.
+- `eligible` — the format and the method pass. This is deliberately NOT described
+  as "verified": nothing in this platform proves the number is registered,
+  reachable, or owned by that hub.
+
+**What fixes it — and what does not exist.** The console can identify an ineligible
+destination and explain the verdict; it cannot repair it. **This build provides no
+destination-correction control anywhere in the Admin Console**, so an operator must
+not assume the stored value can be changed here. There is no manual database-edit
+procedure in this runbook and no correction endpoint in the codebase. Retrying a
+refused payout is not a correction: the same stored value is refused again. The
+verdict changes only when the stored destination or method is changed by a process
+outside this build; the Payout Integrity section itself is read-only by construction
+and has no control that can change a destination, a method or a payout state, and it
+re-reads the verdict on the next dashboard read. A payout the executor refused was
+refused BEFORE submission, so no money moved and no resend is involved.
+
+**What the console will not do.** It will not retry, resubmit or re-issue a payout,
+and it will not mark one paid. Where a verdict could not be read at all (an older
+server build, or a payload that lost the `payout_eligibility` field), the console
+says so — `Verdict not readable by this console — treat as not payable` — and the
+hub is grouped with the ones needing a human rather than being shown as payable.
+
 ### A webhook reports a payment but the claim did not move
 
 Check, in order: `INTASEND_WEBHOOK_CHALLENGE` is set and matches the value

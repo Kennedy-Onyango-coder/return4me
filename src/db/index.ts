@@ -888,7 +888,23 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     // in services/locationProvenance.ts.
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS location_source VARCHAR(30)`,
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS coordinate_source VARCHAR(30)`,
-    `ALTER TABLE agents ADD COLUMN IF NOT EXISTS payout_method_type VARCHAR(50) NOT NULL DEFAULT 'Till Number'`,
+    `ALTER TABLE agents ADD COLUMN IF NOT EXISTS payout_method_type VARCHAR(50) NOT NULL DEFAULT 'Personal M-Pesa'`,
+    // B1 — THE COLUMN DEFAULT FOR FUTURE RECORDS, ON AN ALREADY-RUNNING DATABASE.
+    //
+    // The ADD COLUMN above only runs on a database that does not have the column
+    // yet, so it cannot reach a database that already carries it: this is the ONE
+    // statement that changes the default for a database already in service. It is
+    // additive, idempotent (setting the same default twice is a no-op) and
+    // non-destructive, and it rewrites NO row — `SET DEFAULT` changes what a
+    // future INSERT that OMITS the column receives, never what is already stored.
+    //
+    // There is deliberately no UPDATE, no backfill and no table rebuild here:
+    // an existing agent whose stored method is 'Till Number' keeps that value,
+    // because it is a real fact about that agent's registration. The settlement
+    // guard's refusal of it is what surfaces the correction to an administrator;
+    // silently converting it would pay a destination the launch policy does not
+    // support and would destroy the evidence of what was actually registered.
+    `ALTER TABLE agents ALTER COLUMN payout_method_type SET DEFAULT 'Personal M-Pesa'`,
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ`,
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS needs_manual_geocoding BOOLEAN NOT NULL DEFAULT false`,
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS contact_email VARCHAR(255)`,

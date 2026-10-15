@@ -107,7 +107,17 @@ import { isPayoutSubmittable } from './config/payoutOutcomes';
 // pure predicate, which is exhaustively unit-tested without booting this file.
 // It answers a FORMAT/METHOD question only — it does not verify phone
 // ownership, M-Pesa registration or provider eligibility.
-import { resolvePayoutBatchEligibility, describePayoutDestinationRefusal } from './config/payoutDestinations';
+// B1 — the SAME module also supplies the registration contract: the one method
+// string a registration may store, and the pure normaliser that resolves a typed
+// destination to its canonical `254XXXXXXXXX` form. Registration therefore
+// accepts exactly what the executor will pay, decided by one implementation
+// rather than by a second rule written beside the form.
+import {
+  resolvePayoutBatchEligibility,
+  describePayoutDestinationRefusal,
+  PERSONAL_MPESA_PAYOUT_METHOD,
+  normalizePersonalMpesaPhoneDestination,
+} from './config/payoutDestinations';
 // BATCH 1 — the payout-batch verification path (authoritative provider lookup +
 // exact transaction-to-leg matching + CAS-guarded confirmation). Imported by
 // name so the webhook route receives it as an INJECTED dependency rather than
@@ -119,7 +129,7 @@ import { toOwnerSafeAgentView, toOwnerSafeClaimView, toOwnerSafeItemView } from 
 // moved here from this file so the public search route and the new public
 // item-detail route cannot drift apart in how they coarsen an agent address.
 import { toPublicItemView, getRoughArea } from './services/publicItemView';
-import { toAdminSafeAgentView, toAdminSafeItemView, toAdminSafeDisputeView, toAdminSafeAgentDocumentsView, toAdminSafeLedgerEntry, toAdminSafeAuditLog } from './services/adminSafeViews';
+import { toAdminSafeAgentView, toAdminSafeItemView, toAdminSafeDisputeView, toAdminSafeAgentDocumentsView, toAdminSafeLedgerEntry, toAdminSafeAuditLog, toAdminSafeAuditLogWindow } from './services/adminSafeViews';
 import { registerCustomerClaimRoutes } from './routes/customerClaims';
 // Batch 1: the customer notification USER layer. Registered separately from
 // server.ts for the same reason as the other route modules â€” this file boots the
@@ -240,6 +250,16 @@ import { resolveContainedSourcePath } from './utils/safeStaticPath';
 // PHASE 10 (F-2): the escrow-holdings aggregate. The admin "Escrow Funds Held"
 // card previously displayed a claim COUNT where a monetary total belongs.
 import { computeEscrowFundsHeld, computeMoneyInFlight, computeUnresolvedPayouts } from './services/escrowFunds';
+// PROGRAMME 1 / WS1 + WS2 + WS5: the payout-integrity verdicts. PURE, and it
+// re-uses the settlement executor's own resolvePayoutLegEligibility(), so the
+// console's 'this hub cannot be paid' verdict and the executor's refusal can
+// never disagree. It returns MASKED destinations only, and it reads the agent
+// rows already loaded by the dashboard route below — no new query.
+import { computeAgentPendingEarnings, countAgentPayoutIneligible, resolveAgentPayoutEligibility } from './services/agentPayoutEligibility';
+// PROGRAMME 1 / WS4: the bounded-window contract for GET /api/admin/audit-logs.
+// The window size is the SERVER's decision (a request outside it is refused, not
+// clamped), which is why the rule lives in config rather than in the route.
+import { readAuditLogWindowRequest } from './config/auditLogWindow';
 // N3 note: the activation email reuses the EXISTING EmailService (its provider
 // adapter under services/notificationProviders.ts), whose `send()` already fails
 // closed in production â€” it returns false when Resend has no usable credentials
@@ -2105,6 +2125,54 @@ async function createApp() {
             return res.status(400).json({ error: 'Enter a valid business email address.' });
           }
 
+          // --- B1: THE PAYOUT CONTRACT IS ENFORCED HERE, INDEPENDENTLY OF THE FORM ---
+          //
+          // The launch policy (config/payoutDestinations.ts) submits payouts to
+          // Kenyan PERSONAL M-PESA PHONE destinations only: exactly one method
+          // string and exactly one destination shape are payable, and everything
+          // else — including a method string this code has never seen — is refused
+          // by the executor. Registration is the ONLY writer of
+          // `mpesa_till_or_paybill` and `payout_method_type`, so an unvalidated
+          // registration could create an agent whose every payout is refused; and
+          // because the executor refuses the WHOLE batch when one leg is
+          // ineligible, that would block the paired finder leg as well.
+          //
+          // The form is NOT trusted. It offers one option today; this check does
+          // not depend on that, on the method's casing, or on the client sending
+          // either field at all. Both are validated with the SAME pure policy
+          // module the executor asks, and the value persisted is the CANONICAL
+          // `254XXXXXXXXX` form the policy resolves to — never the raw text the
+          // client typed.
+          //
+          // PLACEMENT IS LOAD-BEARING. This runs BEFORE the duplicate-email
+          // lookup, BEFORE either image upload, BEFORE geocoding and BEFORE
+          // db.createAgent(), so a refused registration creates no agent row, no
+          // stored image, no geocode and no activation token.
+          //
+          // It does NOT run before AuthService.verifyOTP() above: that call is the
+          // authentication of the request and consumes the one-time code, so a
+          // registration refused here has still burned that code (the applicant
+          // requests a new one). The refusal is therefore side-effect-FREE only
+          // with respect to registration state, which is what the tests assert.
+          if (typeof payoutMethodType !== 'string' || payoutMethodType !== PERSONAL_MPESA_PAYOUT_METHOD) {
+            return res.status(400).json({
+              error: `Only personal M-Pesa is supported at launch. Set the payout method to "${PERSONAL_MPESA_PAYOUT_METHOD}" and give the phone number the payout should reach.`,
+            });
+          }
+          // The shared policy decides what a destination IS: it returns the
+          // canonical form, or null for a missing, malformed, too short, too long
+          // or non-Kenyan value — and null is a refusal, never a best guess. It
+          // deliberately accepts both a JSON string and a JSON number (a number
+          // cannot carry a leading zero, and the policy resolves it correctly
+          // anyway), so this does not invent a stricter rule that the settlement
+          // executor would not agree with.
+          const canonicalAgentPayoutDestination = normalizePersonalMpesaPhoneDestination(tillNumber);
+          if (canonicalAgentPayoutDestination === null) {
+            return res.status(400).json({
+              error: 'Enter the personal M-Pesa phone number that should receive the agent payout, for example 0712345678 or +254712345678. Buy Goods till numbers, paybill numbers and Pochi la Biashara are not supported at launch.',
+            });
+          }
+
           // Duplicate check BEFORE the insert, so the common case gets a clean
           // 409. It is not a security boundary on its own â€” two concurrent
           // registrations can both pass it â€” which is why the 23505 handler
@@ -2163,8 +2231,14 @@ async function createApp() {
               latitude: geoResult.latitude,
               longitude: geoResult.longitude,
               needs_manual_geocoding: geoResult.needsManual,
-              mpesa_till_or_paybill: tillNumber,
-              payout_method_type: payoutMethodType || 'Till Number',
+              // B1 — the CANONICAL `254XXXXXXXXX` destination resolved from this
+              // request above, never the raw text the client typed.
+              mpesa_till_or_paybill: canonicalAgentPayoutDestination,
+              // B1 — the validated, supported method. The guard above refuses
+              // every other value, so this and the client's string are the same
+              // value; naming the policy constant here means the STORED method
+              // cannot drift from the policy even if that guard is later relaxed.
+              payout_method_type: PERSONAL_MPESA_PAYOUT_METHOD,
               // BUSINESS APPROVAL axis. Unchanged by N4, and deliberately NOT
               // advanced by activation either â€” see verifyAgentEmail().
               status: 'pending',
@@ -3607,6 +3681,17 @@ async function createApp() {
       const moneyInFlight = computeMoneyInFlight(claims, items);
       const unresolvedPayouts = computeUnresolvedPayouts(ledger);
 
+      // PROGRAMME 1 / WS2 — HOW MANY HUBS CANNOT BE PAID AT ALL.
+      // A hub registered before the launch policy carries a Till, a Paybill, a
+      // Pochi la Biashara or a free-form destination. The settlement executor
+      // REFUSES such a payout BEFORE it is submitted (config/payoutDestinations.ts),
+      // so those hubs cannot receive money until an administrator corrects them
+      // — and until this figure existed, nothing in the console said so. It is
+      // computed from the agent rows already loaded above, by the SAME resolver
+      // the executor asks (services/agentPayoutEligibility.ts re-uses
+      // resolvePayoutLegEligibility), so the figure and the refusal cannot drift.
+      const payoutIneligibleAgentsCount = countAgentPayoutIneligible(agents);
+
       const stats = {
         pendingAgentsCount: agents.filter(a => a.status === 'pending').length,
         itemsInReviewCount: items.filter(i => i.status === 'awaiting_dropoff').length,
@@ -3637,6 +3722,11 @@ async function createApp() {
         // placeholder for "unknown".
         unresolvedPayoutsCount: unresolvedPayouts.count,
         unresolvedPayoutsAmount: unresolvedPayouts.amount,
+        // PROGRAMME 1 / WS2 — hubs the launch policy would refuse at settlement
+        // time. A genuine 0 means every registered hub can be paid; the console
+        // renders the figure only when this build reports it, and a build that
+        // omits the key reads as 'not reported' rather than as 0.
+        payoutIneligibleAgentsCount,
       };
 
       // Attach each agent's total earnings (their share of completed
@@ -3652,9 +3742,23 @@ async function createApp() {
       const agentsWithEarnings = agents.map(agent => {
         const agentItemIds = new Set(items.filter(i => i.assigned_agent_id === agent.id).map(i => i.id));
         const payouts = completedAgentPayouts.filter(l => l.item_id && agentItemIds.has(l.item_id));
+        // PROGRAMME 1 / WS5 — EARNED BUT NOT YET PAID OUT. `pending` payout rows
+        // are money the platform owes this hub; they were invisible in the bulk
+        // payload, so an operator could see lifetime earnings but not what was
+        // still outstanding. The rows are already loaded here, so this adds no
+        // query. `amount` is NULL when a row carries an amount this build cannot
+        // read: a partial sum would understate money owed, and the console
+        // renders the missing marker instead of a smaller number.
+        const pending = computeAgentPendingEarnings(ledger, agentItemIds);
         return toAdminSafeAgentView(agent, {
           total_earned: payouts.reduce((sum, l) => sum + l.amount, 0),
           completed_payouts_count: payouts.length,
+          pending_earnings: pending.amount,
+          pending_earnings_count: pending.count,
+          // PROGRAMME 1 / WS2 — can this hub be paid at all? The verdict is the
+          // executor's own rule, and the DTO below copies its destination ONLY
+          // in masked form.
+          payout_eligibility: resolveAgentPayoutEligibility(agent),
         });
       });
 
@@ -4001,6 +4105,50 @@ async function createApp() {
         createdAt: row.created_at,
       }));
       res.json({ success: true, items });
+    } catch (e: any) {
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
+    }
+  });
+
+  // ============================================================
+  // AUDIT LOG WINDOW (PROGRAMME 1 / WS4 — bounded, read-only)
+  // ============================================================
+  // The admin console could not read the audit trail at all: audit_logs was
+  // written on every administrative action and read only once, for the fixed
+  // dashboard list. An operator investigating a payout therefore had no way to
+  // see WHO changed WHAT, or WHEN — the trail existed and was not reachable.
+  //
+  // READ-ONLY BY CONSTRUCTION. GET only. There is deliberately no endpoint that
+  // edits or deletes an audit entry, and none that writes one from here: entries
+  // are appended by the actions that perform them, and an audit trail an
+  // administrator could rewrite would not be an audit trail.
+  //
+  // THE WINDOW IS THE SERVER'S DECISION (config/auditLogWindow.ts)
+  //   * no `limit`             -> AUDIT_LOG_WINDOW_DEFAULT;
+  //   * a `limit` outside 1..MAX, or not a canonical integer -> 400, NOT clamped.
+  //     Clamping would answer a different question from the one asked and hide
+  //     the operator's mistake behind a plausible-looking page.
+  //   * a malformed `action` filter -> 400, so a typo can never be mistaken for
+  //     "the audit trail has no entries for that action".
+  // The refusal text is a fixed sentence and never echoes the query string.
+  //
+  // Every row goes through toAdminSafeAuditLog (the SAME DTO the dashboard list
+  // uses): no raw, unconstrained `details` free text reaches the browser. The
+  // response echoes the window actually applied, so an empty list under a filter
+  // is legible as "no entries with this action" rather than "nothing happened".
+  app.get('/api/admin/audit-logs', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
+    try {
+      if (req.user?.role !== 'admin') {
+        return res.status(403).json({ error: 'Administrator access required.' });
+      }
+
+      const requested = readAuditLogWindowRequest(req.query);
+      if (!requested.ok) {
+        return res.status(400).json({ error: requested.reason });
+      }
+
+      const logs = await db.getAuditLogsWindow(requested.limit, requested.action);
+      res.json(toAdminSafeAuditLogWindow({ limit: requested.limit, action: requested.action }, logs));
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }

@@ -64,18 +64,33 @@ describe('Batch 2 admin unresolved-payouts UI: the rows behind the figure are di
     expect(adminView).not.toContain('payout_reconciliation');
   });
 
-  it('the disclosure sits with the "Unresolved Payouts" figure it explains', () => {
-    // A LOCALITY bound, not mere co-existence in a ~3,300-line file: the
-    // disclosure must be reachable from the figure itself, so it is asserted as
-    // the shortest span between the two tokens. That span is the whole StatCard
-    // plus the explanatory comment that introduces the button, and it measures
-    // 1,541 characters today — the previous 1,500 window was simply 41 short of
-    // the markup it was written against, which made this assertion fail on
-    // correct code. 2,000 keeps ~1% of the file as the allowed reach: moving the
-    // disclosure to another card, another tab or another component still breaks
-    // it, but a longer description cannot.
+  it('the figure leads to the section that holds the rows, and the rows live there with their disclosure', () => {
+    // PROGRAMME 1 changed WHERE the disclosure sits; it did not make the figure a
+    // dead end. The unresolved-payout rows were promoted — with this disclosure
+    // and this one panel — into the section the sidebar names "Payout Integrity",
+    // so the guarantee is asserted in the two halves it now consists of:
+    //
+    //   1. the FIGURE still carries the LOCALITY bound: the control it renders
+    //      must be within 2,000 characters (~1% of the file) of the label, so a
+    //      figure moved to another card, another tab or another component still
+    //      breaks this;
+    //   2. the DISCLOSURE, its `aria-expanded` state, the section id it points at
+    //      and the single panel mount must all sit inside that section's slice.
     expect(adminView).toMatch(
-      /label=\{'Unresolved Payouts'\}[\s\S]{0,2000}aria-expanded=\{payoutReconciliationOpen\}/,
+      /label=\{'Unresolved Payouts'\}[\s\S]{0,2000}setActiveTab\('payouts'\)/,
+    );
+
+    const sectionAt = adminView.indexOf("{activeTab === 'payouts' && (");
+    const sectionEnd = adminView.indexOf("{activeTab === 'audit' && (", sectionAt);
+    expect(sectionAt, 'the Payout Integrity section must exist').toBeGreaterThan(-1);
+    expect(sectionEnd, 'the Audit Log section must follow it').toBeGreaterThan(sectionAt);
+    const section = adminView.slice(sectionAt, sectionEnd);
+
+    expect(section).toMatch(
+      /aria-expanded=\{payoutReconciliationOpen\}[\s\S]{0,2000}aria-controls=\{PAYOUT_RECONCILIATION_PANEL_ID\}/,
+    );
+    expect(section).toMatch(
+      /\{payoutReconciliationOpen && \(\s*<PayoutReconciliationPanel token=\{token\} \/>/,
     );
   });
 

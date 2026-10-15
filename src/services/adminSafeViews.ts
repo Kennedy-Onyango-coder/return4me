@@ -1,5 +1,8 @@
 import { INACTIVE_CLAIM_STATUSES } from '../config/claimStatuses';
 import { deriveAssignmentConfidence } from '../config/geoMatching';
+// The payout destination policy's OWN canonicaliser, so the audit redactor's idea
+// of "a Kenyan personal mobile" cannot drift from the executor's.
+import { normalizePersonalMpesaPhoneDestination } from '../config/payoutDestinations';
 
 
 // Hand-built, whitelisted DTOs for the ADMIN console's bulk dashboard endpoint.
@@ -38,7 +41,28 @@ import { deriveAssignmentConfidence } from '../config/geoMatching';
 //   - terms_accepted_at      — never rendered
 export function toAdminSafeAgentView(
   agent: any,
-  metrics?: { total_earned?: number; completed_payouts_count?: number }
+  metrics?: {
+    total_earned?: number;
+    completed_payouts_count?: number;
+    /**
+     * PROGRAMME 1 / WS5 — earned but not yet paid out, or NULL when the caller
+     * could not state the total. A caller that simply does not compute it omits
+     * the field, and the console then shows the missing marker.
+     */
+    pending_earnings?: number | null;
+    pending_earnings_count?: number;
+    /**
+     * PROGRAMME 1 / WS2 — the launch-policy verdict for this hub's payout
+     * destination, built by services/agentPayoutEligibility.ts.
+     */
+    payout_eligibility?: {
+      eligible?: boolean;
+      reason?: string | null;
+      risk_class?: string | null;
+      masked_destination?: string | null;
+      summary?: string | null;
+    } | null;
+  }
 ): any {
   if (!agent) return null;
   return {
@@ -65,8 +89,53 @@ export function toAdminSafeAgentView(
     last_warning_reason: agent.last_warning_reason ?? null,
     last_warning_at: agent.last_warning_at ?? null,
     created_at: agent.created_at,
-    total_earned: metrics?.total_earned ?? 0,
-    completed_payouts_count: metrics?.completed_payouts_count ?? 0,
+    // PROGRAMME 1 / WS5 — MISSING IS NOT ZERO.
+    // The Agents Hub used to render `agent.total_earned || 0`, so a figure the
+    // server did not report read as "KES 0 earned" — a money-shaped claim that
+    // no data supported. An absent figure is now NULL and the console renders
+    // its missing marker; a GENUINE zero (the caller supplied metrics, the
+    // agent simply has no completed payout) still arrives as 0 and still reads
+    // as 0. The two facts stay distinguishable end to end.
+    total_earned: metrics?.total_earned ?? null,
+    completed_payouts_count: metrics?.completed_payouts_count ?? null,
+    // Earned, not yet paid. NULL means "this total could not be stated" (an
+    // unreadable ledger amount), which the console states in words rather than
+    // rendering as a figure.
+    pending_earnings: metrics?.pending_earnings ?? null,
+    pending_earnings_count: metrics?.pending_earnings_count ?? 0,
+    // PROGRAMME 1 / WS2 — the launch-policy verdict for this hub's payout
+    // destination, whitelisted field by field below.
+    payout_eligibility: toAdminSafePayoutEligibility(metrics?.payout_eligibility),
+  };
+}
+
+/**
+ * Whitelists an agent payout-eligibility verdict for the bulk dashboard.
+ *
+ * The ONLY destination value that may pass is one that is ALREADY masked. A
+ * value carrying no mask marker (or a value that is not a string) is replaced
+ * by the fully-masked `***` rather than forwarded: this DTO is the last place
+ * before the browser, and "I could not tell you the destination" is always
+ * safer than "here is the number". The marker `(none)` — what the masking
+ * helper returns for an absent destination — is preserved, because "this hub
+ * recorded no destination" is a truthful, actionable statement.
+ *
+ * An unrecognised `risk_class` fails CLOSED to the method class rather than
+ * being copied through or treated as eligible.
+ */
+function toAdminSafePayoutEligibility(eligibility: any): any {
+  if (!eligibility || typeof eligibility !== 'object') return null;
+  const masked = typeof eligibility.masked_destination === 'string' ? eligibility.masked_destination : '';
+  const destinationIsMasked = masked === '(none)' || masked.includes('*');
+  return {
+    eligible: eligibility.eligible === true,
+    reason: typeof eligibility.reason === 'string' ? eligibility.reason : null,
+    risk_class:
+      typeof eligibility.risk_class === 'string' && eligibility.risk_class !== ''
+        ? eligibility.risk_class
+        : 'refused_unsupported_payout_method',
+    masked_destination: destinationIsMasked ? masked : '***',
+    summary: typeof eligibility.summary === 'string' ? eligibility.summary : '',
   };
 }
 // =========================================================================
@@ -113,19 +182,77 @@ export function toAdminSafeLedgerEntry(entry: any): any {
 }
 
 /**
- * Redacts obvious PII patterns from audit-detail free text so the bulk
- * dashboard can show a human-readable "what happened" line without exposing
- * raw phone numbers or emails in every console refresh.
+ * The shapes a Kenyan personal M-Pesa destination can be written in.
+ *
+ * THE REVIEW FIX (F2). The previous patterns were `\+?2547\d{8}` and `07\d{8}`,
+ * which left real handset numbers in the clear: the whole `01x` Safaricom range
+ * (`0110000000`), the international form without a `+` (`254712345678`), and
+ * anything written with separators (`+254 712 345 678` — every whitespace or
+ * hyphen defeated both patterns). `config/payoutDestinations.ts` accepts all of
+ * those as payable destinations, so a number that money can be sent to is exactly
+ * a number that must not reach a browser in clear text.
+ *
+ * A digit-only pattern cannot fix the separated forms, because the separators sit
+ * INSIDE the number. So the candidate is matched with optional separators between
+ * its digits, and the separator-free digits are validated SECOND, against the
+ * payout destination policy's own canonicaliser — the same rule the executor
+ * applies. Matching a shape and then validating the number is what keeps this from
+ * becoming an indiscriminate digit-eater: an order id, a reference or a longer
+ * numeric string does not canonicalise to a Kenyan mobile, so it is preserved
+ * verbatim rather than being needlessly redacted. Redaction therefore never depends
+ * on the formatting of the number.
+ *
+ * The `\b` boundaries are load-bearing: a candidate may not sit inside a longer
+ * digit run, so a 13-digit numeric identifier that merely STARTS with a valid
+ * handset number is not mangled into a false redaction.
  */
-function sanitizeAuditDetails(details: string): string {
+const KENYAN_MOBILE_CANDIDATE = /\b(?:\+?(?:254|0)[\s-]?)?[17](?:[\s-]?\d){8}\b/g;
+
+/** The digits of a candidate, with every separator the matcher allows removed. */
+function candidateDigits(candidate: string): string {
+  return candidate.replace(/[\s+-]/g, '');
+}
+
+/**
+ * Whether a candidate is a Kenyan personal mobile under the SAME rule the payout
+ * executor applies: `normalizePersonalMpesaPhoneDestination` canonicalises the
+ * value (national `0x`/`7x`/`1x`, bare `7x`/`1x`, and international `254x`/`+254x`
+ * forms) and requires exactly twelve digits with a `7` or `1` subscriber prefix.
+ * A candidate with an explicit `254`/`+254` country code is validated directly,
+ * since the canonical form of `0712345678` is itself `254712345678`.
+ */
+function isKenyanPersonalMobile(candidate: string): boolean {
+  const digits = candidateDigits(candidate);
+  if (digits === '') return false;
+  if (digits.startsWith('254')) return digits.length === 12 && /^[71]/.test(digits.slice(3));
+  const canonical = normalizePersonalMpesaPhoneDestination(digits);
+  return canonical !== null;
+}
+
+/**
+ * Redacts obvious PII patterns from audit-detail free text so the bulk dashboard
+ * and the audit window can show a human-readable "what happened" line without
+ * exposing raw phone numbers or emails in every console refresh.
+ *
+ * This runs SERVER-SIDE, inside `toAdminSafeAuditLog`, before the row is
+ * serialised: redaction happens here or it does not happen at all, because the
+ * client receives only this allow-listed object. Nothing is logged here — the raw
+ * value is transformed in place and discarded.
+ */
+function sanitizeAuditDetails(details: unknown): string {
   if (!details) return '';
-  let s = details;
-  // Kenyan mobile numbers — E.164 (+2547...) and local (07...) forms.
-  s = s.replace(/(\+?2547\d{8})/g, '[phone]');
-  s = s.replace(/(07\d{8})/g, '[phone]');
-  // Basic email addresses.
-  s = s.replace(/[^\s@]+@[^\s@]+\.[^\s@]+/g, '[email]');
-  return s;
+  // A non-string detail (a stored number, a serialised object) must not throw
+  // here: a throw inside the DTO would fail the whole audit window rather than
+  // redact one row. Its text is carried through the same redaction instead.
+  const s = typeof details === 'string' ? details : String(details);
+  return s
+    .replace(KENYAN_MOBILE_CANDIDATE, (candidate) =>
+      // A candidate that is NOT a valid Kenyan mobile is returned EXACTLY as it
+      // was captured, separators included, so an unrelated figure is not edited.
+      isKenyanPersonalMobile(candidate) ? '[phone]' : candidate,
+    )
+    // Basic email addresses.
+    .replace(/[^\s@]+@[^\s@]+\.[^\s@]+/g, '[email]');
 }
 
 /**
@@ -141,6 +268,37 @@ export function toAdminSafeAuditLog(log: any): any {
     admin_user: log.admin_user,
     created_at: log.created_at,
     details: sanitizeAuditDetails(log.details),
+  };
+}
+
+/**
+ * PROGRAMME 1 / WS4 — the BOUNDED audit-log window the admin console reads
+ * (GET /api/admin/audit-logs), as one typed, privacy-bounded envelope.
+ *
+ * WHY AN ENVELOPE AND NOT A BARE ARRAY
+ * The window's size and its optional action filter are decided by the SERVER
+ * (config/auditLogWindow.ts). Echoing both back means an operator reading the
+ * list can always see WHICH window they are looking at: an empty list under a
+ * filter is "no entries with this action", which is a different fact from "the
+ * audit trail is empty", and a payload that omitted the request would make the
+ * two indistinguishable.
+ *
+ * Each row is the SAME sanitised audit DTO the bulk dashboard already uses
+ * (toAdminSafeAuditLog): raw, unconstrained `details` free text never leaves the
+ * server, and the actor attribution is retained because it is legitimate audit
+ * data.
+ */
+export function toAdminSafeAuditLogWindow(window: { limit?: number; action?: string | null }, logs: any): any {
+  const rows = Array.isArray(logs) ? logs : [];
+  return {
+    // The window actually applied, not the one requested.
+    limit: typeof window?.limit === 'number' ? window.limit : null,
+    // null means "every action" — never conflated with "the filter was lost".
+    action: typeof window?.action === 'string' ? window.action : null,
+    // The number of rows in THIS response. Always a real count of the array
+    // below, so it can never overstate what the operator can see.
+    count: rows.length,
+    items: rows.map(toAdminSafeAuditLog).filter((row: any) => row !== null),
   };
 }
 

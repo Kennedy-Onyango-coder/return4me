@@ -289,12 +289,14 @@ describe('UX-15B: the administrator identity band and its sign-out', () => {
 // -----------------------------------------------------------------------------
 
 describe('UX-15B: the console section navigation', () => {
-  it('still declares exactly the ten real sections, in the nav landmark', () => {
+  it('still declares exactly the real sections — the ten, plus Payout Integrity and Audit Log — in the nav landmark', () => {
     const declared = [...NAV.matchAll(/aria-current=\{activeTab === '([a-z_]+)'/g)].map((m) => m[1]);
+    // PROGRAMME 1 appended two sections, both backed by endpoints that exist and
+    // both read-only, exactly as PHASE 11A appended 'lost_reports' before them.
     expect(declared.sort()).toEqual(
       [
         'stats', 'agents', 'found_items', 'disputes', 'claims', 'ledger', 'review',
-        'categories', 'strikes', 'lost_reports',
+        'categories', 'strikes', 'lost_reports', 'payouts', 'audit',
       ].sort(),
     );
     expect(NAV).toContain("aria-current={activeTab === 'stats' ? 'page' : undefined}");
@@ -307,26 +309,33 @@ describe('UX-15B: the console section navigation', () => {
       '<span>{t.disputesTab}</span>',
       '<span>{t.ledgerTab}</span>',
       '<span>{t.categoriesTab}</span>',
-      "<span>{lang === 'en' ? 'Agents Hub' : 'Mawakala'}</span>",
-      "<span>{lang === 'en' ? 'Found Items' : 'Vitu Vilivyopatikana'}</span>",
-      "<span>{lang === 'en' ? 'Claims' : 'Claims'}</span>",
-      "<span>{lang === 'en' ? 'Lost Reports' : 'Ripoti za Vitu'}</span>",
+      // HEAD 73187ec ("fix: retain categories without Swahili labels") dropped
+      // the remaining bilingual ternaries from this nav, so these four labels are
+      // pinned in the English-only form that ships. What the test guarantees is
+      // unchanged: the exact text rendered for each section, and its state key.
+      "<span>{'Agents Hub'}</span>",
+      "<span>{'Found Items'}</span>",
+      "<span>{'Claims'}</span>",
+      "<span>{'Lost Reports'}</span>",
       '<span>Manual Review</span>',
       '<span>Payment Strikes</span>',
+      // PROGRAMME 1 — the two sections this batch adds.
+      '<span>Payout Integrity</span>',
+      '<span>Audit Log</span>',
     ]) {
       expect(NAV, `nav label ${label} must survive UX-15B`).toContain(label);
     }
   });
 
   it('stays a navigation control, not a row of generic action buttons', () => {
-    expect(count(NAV, /<button\b/g)).toBe(10);
+    expect(count(NAV, /<button\b/g)).toBe(12);
     expect(NAV).not.toContain('<Button');
   });
 
   it('sizes every nav icon from the UX-01 ladder, decoratively', () => {
     expect(rawIconSize(NAV)).toEqual([]);
-    expect(count(NAV, /size=\{ICON_SIZE\.metadata\}/g)).toBe(10);
-    expect(count(NAV, /aria-hidden="true"/g)).toBe(10);
+    expect(count(NAV, /size=\{ICON_SIZE\.metadata\}/g)).toBe(12);
+    expect(count(NAV, /aria-hidden="true"/g)).toBe(12);
   });
 
   it('uses the appearance tokens for the nav text, the bar and the rule', () => {

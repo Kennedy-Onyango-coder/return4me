@@ -23,10 +23,17 @@ const indexCss = read('src/index.css');
  * GET /api/admin/lost-reports (routes/adminLostReports.ts). It is a real
  * section with a real endpoint, which is exactly what this list is for — it
  * exists to stop a section being added for a feature the backend does not have.
+ *
+ * PROGRAMME 1 appended 'payouts' and 'audit', on the same terms: 'payouts'
+ * (Payout Integrity) reads the launch-policy verdict per hub from the dashboard
+ * payload plus GET /api/admin/payout-reconciliation for the unresolved rows, and
+ * 'audit' (Audit Log) reads GET /api/admin/audit-logs. Both endpoints exist and
+ * both surfaces are read-only, so neither is an invented section.
  */
 const REAL_SECTIONS = [
   'stats', 'agents', 'found_items', 'disputes', 'claims', 'ledger', 'review', 'categories', 'strikes',
   'lost_reports',
+  'payouts', 'audit',
 ] as const;
 
 describe('admin sidebar (Request 05 / §11)', () => {

@@ -60,6 +60,11 @@ import { isAllowedClaimTransition, TERMINAL_CLAIM_STATUSES } from "../config/cla
 // the data layer, the settlement executor and the schema definitions cannot
 // disagree about what is safe to submit.
 import { isPayoutOutcome, isUnresolvedPayoutRow, CONFIRMABLE_PAYOUT_OUTCOMES, type PayoutOutcome } from "../config/payoutOutcomes";
+// B1 — the launch payout-METHOD policy, imported from the same pure config module
+// the settlement executor asks. The write-path default for a new agent row is
+// therefore the method that will actually be paid, not a literal that has to be
+// kept in step by hand.
+import { PERSONAL_MPESA_PAYOUT_METHOD } from "../config/payoutDestinations";
 // A1 (Batch 0A) — the single definition of the 5-day strike window, plus the
 // repository's EXISTING canonical phone normalization (re-exported, never
 // reimplemented) so every strike path resolves to one identity.
@@ -2499,6 +2504,37 @@ class DatabaseEngine {
     }
   }
 
+  /**
+   * PROGRAMME 1 / WS4 — a BOUNDED window of the audit trail, optionally scoped to
+   * ONE action, for the admin console's audit surface
+   * (GET /api/admin/audit-logs).
+   *
+   * WHY THIS IS NOT getRecentAuditLogs() WITH A WHERE CLAUSE
+   * The dashboard's window is a fixed operational read with no caller input. This
+   * one accepts a caller-chosen size and filter, so the bound is validated by the
+   * ROUTE (config/auditLogWindow.ts rejects anything outside 1..AUDIT_LOG_WINDOW_MAX
+   * instead of clamping it) and applied here as a hard `limit`. There is no code
+   * path that reads an unbounded audit trail.
+   *
+   * Same ordering rule as getRecentAuditLogs(): newest first by created_at, with
+   * id DESC as the tiebreaker, so two entries sharing a timestamp still come back
+   * in a deterministic, repeatable order.
+   */
+  public async getAuditLogsWindow(limit: number = 100, action: string | null = null): Promise<AuditLog[]> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(auditLogTable)
+        .where(action ? eq(auditLogTable.action, action) : undefined)
+        .orderBy(desc(auditLogTable.created_at), desc(auditLogTable.id))
+        .limit(limit);
+      return rows.map(parseAuditLog);
+    } catch (error) {
+      console.error("Database query failed:", error);
+      throw new Error("Failed to query the audit log window.", { cause: error });
+    }
+  }
+
   // Save new found item
   public async createItem(item: Omit<FoundItem, "created_at">): Promise<FoundItem> {
     try {
@@ -3167,7 +3203,15 @@ class DatabaseEngine {
           latitude: agent.latitude !== undefined && agent.latitude !== null ? String(agent.latitude) : null,
           longitude: agent.longitude !== undefined && agent.longitude !== null ? String(agent.longitude) : null,
           mpesa_till_or_paybill: agent.mpesa_till_or_paybill,
-          payout_method_type: agent.payout_method_type || "Till Number",
+          // B1 — the write-path default for a NEW agent row is the one method the
+          // launch payout policy pays (see config/payoutDestinations.ts). It used
+          // to default to 'Till Number', a method the executor refuses.
+          //
+          // `parseAgent`'s READ-time fallback (above) is deliberately NOT changed
+          // to match: it describes how an EXISTING row with no recorded method
+          // reads back, and altering it would silently convert the treatment of
+          // records this batch must leave exactly as they are.
+          payout_method_type: agent.payout_method_type || PERSONAL_MPESA_PAYOUT_METHOD,
           status: agent.status,
           refundable_deposit: String(agent.refundable_deposit),
           national_id_hash: agent.national_id_hash,

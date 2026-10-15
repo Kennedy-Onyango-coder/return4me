@@ -140,6 +140,14 @@ export const OVERVIEW_OPTIONAL_STATS_FIELDS = [
   'fundsInFlightCount',
   'unresolvedPayoutsCount',
   'unresolvedPayoutsAmount',
+  /**
+   * PROGRAMME 1 / WS2 — hubs the launch payout policy would refuse at settlement
+   * time (a stored Till, Paybill, Pochi la Biashara or free-form destination, or
+   * a method other than Personal M-Pesa). Optional on the same terms as every
+   * other field above: a build that does not publish it reads as "not reported"
+   * — never as 0, which would claim every hub can be paid.
+   */
+  'payoutIneligibleAgentsCount',
 ] as const;
 
 export interface OverviewStatsReadout {

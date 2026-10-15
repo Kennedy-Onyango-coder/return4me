@@ -2,6 +2,11 @@ import { pgTable, varchar, text, numeric, integer, timestamp, jsonb, boolean, in
 import { sql } from "drizzle-orm";
 import { CLAIM_SLOT_EXCLUDED_SQL_LIST } from "../config/claimStatuses";
 import { PAYOUT_OUTCOME_SQL_LIST } from "../config/payoutOutcomes";
+// B1 — the ONE payout-method policy, imported from the pure config module the
+// settlement executor itself asks rather than restated as a literal, so the
+// column default, the Drizzle definition, sql/schema.sql and the runtime
+// migration all name the same method that will actually be paid.
+import { PERSONAL_MPESA_PAYOUT_METHOD } from "../config/payoutDestinations";
 
 // 1. CATEGORIES TABLE
 export const categories = pgTable("categories", {
@@ -118,7 +123,13 @@ export const agents = pgTable("agents", {
   latitude: numeric("latitude", { precision: 9, scale: 6 }),
   longitude: numeric("longitude", { precision: 9, scale: 6 }),
   mpesa_till_or_paybill: varchar("mpesa_till_or_paybill", { length: 20 }).notNull(),
-  payout_method_type: varchar("payout_method_type", { length: 50 }).default("Till Number").notNull(),
+  // B1 — the default for FUTURE records is the one method the launch payout
+  // policy actually pays. The previous default ('Till Number') named a method
+  // the executor refuses, so a row created without an explicit method was
+  // unpayable — and because the executor refuses the WHOLE batch when one leg is
+  // ineligible, it blocked the paired finder leg too. Changing a DEFAULT rewrites
+  // NO existing row: it applies only to inserts that omit the column.
+  payout_method_type: varchar("payout_method_type", { length: 50 }).default(PERSONAL_MPESA_PAYOUT_METHOD).notNull(),
   status: varchar("status", { length: 20 }).default("pending").notNull(),
   refundable_deposit: numeric("refundable_deposit", { precision: 10, scale: 2 }).default("0.00").notNull(),
   national_id_hash: varchar("national_id_hash", { length: 64 }).notNull(),

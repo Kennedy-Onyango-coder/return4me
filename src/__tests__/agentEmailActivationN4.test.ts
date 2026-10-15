@@ -33,6 +33,10 @@ import {
 } from '../services/customerAuth';
 import { resolveCountyName } from '../config/kenyaCounties';
 import { administrativeUnitsForCounty } from '../config/kenyaAdministrativeUnits';
+// B1 — the ONE supported payout method. The registration fixture below must send
+// a valid personal M-Pesa phone destination and this exact method, because the
+// registration route now refuses anything the launch payout policy refuses.
+import { PERSONAL_MPESA_PAYOUT_METHOD } from '../config/payoutDestinations';
 
 // --- EXTERNAL PROVIDERS DOUBLED, BUSINESS LOGIC REAL -------------------------
 // Only the transport is captured. Hashing, token consumption, CAS and the
@@ -254,7 +258,8 @@ async function registerAgent(overrides: Record<string, any> = {}, phone = nextPh
         businessName: 'N4 Test Shop',
         locationAddress: 'Kenyatta Avenue, Nairobi',
         county: 'Nairobi', administrativeUnitId: UNIT_ID,
-        tillNumber: '123456', nationalId: '12345678',
+        tillNumber: '0712345678', payoutMethodType: PERSONAL_MPESA_PAYOUT_METHOD,
+        nationalId: '12345678',
         termsAccepted: true,
         ...overrides,
       },

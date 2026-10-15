@@ -6,6 +6,19 @@ import AgentHub from './agent/AgentHub';
 import { ShieldCheck, Plus, CheckCircle, PackageOpen, HelpCircle, Loader2, AlertCircle, Lock, Eye, Camera, Upload, MapPin, Mail } from 'lucide-react';
 import { countiesByUxGroup } from '../config/kenyaCounties';
 import { administrativeUnitsForCounty } from '../config/kenyaAdministrativeUnits';
+// B1 — THE ONE PAYOUT-METHOD POLICY, IMPORTED RATHER THAN RESTATED.
+//
+// `config/payoutDestinations.ts` is PURE and I/O-free (it is the same module the
+// settlement executor's eligibility guard asks), so the registration form can
+// import it with no bundle cost and no second implementation. The form must not
+// invent its own method literal, its own accepted formats or its own
+// normalisation rule: the value the applicant is offered, the value the field
+// validates against and the value the executor will actually pay are then
+// provably one vocabulary rather than three that merely look alike.
+import {
+  PERSONAL_MPESA_PAYOUT_METHOD,
+  normalizePersonalMpesaPhoneDestination,
+} from '../config/payoutDestinations';
 import { detectBrowserLocation, hasGeographyConflict, type DetectedLocation } from '../services/browserLocation';
 import { useAgentOperations } from '../hooks/useAgentOperations';
 import { Banner, Button, ICON_SIZE, Input, LocationFirstField } from './ui';
@@ -114,7 +127,15 @@ export default function AgentView({ token, setToken, categories, refreshCategori
   const [agentLocationAccuracy, setAgentLocationAccuracy] = useState<number | null>(null);
   const [agentDetectedLocation, setAgentDetectedLocation] = useState<DetectedLocation | null>(null);
   const [agentLocationMessage, setAgentLocationMessage] = useState('');
-  const [payoutMethodType, setPayoutMethodType] = useState('Till Number');
+  // B1 — THE METHOD DEFAULT IS THE SUPPORTED METHOD, NOT A LITERAL.
+  //
+  // This defaulted to 'Till Number', which the launch payout policy REFUSES
+  // (config/payoutDestinations.ts pays 'Personal M-Pesa' only). A newly
+  // registered agent could therefore be unpayable — and because the executor
+  // refuses the WHOLE payout batch when one leg is ineligible, the paired finder
+  // leg was blocked too. Sourcing the default from the one shared constant means
+  // the form cannot drift from the policy again.
+  const [payoutMethodType, setPayoutMethodType] = useState(PERSONAL_MPESA_PAYOUT_METHOD);
   const [tillNumber, setTillNumber] = useState('');
   const [nationalId, setNationalId] = useState('');
   const [contactEmail, setContactEmail] = useState('');
@@ -131,6 +152,45 @@ export default function AgentView({ token, setToken, categories, refreshCategori
   // only: it selects which of the SAME registration fields are rendered, and it
   // never influences what is sent, when, or to which endpoint.
   const [registrationStep, setRegistrationStep] = useState(0);
+
+  /**
+   * B1 — THE CANONICAL PAYOUT DESTINATION, DERIVED ON EVERY RENDER.
+   *
+   * `normalizePersonalMpesaPhoneDestination` is the SAME pure helper the
+   * settlement executor's eligibility guard resolves a destination with, so
+   * "what this form accepts" and "what the provider may be asked to pay" are one
+   * rule rather than two that happen to agree. It returns the canonical
+   * `254XXXXXXXXX` form or null — never a best guess, never a partially
+   * normalised number.
+   *
+   * The value is DERIVED rather than stored, so the field always shows exactly
+   * what the applicant typed while the validation below always reflects the
+   * current text. The canonical form is what leaves the form: the Payout step
+   * writes it back into `tillNumber` when it advances (see handleAuthRequest),
+   * so the submitted payload stays a single field with a single source of truth.
+   */
+  const canonicalPayoutDestination = normalizePersonalMpesaPhoneDestination(tillNumber);
+
+  /**
+   * ONE message, one meaning, wherever the destination is refused client-side:
+   * the inline field error below and the two guards that could otherwise send an
+   * unusable value. The step's own prose already explains which methods are not
+   * supported, so this stays short and actionable.
+   */
+  const payoutDestinationMessage =
+    'Enter the personal M-Pesa phone number that should receive your share, for example 07XX XXX XXX.';
+
+  /**
+   * Inline validation for the destination field, shown in place on the step that
+   * owns it. An untouched field shows the step's own hint (the control is
+   * `required`, so the form cannot advance past an empty value); a non-empty
+   * value that is not a Kenyan personal M-Pesa phone number is named here, so
+   * the applicant is told before they submit rather than by a 400 afterwards.
+   */
+  const payoutDestinationError =
+    tillNumber.trim() !== '' && canonicalPayoutDestination === null
+      ? payoutDestinationMessage
+      : undefined;
 
   const {
     agentStatus, queueError, queueLoading, expectedDropoffs, holdingPickups, agentProfile, agentEarnings,
@@ -196,6 +256,30 @@ export default function AgentView({ token, setToken, categories, refreshCategori
     // unchanged: the same endpoint, the same body, the same OTP sequencing, the
     // same failures. No second submission path exists, and the submit button's
     // loading guard still prevents a duplicate dispatch in flight.
+    // B1 — THE PAYOUT DESTINATION IS VALIDATED ON THE STEP THAT OWNS IT.
+    //
+    // The Payout step (index 3) cannot advance until the destination is a Kenyan
+    // personal M-Pesa phone number, so the applicant is told in place — before
+    // Review and before any request — instead of submitting and receiving a 400.
+    //
+    // On success the CANONICAL `254XXXXXXXXX` form is written back into
+    // `tillNumber`, so the text the applicant confirmed on Review is exactly the
+    // text that is submitted. The payload keeps its single `tillNumber` field:
+    // this normalises an existing value rather than introducing a second source
+    // of truth, and the canonical form is the one the payout policy itself
+    // resolves a destination to.
+    //
+    // Nothing here is a security boundary. The server re-validates and
+    // normalises independently of this form, and the settlement executor asks
+    // the payout policy itself before any money moves.
+    if (isRegistering && registrationStep === 3) {
+      if (canonicalPayoutDestination === null) {
+        setAuthError(payoutDestinationMessage);
+        return;
+      }
+      setTillNumber(canonicalPayoutDestination);
+    }
+
     if (isRegistering && registrationStep < AGENT_REGISTRATION_STEPS.length - 1) {
       setRegistrationStep((step) => Math.min(step + 1, AGENT_REGISTRATION_STEPS.length - 1));
       return;
@@ -280,6 +364,21 @@ export default function AgentView({ token, setToken, categories, refreshCategori
   const handleOtpVerify = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
+
+    // B1 — DEFENCE IN DEPTH, NEVER A SUBSTITUTE FOR THE SERVER.
+    //
+    // The guided flow cannot reach Review with an unusable destination: the
+    // Payout step refuses to advance and re-writes its value in canonical form
+    // (see handleAuthRequest), and the server re-validates and normalises
+    // independently. This branch exists so this payload can never carry a null
+    // or raw-shaped destination if the form is reached another way: it fails
+    // closed on the existing authentication-error channel instead of sending a
+    // value the launch payout policy would refuse.
+    if (canonicalPayoutDestination === null) {
+      setAuthError(payoutDestinationMessage);
+      return;
+    }
+
     setAuthLoading(true);
 
     try {
@@ -643,28 +742,36 @@ export default function AgentView({ token, setToken, categories, refreshCategori
             {'Where your share is sent'}
           </h2>
           <p className="text-body leading-relaxed text-[var(--appearance-text-muted)]">
-            {'Your share of the service fee is paid to this M-Pesa account. Enter the details exactly as they appear in M-Pesa so the payment reaches you.'}
+            {'Your share of the service fee is paid to a personal M-Pesa phone number, using M-Pesa Send Money. Enter the number exactly as it appears in M-Pesa so the payment reaches you.'}
           </p>
+          {/* B1 — ONE METHOD, NAMED FROM THE POLICY CONSTANT.
+              The unsupported choices are REMOVED rather than disabled: the launch
+              payout policy pays PERSONAL_MPESA_PAYOUT_METHOD only, and offering a
+              choice the executor will refuse is how a new agent ends up
+              unpayable. The option value is the shared constant, so this form and
+              the payout policy cannot drift apart, and the hint states the limit
+              plainly instead of leaving a locked control unexplained. */}
           <Select
             id="agent-payout-method"
             label={'Payout method'}
             required
             value={payoutMethodType}
             onChange={(e) => setPayoutMethodType(e.target.value)}
+            hint={'Only personal M-Pesa is paid at launch. Buy Goods till numbers, paybill numbers and Pochi la Biashara are not supported yet.'}
           >
-            <option value="Till Number">Till Number (M-Pesa Buy Goods)</option>
-            <option value="Paybill Number">Paybill Number</option>
-            <option value="Pochi la Biashara">Pochi la Biashara</option>
-            <option value="Personal M-Pesa">Personal M-Pesa (Send Money)</option>
+            <option value={PERSONAL_MPESA_PAYOUT_METHOD}>Personal M-Pesa (Send Money)</option>
           </Select>
           <Input
             id="agent-till-number"
-            label={'Payout code or number'}
+            label={'Personal M-Pesa phone number'}
             value={tillNumber}
             onChange={(e) => setTillNumber(e.target.value)}
-            placeholder="Till / Paybill / Phone"
+            placeholder="07XX XXX XXX"
+            inputMode="tel"
+            autoComplete="tel"
             required
-            hint={'The number the money is sent to. Please check it twice.'}
+            error={payoutDestinationError}
+            hint={'The personal M-Pesa number your share is sent to. Please check it twice.'}
           />
         </section>
       )}
@@ -712,7 +819,7 @@ export default function AgentView({ token, setToken, categories, refreshCategori
             <>
               {reviewRow('Payout method', payoutMethodType)}
               {reviewRow(
-                'Payout code or number',
+                'Personal M-Pesa phone number',
                 tillNumber ? 'Provided' : 'Not provided'
               )}
             </>
