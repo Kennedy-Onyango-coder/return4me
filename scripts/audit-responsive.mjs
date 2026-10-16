@@ -30,6 +30,24 @@ setTimeout(() => {
 }, 900000).unref();
 
 // -----------------------------------------------------------------------------
+// 0. THE RUN'S OWN VERDICT
+// -----------------------------------------------------------------------------
+// Some failures are not findings ABOUT the app: they mean the RUN cannot be
+// trusted. An /api/* endpoint the harness never mocked, a capture of a screen
+// that rendered nothing, or the agent-queue fixture drifting from the contract
+// the Hub actually consumes. All three used to be silent - an unmocked endpoint
+// answered 200 `{}` (so a screen missing its data was measured as a clean one)
+// and an empty capture was written out as if it were a pass. They are now
+// printed as they happen, recorded in the results file under `auditFailures`,
+// and they set a non-zero exit code, so a green-looking run cannot be read as a
+// green run.
+const auditFailures = [];
+const failAudit = (kind, detail) => {
+  auditFailures.push({ kind, detail });
+  console.error(`[audit] HARNESS FAILURE (${kind}): ${detail}`);
+};
+
+// -----------------------------------------------------------------------------
 // 1. SYNTHETIC API — realistic shapes, zero production data
 // -----------------------------------------------------------------------------
 
@@ -114,12 +132,81 @@ const dashboardPayload = () => ({
   socialPublishingPaused: false,
 });
 
+// -----------------------------------------------------------------------------
+// 1b. THE AGENT-QUEUE FIXTURE — asserted against the app's own contract
+// -----------------------------------------------------------------------------
+// The queue mock is the only thing that makes the agent screens measurable at
+// all, so its shape is CHECKED rather than trusted. A fixture that drifts does
+// not fail on its own: it renders a thinner screen and the audit then reports a
+// clean pass for a screen it never really saw.
+const AGENT_QUEUE_KEYS = ['agent', 'earnings', 'pendingDropoffs', 'holdingItems'];
+const AGENT_PROFILE_KEYS = ['business_name', 'location_address', 'payout_method_type', 'mpesa_till_or_paybill'];
+const AGENT_EARNINGS_KEYS = ['totalEarned', 'completedPayoutsCount', 'pendingSettlementEarnings', 'pendingSettlementsCount'];
+
+/**
+ * Deterministic stand-in for GET /api/agents/queue.
+ *
+ * Contract (src/routes/agentOps.ts -> src/types/agent.ts `AgentQueueResponse`):
+ *   agent           the explicit serialisation allowlist, nothing else
+ *   earnings        the four numeric counters AgentHub renders
+ *   pendingDropoffs drop-off cards, each carrying its Reject action
+ *   holdingItems    handover cards
+ *
+ * `agent` is nullable in the app (AgentView renders its own "could not load the
+ * hub" card without it) but THIS fixture exists to render the POPULATED hub, so
+ * it is always present: a null profile would silently measure the error card.
+ */
+const agentQueuePayload = () => ({
+  agent: {
+    business_name: 'Umoja Handover Hub 1 Ltd',
+    location_address: 'Moi Avenue, Nairobi CBD',
+    payout_method_type: 'Till Number',
+    mpesa_till_or_paybill: '1234567',
+  },
+  earnings: { totalEarned: 0, completedPayoutsCount: 0, pendingSettlementEarnings: 0, pendingSettlementsCount: 0 },
+  pendingDropoffs: [itemRow(1, 'awaiting_dropoff')],
+  holdingItems: [{ ...itemRow(2, 'at_agent'), associatedClaim: { id: 'CLAIM-2', status: 'escrow_held', agent_confirmed_at: null, owner_identifying_details: null, security_answers: {} } }],
+});
+
+const agentQueueFixtureProblems = (() => {
+  const payload = agentQueuePayload();
+  const problems = [];
+  for (const key of AGENT_QUEUE_KEYS) if (!(key in payload)) problems.push(`missing top-level key "${key}"`);
+  for (const key of Object.keys(payload)) if (!AGENT_QUEUE_KEYS.includes(key)) problems.push(`unexpected top-level key "${key}"`);
+  if (!payload.agent || typeof payload.agent !== 'object') {
+    problems.push('"agent" must be the populated agent profile, never null/undefined');
+  } else {
+    for (const key of AGENT_PROFILE_KEYS) if (typeof payload.agent[key] !== 'string' || !payload.agent[key]) problems.push(`agent.${key} must be a non-empty string`);
+    for (const key of Object.keys(payload.agent)) if (!AGENT_PROFILE_KEYS.includes(key)) problems.push(`agent.${key} is not on the queue's agent allowlist - the real route never serialises it`);
+  }
+  if (!payload.earnings || typeof payload.earnings !== 'object') problems.push('"earnings" must be an object');
+  else for (const key of AGENT_EARNINGS_KEYS) if (typeof payload.earnings[key] !== 'number') problems.push(`earnings.${key} must be a number`);
+  for (const [key, label] of [['pendingDropoffs', 'drop-off actions'], ['holdingItems', 'handover actions']]) {
+    if (!Array.isArray(payload[key])) { problems.push(`"${key}" must be an array`); continue; }
+    if (!payload[key].length) problems.push(`"${key}" is empty, so ${label} cannot render and would be measured without them`);
+  }
+  return problems;
+})();
+if (agentQueueFixtureProblems.length) failAudit('agent-queue-fixture', agentQueueFixtureProblems.join('; '));
+
 let identityMode = 'anon';
 
 const json = (res, body, status = 200) => {
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json');
   res.end(JSON.stringify(body));
+};
+
+// Every /api/* path this harness has no mock for. Each one is a HARNESS GAP:
+// the mock would have had to GUESS a shape, and guessing is how a screen missing
+// its data used to be measured as a clean, passing screen.
+const unknownApi = new Map();
+const recordUnknownApi = (method, p) => {
+  const endpoint = `${method} ${p}`;
+  const entry = unknownApi.get(endpoint) || { endpoint, count: 0 };
+  entry.count += 1;
+  unknownApi.set(endpoint, entry);
+  console.error(`[audit] UNMOCKED API: ${endpoint} - answering 501 instead of guessing a shape`);
 };
 
 const server = http.createServer((req, res) => {
@@ -149,21 +236,7 @@ const server = http.createServer((req, res) => {
     // GET /api/agents/queue — the real agent-hub contract (src/routes/agentOps.ts):
     // `agent`, `earnings`, `pendingDropoffs`, `holdingItems`. Deterministic mock
     // matching AgentQueueResponse (src/types/agent.ts); no live data, no auth.
-    if (p === '/api/agents/queue') {
-      return json(res, {
-        agent: {
-          id: 'AGENT-1', business_name: 'Umoja Handover Hub 1 Ltd', contact_phone: '+254711000000',
-          location_address: 'Moi Avenue, Nairobi CBD', latitude: -1.286389, longitude: 36.817223,
-          mpesa_till_or_paybill: '1234567', status: 'active', refundable_deposit: 5000,
-          national_id_hash: 'audit-national-id-hash', rating: 4.6, rating_count: 12,
-          needs_manual_geocoding: false,
-        },
-        earnings: { totalEarned: 0, completedPayoutsCount: 0, pendingSettlementEarnings: 0, pendingSettlementsCount: 0 },
-        pendingDropoffs: [itemRow(1, 'awaiting_dropoff')],
-        holdingItems: [{ ...itemRow(2, 'at_agent'), associatedClaim: { id: 'CLAIM-2', status: 'escrow_held', agent_confirmed_at: null, owner_identifying_details: null, security_answers: {} } }],
-      });
-    }
-    if (p.startsWith('/api/agent/')) return json(res, {});
+    if (p === '/api/agents/queue') return json(res, agentQueuePayload());
 
     if (p === '/api/admin/dashboard') return json(res, dashboardPayload());
     if (p === '/api/admin/categories') return json(res, categories);
@@ -178,7 +251,14 @@ const server = http.createServer((req, res) => {
     if (p === '/api/items/recent') return json(res, []);
     if (p === '/api/claims/lookup') { req.resume(); return json(res, { error: 'Synthetic claim not found' }, 404); }
 
-    return json(res, {});
+    // Anything that reaches this point is an /api/* route this harness does not
+    // know. It used to answer 200 `{}`: a silent, wrong-shaped success that let a
+    // screen render without its data and still be measured as a clean pass. It is
+    // now loud in both directions - the endpoint is recorded as a harness failure
+    // (and forces a non-zero exit code) and the app receives a real error status,
+    // so its own error path renders instead of an empty screen being measured.
+    recordUnknownApi(req.method, p);
+    return json(res, { error: `audit harness has no mock for ${req.method} ${p}` }, 501);
   }
 
   let file = path.join(root, 'dist', url.pathname === '/' ? 'index.html' : url.pathname);
@@ -209,7 +289,7 @@ edge.on('error', (error) => console.error(`[audit] Edge launch failed: ${error.m
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let ws;
-const results = { generatedAt: new Date().toISOString(), viewports: [], screens: [], findings: [], pageErrors: [] };
+const results = { generatedAt: new Date().toISOString(), viewports: [], screens: [], findings: [], pageErrors: [], auditFailures, unknownApiEndpoints: [] };
 let measureExpression = null;
 
 try {
@@ -457,6 +537,11 @@ try {
       longStrings: longStrings.slice(0, MAX),
       dialogs: document.querySelectorAll('[role="dialog"]').length,
       h1Count: document.querySelectorAll('main h1').length,
+      // Enough to tell a rendered screen from an empty one. A capture with no
+      // heading, almost no text and almost no nodes proves nothing, and used to be
+      // written out as if it were a clean screen.
+      contentLength: (main.innerText || '').replace(/\s+/g, ' ').trim().length,
+      nodeCount: main.querySelectorAll('*').length,
     };
   };
   measureExpression = `(${measureInPage.toString()})()`;
@@ -546,6 +631,15 @@ try {
     + (mode === 'admin' ? `localStorage.setItem('admin_token',${JSON.stringify(ADMIN_JWT)});` : ''),
   );
 
+  // Shared by the screen pass and the rejection-panel pass below. `num`
+  // normalises a possibly-missing measurement; `isBlankCapture` decides whether a
+  // capture proves anything at all. A row with no measurement error, no heading,
+  // almost no text and almost no nodes is an EMPTY page, not a clean one, so it is
+  // recorded as a harness failure rather than as a finding about the app.
+  const REJECTION_SCREEN_ID = 'agent_portal (rejection panel open)';
+  const num = (v) => (typeof v === 'number' ? v : 0);
+  const isBlankCapture = (row) => !row.error && !row.heading && num(row.contentLength) < 24 && num(row.nodeCount) < 8;
+
   // ---------------------------------------------------------------------------
   // 5. DRIVE THE AUDIT
   // ---------------------------------------------------------------------------
@@ -584,20 +678,70 @@ try {
       const opened = await openScreen(screen);
       let m;
       try { m = await evaluate(measureExpression); } catch (e) { m = { error: String(e).slice(0, 200) }; }
-      results.screens.push({ viewport: vp.label, width: vp.width, height: vp.height, screen: screen.id, ...opened, ...m });
-      process.stdout.write(`\r[audit] ${vp.label.padEnd(24)} ${screen.id.padEnd(30)}`);
+      // `interaction` distinguishes a plain screen load from a state that had to
+      // be opened by a tap (the rejection-panel pass below), so a reader can never
+      // mistake one for the other.
+      const row = { viewport: vp.label, width: vp.width, height: vp.height, screen: screen.id, interaction: 'screen-load', ...opened, ...m };
+      row.blankCapture = isBlankCapture(row);
+      results.screens.push(row);
+      process.stdout.write(`\r[audit] ${vp.label.padEnd(24)} ${screen.id.padEnd(30)}` + (row.blankCapture ? ' BLANK!' : '      '));
     }
   }
   process.stdout.write('\n');
   log('render pass complete');
 
   // ---------------------------------------------------------------------------
+  // 5b. THE REJECTION PANEL — a state that exists only AFTER a tap
+  // ---------------------------------------------------------------------------
+  // The screen list can only load a route, and the rejection panel is not a
+  // route: it appears when an agent presses Reject on a queued drop-off. Without
+  // this pass the panel - including the two controls B4.1 resizes - would never
+  // be rendered by this audit at all, so their tap targets could regress forever
+  // with nothing to catch it. It runs at the phone widths where the Hub's action
+  // row is tightest, is recorded under its OWN screen id and interaction tag (so
+  // it can never be mistaken for the plain Agent Hub capture), and only OPENS and
+  // measures the panel: it never presses Submit Rejection, so no POST is issued.
+  if (agentQueueFixtureProblems.length === 0) {
+    const rejectionViewports = VIEWPORTS.filter((vp) => vp.width <= 430);
+    if (!rejectionViewports.length) failAudit('rejection-panel-not-audited', 'no viewport at or below 430px is configured, so the panel is never exercised');
+    for (const vp of rejectionViewports) {
+      await call('Emulation.setDeviceMetricsOverride', { width: vp.width, height: vp.height, deviceScaleFactor: 1, mobile: vp.width < 768 });
+      // The panel lives behind the agent identity, so the token must be in
+      // localStorage BEFORE the navigation - exactly as the screen pass does it.
+      // Without it the Hub would render its signed-out shell and the panel would
+      // never exist, which the reachability check below reports rather than
+      // silently measuring the shell.
+      if (appliedTokens !== 'agent') { await applyTokens('agent'); appliedTokens = 'agent'; }
+      const opened = await openScreen({ id: REJECTION_SCREEN_ID, path: '/agent_portal', identity: 'agent' });
+      const trigger = await evaluate(`(()=>{const b=document.querySelector('[id^="agent-panel-trigger-reject-"]');if(!b)return{found:false};const id=b.id;b.click();return{found:true,id}})()`);
+      await waitForStable('/agent_portal');
+      // The panel must be REACHABLE and COMPLETE before it is measured: a missing
+      // trigger or a panel without its Cancel/Submit controls would otherwise be
+      // reported as a clean measurement of a screen that was never opened.
+      const panel = await evaluate(`(()=>{const main=document.querySelector('main');const label=(b)=>(b.textContent||'').trim();const buttons=[...main.querySelectorAll('button')];const select=document.querySelector('select[id^="reject-reason-"]');return{open:!!select,reasonId:select?select.id:null,hasCancel:buttons.some((b)=>label(b)==='Cancel'),hasSubmit:buttons.some((b)=>label(b)==='Submit Rejection')}})()`);
+      if (!trigger.found || !panel.open || !panel.hasCancel || !panel.hasSubmit) {
+        failAudit('rejection-panel-not-reachable', `${vp.label}: trigger=${JSON.stringify(trigger)} panel=${JSON.stringify(panel)} - the panel must open with its Cancel and Submit Rejection controls, otherwise its controls are not being audited at all`);
+      }
+      let m;
+      try { m = await evaluate(measureExpression); } catch (e) { m = { error: String(e).slice(0, 200) }; }
+      const row = { viewport: vp.label, width: vp.width, height: vp.height, screen: REJECTION_SCREEN_ID, interaction: 'rejection-panel-open', ...opened, ...m, trigger, panel };
+      row.blankCapture = isBlankCapture(row);
+      results.screens.push(row);
+      process.stdout.write(`\r[audit] ${vp.label.padEnd(24)} ${REJECTION_SCREEN_ID.padEnd(30)}` + (row.blankCapture ? ' BLANK!' : '      '));
+    }
+    process.stdout.write('\n');
+  }
+
+  // ---------------------------------------------------------------------------
   // 6. REPORT — only what a reader can act on
   // ---------------------------------------------------------------------------
-  const num = (v) => (typeof v === 'number' ? v : 0);
   const push = (kind, row, detail) => results.findings.push({ kind, viewport: row.viewport, screen: row.screen, detail });
 
   for (const row of results.screens) {
+    // Reported BEFORE the app-level checks, so an empty capture can never be read
+    // as a clean screen. It is also recorded as a harness failure below, which is
+    // what makes the run exit non-zero.
+    if (row.blankCapture) push('blank-capture', row, `main rendered no heading, ${num(row.contentLength)} character(s) of text and ${num(row.nodeCount)} node(s) - the capture is empty and proves nothing`);
     if (row.error) { push('page-error', row, row.error); continue; }
     if (!row.mounted) push('did-not-mount', row, 'root never rendered');
     if (num(row.pageOverflowPx) > 0) {
@@ -644,6 +788,29 @@ try {
   for (const r of worst) {
     console.log(`${String(score(r)).padStart(5)}  ${r.viewport.padEnd(24)} ${r.screen.padEnd(30)} ovf=${num(r.pageOverflowPx)}px off=${num(r.overflowCount)} clip=${num(r.clippedCount)} tap=${num(r.smallTargetCount)} tiny=${num(r.tinyTextCount)}`);
   }
+
+  // ---------------------------------------------------------------------------
+  // 6b. THE RUN'S OWN VERDICT
+  // ---------------------------------------------------------------------------
+  // Harness-level problems are collected here, once every pass has run: an /api/*
+  // endpoint the harness never mocked, a capture that rendered nothing, or the
+  // agent-queue fixture drifting from the contract the Hub consumes. They are NOT
+  // findings about the app, and they set a non-zero exit code, so a run that looks
+  // green cannot be read as a green run.
+  results.unknownApiEndpoints = [...unknownApi.values()];
+  for (const entry of unknownApi.values()) {
+    failAudit('unmocked-api-endpoint', `${entry.endpoint} called ${entry.count}x and was answered 501 - no mock exists for it, so any screen depending on it was measured without its data`);
+  }
+  for (const row of results.screens) {
+    if (row.blankCapture) failAudit('blank-capture', `${row.viewport} / ${row.screen}: ${num(row.contentLength)} character(s) of text, ${num(row.nodeCount)} node(s) and no heading`);
+  }
+  console.log('\n================ HARNESS INTEGRITY ================');
+  if (!auditFailures.length) {
+    console.log('  clean: every /api/* call was answered by a mock, no capture was empty, agent-queue fixture matches AgentQueueResponse');
+  } else {
+    for (const failure of auditFailures) console.log(`  FAILURE ${failure.kind}: ${failure.detail}`);
+  }
+  if (auditFailures.length) process.exitCode = 1;
 
   // Output destination. The default stays the tracked baseline file, so an
   // unattended run behaves exactly as before. R4M_RESPONSIVE_AUDIT_OUTPUT lets a

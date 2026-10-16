@@ -89,7 +89,7 @@ export default function AgentRejectionPanel({
   </p>
 
   <div className="flex flex-wrap items-center justify-end gap-2">
-    <Button type="button" variant="outline" size="sm" onClick={() => setRejectingItemId(null)}>
+    <Button type="button" variant="outline" size="md" onClick={() => setRejectingItemId(null)}>
       Cancel
     </Button>
     {/* BATCH 2 (UX-03): the destructive action now uses the SHARED Button
@@ -102,7 +102,7 @@ export default function AgentRejectionPanel({
     <Button
       type="button"
       variant="danger"
-      size="sm"
+      size="md"
       onClick={() => handleRejectDropoff(item.id)}
       disabled={isItemBusy(item.id) || (rejectionReason === "Other" && rejectionCustomText.trim() === "")}
       loading={isItemBusy(item.id)}

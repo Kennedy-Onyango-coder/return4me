@@ -448,7 +448,7 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
                                   so the destructive action drops to its own line
                                   instead of crowding Review on a 320px screen. */}
                               <span className="flex w-full items-center justify-end sm:w-auto sm:border-l sm:border-stone-200 sm:pl-3">
-                              <Button variant="danger" size="sm" id={panelTriggerId(item.id, 'reject')} onClick={() => {
+                              <Button variant="danger" size="md" id={panelTriggerId(item.id, 'reject')} onClick={() => {
                                 props.setRejectingItemId(item.id);
                                 props.setRejectionReason("Not a real item");
                                 props.setRejectionCustomText("");
