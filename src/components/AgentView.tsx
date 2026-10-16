@@ -916,6 +916,36 @@ export default function AgentView({ token, setToken, categories, refreshCategori
               >
                 {'Use a different number'}
               </Button>
+
+              {/* LOGIN-DEAD-END — additive, E1-safe, and the end of the dead end.
+                  The two sentences above are PINNED (agentSignInUx11:144 + its
+                  Kiswahili twin, publicHelpBatch13:242) and are deliberately left
+                  byte-identical; this note qualifies them rather than replacing them.
+
+                  Why it exists: an agent can be fully approved and still receive no
+                  code. The OTP destination is resolved server-side from a VERIFIED
+                  `contact_email`, so three reachable account states — ACTIVE with no
+                  address at all (the legacy pre-N4 shape), ACTIVE with an unverified
+                  address, and a never-registered number — all dispatch nothing, while
+                  /api/auth/request-otp answers identically on purpose so the endpoint
+                  cannot be used to enumerate accounts (server.ts's anti-enumeration
+                  branch). The step therefore must not read as a promise.
+
+                  Why it is a static string and not state: copy that branched on the
+                  response (its message, status or a success flag) would rebuild the
+                  very oracle the server refuses to be. Static, account-agnostic copy
+                  is the security property here, not a style preference.
+
+                  Why it says nothing about a link "we emailed you": for an account
+                  with no address on file that would be a second false claim. The
+                  wording is chosen to be true for every account state instead, and it
+                  promises no resend — no resend endpoint, admin control or audit
+                  action exists at this commit (that is separate, approved work).
+                  It is English-only because this component has no `tr` helper yet;
+                  it joins the queue for the bilingual restoration work item. */}
+              <p className="text-caption leading-relaxed text-[var(--appearance-text-muted)]">
+                {'If no code arrives: check your spam or junk folder. A code can only be sent to a verified email address on this account, so if your email address has not been verified yet, no code is sent.'}
+              </p>
             </form>
           ) : (
             /* Request OTP / Register form */
