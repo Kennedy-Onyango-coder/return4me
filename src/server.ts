@@ -10,7 +10,7 @@ import rateLimit from 'express-rate-limit';
 import { createServer as createViteServer } from 'vite';
 import { db, FoundItem, Claim, Agent, Dispute, LedgerEntry } from './db/database';
 import { pool, ensureSchemaUpToDate, isDatabaseConnectionError } from './db/index';
-import { AuthService, authenticateJWT, generateToken, verifyToken, toE164Kenyan, hashCode, timingSafeEqualHex, maskPhoneForLog, isAgentActionable, isAdminSessionCurrent } from './services/auth';
+import { AuthService, authenticateJWT, generateToken, verifyToken, toE164Kenyan, hashCode, timingSafeEqualHex, maskPhoneForLog, isAgentActionable, isAdminSessionCurrent, resolveAgentByPhone } from './services/auth';
 // Administrative 2FA hardening — authenticated encryption of the admin TOTP
 // secret at rest, and the single-use recovery-code primitives.
 import { encryptTOTPSecret, decryptTOTPSecret, assertTotpEncryptionKeyConfigured } from './services/totpCrypto';
@@ -2118,9 +2118,14 @@ async function createApp() {
       const isDeletionPurpose = purpose === 'data_deletion';
       const eventType = isDeletionPurpose ? 'ACCOUNT_DELETION_OTP_EMAIL' : 'AGENT_LOGIN_OTP_EMAIL';
 
-      const findByPhone = (list: any[]) =>
-        list.find((a) => a?.contact_phone === phone) ??
-        list.find((a) => toE164Kenyan(String(a?.contact_phone || '').replace(/\s+/g, '')) === canonicalPhone);
+      // WHICH AGENT HOLDS THIS NUMBER IS ONE QUESTION WITH ONE ANSWER.
+      //
+      // Both endpoints below ask it, and they must agree: a number recognised
+      // here but not by /api/auth/verify-otp sends a code to an existing agent
+      // whose submission is then refused as a registration. `resolveAgentByPhone`
+      // is the single shared rule (services/auth.ts, beside `toE164Kenyan`), so
+      // the two endpoints cannot drift apart again. It compares EXACTLY — raw
+      // string first, then the canonical E.164 form — and never guesses.
 
       let destination: string | null = null;
       // NEW-AGENT ONBOARDING is the ONE journey whose recipient the request
@@ -2139,13 +2144,13 @@ async function createApp() {
         if (customer && customer.email && customer.email_verified_at) {
           destination = customer.email;
         } else {
-          const agent = findByPhone(await db.getAgents());
+          const agent = resolveAgentByPhone(await db.getAgents(), phone);
           if (agent && agent.contact_email && agent.email_verified_at) {
             destination = agent.contact_email;
           }
         }
       } else {
-        const existingAgent = findByPhone(await db.getAgents());
+        const existingAgent = resolveAgentByPhone(await db.getAgents(), phone);
         if (existingAgent) {
           // Existing account: SERVER-RESOLVED verified contact_email only.
           // Legacy pre-N4 agents (no email) and unverified emails fail closed —
@@ -2252,8 +2257,18 @@ async function createApp() {
 
       if (userRole === 'agent') {
         // If it's a registration/onboarding request, save agent application first
+        //
+        // WHICH ARM THIS REQUEST TAKES IS DECIDED BY THE SAME RULE THAT DECIDED
+        // WHERE THE CODE WENT. `resolveAgentByPhone` is the shared matcher
+        // /api/auth/request-otp resolves its recipient with, so a number written
+        // in any supported Kenyan spelling (0712..., +254712..., 254712..., with
+        // or without spaces) finds its EXISTING agent here instead of being
+        // misread as a new applicant and refused for missing the registration
+        // fields. It is an exact two-step comparison — raw string, then
+        // canonical E.164 — never a guess, and the registration arm below is
+        // reached only when NO agent row holds this number at all.
         const agents = await db.getAgents();
-        const existingAgent = agents.find(a => a.contact_phone === phone);
+        const existingAgent = resolveAgentByPhone(agents, phone);
         if (existingAgent) {
           agentId = existingAgent.id;
           userRole = 'agent';

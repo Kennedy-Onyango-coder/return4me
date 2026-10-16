@@ -44,6 +44,54 @@ export function toE164Kenyan(phone: string): string {
 }
 
 /**
+ * Resolves the agent row a phone number belongs to, tolerating the equivalent
+ * Kenyan spellings the SAME number can be written in.
+ *
+ * WHY THIS IS SHARED AND NOT DUPLICATED. POST /api/auth/request-otp and
+ * POST /api/auth/verify-otp both have to answer one question — "which agent
+ * holds this number?" — and they must answer it identically. The request
+ * endpoint resolved an agent by comparing the CANONICAL E.164 form (so
+ * `0712...`, `+254712...` and a stored `254712...` all found the same account)
+ * while verification compared the raw string. A number recognised when the code
+ * was requested was therefore NOT recognised when the code was submitted: the
+ * existing-agent arm was skipped, the request fell into the REGISTRATION arm,
+ * and a legitimate sign-in was answered with "provide all of the business
+ * details required to register as an Agent" — a login failure wearing a
+ * validation error's clothes, with the one-time code already consumed.
+ *
+ * THE MATCH IS EXACT, IN TWO STEPS, AND NEVER A GUESS:
+ *   1. raw string equality — the original, exact-match behaviour, kept first;
+ *   2. equality of the canonical E.164 form.
+ * There is no prefix or fuzzy matching, and an unnormalisable value whose
+ * canonical form is empty matches nothing at all, so two unnormalisable strings
+ * can never become equal to each other by accident.
+ *
+ * `toE164Kenyan` is the same canonicalisation the OTP store key, the customer
+ * lookups and the payout policy already use, so this introduces no third rule.
+ */
+export function resolveAgentByPhone<T extends { contact_phone?: string | null }>(
+  agents: readonly T[],
+  phone: string,
+): T | undefined {
+  const raw = String(phone ?? '');
+  const canonicalPhone = toE164Kenyan(raw.replace(/\s+/g, ''));
+  // A BLANK phone is not an identity, and neither is an unnormalisable one: a
+  // value that canonicalises to nothing matches NOTHING, so two unusable strings
+  // can never become "equal" to each other and an empty submitted number can
+  // never resolve an account whose stored number is also empty. Both callers
+  // validate the format before they get here, so no reachable request is
+  // affected — this only removes an accident.
+  if (!canonicalPhone) return undefined;
+
+  const exact = agents.find((a) => a?.contact_phone === raw);
+  if (exact) return exact;
+
+  return agents.find(
+    (a) => toE164Kenyan(String(a?.contact_phone || '').replace(/\s+/g, '')) === canonicalPhone,
+  );
+}
+
+/**
  * Masks a phone number for logging — keeps enough to trace/correlate a
  * specific request in operational logs without printing the full number.
  * "+254712345678" -> "+254712***678". Never use the raw phone number in a

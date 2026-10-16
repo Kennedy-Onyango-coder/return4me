@@ -365,16 +365,27 @@ export default function AgentView({ token, setToken, categories, refreshCategori
     e.preventDefault();
     setAuthError('');
 
-    // B1 — DEFENCE IN DEPTH, NEVER A SUBSTITUTE FOR THE SERVER.
+    // B1 — DEFENCE IN DEPTH FOR REGISTRATION, NEVER A SUBSTITUTE FOR THE SERVER.
     //
     // The guided flow cannot reach Review with an unusable destination: the
     // Payout step refuses to advance and re-writes its value in canonical form
     // (see handleAuthRequest), and the server re-validates and normalises
-    // independently. This branch exists so this payload can never carry a null
-    // or raw-shaped destination if the form is reached another way: it fails
-    // closed on the existing authentication-error channel instead of sending a
-    // value the launch payout policy would refuse.
-    if (canonicalPayoutDestination === null) {
+    // independently. This branch exists so a REGISTRATION payload can never
+    // carry a null or raw-shaped destination if the form is reached another
+    // way: it fails closed on the existing authentication-error channel instead
+    // of sending a value the launch payout policy would refuse.
+    //
+    // SCOPE IS LOAD-BEARING, AND IT IS REGISTRATION ONLY — the same scope the
+    // payout guard in handleAuthRequest already has. This handler is ALSO the
+    // SIGN-IN path for an existing agent, where none of the payout fields are
+    // part of the submission (the server's existing-agent arm reads nothing but
+    // the resolved agent id). `canonicalPayoutDestination` derives from
+    // `tillNumber`, a registration-only field that is always empty on the
+    // sign-in path, so an unscoped check here returned before the verification
+    // request below and NO existing agent could ever complete email-OTP
+    // sign-in — the failure the applicant experiences as "the code arrives, but
+    // the form refuses it".
+    if (isRegistering && canonicalPayoutDestination === null) {
       setAuthError(payoutDestinationMessage);
       return;
     }
