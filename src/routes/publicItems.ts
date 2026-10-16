@@ -37,13 +37,19 @@ import { toE164Kenyan } from '../services/auth.ts';
 import { toPublicItemView } from '../services/publicItemView.ts';
 import { toOwnerSafeAgentView } from '../services/ownerSafeViews.ts';
 import { isPickupEligibleClaimStatus } from '../config/claimStatuses.ts';
+// The shared item-id shape guard (see utils/publicRoutes.ts for why it lives
+// there, and for what it is — and is not — an authority over).
+import { ITEM_ID_PATTERN } from '../utils/publicRoutes.ts';
 
 // Item IDs are drop-off codes ('R4M-' + 3 digits + 3 alphanumerics — see the
-// report route in server.ts). This is a shape/abuse guard, NOT an authorization
-// control: the lookup itself is done by primary key, and anything that doesn't
-// resolve is reported as "not publicly available" rather than as a distinct
-// error the caller could use to probe for internal records.
-const ITEM_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,49}$/;
+// report route in server.ts). The SHAPE GUARD itself now lives in
+// utils/publicRoutes.ts and is imported here (Batch 1 / P1): the pure SEO
+// planner validates item ids against the SAME pattern, and two copies of a
+// security-relevant shape rule are two copies that can drift. It remains a
+// shape/abuse guard, NOT an authorization control: the lookup itself is done by
+// primary key, and anything that doesn't resolve is reported as "not publicly
+// available" rather than as a distinct error the caller could use to probe for
+// internal records.
 
 const MESSAGES = {
   // Deliberately ONE message for "no such item", "not claimable any more",

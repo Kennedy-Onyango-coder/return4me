@@ -247,6 +247,16 @@ import { isSentryDsnUsable, sentryDsnProblem, sentryDsnProblemLabel } from './co
 // Phase 12: containment-checked resolution of /src/* sourcemap requests (see the
 // module's own documentation for the traversal defect it replaces).
 import { resolveContainedSourcePath } from './utils/safeStaticPath';
+// BATCH 1 / P2 (SEO): the P1 page-request planner and the pure head injector
+// that writes its plan into the document. Both are dependency-free, so the
+// production HTML path gains no database read, no network call and no state.
+import { planPageRequest } from './utils/publicRoutes';
+import {
+  applySeoHead,
+  notFoundDocument,
+  NOINDEX_ROBOTS_DIRECTIVE,
+  type SeoHeadPlan,
+} from './utils/seoHead';
 // PHASE 10 (F-2): the escrow-holdings aggregate. The admin "Escrow Funds Held"
 // card previously displayed a claim COUNT where a monetary total belongs.
 import { computeEscrowFundsHeld, computeMoneyInFlight, computeUnresolvedPayouts } from './services/escrowFunds';
@@ -1147,6 +1157,92 @@ async function startServer() {
     }
 
   });
+}
+
+// ===========================================================================
+// BATCH 1 / P2 (SEO) - THE PRODUCTION PAGE RESPONDER.
+// ===========================================================================
+// WHY THIS EXISTS
+// The SPA catch-all below used to answer EVERY extensionless path with the same
+// 200 document: the built index.html, whose head declares
+// `<meta name="robots" content="index, follow">` and
+// `<link rel="canonical" href="https://return4me.co.ke/">`. One response
+// therefore told a crawler that `/console`, `/agent_portal`,
+// `/activate-email?token=...` and a mistyped path are all the homepage, and are
+// all indexable: a typo was indistinguishable from a real page, and a private
+// screen was advertised as indexable.
+//
+// planPageRequest() (utils/publicRoutes.ts, P1) decides what a request path IS.
+// The two functions here are the only other pieces - read the template, write
+// the plan into its head - and nothing from the planner is duplicated here.
+//
+// TEMPLATE SAFETY: index.html and dist/index.html are READ and never written,
+// replaced or temporarily overwritten. applySeoHead() is a pure transformation
+// of an in-memory string, so no request can corrupt a deployment and the server
+// never produces a build artifact.
+//
+// FAIL CLOSED: if the template is unreadable, or its expected robots/canonical
+// markers are absent, the response is served noindex with NO canonical rather
+// than with a canonical nobody verified. Each failure is logged ONCE, and the
+// request path and query are deliberately excluded from that log line - the
+// query string of an activation URL is a credential.
+// ===========================================================================
+
+/** The in-memory template cache: the build output is read at most once. */
+let seoHeadTemplate: { distPath: string; html: string } | null = null;
+/** One-shot log guards, so a broken build cannot flood the log per request. */
+let seoHeadTemplateFailureLogged = false;
+let seoHeadMarkersFailureLogged = false;
+
+/** Read (and cache) the built SPA shell, or null when it cannot be read. */
+function loadSeoHeadTemplate(distPath: string): string | null {
+  if (seoHeadTemplate && seoHeadTemplate.distPath === distPath) return seoHeadTemplate.html;
+  try {
+    const html = fs.readFileSync(path.join(distPath, 'index.html'), 'utf8');
+    seoHeadTemplate = { distPath, html };
+    return html;
+  } catch (err) {
+    if (!seoHeadTemplateFailureLogged) {
+      seoHeadTemplateFailureLogged = true;
+      console.error('[SEO] Unable to read the built index.html for head injection:', err instanceof Error ? err.message : err);
+    }
+    return null;
+  }
+}
+
+/**
+ * Answer a page request with the built SPA shell carrying the plan's canonical
+ * path and robots directive. HEAD needs no special case: Express/Node answer it
+ * with the status and headers of the equivalent GET and no body.
+ *
+ * `X-Robots-Tag` is written ONLY when the response really is noindex - never
+ * `index, follow` for every page. The HTML meta tag already says `index,
+ * follow` where that is true, and a blanket header would override the correct
+ * directive of every private page.
+ */
+function sendPlannedPage(res: Response, plan: SeoHeadPlan, distPath: string): void {
+  const template = loadSeoHeadTemplate(distPath);
+  if (template === null) {
+    // No template means no head to correct. Fail closed rather than serve a 200
+    // whose head nobody verified.
+    res.status(404);
+    res.setHeader('X-Robots-Tag', NOINDEX_ROBOTS_DIRECTIVE);
+    res.type('html').send(notFoundDocument());
+    return;
+  }
+
+  const { html, headMarkersRecognised } = applySeoHead(template, plan);
+  if (!headMarkersRecognised) {
+    if (!seoHeadMarkersFailureLogged) {
+      seoHeadMarkersFailureLogged = true;
+      console.error('[SEO] The built index.html is missing the expected robots/canonical head markers; serving noindex, nofollow with no canonical until the frontend is rebuilt.');
+    }
+    res.setHeader('X-Robots-Tag', NOINDEX_ROBOTS_DIRECTIVE);
+  } else if (plan.noindex) {
+    res.setHeader('X-Robots-Tag', NOINDEX_ROBOTS_DIRECTIVE);
+  }
+
+  res.type('html').send(html);
 }
 
 // P2-A4 - APPLICATION CONSTRUCTION SEPARATED FROM LISTENING.
@@ -5343,6 +5439,27 @@ async function createApp() {
     }
   });
 
+  // ==========================================================================
+  // BATCH 1 / P2 (SEO) - TERMINAL JSON 404 FOR UNMATCHED API ROUTES.
+  // ==========================================================================
+  // Every API route in this file and in the extracted route modules is
+  // registered ABOVE this line, so reaching it means no endpoint matched. Before
+  // this handler existed, GET /api/does-not-exist fell through to the SPA
+  // catch-all below and was answered with 200 text/html - the built index.html -
+  // for a JSON endpoint: a client's `await res.json()` threw on a 200, and a
+  // probe could not tell a missing endpoint from a working one.
+  //
+  // Placement is the control: AFTER every registration (so it can shadow
+  // nothing) and BEFORE the frontend fallback (which should only ever see page
+  // requests). It is /api-scoped, so the HTML path is untouched, and it answers
+  // only "no such endpoint" - thrown errors still belong to the JSON API error
+  // handler below, and the body is a fixed string, so no request value is
+  // echoed back to the caller.
+  app.use('/api', (req, res) => {
+    if (res.headersSent) return;
+    res.status(404).json({ error: 'API endpoint not found.' });
+  });
+
   // Vite integration as standard middleware for frontend serving
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -5444,7 +5561,52 @@ async function createApp() {
       if (path.extname(req.path)) {
         return res.status(404).send('Not Found');
       }
-      res.sendFile(path.join(distPath, 'index.html'));
+
+      // -------------------------------------------------------------------
+      // BATCH 1 / P2 (SEO) - WHAT THIS EXTENSIONLESS REQUEST ACTUALLY IS.
+      //
+      // Everything above has already had its turn (express.static, the /src
+      // denylist, the /src sourcemap branch, the extension guard), so what
+      // reaches here is an extensionless PAGE request - and until now every one
+      // of them, a real page, a private screen, a mistyped path and a
+      // token-bearing activation link alike, was answered with the same 200
+      // index.html whose head advertises the homepage as canonical and
+      // `index, follow`.
+      //
+      // The classification is NOT re-implemented here: planPageRequest() is the
+      // single pure authority (utils/publicRoutes.ts) and this block only
+      // carries out the plan it returns, using its `status` and `location`
+      // verbatim. The two rules the planner deliberately leaves to the caller
+      // are applied here:
+      //   * only GET/HEAD may follow a redirect plan;
+      //   * the head is rewritten IN MEMORY (no file on disk is ever touched).
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        return res.status(404).send('Not Found');
+      }
+
+      // Path and query are passed SEPARATELY, in the two shapes the planner
+      // documents: req.path never contains the query string, and only the query
+      // part of req.url is added to it.
+      const queryIndex = req.url.indexOf('?');
+      const plan = planPageRequest(req.path, queryIndex === -1 ? '' : req.url.slice(queryIndex));
+
+      if (plan.kind === 'redirect') {
+        // status/location come from the planner and never from request values,
+        // and a token-bearing page is never redirected at all, so a credential
+        // cannot ride out in a Location header or be dropped by one.
+        return res.redirect(plan.status, plan.location);
+      }
+
+      if (plan.kind === 'notFound') {
+        // A real 404, never a 200 homepage shell: a 200 would keep an unknown or
+        // private URL in the index under the homepage's canonical. The requested
+        // path and query are deliberately NOT reflected into this document.
+        res.status(404);
+        res.setHeader('X-Robots-Tag', NOINDEX_ROBOTS_DIRECTIVE);
+        return res.type('html').send(notFoundDocument());
+      }
+
+      return sendPlannedPage(res, plan, distPath);
     });
   }
 

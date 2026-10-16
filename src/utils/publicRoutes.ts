@@ -86,6 +86,17 @@ export type PublicRoute =
 
 const ITEM_PATH_PREFIX = '/item';
 const ITEM_PATH = /^\/item\/([^/]+)$/i;
+
+// ITEM IDS — ONE shared shape guard (Batch 1 / P1).
+// Moved here verbatim from routes/publicItems.ts, which held the only copy, so
+// the server route and the pure SEO planner below can never disagree about what
+// a well-formed item id is. Item IDs are drop-off codes ('R4M-' + 3 digits + 3
+// alphanumerics — see the report route in server.ts). This is a shape/abuse
+// guard, NOT an authorization control: the lookup itself is done by primary key,
+// and anything that doesn't resolve is reported as "not publicly available"
+// rather than as a distinct error the caller could use to probe for internal
+// records.
+export const ITEM_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,49}$/;
 const ACCOUNT_PATH = '/account';
 const CONSOLE_PATH = '/console';
 const AGENT_PATH = '/agent_portal';
@@ -385,4 +396,286 @@ export function pathForView(view: PublicViewName): string {
  */
 export function isRestorableView(value: unknown): value is PublicViewName {
   return typeof value === 'string' && (RESTORABLE_VIEWS as ReadonlyArray<string>).includes(value);
+}
+
+// ===========================================================================
+// BATCH 1 / P1 — SEO PAGE-REQUEST PLANNER (pure, additive)
+// ===========================================================================
+// WHY THIS EXISTS
+// The SPA catch-all in server.ts answers EVERY extensionless path with the same
+// 200 document, so a crawler cannot tell a real public page (/lost) from a typo
+// (/lostt): both look like a successfully served page. planPageRequest below is
+// the single, pure place that decides what a request path actually IS — a known
+// page (indexable or not), a normalisation redirect, a legacy social link, or
+// nothing at all — so the server integration can answer with a real status code
+// and the head injector can emit one canonical URL plus the right robots
+// directive for the page it is serving.
+//
+// It is deliberately PURE and synchronous: no I/O, no environment reads, no
+// database, no server-only or browser-only import. Every branch below is
+// executable by a unit test, which is exactly why the crawl rules live here
+// instead of being spelled out inside the server's fallback handler.
+//
+// THE CRAWL RULE THIS ENCODES
+//   * reachable, wanted         -> indexable page
+//   * reachable, unwanted       -> noindex page (the URL still resolves and the
+//                                  page itself tells the crawler to drop it)
+//   * not ours to serve at all  -> notFound (the server integration decides
+//                                  whether that becomes a 404)
+// The indexable and noindex buckets are disjoint by construction, so one URL
+// can never be both.
+//
+// NOT A METHOD DECISION (deliberate)
+// There is no HTTP-method parameter: this function answers "what is this URL?",
+// never "may this request be redirected?". The server integration MUST apply the
+// method rule itself — only GET/HEAD may follow a redirect plan, and /api/*,
+// /src/* and static file paths must never reach this planner at all.
+
+/**
+ * Public pages the app publishes as destinations and wants crawled: the
+ * homepage, the lost-report entry point, and every path in the app's own public
+ * destination list (VIEW_PATHS — the unauthenticated screens that have a real,
+ * linkable URL).
+ *
+ * Derived rather than re-listed on purpose: a new public screen added to
+ * VIEW_PATHS joins the indexable set automatically, so this bucket cannot drift
+ * from the paths the app actually serves.
+ *
+ * '/sign-in' is in that list and is therefore indexable here: it is a public,
+ * unauthenticated destination a visitor legitimately searches for by name. If
+ * the owner would rather the sign-in chooser stayed out of search results,
+ * moving '/sign-in' into NOINDEX_PAGE_PATHS is a one-line change — the decision
+ * is deliberately visible here instead of buried in a <meta> tag.
+ */
+export const INDEXABLE_PAGE_PATHS: ReadonlyArray<string> = [
+  '/',
+  REPORT_LOST_PATH,
+  ...VIEW_PATHS.map((entry) => entry.path),
+];
+
+/**
+ * Addressable pages that must never be indexed, because reaching one means the
+ * visitor is inside (or entering) a private, privileged or credential-bearing
+ * surface:
+ *   /account               the authentication boundary and customer surface
+ *   /console               the admin console
+ *   /agent_portal          the agent workspace
+ *   /activate-email        the emailed one-time customer activation link
+ *   /activate-agent-email  the emailed one-time agent activation link
+ *
+ * These are listed explicitly rather than derived because they are NOT in
+ * VIEW_PATHS and must not be: the two activation links arrive by email and are
+ * never linked from the app.
+ *
+ * WHY noindex AND NOT A ROBOTS RULE: every one of them is publicly reachable and
+ * unauthenticated by design (the activation link has to work for someone who has
+ * no session yet), so a robots.txt rule would stop a crawler from ever READING
+ * the noindex — and from following a link a real person was sent — while noindex
+ * is obeyed on the page itself. Crawl-forbidden is robots.txt's job; this list
+ * is for pages that may be crawled but must not be kept.
+ */
+export const NOINDEX_PAGE_PATHS: ReadonlyArray<string> = [
+  ACCOUNT_PATH,
+  CONSOLE_PATH,
+  AGENT_PATH,
+  ACTIVATE_EMAIL_PATH,
+  ACTIVATE_AGENT_EMAIL_PATH,
+];
+
+/**
+ * The subset of NOINDEX_PAGE_PATHS whose URL carries a one-time credential. Its
+ * own list because these paths get the strictest treatment in the planner: they
+ * are NEVER redirected (a redirect would have to either propagate the credential
+ * or drop it) and their canonical path never contains a query string.
+ */
+export const TOKEN_BEARING_PAGE_PATHS: ReadonlyArray<string> = [
+  ACTIVATE_EMAIL_PATH,
+  ACTIVATE_AGENT_EMAIL_PATH,
+];
+
+/**
+ * BATCH POLICY (temporary): found-item detail pages are rendered noindex.
+ *
+ * /item/<id> is a real, linkable page and will very likely deserve indexing —
+ * but whether a given item is publicly claimable is a DATABASE question (status,
+ * disputes, flags), and this planner is pure: it must not read the database to
+ * answer it. Until a separate item-page indexability batch gives that question
+ * its own answer, every well-formed item URL is treated as noindex, which is the
+ * fail-closed choice: declining to index a page costs nothing, whereas indexing
+ * an item that is no longer claimable advertises a dead end. Flip this ONE
+ * constant when that batch lands.
+ */
+export const ITEM_PAGES_NOINDEX = true;
+
+const NOINDEX_PAGE_PATH_SET: ReadonlySet<string> = new Set(NOINDEX_PAGE_PATHS);
+const TOKEN_BEARING_PAGE_PATH_SET: ReadonlySet<string> = new Set(TOKEN_BEARING_PAGE_PATHS);
+const KNOWN_PAGE_PATH_SET: ReadonlySet<string> = new Set([...INDEXABLE_PAGE_PATHS, ...NOINDEX_PAGE_PATHS]);
+
+/**
+ * What the server should do with a page request. Three outcomes and nothing
+ * else — a plan can never be half a page and half a redirect.
+ */
+export type PageRequestPlan =
+  | {
+      kind: 'page';
+      /**
+       * The one canonical, origin-free path for this page, e.g. '/lost'. Never
+       * an absolute URL and never a query string: the caller owns the
+       * production origin.
+       */
+      canonicalPath: string;
+      /** True when the page must be served with a noindex directive. */
+      noindex: boolean;
+    }
+  | {
+      kind: 'redirect';
+      /** 301: every destination here is a permanent, single canonical identity. */
+      status: 301;
+      /**
+       * Origin-free, path-only destination. Never absolute, never
+       * protocol-relative, and never a raw value lifted straight out of the
+       * query string.
+       */
+      location: string;
+    }
+  | { kind: 'notFound' };
+
+/** The plan for a known page path, which is always already lowercase. */
+function pagePlanFor(path: string): PageRequestPlan {
+  return {
+    kind: 'page',
+    canonicalPath: path,
+    // The two buckets are disjoint (asserted by the unit tests), so this is
+    // exactly "is this path in the noindex bucket".
+    noindex: NOINDEX_PAGE_PATH_SET.has(path),
+  };
+}
+
+/**
+ * The ONLY query parameters allowed to survive a normalisation redirect.
+ *
+ * Everything else is dropped — tracking parameters included, which is rather the
+ * point of a canonical redirect — and these two are REBUILT from validated
+ * values instead of being echoed back:
+ *   /lost?track=1      the "open Track My Claim" intent read by OwnerView
+ *   /account?next=...  the post-sign-in return destination, accepted only when
+ *                      isSafeReturnPath() accepts it
+ *
+ * Both are documented app behaviour (see lostTrackPath() and accountPath()
+ * above): a normalisation redirect that dropped them would break a flow the app
+ * deliberately built into its URLs, and that is the one case where preserving a
+ * parameter is justified. A credential can never ride through here, because the
+ * only paths that carry one are token-bearing and are never redirected at all.
+ */
+function preservedIntentQuery(path: string, search: string): string {
+  if (!search) return '';
+  let params: URLSearchParams;
+  try {
+    params = new URLSearchParams(search);
+  } catch {
+    return '';
+  }
+  if (path === ACCOUNT_PATH) {
+    const next = params.get('next');
+    return isSafeReturnPath(next) ? `?next=${encodeURIComponent(next)}` : '';
+  }
+  if (path === LOST_PATH) {
+    return params.get('track') === '1' ? '?track=1' : '';
+  }
+  return '';
+}
+
+/**
+ * The item-detail branch.
+ *
+ * The id is validated in the form the runtime resolves it to (parsePublicRoute
+ * percent-decodes the segment) and against the form the public item API enforces
+ * (the shared ITEM_ID_PATTERN), so a URL the app renders as an item page can
+ * never be planned as unknown, and an id the API would refuse can never be
+ * planned as a page.
+ *
+ * The id itself is carried out BYTE FOR BYTE: never re-cased, trimmed,
+ * slugified or re-encoded. Only the route AROUND it may be normalised — the
+ * '/item' prefix and a trailing slash — and a query string is never part of it.
+ */
+function planItemPage(path: string, rawId: string, hadTrailingSlash: boolean): PageRequestPlan {
+  let decodedId = rawId;
+  try {
+    decodedId = decodeURIComponent(rawId);
+  } catch {
+    // Malformed percent-encoding: the raw segment is what the page would use,
+    // exactly as parsePublicRoute decides. The shape guard below is what rejects
+    // it if it is not an item id.
+  }
+
+  if (!ITEM_ID_PATTERN.test(decodedId)) return { kind: 'notFound' };
+
+  const canonicalPath = `${ITEM_PATH_PREFIX}/${rawId}`;
+  if (hadTrailingSlash || !path.startsWith(`${ITEM_PATH_PREFIX}/`)) {
+    return { kind: 'redirect', status: 301, location: canonicalPath };
+  }
+  return { kind: 'page', canonicalPath, noindex: ITEM_PAGES_NOINDEX };
+}
+
+/**
+ * Plan the response for a page request: the whole point of Batch 1.
+ *
+ * `pathname` is a PATH and `search` is the query string (in Express terms,
+ * `req.path` plus the query part of `req.url`). A full URL, a value containing
+ * '?' or '#', or anything that is not origin-relative is refused rather than
+ * guessed at: a planner that silently reinterprets a URL is a redirect risk, not
+ * a convenience.
+ *
+ * Deterministic by construction — same input, same plan, no state, no I/O.
+ */
+export function planPageRequest(pathname: string, search = ''): PageRequestPlan {
+  if (typeof pathname !== 'string' || pathname.length === 0) return { kind: 'notFound' };
+  if (!pathname.startsWith('/') || pathname.startsWith('//')) return { kind: 'notFound' };
+  if (pathname.includes('?') || pathname.includes('#')) return { kind: 'notFound' };
+
+  // A trailing slash is the one shape the runtime already tolerates
+  // (normalizePath strips it), so the planner records that one arrived and
+  // answers with a redirect to the same page without it.
+  const hadTrailingSlash = pathname.length > 1 && pathname.endsWith('/');
+  const stripped = hadTrailingSlash ? pathname.replace(/\/+$/, '') : pathname;
+  const path = stripped === '' ? '/' : stripped;
+
+  const itemMatch = ITEM_PATH.exec(path);
+  if (itemMatch) return planItemPage(path, itemMatch[1], hadTrailingSlash);
+
+  const lowered = path.toLowerCase();
+
+  if (lowered === '/') {
+    // LEGACY SOCIAL LINK — https://return4me.co.ke/?claim=<itemId>. social.ts
+    // publishes exactly this form, so those links are already out in the world.
+    // Only an id that passes the SAME shape guard the public item API uses is
+    // translated, and the destination is built by itemPath() — never a raw query
+    // value. Every other value leaves the visitor on the homepage, which is what
+    // the app does today, so no malformed or hostile query string can ever turn
+    // into a redirect.
+    const legacyId = legacyClaimItemId('/', search);
+    if (legacyId && ITEM_ID_PATTERN.test(legacyId)) {
+      return { kind: 'redirect', status: 301, location: itemPath(legacyId) };
+    }
+    return pagePlanFor(lowered);
+  }
+
+  if (!KNOWN_PAGE_PATH_SET.has(lowered)) return { kind: 'notFound' };
+
+  // A token-bearing page is NEVER redirected. Its URL carries a one-time
+  // credential, so a redirect would have to either propagate that credential
+  // (this planner never puts one in a Location header) or silently drop it
+  // (which breaks the activation the visitor just clicked). It stays the page it
+  // already is, always noindex.
+  if (TOKEN_BEARING_PAGE_PATH_SET.has(lowered)) return pagePlanFor(lowered);
+
+  if (hadTrailingSlash || path !== lowered) {
+    return {
+      kind: 'redirect',
+      status: 301,
+      location: lowered + preservedIntentQuery(lowered, search),
+    };
+  }
+
+  return pagePlanFor(lowered);
 }
