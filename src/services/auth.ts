@@ -331,11 +331,15 @@ export function normalizeAtSmsResult(
  *
  * Live SMS is sent only when BOTH real credentials AND SMS_ENABLED=true are
  * configured. In simulation/dev fallback mode (no credentials, or SMS_ENABLED
- * not true and non-production), the code is printed to the console with an
- * unmistakable "SIMULATION" label — the ONLY path that ever logs a real OTP
- * code. In production, when SMS cannot actually be delivered
- * (SMS_ENABLED missing/false or no provider configured), this returns failure
- * so the caller is never told an SMS was sent when it was not.
+ * not true and non-production), an unmistakable "SIMULATION" label is printed
+ * with the MASKED recipient and NO code at all. BATCH S1 removed the code from
+ * this line: it used to print a real OTP on the reasoning that a dev/sandbox
+ * console is harmless, but console output is captured into whatever store
+ * aggregates it (a developer's terminal history, a CI job log, a log shipper)
+ * and is retained long after the 5-minute code has expired. In production, when
+ * SMS cannot actually be delivered (SMS_ENABLED missing/false or no provider
+ * configured), this returns failure so the caller is never told an SMS was sent
+ * when it was not.
  */
 export async function sendCodeViaSms(cleanPhone: string, code: string, label: string, message: string): Promise<{ success: boolean; message: string }> {
   const canSendLive = smsEnabled && !isAtDummy && !!atSMSClient;
@@ -349,7 +353,11 @@ export async function sendCodeViaSms(cleanPhone: string, code: string, label: st
       console.warn(`[SMS ${label} GATEWAY] SMS is not deliverable in this configuration (SMS_ENABLED missing/false, or provider not configured). Not claiming delivery.`);
       return { success: false, message: SMS_UNAVAILABLE_MESSAGE };
     }
-    console.log(`\n========================================\n[SMS ${label} GATEWAY - SIMULATION, DEV/SANDBOX ONLY] Sending code ${code} to ${maskPhoneForLog(cleanPhone)}\n========================================\n`);
+    // BATCH S1 - the code is NOT part of this line any more. The literal
+    // "SIMULATION, DEV/SANDBOX ONLY" label is retained (it is asserted by
+    // src/__tests__/smsIdempotencyRateLimitN6.test.ts) and so is the masked
+    // recipient; only the credential is gone.
+    console.log(`\n========================================\n[SMS ${label} GATEWAY - SIMULATION, DEV/SANDBOX ONLY] Simulated send to ${maskPhoneForLog(cleanPhone)} - the code is deliberately NOT logged.\n========================================\n`);
     return { success: true, message };
   }
 
@@ -498,7 +506,13 @@ export const AuthService = {
         console.warn('[SMS GATEWAY] SMS is not deliverable in this configuration. Not claiming delivery.');
         return false;
       }
-      console.log(`\n========================================\n[SMS GATEWAY - SIMULATION] Sending to ${maskPhoneForLog(cleanPhone)}: ${message}\n========================================\n`);
+      // BATCH S1 - the caller's message is NOT printed any more. It is a full
+      // sentence whose body can carry a live credential (the pickup code, a
+      // verification code), so logging it verbatim wrote that credential into the
+      // log. Only its SIZE is kept as context; the masked recipient and the
+      // SIMULATION label remain, so a developer can still see that a simulated
+      // send happened and to whom.
+      console.log(`\n========================================\n[SMS GATEWAY - SIMULATION] Simulated send to ${maskPhoneForLog(cleanPhone)} - message NOT logged (${String(message ?? '').length} chars).\n========================================\n`);
       return true;
     }
     try {

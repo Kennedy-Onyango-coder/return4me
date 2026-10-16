@@ -247,6 +247,11 @@ import { isSentryDsnUsable, sentryDsnProblem, sentryDsnProblemLabel } from './co
 // Phase 12: containment-checked resolution of /src/* sourcemap requests (see the
 // module's own documentation for the traversal defect it replaces).
 import { resolveContainedSourcePath } from './utils/safeStaticPath';
+// BATCH S1: the request-log redactor. The [HTTP] logger below logs the request
+// URL, and activation links carry a one-time credential in the query string
+// (?token=...), so what may be written to the log is decided in ONE pure place
+// (see the module's own documentation for the defect and the matching rules).
+import { redactRequestUrlForLog } from './utils/safeRequestLog';
 // BATCH 1 / P2 (SEO): the P1 page-request planner and the pure head injector
 // that writes its plan into the document. Both are dependency-free, so the
 // production HTML path gains no database read, no network call and no state.
@@ -1372,10 +1377,66 @@ async function createApp() {
 
   // Simple Request Logger
   app.use((req, res, next) => {
-    // Sanitize log to prevent regex-based log parsers from falsely flagging ErrorBoundary component requests as errors
-    const safeUrl = req.url.replace(/ErrorBoundary/gi, 'ErrBoundary');
+    // BATCH S1 - THE RAW req.url IS NO LONGER LOGGED.
+    //
+    // This middleware runs before every route and before the static/SPA
+    // handlers, so it sees every request. Activation emails link to
+    // /activate-email?token=<32 random bytes> (and /activate-agent-email
+    // likewise), and the activation page is reached by an ordinary GET of that
+    // URL - so logging req.url verbatim wrote a LIVE, single-use credential into
+    // the application log every time a user clicked a link in their inbox.
+    //
+    // The redactor replaces the VALUE of every credential-looking parameter
+    // (token, secret, code, pin, password, session, authorization, signature,
+    // key, claim, ...) with [REDACTED], leaves the path and every harmless
+    // diagnostic parameter intact, never decodes a value (so no CRLF can be
+    // injected into a log line), and caps the line at 512 characters. See
+    // utils/safeRequestLog.ts for the matching rules and their documented
+    // limitations.
+    const redactedUrl = redactRequestUrlForLog(req.url);
+    // Sanitize log to prevent regex-based log parsers from falsely flagging ErrorBoundary component requests as errors.
+    // Deliberately applied AFTER redaction, so this existing behaviour is
+    // preserved exactly (the replace only ever shortens the string, so the
+    // 512-character bound still holds).
+    const safeUrl = redactedUrl.replace(/ErrorBoundary/gi, 'ErrBoundary');
     console.log(`[HTTP] ${req.method} ${safeUrl}`);
     next();
+  });
+
+  // ==========================================================================
+  // BATCH S1 - THE LEGACY `/?claim=<itemId>` LINK, ANSWERED BEFORE STATIC FILES.
+  // ==========================================================================
+  // social.ts has ALREADY published https://return4me.co.ke/?claim=<itemId>, and
+  // P1's planner (utils/publicRoutes.ts) turns exactly that form into the 301
+  // those links need. Until now the plan was unreachable over HTTP: in
+  // production `express.static(dist)` resolves '/' to dist/index.html and answers
+  // the request BEFORE the catch-all that consults the planner, so a published
+  // link was handed the SPA shell with a 200 instead of being redirected
+  // (measured - see src/__tests__/seoPageIntegrationP2.test.ts).
+  //
+  // This route is the smallest placement that works in BOTH serving modes: after
+  // the request logger above (so the request is still logged) and before the Vite
+  // middleware / express.static below, matching only the exact path '/'.
+  //
+  // It is NOT a second routing authority. planPageRequest() stays the only
+  // decision-maker: the path is passed as the literal '/', the query is passed in
+  // exactly the shape the catch-all passes it, and only a `redirect` plan is
+  // carried out, using the planner's OWN status and location (which never contain
+  // a raw request value). Every other outcome - including an absent, empty or
+  // malformed ?claim= - calls next() and leaves the existing handlers untouched,
+  // so plain '/' requests, static assets, the SPA shell, the real 404s and the
+  // JSON /api 404 all behave exactly as before.
+  //
+  // Nothing here authenticates, mutates state or moves money: the parameter only
+  // selects a PUBLIC item URL (the same page /item/<id> already serves) and is
+  // never read as authorisation to claim anything.
+  app.get('/', (req, res, next) => {
+    const queryIndex = req.url.indexOf('?');
+    const plan = planPageRequest('/', queryIndex === -1 ? '' : req.url.slice(queryIndex));
+    if (plan.kind === 'redirect') {
+      return res.redirect(plan.status, plan.location);
+    }
+    return next();
   });
 
   /**

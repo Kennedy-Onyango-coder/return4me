@@ -282,7 +282,7 @@ describe('P2 integration: the /api terminator and the static boundary', () => {
 });
 
 describe('P2 integration: the legacy ?claim= homepage link', () => {
-  it('is a redirect plan in the planner, but express.static answers the URL first', async () => {
+  it('is a redirect plan in the planner AND a real 301 over HTTP (Batch S1)', async () => {
     // P1 translates the already-published https://return4me.co.ke/?claim=<id>
     // link into a 301 to /item/<id>.
     expect(planPageRequest('/', `?claim=${ITEM_ID}`)).toEqual({
@@ -292,19 +292,50 @@ describe('P2 integration: the legacy ?claim= homepage link', () => {
     });
 
     // MEASURED, not assumed: express.static is registered BEFORE the catch-all
-    // and resolves '/' to dist/index.html, so '/?claim=<id>' is answered by the
-    // shell and the planner never sees it — the redirect plan above is therefore
-    // unreachable for this one URL. The SPA keeps handling ?claim= as it does
-    // today; making the planner authoritative here would mean changing the
-    // static handler's index behaviour, which this batch does not do.
+    // and resolves '/' to dist/index.html, so '/?claim=<id>' was answered by the
+    // shell with a 200 and the planner never saw it - the plan above was
+    // UNREACHABLE for this one URL, and the published social link never received
+    // its redirect. Batch S1 registers the planner's homepage decision ahead of
+    // the static mount, so this is now the real response.
     const res = await probe(`/?claim=${ITEM_ID}`);
-    expect(res.status).toBe(200);
-    expect(res.location).toBeNull();
-    expect(String(res.headers.get('content-type'))).toContain('text/html');
+    expect(res.status).toBe(301);
+    expect(res.location).toBe(`/item/${ITEM_ID}`);
+    // A legacy link is NOT an authorisation step: no session is issued, nothing
+    // is claimed, and the destination is path-only (never a raw query value).
+    expect(res.headers.get('set-cookie')).toBeNull();
+    expect(String(res.location)).not.toContain('?');
 
-    // The property that must hold regardless of which layer answers: the query
-    // string never reaches the canonical URL.
-    expect(res.body).toContain('<link rel="canonical" href="https://return4me.co.ke/" />');
-    expect(res.body).not.toContain('?claim');
+    if (distReady) {
+      // ...and it lands on the SAME ordinary public item page /item/<id> serves.
+      const item = await probe(`/item/${ITEM_ID}`);
+      expect(item.status).toBe(200);
+      expect(item.body).toContain(`<link rel="canonical" href="${SITE_ORIGIN}/item/${ITEM_ID}" />`);
+    }
+  });
+
+  it('does not let extra parameters change the destination', async () => {
+    const res = await probe(`/?claim=${ITEM_ID}&utm_source=facebook`);
+    expect(res.status).toBe(301);
+    expect(res.location).toBe(`/item/${ITEM_ID}`);
+  });
+
+  it.skipIf(!distReady)('leaves an absent, empty or malformed ?claim= on the homepage, exactly as before', async () => {
+    for (const urlPath of [
+      '/',
+      '/?claim=',
+      '/?claim=%20',
+      '/?claim=not%20a%20valid%20id',
+      '/?claim=%3Cscript%3E',
+    ]) {
+      const res = await probe(urlPath);
+      // Still the ordinary homepage shell: no redirect, no 404.
+      expect(res.status, urlPath).toBe(200);
+      expect(res.location, urlPath).toBeNull();
+      expect(String(res.headers.get('content-type')), urlPath).toContain('text/html');
+      // The property that must hold regardless of which layer answers: the query
+      // string never reaches the canonical URL.
+      expect(res.body, urlPath).toContain('<link rel="canonical" href="https://return4me.co.ke/" />');
+      expect(res.body, urlPath).not.toContain('?claim');
+    }
   });
 });

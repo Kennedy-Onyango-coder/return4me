@@ -641,15 +641,31 @@ export const EmailService = {
         console.error('[EMAIL SERVICE] RESEND_API_KEY is not configured in production — refusing to claim the email was sent. No delivery happened.');
         return { accepted: false, providerMessageId: null, providerError: null };
       }
+      // BATCH S1 - METADATA ONLY: the bodies are deliberately NOT printed.
+      //
+      // This outbox used to print the full text/plain and text/html parts, and an
+      // activation message carries its one-time link TWICE in each of them (the
+      // button href plus the raw URL fallback, and the plain-text rendering of
+      // both). Every test run or local registration of a customer or an agent
+      // therefore wrote a LIVE activation token into the console - and from there
+      // into any captured CI log, which outlives the 24h token by a long way.
+      // Redacting the bodies in place would mean guessing at every link shape the
+      // templates can produce; not printing them is the honest fix.
+      //
+      // What IS kept is the useful, non-sensitive part: that the send was
+      // SIMULATED (nothing left this machine), the recipient, the sender, the
+      // subject and the size of each part, so a developer can still tell what was
+      // built without a credential ever reaching a log line. The subject is safe
+      // by construction: every template's subject is a fixed string ("Activate
+      // your Return4me account", "Your Return4me sign-in code - Return4me", ...)
+      // and no builder interpolates a code or a token into one.
       console.log(`\n=================== [SANDBOX EMAIL OUTBOX] ===================`);
+      console.log(`Simulated: no email was sent (no usable RESEND_API_KEY in this environment).`);
       console.log(`To: ${to}`);
       console.log(`From: ${fromEmail}`);
       console.log(`Reply-To: ${replyTo ?? '(none)'}`);
       console.log(`Subject: ${subject}`);
-      console.log(`--- Body (text/plain part, as a text-only client renders it) ---`);
-      console.log(plainText);
-      console.log(`--- Body (text/html part, ${html.length} bytes) ---`);
-      console.log(html);
+      console.log(`Body NOT logged (it can contain a one-time activation link): text/plain ${plainText.length} chars, text/html ${html.length} chars.`);
       console.log(`==============================================================\n`);
       return { accepted: true, providerMessageId: null, providerError: null };
     }
