@@ -96,3 +96,60 @@ export interface ConfirmHandoverPayload {
   pickupCode: string;
   handoverPhotoBase64: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// AGENT DASHBOARD BATCH 2 — PAYOUT SETTINGS
+//
+// The change view is re-exported from the ONE policy module instead of being
+// restated here: the server projection and the dashboard must not be able to
+// drift on which fields exist or what `status` can mean. Every destination in
+// these DTOs is MASKED; no response type has a field for a full number, a code
+// or a hash.
+// ---------------------------------------------------------------------------
+export type {
+  AgentPayoutChangeView,
+  AgentPayoutVerificationStatus,
+} from '../config/agentPayoutVerification';
+import type {
+  AgentPayoutChangeView,
+  AgentPayoutVerificationStatus,
+} from '../config/agentPayoutVerification';
+
+export interface AgentPayoutSettingsCurrent {
+  /** The active method. Only `Personal M-Pesa` is eligible for payout. */
+  method: string;
+  /** Masked (never the full number). */
+  masked_destination: string;
+  /** FORMAT + METHOD eligibility. NOT a verification. */
+  eligible: boolean;
+  risk_class: string;
+  /** Always true: states explicitly that this is a format check only. */
+  format_check_only: true;
+  /** True only when an activated change recorded a real phone attestation. */
+  phone_ownership_verified: boolean;
+  phone_ownership_verified_at: string | null;
+}
+
+export interface AgentPayoutSettingsResponse {
+  payout: AgentPayoutSettingsCurrent;
+  verification: AgentPayoutVerificationStatus;
+  /** LIVE only: the request still occupying this agent's single slot. */
+  pending_request: AgentPayoutChangeView | null;
+  /**
+   * MEDIUM-2 — the newest request for this agent in ANY state, including the
+   * terminal outcomes `pending_request` stops reporting (rejected / expired /
+   * activated). Masked exactly like every other view; `rejection_reason` is the
+   * administrator's text when one was recorded. Scoped server-side to the
+   * caller's own agent id.
+   */
+  latest_request: AgentPayoutChangeView | null;
+}
+
+export interface AgentPayoutChangeRequestResponse {
+  success: boolean;
+  created: boolean;
+  duplicate: boolean;
+  request: AgentPayoutChangeView;
+  verification: AgentPayoutVerificationStatus;
+  message: string;
+}

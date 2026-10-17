@@ -2,6 +2,10 @@ import { db as drizzleDb } from "./index.ts";
 import {
   categories as categoriesTable,
   agents as agentsTable,
+  // AGENT DASHBOARD BATCH 2 — the proposed-but-unproven payout destination.
+  // Deliberately a separate table: the unverified value must never sit in the
+  // `agents` row the settlement executor reads.
+  agent_payout_destination_changes as agentPayoutDestinationChangesTable,
   items as itemsTable,
   claims as claimsTable,
   disputes as disputesTable,
@@ -64,7 +68,18 @@ import { isPayoutOutcome, isUnresolvedPayoutRow, CONFIRMABLE_PAYOUT_OUTCOMES, ty
 // the settlement executor asks. The write-path default for a new agent row is
 // therefore the method that will actually be paid, not a literal that has to be
 // kept in step by hand.
-import { PERSONAL_MPESA_PAYOUT_METHOD } from "../config/payoutDestinations";
+import {
+  PERSONAL_MPESA_PAYOUT_METHOD,
+  maskPayoutDestinationForLog,
+} from "../config/payoutDestinations";
+// AGENT DASHBOARD BATCH 2 — the ONE payout-destination-change policy. The data
+// layer asks these pure functions rather than restating the activation rule, so
+// the route, the console projection and the persistence guard cannot disagree
+// about when a proposed destination may become active.
+import {
+  LIVE_AGENT_PAYOUT_CHANGE_STATUSES,
+  evaluateAgentPayoutActivation,
+} from "../config/agentPayoutVerification";
 // A1 (Batch 0A) — the single definition of the 5-day strike window, plus the
 // repository's EXISTING canonical phone normalization (re-exported, never
 // reimplemented) so every strike path resolves to one identity.
@@ -8766,6 +8781,596 @@ await drizzleDb.transaction(async (tx) => {
     } catch (error) {
       console.error("Failed to list lost reports for admin:", error);
       throw new Error("Failed to list lost reports for admin.");
+    }
+  }
+
+  // ==========================================================================
+  // AGENT DASHBOARD BATCH 2 — PAYOUT DESTINATION CHANGES
+  //
+  // A proposed destination lives ONLY in `agent_payout_destination_changes`
+  // until BOTH real phone verification and admin approval exist. Nothing in this
+  // section writes `agents` except activateAgentPayoutDestinationChange(), whose
+  // first statement is the policy guard.
+  //
+  // `live_key` is the agent id while a change is live and NULL once terminal.
+  // The unique index on it is the single-live-request guarantee; terminal rows
+  // therefore accumulate as history without blocking a later request.
+  // ==========================================================================
+
+  /** The one LIVE request for this agent, newest first. */
+  public async getLiveAgentPayoutDestinationChange(agentId: string): Promise<any | undefined> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(agentPayoutDestinationChangesTable)
+        .where(
+          and(
+            eq(agentPayoutDestinationChangesTable.agent_id, agentId),
+            inArray(agentPayoutDestinationChangesTable.status, [...LIVE_AGENT_PAYOUT_CHANGE_STATUSES]),
+          ),
+        );
+      // Sorted here as well as in SQL: the in-memory test double does not apply
+      // ORDER BY, and "the newest live row" must not depend on harness details.
+      const sorted = [...rows].sort(
+        (a: any, b: any) =>
+          new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime(),
+      );
+      return sorted[0];
+    } catch (error) {
+      console.error("Failed to read live agent payout destination change:", error);
+      return undefined;
+    }
+  }
+
+  /**
+   * MEDIUM-2 — THE NEWEST request for this agent, INCLUDING TERMINAL ONES.
+   *
+   * getLiveAgentPayoutDestinationChange() above deliberately returns only live
+   * rows, so the moment a request was rejected, expired or activated it
+   * disappeared from the agent's dashboard: the agent could not see the
+   * outcome, and an administrator's rejection reason was unreachable. This
+   * read is the agent-scoped "what happened to my last request" query.
+   *
+   * SCOPING: `agent_id = agentId` is part of the WHERE clause, exactly like
+   * getAgentPayoutDestinationChangeById(), so another agent's history cannot
+   * resolve. The caller projects through toAgentPayoutChangeView(), which
+   * exposes the MASKED proposed destination only.
+   */
+  public async getLatestAgentPayoutDestinationChange(agentId: string): Promise<any | undefined> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(agentPayoutDestinationChangesTable)
+        .where(eq(agentPayoutDestinationChangesTable.agent_id, agentId))
+        .orderBy(
+          desc(agentPayoutDestinationChangesTable.created_at),
+          desc(agentPayoutDestinationChangesTable.id),
+        )
+        .limit(1);
+      // Sorted here as well as in SQL for the same reason as the live read: the
+      // in-memory test double does not apply ORDER BY, and "the newest row" must
+      // not depend on harness details. The id tie-break keeps the choice stable
+      // when two rows share a millisecond.
+      const sorted = [...rows].sort((a: any, b: any) => {
+        const byCreated =
+          new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime();
+        if (byCreated !== 0) return byCreated;
+        return String(b.id ?? '').localeCompare(String(a.id ?? ''));
+      });
+      return sorted[0];
+    } catch (error) {
+      console.error("Failed to read the latest agent payout destination change:", error);
+      return undefined;
+    }
+  }
+
+  /**
+   * Retire every live request whose TTL has elapsed.
+   *
+   * Clearing `live_key` is part of the transition: an expired row must release
+   * the agent's single live slot, otherwise the unique index would refuse the
+   * next request forever.
+   */
+  public async expireStaleAgentPayoutDestinationChanges(
+    agentId: string,
+    now: Date = new Date(),
+  ): Promise<number> {
+    try {
+      const rows = await drizzleDb
+        .update(agentPayoutDestinationChangesTable)
+        .set({ status: "expired", live_key: null, updated_at: now } as any)
+        .where(
+          and(
+            eq(agentPayoutDestinationChangesTable.agent_id, agentId),
+            inArray(agentPayoutDestinationChangesTable.status, [...LIVE_AGENT_PAYOUT_CHANGE_STATUSES]),
+            lte(agentPayoutDestinationChangesTable.expires_at, now),
+          ),
+        )
+        .returning({
+          id: agentPayoutDestinationChangesTable.id,
+          proposed_destination: agentPayoutDestinationChangesTable.proposed_destination,
+        });
+      // EXPIRY IS A STATUS TRANSITION, so it is audited like every other one.
+      // Masked destination only; a failed audit write must not undo the expiry.
+      for (const row of rows as any[]) {
+        try {
+          await this.logAudit(
+            "SYSTEM",
+            "AGENT_PAYOUT_DESTINATION_CHANGE_EXPIRED",
+            `Payout destination change ${row.id} expired before it was verified and approved ` +
+              `(proposed Personal M-Pesa ${maskPayoutDestinationForLog(row.proposed_destination)}). ` +
+              `The active destination was not changed.`,
+          );
+        } catch (auditError) {
+          console.error("Failed to audit an expired payout destination change:", auditError);
+        }
+      }
+      return rows.length;
+    } catch (error) {
+      console.error("Failed to expire stale agent payout destination changes:", error);
+      return 0;
+    }
+  }
+
+  /**
+   * Insert a proposed change.
+   *
+   * Returns the created row, or NULL when the database refused it because this
+   * agent already has a live request. That conflict is the concurrency
+   * guarantee, not an application-level check: `ON CONFLICT (live_key) DO
+   * NOTHING` means two simultaneous submissions cannot both become live.
+   */
+  public async createAgentPayoutDestinationChange(params: {
+    id: string;
+    agentId: string;
+    proposedDestination: string;
+    proposedPayoutMethod: string;
+    destinationFormatEligible: boolean;
+    expiresAt: Date;
+  }): Promise<any | null> {
+    try {
+      const now = new Date();
+      const rows = await drizzleDb
+        .insert(agentPayoutDestinationChangesTable)
+        .values({
+          id: params.id,
+          agent_id: params.agentId,
+          live_key: params.agentId,
+          proposed_destination: params.proposedDestination,
+          proposed_payout_method: params.proposedPayoutMethod,
+          destination_format_eligible: params.destinationFormatEligible,
+          status: "pending_verification",
+          phone_verified_at: null,
+          phone_verification_provider_ref: null,
+          admin_approved_at: null,
+          admin_approved_by: null,
+          admin_rejected_at: null,
+          admin_rejected_by: null,
+          rejection_reason: null,
+          activated_at: null,
+          expires_at: params.expiresAt,
+          created_at: now,
+          updated_at: now,
+        } as any)
+        .onConflictDoNothing({ target: agentPayoutDestinationChangesTable.live_key })
+        .returning();
+      return rows[0] ?? null;
+    } catch (error) {
+      console.error("Failed to create agent payout destination change:", error);
+      throw new Error("Failed to record the payout destination change.");
+    }
+  }
+
+  /**
+   * One change, scoped to its owner. Both predicates are in the WHERE clause,
+   * so a change id belonging to another agent simply does not resolve.
+   */
+  public async getAgentPayoutDestinationChangeById(
+    id: string,
+    agentId: string,
+  ): Promise<any | undefined> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(agentPayoutDestinationChangesTable)
+        .where(
+          and(
+            eq(agentPayoutDestinationChangesTable.id, id),
+            eq(agentPayoutDestinationChangesTable.agent_id, agentId),
+          ),
+        )
+        .limit(1);
+      return rows[0];
+    } catch (error) {
+      console.error("Failed to read agent payout destination change:", error);
+      return undefined;
+    }
+  }
+
+  /**
+   * ADMIN read of one change. Deliberately NOT agent-scoped: an administrator
+   * reviews requests across agents. The caller projects through
+   * toAgentPayoutChangeView(), which masks the proposed destination.
+   */
+  public async getAgentPayoutDestinationChangeByIdForAdmin(id: string): Promise<any | undefined> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(agentPayoutDestinationChangesTable)
+        .where(eq(agentPayoutDestinationChangesTable.id, id))
+        .limit(1);
+      return rows[0];
+    } catch (error) {
+      console.error("Failed to read agent payout destination change for admin:", error);
+      return undefined;
+    }
+  }
+
+  /**
+   * A bounded admin page of change requests. Raw rows: the route must project
+   * through toAgentPayoutChangeView() before responding so the proposed
+   * destination is masked.
+   *
+   * MEDIUM-3 — FILTERING, ORDERING AND THE PAGE WINDOW ALL HAPPEN IN SQL.
+   *
+   * The first implementation selected every row, sorted the whole table in
+   * JavaScript and then sliced it, so the database transferred the complete
+   * history on every admin page view. This mirrors the proven shape used by
+   * listAdminClaims()/listAdminLostReports() instead:
+   *
+   *   * the status filter is a WHERE clause (the same `IN (...)` the status
+   *     vocabulary already uses);
+   *   * ordering is `created_at DESC, id DESC` — deterministic, so two rows
+   *     created in the same millisecond cannot swap between pages;
+   *   * the read is bounded to `offset + limit + 1` rows (never the whole
+   *     table) and `hasMore` is derived from that one extra row rather than a
+   *     second COUNT query that could disagree with the page it describes.
+   */
+  public async listAdminAgentPayoutDestinationChanges(opts: {
+    statuses?: readonly string[] | null;
+    limit: number;
+    offset: number;
+  }): Promise<{ rows: any[]; hasMore: boolean }> {
+    try {
+      const statuses = Array.isArray(opts.statuses) && opts.statuses.length > 0 ? opts.statuses : null;
+      const rows = await drizzleDb
+        .select()
+        .from(agentPayoutDestinationChangesTable)
+        .where(statuses ? inArray(agentPayoutDestinationChangesTable.status, [...statuses]) : undefined)
+        .orderBy(
+          desc(agentPayoutDestinationChangesTable.created_at),
+          desc(agentPayoutDestinationChangesTable.id),
+        )
+        .limit(opts.offset + opts.limit + 1);
+      const page = rows.slice(opts.offset, opts.offset + opts.limit);
+      return { rows: page, hasMore: rows.length > opts.offset + opts.limit };
+    } catch (error) {
+      console.error("Failed to list agent payout destination changes for admin:", error);
+      throw new Error("Failed to list payout destination changes.");
+    }
+  }
+
+  /**
+   * Record an administrator's decision on a change.
+   *
+   * APPROVAL IS NOT ACTIVATION. This method only writes the approval fact; the
+   * caller must then ask activateAgentPayoutDestinationChange(), which still
+   * requires REAL phone verification. An approval on an unverified change
+   * therefore leaves `agents` untouched — by construction, not by convention.
+   */
+  public async recordAgentPayoutDestinationAdminDecision(params: {
+    id: string;
+    decision: "approve" | "reject";
+    actor: string;
+    reason?: string | null;
+    now?: Date;
+  }): Promise<{ ok: boolean; code: string; row?: any }> {
+    const now = params.now ?? new Date();
+    const existing = await this.getAgentPayoutDestinationChangeByIdForAdmin(params.id);
+    if (!existing) return { ok: false, code: "NOT_FOUND" };
+
+    if (
+      existing.activated_at ||
+      existing.admin_rejected_at ||
+      existing.status === "activated" ||
+      existing.status === "rejected"
+    ) {
+      return { ok: false, code: "TERMINAL", row: existing };
+    }
+
+    const expiresAt = existing.expires_at ? new Date(existing.expires_at).getTime() : NaN;
+    if (Number.isFinite(expiresAt) && expiresAt <= now.getTime()) {
+      await drizzleDb
+        .update(agentPayoutDestinationChangesTable)
+        .set({ status: "expired", live_key: null, updated_at: now } as any)
+        .where(
+          and(
+            eq(agentPayoutDestinationChangesTable.id, params.id),
+            inArray(agentPayoutDestinationChangesTable.status, [...LIVE_AGENT_PAYOUT_CHANGE_STATUSES]),
+          ),
+        );
+      return { ok: false, code: "EXPIRED" };
+    }
+
+    try {
+      if (params.decision === "approve") {
+        if (existing.admin_approved_at) return { ok: true, code: "ALREADY_APPROVED", row: existing };
+        const rows = await drizzleDb
+          .update(agentPayoutDestinationChangesTable)
+          .set({ admin_approved_at: now, admin_approved_by: params.actor, updated_at: now } as any)
+          .where(
+            and(
+              eq(agentPayoutDestinationChangesTable.id, params.id),
+              inArray(agentPayoutDestinationChangesTable.status, [...LIVE_AGENT_PAYOUT_CHANGE_STATUSES]),
+              isNull(agentPayoutDestinationChangesTable.admin_approved_at),
+            ),
+          )
+          .returning();
+        if (!rows[0]) return { ok: false, code: "STATE_CONFLICT" };
+        return { ok: true, code: "APPROVED", row: rows[0] };
+      }
+
+      const reason = params.reason ? String(params.reason) : null;
+      const rows = await drizzleDb
+        .update(agentPayoutDestinationChangesTable)
+        .set({
+          status: "rejected",
+          live_key: null,
+          admin_rejected_at: now,
+          admin_rejected_by: params.actor,
+          rejection_reason: reason,
+          updated_at: now,
+        } as any)
+        .where(
+          and(
+            eq(agentPayoutDestinationChangesTable.id, params.id),
+            inArray(agentPayoutDestinationChangesTable.status, [...LIVE_AGENT_PAYOUT_CHANGE_STATUSES]),
+            isNull(agentPayoutDestinationChangesTable.admin_rejected_at),
+          ),
+        )
+        .returning();
+      if (!rows[0]) return { ok: false, code: "STATE_CONFLICT" };
+      return { ok: true, code: "REJECTED", row: rows[0] };
+    } catch (error) {
+      console.error("Failed to record agent payout destination admin decision:", error);
+      return { ok: false, code: "WRITE_FAILED" };
+    }
+  }
+
+  /**
+   * PROVIDER ATTESTATION BOUNDARY — NOT REACHABLE FROM ANY HTTP ROUTE.
+   *
+   * This is the ONLY writer of `phone_verified_at`. It exists so a future, REAL
+   * delivery-channel adapter (SMS or WhatsApp) has one narrowly-scoped place to
+   * record that a code was delivered to the proposed number and returned
+   * successfully. Until `AGENT_PAYOUT_PHONE_VERIFICATION_ADAPTER_IMPLEMENTED`
+   * becomes true and a route is deliberately wired to it, nothing calls this.
+   *
+   * The `providerRef` is REQUIRED and non-empty: an attestation with no
+   * provider-side reference is not evidence and is refused. The code itself is
+   * never passed here and never stored — no challenge table exists.
+   */
+  public async recordAgentPayoutDestinationPhoneVerification(params: {
+    id: string;
+    providerRef: string;
+    verifiedAt?: Date;
+  }): Promise<{ ok: boolean; code: string; row?: any }> {
+    if (!params.providerRef || !String(params.providerRef).trim()) {
+      return { ok: false, code: "INVALID_ATTESTATION" };
+    }
+
+    const existing = await this.getAgentPayoutDestinationChangeByIdForAdmin(params.id);
+    if (!existing) return { ok: false, code: "NOT_FOUND" };
+    if (existing.activated_at || existing.admin_rejected_at || existing.status === "rejected") {
+      return { ok: false, code: "TERMINAL", row: existing };
+    }
+    if (existing.phone_verified_at) return { ok: true, code: "ALREADY_VERIFIED", row: existing };
+
+    const now = params.verifiedAt ?? new Date();
+    const expiresAt = existing.expires_at ? new Date(existing.expires_at).getTime() : NaN;
+    if (Number.isFinite(expiresAt) && expiresAt <= now.getTime()) {
+      await drizzleDb
+        .update(agentPayoutDestinationChangesTable)
+        .set({ status: "expired", live_key: null, updated_at: now } as any)
+        .where(
+          and(
+            eq(agentPayoutDestinationChangesTable.id, params.id),
+            inArray(agentPayoutDestinationChangesTable.status, [...LIVE_AGENT_PAYOUT_CHANGE_STATUSES]),
+          ),
+        );
+      return { ok: false, code: "EXPIRED" };
+    }
+
+    try {
+      // MEDIUM-1 — THE PERSISTED STATUS FOLLOWS THE FACTS, IN EITHER ORDER.
+      //
+      // The persisted vocabulary is closed (five values, mirrored by a CHECK)
+      // and does NOT contain "ready to activate" — that name belongs to the
+      // derived state machine. Once control of the number has been proven the
+      // row must therefore leave `pending_verification`:
+      //
+      //   * verify-then-approve: pending_verification -> pending_admin_approval
+      //     (unchanged behaviour; the admin is still to decide).
+      //   * approve-then-verify: previously the OLD status was kept, so a row
+      //     with `phone_verified_at`, `admin_approved_at` AND `status =
+      //     'pending_verification'` could exist. The projection then reported
+      //     `ready_to_activate` while the persisted column still claimed the
+      //     number was unverified.
+      //
+      // Both orders now converge on `pending_admin_approval`. It remains a LIVE
+      // status, so the single-live-request slot, the terminal-state guards and
+      // the activation compare-and-swap are untouched; when approval is also
+      // present resolveAgentPayoutChangeState() promotes the row to
+      // `ready_to_activate` from the two fact columns, not from this column.
+      const nextStatus = "pending_admin_approval";
+      const rows = await drizzleDb
+        .update(agentPayoutDestinationChangesTable)
+        .set({
+          phone_verified_at: now,
+          phone_verification_provider_ref: String(params.providerRef),
+          status: nextStatus,
+          updated_at: now,
+        } as any)
+        .where(
+          and(
+            eq(agentPayoutDestinationChangesTable.id, params.id),
+            inArray(agentPayoutDestinationChangesTable.status, [...LIVE_AGENT_PAYOUT_CHANGE_STATUSES]),
+            isNull(agentPayoutDestinationChangesTable.phone_verified_at),
+          ),
+        )
+        .returning();
+      if (!rows[0]) return { ok: false, code: "STATE_CONFLICT" };
+      try {
+        await this.logAudit(
+          "SYSTEM",
+          "AGENT_PAYOUT_DESTINATION_PHONE_VERIFIED",
+          `Payout destination change ${rows[0].id} recorded a real phone-ownership attestation ` +
+            `(proposed Personal M-Pesa ${maskPayoutDestinationForLog(rows[0].proposed_destination)}; ` +
+            `provider reference ${String(params.providerRef)}). Approval is still required before activation.`,
+        );
+      } catch (auditError) {
+        console.error("Failed to audit a payout destination phone verification:", auditError);
+      }
+      return { ok: true, code: "VERIFIED", row: rows[0] };
+    } catch (error) {
+      console.error("Failed to record agent payout destination phone verification:", error);
+      return { ok: false, code: "WRITE_FAILED" };
+    }
+  }
+
+  /**
+   * THE ONLY WRITER OF `agents.mpesa_till_or_paybill` in this feature.
+   *
+   * Runs in ONE transaction and asks evaluateAgentPayoutActivation() FIRST. A
+   * change activates only when it is format-eligible, has REAL phone
+   * verification, has an admin approval, has not expired and is not rejected.
+   * The guarded UPDATE is also a compare-and-swap on those same facts, so two
+   * concurrent attempts cannot both apply the destination.
+   */
+  public async activateAgentPayoutDestinationChange(params: {
+    id: string;
+    actor?: string;
+    now?: Date;
+  }): Promise<{ activated: boolean; code: string; row?: any }> {
+    const now = params.now ?? new Date();
+
+    try {
+      return await drizzleDb.transaction(async (tx: any) => {
+        const rows = await tx
+          .select()
+          .from(agentPayoutDestinationChangesTable)
+          .where(eq(agentPayoutDestinationChangesTable.id, params.id))
+          .limit(1);
+        const change = rows[0];
+        if (!change) return { activated: false, code: "NOT_FOUND" };
+        if (change.activated_at) return { activated: true, code: "ALREADY_ACTIVATED", row: change };
+
+        const decision = evaluateAgentPayoutActivation(change, now);
+        if (!decision.allowed) {
+          if (decision.reason === "expired") {
+            await tx
+              .update(agentPayoutDestinationChangesTable)
+              .set({ status: "expired", live_key: null, updated_at: now } as any)
+              .where(
+                and(
+                  eq(agentPayoutDestinationChangesTable.id, params.id),
+                  inArray(agentPayoutDestinationChangesTable.status, [...LIVE_AGENT_PAYOUT_CHANGE_STATUSES]),
+                ),
+              );
+          }
+          const code =
+            decision.reason === "phone_verification_required"
+              ? "NOT_VERIFIED"
+              : decision.reason === "admin_approval_required"
+                ? "NOT_APPROVED"
+                : decision.reason === "expired"
+                  ? "EXPIRED"
+                  : decision.reason === "rejected"
+                    ? "REJECTED"
+                    : "NOT_ELIGIBLE";
+          return { activated: false, code, row: change };
+        }
+
+        const claimed = await tx
+          .update(agentPayoutDestinationChangesTable)
+          .set({ status: "activated", live_key: null, activated_at: now, updated_at: now } as any)
+          .where(
+            and(
+              eq(agentPayoutDestinationChangesTable.id, params.id),
+              inArray(agentPayoutDestinationChangesTable.status, [...LIVE_AGENT_PAYOUT_CHANGE_STATUSES]),
+              isNotNull(agentPayoutDestinationChangesTable.phone_verified_at),
+              isNotNull(agentPayoutDestinationChangesTable.admin_approved_at),
+            ),
+          )
+          .returning();
+        if (!claimed[0]) return { activated: false, code: "STATE_CONFLICT" };
+
+        const applied = await tx
+          .update(agentsTable)
+          .set({
+            mpesa_till_or_paybill: claimed[0].proposed_destination,
+            payout_method_type: claimed[0].proposed_payout_method,
+          } as any)
+          .where(eq(agentsTable.id, claimed[0].agent_id))
+          .returning({ id: agentsTable.id });
+        if (!applied[0]) {
+          // Roll back the status change: a change can never be "activated"
+          // without an agent row that received the destination.
+          throw new Error("Agent row not found while activating payout destination change.");
+        }
+
+        await tx.insert(auditLogTable).values({
+          id: "AUD-" + Math.random().toString(36).substr(2, 9).toUpperCase(),
+          admin_user: params.actor ?? "SYSTEM",
+          action: "AGENT_PAYOUT_DESTINATION_ACTIVATED",
+          // MASKED destination only — never the number in the clear.
+          details:
+            `Agent ${claimed[0].agent_id}: payout destination change ${claimed[0].id} activated after real phone verification ` +
+            `and administrator approval (destination ${maskPayoutDestinationForLog(claimed[0].proposed_destination)}, ` +
+            `method ${claimed[0].proposed_payout_method}).`,
+        });
+
+        return { activated: true, code: "ACTIVATED", row: claimed[0] };
+      });
+    } catch (error) {
+      console.error("Failed to activate agent payout destination change:", error);
+      return { activated: false, code: "WRITE_FAILED" };
+    }
+  }
+
+  /**
+   * Evidence for the CURRENT destination, used only to display an honest
+   * verification label. Returns the most recent ACTIVATED change whose proposed
+   * destination is the canonical value now stored on the agent, or undefined.
+   *
+   * A NULL result means "no record of phone verification", never "verified".
+   */
+  public async getActivatedAgentPayoutDestinationChangeFor(
+    agentId: string,
+    canonicalDestination: string,
+  ): Promise<any | undefined> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(agentPayoutDestinationChangesTable)
+        .where(
+          and(
+            eq(agentPayoutDestinationChangesTable.agent_id, agentId),
+            eq(agentPayoutDestinationChangesTable.status, "activated"),
+          ),
+        );
+      const matching = rows.filter(
+        (row: any) => String(row.proposed_destination) === canonicalDestination,
+      );
+      matching.sort(
+        (a: any, b: any) =>
+          new Date(b.activated_at ?? b.updated_at ?? 0).getTime() -
+          new Date(a.activated_at ?? a.updated_at ?? 0).getTime(),
+      );
+      return matching[0];
+    } catch (error) {
+      console.error("Failed to read activated payout destination evidence:", error);
+      return undefined;
     }
   }
 }

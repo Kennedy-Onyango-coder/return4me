@@ -167,6 +167,92 @@ export const agents = pgTable("agents", {
   created_at: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
+// 2b. AGENT PAYOUT DESTINATION CHANGES (Agent Dashboard Batch 2)
+//
+// WHY A SEPARATE TABLE, AND NOT pending_* COLUMNS ON `agents`
+// -----------------------------------------------------------
+// A proposed payout destination is UNPROVEN. Storing it on `agents` would put
+// an unverified number in the row the settlement executor reads, so the money
+// path would have to remember not to look at it. A separate row keeps the
+// proposed value out of the authoritative record entirely: `agents` is
+// untouched until BOTH real phone verification and admin approval exist.
+//
+// THE THREE FACTS ARE SEPARATE COLUMNS, DELIBERATELY
+// --------------------------------------------------
+//   destination_format_eligible — a FORMAT/METHOD check (254 + nine digits,
+//                                 Personal M-Pesa). Never a verification.
+//   phone_verified_at           — proof of CONTROL of the proposed number.
+//                                 Only a real delivery channel may set it.
+//   admin_approved_at           — an administrator's decision. Independent of
+//                                 the two above; approval alone never activates.
+//
+// `email_verified_at` on `agents` is a different axis and is deliberately NOT
+// read here: control of a mailbox is not control of a mobile number.
+//
+// SINGLE LIVE REQUEST PER AGENT, ENFORCED BY THE DATABASE
+// -------------------------------------------------------
+// `live_key` holds the agent id while the request is live and NULL once it is
+// terminal (activated / rejected / expired). The unique index on that column is
+// therefore a PARTIAL uniqueness rule expressed in a way both PostgreSQL and
+// the in-memory test double enforce (NULLs never collide). Two concurrent
+// submissions race on this index, not on application-level check-then-insert.
+//
+// NO CODE / HASH COLUMNS EXIST. This batch issues no OTP because no delivery
+// channel is configured; adding a `code_hash` with nothing able to send a code
+// would present an operational challenge flow that cannot deliver.
+export const agent_payout_destination_changes = pgTable(
+  "agent_payout_destination_changes",
+  {
+    id: varchar("id", { length: 50 }).primaryKey(),
+    agent_id: varchar("agent_id", { length: 50 })
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    // The agent id while live, NULL once terminal. See the header note.
+    live_key: varchar("live_key", { length: 50 }),
+    // Canonical 254XXXXXXXXX. NEVER written to `agents` before activation.
+    proposed_destination: varchar("proposed_destination", { length: 20 }).notNull(),
+    proposed_payout_method: varchar("proposed_payout_method", { length: 50 })
+      .default(PERSONAL_MPESA_PAYOUT_METHOD)
+      .notNull(),
+    // FACT 1 — format/method eligibility only.
+    destination_format_eligible: boolean("destination_format_eligible").default(false).notNull(),
+    // Persisted lifecycle. Mirrored by a CHECK below.
+    status: varchar("status", { length: 30 }).default("pending_verification").notNull(),
+    // FACT 2 — proof of control. NULL = never proven.
+    phone_verified_at: timestamp("phone_verified_at", { withTimezone: true }),
+    // The provider's attestation reference, for reconciliation. Never a code.
+    phone_verification_provider_ref: varchar("phone_verification_provider_ref", { length: 100 }),
+    // FACT 3 — the administrative decision.
+    admin_approved_at: timestamp("admin_approved_at", { withTimezone: true }),
+    admin_approved_by: varchar("admin_approved_by", { length: 100 }),
+    admin_rejected_at: timestamp("admin_rejected_at", { withTimezone: true }),
+    admin_rejected_by: varchar("admin_rejected_by", { length: 100 }),
+    rejection_reason: text("rejection_reason"),
+    activated_at: timestamp("activated_at", { withTimezone: true }),
+    expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => {
+    return {
+      idx_agent_payout_changes_agent: index("idx_agent_payout_changes_agent").on(
+        table.agent_id,
+        table.status
+      ),
+      idx_agent_payout_changes_expiry: index("idx_agent_payout_changes_expiry").on(
+        table.expires_at
+      ),
+      // One LIVE request per agent. PostgreSQL skips NULLs, so terminal rows
+      // accumulate as history without blocking a later request.
+      uq_agent_payout_changes_live: uniqueIndex("uq_agent_payout_changes_live").on(table.live_key),
+      agent_payout_changes_status_check: check(
+        "agent_payout_changes_status_check",
+        sql`${table.status} IN ('pending_verification', 'pending_admin_approval', 'activated', 'rejected', 'expired')`
+      ),
+    };
+  }
+);
+
 // 3. ITEMS TABLE
 export const items = pgTable("items", {
   id: varchar("id", { length: 50 }).primaryKey(),

@@ -224,6 +224,11 @@ import { registerWebhookRoutes } from './routes/webhooks';
 // into routes/agentOps.ts so they can be mounted for real HTTP integration
 // testing. confirm-viewing and confirm-handover deliberately remain inline.
 import { registerAgentOperationalRoutes } from './routes/agentOps';
+// AGENT DASHBOARD BATCH 2 — payout destination settings and the admin review
+// workflow. Deliberately a SEPARATE module: agentOps.ts owns exactly six
+// registrations and a test pins that count, and this feature is a different
+// concern (money destination, verification, admin approval).
+import { registerAgentPayoutSettingsRoutes } from './routes/agentPayoutSettings';
 import { claimStatusPollLimiter, paymentSessionStatusLimiter } from './config/claimStatusPollLimiter';
 // Server-authoritative payment timing policy. The claim-level window is 24
 // HOURS (the product requirement) and is deliberately distinct from the short
@@ -3760,6 +3765,16 @@ async function createApp() {
     claimabilityErrorMessage,
     DISPUTE_WINDOW_MS,
     isPlatformOperationPaused,
+  });
+
+  // AGENT DASHBOARD BATCH 2 — payout settings. Registered EXACTLY ONCE, after the
+  // operational routes and before the admin dashboard block. The middleware is
+  // injected rather than re-implemented: requireActiveAgent, the admin-session
+  // revalidation and the shared error disclosure each still have one definition.
+  registerAgentPayoutSettingsRoutes(app, {
+    requireActiveAgent,
+    requireCurrentAdminSession,
+    sendServerError,
   });
 
 

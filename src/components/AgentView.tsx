@@ -3,6 +3,9 @@ import { translations } from '../types';
 import ClaimVerificationEvidence from './ClaimVerificationEvidence';
 import { getClaimStatusDisplay, agentClaimBadge } from './claimStatus';
 import AgentHub from './agent/AgentHub';
+// AGENT DASHBOARD BATCH 2 — payout settings. Mounted here, beside the Hub, so
+// AgentHub stays exactly as it is: hook-free, fetch-free and presentation-only.
+import PayoutSettingsCard from './agent/PayoutSettingsCard';
 import { ShieldCheck, Plus, CheckCircle, PackageOpen, HelpCircle, Loader2, AlertCircle, Lock, Eye, Camera, Upload, MapPin, Mail } from 'lucide-react';
 import { countiesByUxGroup } from '../config/kenyaCounties';
 import { administrativeUnitsForCounty } from '../config/kenyaAdministrativeUnits';
@@ -1282,6 +1285,18 @@ export default function AgentView({ token, setToken, categories, refreshCategori
           categories={categories}
           holdingPickups={holdingPickups}
         />
+      )}
+
+      {/* AGENT DASHBOARD BATCH 2 — payout destination settings.
+          Placed directly after the Hub, inside the same dashboard view. The
+          card loads its own data and never reads or changes the Hub's props, so
+          the earnings/orientation behaviour above is untouched. It only mounts
+          for an ACTIVE agent, because the endpoints it calls require exactly
+          that. */}
+      {token && agentStatus === 'active' && agentProfile && (
+        <div className="mt-8">
+          <PayoutSettingsCard token={token} />
+        </div>
       )}
 
       {/* Custom Confirmation Modal.

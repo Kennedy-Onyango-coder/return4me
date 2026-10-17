@@ -1,5 +1,7 @@
 import type {
   AgentMutationResponse,
+  AgentPayoutChangeRequestResponse,
+  AgentPayoutSettingsResponse,
   AgentQueueResponse,
   ConfirmDropoffPayload,
   ConfirmHandoverPayload,
@@ -83,5 +85,37 @@ export const agentApi = {
     return request<AgentMutationResponse>(token, '/api/agents/confirm-handover', {
       method: 'POST', headers: jsonHeaders(token), body: JSON.stringify(payload),
     }, 'Confirm handover failed');
+  },
+
+  /**
+   * AGENT DASHBOARD BATCH 2 — my payout settings.
+   *
+   * The response contains a MASKED destination only. The full number is never
+   * downloaded to the browser, so the form can never echo a stored value back.
+   */
+  getPayoutSettings(token: string): Promise<AgentPayoutSettingsResponse> {
+    return request<AgentPayoutSettingsResponse>(token, '/api/agents/payout-settings', {
+      method: 'GET', headers: authHeaders(token),
+    }, 'Could not load payout settings');
+  },
+
+  /**
+   * Submit a proposed Personal M-Pesa replacement. The number is sent once, over
+   * the authenticated request; it is never read back.
+   */
+  requestPayoutDestinationChange(
+    token: string,
+    destination: string,
+  ): Promise<AgentPayoutChangeRequestResponse> {
+    return request<AgentPayoutChangeRequestResponse>(
+      token,
+      '/api/agents/payout-settings/change-request',
+      {
+        method: 'POST',
+        headers: jsonHeaders(token),
+        body: JSON.stringify({ destination, payoutMethodType: 'Personal M-Pesa' }),
+      },
+      'Could not submit payout destination change',
+    );
   },
 };

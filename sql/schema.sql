@@ -876,3 +876,49 @@ CREATE INDEX idx_lost_reports_category ON lost_reports(category_id);
 CREATE INDEX idx_lost_reports_status ON lost_reports(status);
 CREATE INDEX idx_lost_reports_document_hash ON lost_reports(document_number_hash);
 CREATE INDEX idx_lost_reports_county ON lost_reports(county);
+
+-- =============================================================================
+-- AGENT DASHBOARD BATCH 2 — PAYOUT DESTINATION CHANGES
+--
+-- A proposed payout destination is UNPROVEN until it is both phone-verified and
+-- admin-approved, so it never goes into `agents` before then. Keeping it here
+-- means the settlement executor keeps reading the unchanged active destination
+-- while a change request is pending.
+--
+-- Three independent facts, three independent columns:
+--   destination_format_eligible — 254 + nine digits and Personal M-Pesa only.
+--   phone_verified_at           — proof of CONTROL of the number (NULL = none).
+--   admin_approved_at           — an administrator's decision (NULL = none).
+--
+-- `live_key` is the agent id while the change is live and NULL once terminal;
+-- the unique index therefore allows exactly one LIVE request per agent while
+-- letting terminal rows accumulate as history.
+--
+-- NO code/hash columns: this build configures no delivery channel, so it ships
+-- no challenge it could not deliver.
+-- =============================================================================
+CREATE TABLE agent_payout_destination_changes (
+    id VARCHAR(50) PRIMARY KEY,
+    agent_id VARCHAR(50) NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    live_key VARCHAR(50),
+    proposed_destination VARCHAR(20) NOT NULL,
+    proposed_payout_method VARCHAR(50) NOT NULL DEFAULT 'Personal M-Pesa',
+    destination_format_eligible BOOLEAN NOT NULL DEFAULT false,
+    status VARCHAR(30) NOT NULL DEFAULT 'pending_verification',
+    phone_verified_at TIMESTAMP WITH TIME ZONE,
+    phone_verification_provider_ref VARCHAR(100),
+    admin_approved_at TIMESTAMP WITH TIME ZONE,
+    admin_approved_by VARCHAR(100),
+    admin_rejected_at TIMESTAMP WITH TIME ZONE,
+    admin_rejected_by VARCHAR(100),
+    rejection_reason TEXT,
+    activated_at TIMESTAMP WITH TIME ZONE,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT agent_payout_changes_status_check
+        CHECK (status IN ('pending_verification', 'pending_admin_approval', 'activated', 'rejected', 'expired'))
+);
+CREATE INDEX idx_agent_payout_changes_agent ON agent_payout_destination_changes(agent_id, status);
+CREATE INDEX idx_agent_payout_changes_expiry ON agent_payout_destination_changes(expires_at);
+CREATE UNIQUE INDEX uq_agent_payout_changes_live ON agent_payout_destination_changes(live_key);

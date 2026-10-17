@@ -38,7 +38,11 @@ const mockDatabaseState: Record<string, any[]> = {
   customer_claim_links: [],
   lost_reports: [],
   account_activation_tokens: [],
-  notification_events: []
+  notification_events: [],
+  // AGENT DASHBOARD BATCH 2 — the payout destination change slot. Auto-created
+  // on first insert by executeMockQuery(), but listed here with the other
+  // tables so the in-memory shape is explicit.
+  agent_payout_destination_changes: [],
 };
 
 // Uniqueness invariants the in-memory mock enforces on a PLAIN insert.
@@ -75,6 +79,13 @@ const MOCK_UNIQUE_INDEXES: Record<string, string[][]> = {
   // test would pass while the limit did nothing. Registering it makes the
   // insert-or-23505 path the code actually relies on reachable in tests.
   sms_rate_limit_buckets: [['bucket_key']],
+  // AGENT DASHBOARD BATCH 2 — `live_key` is the PARTIAL unique index that gives
+  // an agent exactly ONE live payout destination change. The null-check in the
+  // enforcement loop below means terminal rows (live_key NULL) never collide,
+  // which is precisely how a PostgreSQL unique index treats NULLs. Without this
+  // entry two concurrent submissions could both insert a live row in the test
+  // double, and the "one live request" guarantee would be untestable.
+  agent_payout_destination_changes: [['live_key']],
 };
 
 // Evaluate logical WHERE conditions recursively
@@ -1727,6 +1738,49 @@ created_at TIMESTAMP WITH TIME ZONE NOT NULL
     `ALTER TABLE items ADD COLUMN IF NOT EXISTS withdrawn_at TIMESTAMPTZ`,
     `ALTER TABLE items ADD COLUMN IF NOT EXISTS withdrawn_by VARCHAR(100)`,
     `ALTER TABLE items ADD COLUMN IF NOT EXISTS withdrawal_reason TEXT`,
+
+    // --- AGENT DASHBOARD BATCH 2: payout destination changes ----------------
+    // ONE new table, additive and idempotent. A proposed payout destination is
+    // kept ENTIRELY OUT of `agents` until real phone verification AND admin
+    // approval both exist; the settlement executor therefore keeps reading the
+    // unchanged active destination while a request is pending.
+    //
+    // `live_key` is the agent id while the change is live and NULL once it is
+    // terminal. Its unique index is the database-level guarantee of ONE live
+    // request per agent, including under concurrency, and NULLs are exempt so
+    // terminal rows accumulate as history.
+    //
+    // NO CODE/HASH COLUMN: this build has no configured delivery channel, so it
+    // deliberately ships no OTP challenge it could not deliver.
+    //
+    // Placed at the END of this list so every earlier statement keeps its exact
+    // relative order (migrationOrder.test.ts and the locked Batch 0 ordering
+    // assertions are unaffected).
+    `CREATE TABLE IF NOT EXISTS agent_payout_destination_changes (
+      id VARCHAR(50) PRIMARY KEY,
+      agent_id VARCHAR(50) NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      live_key VARCHAR(50),
+      proposed_destination VARCHAR(20) NOT NULL,
+      proposed_payout_method VARCHAR(50) NOT NULL DEFAULT 'Personal M-Pesa',
+      destination_format_eligible BOOLEAN NOT NULL DEFAULT false,
+      status VARCHAR(30) NOT NULL DEFAULT 'pending_verification',
+      phone_verified_at TIMESTAMP WITH TIME ZONE,
+      phone_verification_provider_ref VARCHAR(100),
+      admin_approved_at TIMESTAMP WITH TIME ZONE,
+      admin_approved_by VARCHAR(100),
+      admin_rejected_at TIMESTAMP WITH TIME ZONE,
+      admin_rejected_by VARCHAR(100),
+      rejection_reason TEXT,
+      activated_at TIMESTAMP WITH TIME ZONE,
+      expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+      created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_agent_payout_changes_agent ON agent_payout_destination_changes(agent_id, status)`,
+    `CREATE INDEX IF NOT EXISTS idx_agent_payout_changes_expiry ON agent_payout_destination_changes(expires_at)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_payout_changes_live ON agent_payout_destination_changes(live_key)`,
+    `ALTER TABLE agent_payout_destination_changes DROP CONSTRAINT IF EXISTS agent_payout_changes_status_check`,
+    `ALTER TABLE agent_payout_destination_changes ADD CONSTRAINT agent_payout_changes_status_check CHECK (status IN ('pending_verification', 'pending_admin_approval', 'activated', 'rejected', 'expired'))`,
   ];
   let migrationFailureCount = 0;
   for (const sql of statements) {
