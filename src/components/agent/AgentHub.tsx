@@ -215,6 +215,27 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
             <p className="max-w-2xl text-body text-[var(--appearance-text-muted)]">
               {t.agentWorkspaceIntro}
             </p>
+
+            {/* AGENT DASHBOARD BATCH 1 — "WHAT DO I DO FIRST?".
+                The tiles below COUNT the work; this strip names the FIRST thing
+                to open, so an agent who is not a power user does not have to
+                rank three numbers before acting. It reads only the two queue
+                props this Hub already renders - no new state, no second fetch,
+                no new counter and no new business rule. When both queues are
+                empty it says so plainly, because an empty queue is normal and
+                must never read as a failure. */}
+            <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] px-4 py-3">
+              <span className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">
+                {t.agentWorkflowLabel}
+              </span>
+              <span className="min-w-0 break-words text-body font-semibold text-[var(--appearance-text-primary)]">
+                {props.expectedDropoffs.length > 0
+                  ? t.agentNextStepDropoffs
+                  : props.holdingPickups.length > 0
+                    ? t.agentNextStepHandovers
+                    : t.agentNextStepAllClear}
+              </span>
+            </div>
           </section>
 
           {/* UX-13 - OPERATIONAL SUMMARY.
@@ -694,13 +715,36 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
 
               Ownership is unchanged: this component is still hook-free
               presentation over values owned by useAgentOperations. */}
+          {/* AGENT DASHBOARD BATCH 1 — PAYOUT DETAILS AND EARNINGS NOW FORM ONE
+              NAMED GROUP.
+              UX-07 deliberately put the operational work above this block, and
+              that decision stands: identity and compensation stay secondary to
+              the queues. What was missing was a HEADING, so the block read as
+              three unrelated panels stacked at the bottom of the page. The
+              heading names the group and the intro sentence states the one
+              distinction an agent must not get wrong - money already paid out is
+              a different figure from money still awaiting settlement.
+              This is copy plus structure only: the figures below still come from
+              the server's agentEarnings projection, the payout block below is
+              still read-only, and the wrapped markup is unchanged (its
+              indentation is left as it was so the diff stays reviewable). */}
+          <section aria-labelledby="agent-payout-earnings-heading" className="space-y-4">
+            <div className="space-y-1">
+              <h2 id="agent-payout-earnings-heading" className="text-subsection font-extrabold text-[var(--appearance-text-primary)]">
+                {t.agentEarningsSectionTitle}
+              </h2>
+              <p className="max-w-2xl text-small text-[var(--appearance-text-muted)]">
+                {t.agentEarningsSectionIntro}
+              </p>
+            </div>
+
           {/* Hub Profile Banner */}
           <div className="bg-primary-green text-white p-6 rounded-panel flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <div>
               <span className="bg-emerald-900/60 text-accent-orange border border-emerald-700 text-caption font-extrabold px-3 py-1 rounded-full uppercase tracking-wider inline-block mb-2">
                 Verified Return4me Partner Point
               </span>
-              <h2 className="text-subsection font-extrabold">{props.agentProfile.business_name}</h2>
+              <h3 className="text-subsection font-extrabold">{props.agentProfile.business_name}</h3>
               <p className="text-white/70 text-small mt-0.5">{props.agentProfile.location_address}</p>
             </div>
             <div className="bg-white/10 p-4 rounded-standard border border-white/10 text-right font-mono">
@@ -727,6 +771,19 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
               <span className="text-section font-black text-[var(--appearance-primary)] tabular-nums block mt-1">
                 {formatEarnings(props.agentEarnings?.totalEarned)}
               </span>
+              {/* AGENT DASHBOARD BATCH 1 — AN UNREADABLE FIGURE EXPLAINS ITSELF.
+                  formatEarnings already refuses to invent a number; this adds the
+                  reason and the recovery step next to it, so a blank figure is
+                  never mistaken for a zero. The guard is the shared
+                  finite-number check, which means a genuine zero is still
+                  readable and keeps the real zero value the ledger holds. Nothing
+                  is summed, coerced or reconstructed here. */}
+              {(!isFiniteNumber(props.agentEarnings?.totalEarned) ||
+                !isFiniteNumber(props.agentEarnings?.pendingSettlementsCount)) && (
+                <span className="mt-1 block text-small font-semibold text-[var(--appearance-text-muted)]">
+                  {t.agentEarningsUnavailableNote}
+                </span>
+              )}
             </div>
             {isFiniteNumber(props.agentEarnings?.completedPayoutsCount) && (
               <div className="bg-[var(--appearance-surface-muted)] text-[var(--appearance-success)] border border-[var(--appearance-border)] rounded-standard px-4 py-2 text-caption font-bold">
@@ -752,6 +809,7 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
               </div>
             </div>
           )}
+          </section>
 
         </div>
   );

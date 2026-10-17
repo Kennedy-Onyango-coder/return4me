@@ -246,6 +246,18 @@ export const translations = {
     agentHandoverQueueEmptyExplain: 'Items you are holding for an owner stay here until the handover is complete.',
     agentWorkflowLabel: 'Next step',
     agentDropoffWorkflow: 'Review the item when it arrives.',
+    // AGENT DASHBOARD BATCH 1 — orientation and earnings legibility.
+    // English copy only, matching this bundle: these strings add no data source,
+    // no calculation and no new financial state. They name what the agent sees
+    // (the first queue to open, the payout/earnings group, and the reason a
+    // figure can be unreadable) and are rendered beside figures that still come
+    // only from the server's existing queue response.
+    agentNextStepDropoffs: 'Start below with the drop-off you are expecting: receive the item when the finder arrives, then review it.',
+    agentNextStepHandovers: 'No drop-off is waiting. Open the item you are holding below and complete the handover.',
+    agentNextStepAllClear: 'Nothing is waiting on you right now. New drop-offs appear here as soon as a finder hands an item in.',
+    agentEarningsSectionTitle: 'Your payout details and earnings',
+    agentEarningsSectionIntro: 'Total earned is money already paid out for completed handovers. Pending settlement is booked but not paid yet, and stays separate until the dispute window closes.',
+    agentEarningsUnavailableNote: 'Some figures could not be read from the server, so they are left as unavailable instead of being shown as zero. Refresh the queue to load them again.',
     agentReview: 'Review',
     agentReject: 'Reject',
     // AGENTHUB UX BATCH 4 — verification action hierarchy. The panel submits ONE
