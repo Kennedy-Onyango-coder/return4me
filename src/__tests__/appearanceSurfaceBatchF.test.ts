@@ -45,6 +45,46 @@ describe('Batch F incremental appearance surface migration', () => {
     expect(app).toContain("setView('terms')");
   });
 
+  it('gives every footer action the documented 44px touch floor', () => {
+    const start = app.indexOf('<footer className="bg-[var(--appearance-surface-muted)]');
+    expect(start).toBeGreaterThan(-1);
+    const footer = app.slice(start, app.indexOf('</footer>', start));
+
+    // WP4: the four footer actions are standalone controls, so each takes the
+    // 44px floor from the design system. Their hit area used to be the 12px text
+    // box alone (~16px tall), which missed both the WCAG 2.5.8 24px minimum and
+    // the 44px floor every other piece of public chrome already meets.
+    expect(footer.match(/<button/g) || []).toHaveLength(4);
+    expect(footer.match(/inline-flex min-h-11 items-center/g) || []).toHaveLength(4);
+
+    // The two mailboxes stay inline links inside a sentence: WCAG 2.5.8 exempts
+    // targets set inline in a block of text, and growing them would reflow the
+    // paragraph, so they keep their colour/underline treatment untouched.
+    const mailtoLinks = footer.match(/<a href="mailto:[^>]*>/g) || [];
+    expect(mailtoLinks).toHaveLength(2);
+    for (const link of mailtoLinks) expect(link).not.toContain('min-h-11');
+  });
+
+  it('keeps footer ink on the themed primary token so the muted surface stays AA', () => {
+    const start = app.indexOf('<footer className="bg-[var(--appearance-surface-muted)]');
+    expect(start).toBeGreaterThan(-1);
+    const footer = app.slice(start, app.indexOf('</footer>', start));
+
+    // WP4: the footer sits on `--appearance-surface-muted`, which flips to a dark
+    // green in the dark theme. The green `text-primary-green` utility is a fixed
+    // brand value, so it stayed a near-invisible dark green on that dark surface.
+    // Every footer link/action therefore uses the themed primary token, which is
+    // re-declared as a light green under `html[data-theme='dark']`.
+    expect(footer).not.toContain('text-primary-green');
+    expect(footer.match(/text-\[var\(--appearance-primary\)\]/g) || []).toHaveLength(6);
+    expect(footer.match(/<button/g) || []).toHaveLength(4);
+
+    // Both pairs the token resolves to clear AA for small text.
+    expect(contrast('#003820', '#F4EFE6')).toBeGreaterThanOrEqual(4.5);
+    expect(contrast('#6FD79B', '#182B22')).toBeGreaterThanOrEqual(4.5);
+  });
+
+
   it('migrates shared controls while preserving their structural contracts', () => {
     for (const name of ['Button', 'Input', 'Select', 'Textarea', 'Modal', 'Badge', 'Banner', 'EmptyState', 'SectionHeading', 'StatCard', 'Stepper', 'Skeleton', 'OTPInput']) {
       expect(primitives[name], `${name} must consume appearance tokens`).toContain('--appearance-');
@@ -117,7 +157,7 @@ describe('Batch F incremental appearance surface migration', () => {
       expect(navbar).toContain(`--appearance-${token}`);
     }
     expect(css).toContain('--appearance-focus:');
-    expect(css).toContain('outline: 2px solid var(--color-accent-orange)');
+    expect(css).toContain('outline: 2px solid var(--appearance-focus)');
     expect((navbar.match(/<LanguageControl /g) || [])).toHaveLength(0);
     // BATCH 1 (navbar): 3 Navbar appearance instances - desktop utility tray,
     // sub-lg compact header, drawer. The compact header previously had none, so

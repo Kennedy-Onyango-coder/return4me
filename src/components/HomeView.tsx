@@ -13,6 +13,7 @@ import { ICON_SIZE } from './ui/iconSize';
 import EmptyState from './ui/EmptyState';
 import Skeleton from './ui/Skeleton';
 import { motion, AnimatePresence } from 'motion/react';
+import { formatActiveAgentCount } from '../utils/agentCountLabel';
 
 type ViewName = 'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'terms' | 'privacy' | 'signin' | 'becomeAgent';
 
@@ -43,6 +44,16 @@ export default function HomeView(props: HomeViewProps) {
     onRetryRecentItems, onOpenItem,
   } = props;
   const t = translations.en;
+
+  // ── ACTIVE COPY LOCALE ───────────────────────────────────────────────────
+  // The app ships English copy (the English-only decision, commit e073c8e) and
+  // this page adds no language state, storage, control or context: the document
+  // language stays `en`. `lang` merely names the locale the strings below
+  // resolve for, so every English/Swahili pair lives at its own call site and is
+  // resolved in ONE place instead of being scattered as prose. The Swahili twins
+  // of the canonical public labels live beside their English source in
+  // types.ts (`translationsSw`), so the pair cannot drift.
+  const lang: 'en' | 'sw' = 'en';
 
   // P14A (P14-09) — the ONLY source of a category's human-readable name is the
   // live category list. This used to fall back to a hard-coded label map for
@@ -192,7 +203,7 @@ export default function HomeView(props: HomeViewProps) {
       // terminology the application already established (identical to this
       // slide-1 secondary and to the /found document title in App.tsx).
       // LABEL ONLY: the destination is still `finder` -> /found, unchanged.
-      primary: { label: 'Report a Found Item', view: 'finder' },
+      primary: { label: lang === 'en' ? 'Report a Found Item' : 'Ripoti Kitu Kilichopatikana', view: 'finder' },
       secondary: { label: 'How It Works', scroll: true },
     },
     {
@@ -374,7 +385,7 @@ export default function HomeView(props: HomeViewProps) {
         <button
           type="button"
           onClick={prevSlide}
-          aria-label={'Previous slide'}
+          aria-label={lang === 'en' ? 'Previous slide' : 'Slaidi iliyotangulia'}
           className="absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 z-10 h-11 w-11 rounded-full bg-black/30 hover:bg-black/50 text-white flex items-center justify-center transition-colors motion-reduce:transition-none"
         >
           <ChevronLeft size={ICON_SIZE.feature} aria-hidden="true" />
@@ -382,7 +393,7 @@ export default function HomeView(props: HomeViewProps) {
         <button
           type="button"
           onClick={nextSlide}
-          aria-label={'Next slide'}
+          aria-label={lang === 'en' ? 'Next slide' : 'Slaidi inayofuata'}
           className="absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 z-10 h-11 w-11 rounded-full bg-black/30 hover:bg-black/50 text-white flex items-center justify-center transition-colors motion-reduce:transition-none"
         >
           <ChevronRight size={ICON_SIZE.feature} aria-hidden="true" />
@@ -399,7 +410,7 @@ export default function HomeView(props: HomeViewProps) {
             already Kiswahili.
             No new translation key, architecture, helper, state or prop is
             introduced — this reuses the pattern the file already uses. */}
-        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1" role="tablist" aria-label={'Slide indicator'}>
+        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1" role="tablist" aria-label={lang === 'en' ? 'Slide indicator' : 'Kiashiria cha slaidi'}>
           {slides.map((s, i) => (
             <button
               key={s.img}
@@ -416,7 +427,9 @@ export default function HomeView(props: HomeViewProps) {
               role="tab"
               aria-selected={i === current}
               aria-controls={`r4m-hero-panel-${i}`}
-              aria-label={`Go to slide ${i + 1} of ${slides.length}`}
+              aria-label={lang === 'en'
+                ? `Go to slide ${i + 1} of ${slides.length}`
+                : `Nenda kwenye slaidi ${i + 1} kati ya ${slides.length}`}
               aria-current={i === current ? 'true' : undefined}
               /* UX-03 — the tab is a 44px target and the DOT is its child. The
                  dot keeps the size-and-colour difference (never colour alone),
@@ -436,124 +449,43 @@ export default function HomeView(props: HomeViewProps) {
       {/* ───────── TRUST STRIP ───────── */}
       <section className="bg-[var(--appearance-surface)]">
         <div className="mx-auto max-w-7xl px-5 sm:px-12 py-5">
-          <div className="flex flex-wrap items-center justify-center gap-x-8 gap-y-3 text-caption sm:text-body font-semibold text-[var(--appearance-text-muted)]">
-            <span className="flex items-center gap-2">
+          {/* A real list, because the strip is a set of parallel guarantees and a
+              screen reader should hear "list, 4 items" rather than four
+              undifferentiated phrases. `role="list"` restores the semantics that
+              Tailwind Preflight's `list-style: none` removes in Safari/VoiceOver.
+              The flex classes are unchanged, so the visual layout is identical. */}
+          <ul role="list" className="flex flex-wrap items-center justify-center gap-x-8 gap-y-3 text-caption sm:text-body font-semibold text-[var(--appearance-text-muted)]">
+            <li className="flex items-center gap-2">
               <ShieldCheck size={ICON_SIZE.ui} className="text-status-success" aria-hidden="true" />
               {'Vetted Agents Only'}
-            </span>
-            <span className="flex items-center gap-2">
+            </li>
+            <li className="flex items-center gap-2">
               <Users size={ICON_SIZE.ui} className="text-status-success" aria-hidden="true" />
-              {activeAgentsCount !== null
-                ? (`${activeAgentsCount} Active Agents`)
-                : ('Growing Agent Network')}
-            </span>
-            <span className="flex items-center gap-2">
+              {/* TRUTHFUL COUNT — a real number when App has one, and a claim
+                  that is only ever a location when it does not. The previous
+                  fallback ("Growing Agent Network") asserted growth the homepage
+                  cannot observe: there is no historical series behind it, so it
+                  was a marketing claim dressed as data. "Agent network in Kenya"
+                  says where the network operates — the one thing this page can
+                  state without a number.
+
+                  The guard lives in `formatActiveAgentCount` and accepts
+                  `unknown`, because the value is unvalidated JSON from
+                  `/api/stats`: the old inline `!== null` check let `undefined`
+                  through and printed "undefined Active Agents". Only a finite,
+                  non-negative number is ever rendered as a count; nothing is
+                  defaulted, rounded or invented to fill the strip. */}
+              {formatActiveAgentCount(activeAgentsCount)}
+            </li>
+            <li className="flex items-center gap-2">
               <CreditCard size={ICON_SIZE.ui} className="text-status-success" aria-hidden="true" />
               {'M-Pesa Supported'}
-            </span>
-            <span className="flex items-center gap-2">
+            </li>
+            <li className="flex items-center gap-2">
               <Lock size={ICON_SIZE.ui} className="text-status-success" aria-hidden="true" />
               {'Payment held safely'}
-            </span>
-          </div>
-        </div>
-      </section>
-
-      {/* ───────── EARN & RETURN MARKETING ───────── */}
-      {/* BATCH 6C — hand-written <h2>, so the id goes on the heading element
-          itself and the section is named from it. */}
-      <section aria-labelledby="earn-heading" className="bg-[var(--appearance-surface)] py-14 sm:py-20 border-t border-[var(--appearance-border)]">
-        <div className="mx-auto max-w-7xl px-5 sm:px-12">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-16 items-center">
-            {/* Image area */}
-            <div className="order-2 lg:order-1">
-              <div className="aspect-[4/3] bg-[var(--appearance-surface-muted)] rounded-xl overflow-hidden flex items-center justify-center">
-                <img
-                  src="/assets/return4me-earn-and-return.webp"
-                  alt={'A Return4me agent safely returning a found item to its owner'}
-                  width="1672"
-                  height="941"
-                  className="w-full h-full object-cover"
-                  referrerPolicy="no-referrer"
-                  loading="lazy"
-                  decoding="async"
-                />
-              </div>
-            </div>
-
-            {/* Content area */}
-            <div className="order-1 lg:order-2">
-              <h2 id="earn-heading" className="text-section font-bold tracking-tight text-[var(--appearance-text-primary)]">
-                {'Found something? Help it find its way home.'}
-              </h2>
-              <p className="mt-4 text-body sm:text-body-large text-[var(--appearance-text-muted)] leading-relaxed">
-                {"Every lost item has a story. Every person who finds something has an opportunity to make a difference — and be rewarded for doing the right thing."}
-              </p>
-
-              <div className="mt-8 space-y-6">
-                {/* If you find something */}
-                <div>
-                  {/* UX-03 — the two core intents are SUB-HEADINGS now (16px bold,
-                      sentence case) instead of 14px upper-case labels, so a
-                      visitor can tell "I found something" from "I lost
-                      something" at a glance. Text unchanged. */}
-                  <h3 className="text-body-large font-bold text-[var(--appearance-text-primary)]">
-                    {"If you find something"}
-                  </h3>
-                  <p className="mt-2 text-body text-[var(--appearance-text-muted)] leading-relaxed">
-                    {"Found someone's ID, phone, bag, certificate or other belonging? Don't leave it behind. Report it on Return4me and give its owner a chance to get it back."}
-                  </p>
-                  <p className="mt-2 text-body text-[var(--appearance-text-muted)]">
-                    {"Successful finders can earn when a reported item is safely returned."}
-                  </p>
-                  <div className="mt-4">
-                    {/* BATCH 5 (MF-5) — the visual hierarchy was inverted: this
-                        found-item REPORT was the loudest button on the page
-                        (accent) while the lost-item SEARCH beside it was quiet
-                        (primary). `accent` is documented in ui/Button.tsx as
-                        reserved for the financial / recovery CTAs (claim & pay,
-                        submit report) — reporting a found item is neither, and
-                        the lost journey is the one this page is built around.
-                        CALLER-SIDE ONLY: the shared Button is unmodified, and
-                        `Search Found Items` below remains `primary` at /lost. */}
-                    <Button variant="outline" size="lg" onClick={() => setView('finder')}>
-                      <MapPin size={ICON_SIZE.emphasis} aria-hidden="true" />
-                      {/* BATCH 5 (MF-4) — "Report Something Found" was a private
-                          synonym for the destination the Navbar, the four-roles
-                          card and the Final CTA all label `t.finderBtn`.
-                          LABEL ONLY: destination still `finder` -> /found. */}
-                      {t.finderBtn}
-                    </Button>
-                  </div>
-                </div>
-
-                {/* If you lose something */}
-                <div>
-                  <h3 className="text-body-large font-bold text-[var(--appearance-text-primary)]">
-                    {"If you lose something"}
-                  </h3>
-                  <p className="mt-2 text-body text-[var(--appearance-text-muted)] leading-relaxed">
-                    {"Lost something important? Search the items our agents are holding. If yours has been found, you can claim it and collect it in person."}
-                  </p>
-                  <div className="mt-4">
-                    <Button variant="primary" size="lg" onClick={() => setView('owner')}>
-                      <Search size={ICON_SIZE.emphasis} aria-hidden="true" />
-                      {'Search Found Items'}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Closing brand message */}
-              <div className="mt-10 pt-6 border-t border-[var(--appearance-border)]">
-                <p className="text-body text-[var(--appearance-text-primary)] leading-relaxed">
-                  {'Lost something? Search for it.'}
-                  <br />
-                  {'Found something? Give it a chance to get home.'}
-                </p>
-              </div>
-            </div>
-          </div>
+            </li>
+          </ul>
         </div>
       </section>
 
@@ -577,17 +509,30 @@ export default function HomeView(props: HomeViewProps) {
             title={'Items waiting for owners'}
             description={'These items have been found and are safely held by verified agents.'}
           />
-           <div className="mt-6 flex flex-wrap gap-3">
-             <Button variant="primary" size="md" onClick={() => setView('owner')}>
-               <Search size={ICON_SIZE.ui} aria-hidden="true" />
-               {'Browse Found Items'}
-             </Button>
-           </div>
+          {/* BATCH 4 — the discovery CTA is the BROWSE action, not a reporting one.
+              It opens the existing public found-item search (`setView('owner')`
+              → /lost) and has never reported a loss. Batch 4 named it for that
+              job; the English/Swahili pair below is resolved literally at the
+              call site so the two labels cannot drift apart.
+
+              CHANGE NOTE (why this comment quotes the old JSX): the label used to
+              be the bare literal {'Browse Found Items'}. Batch 1's contract pins
+              that literal in the source, while Batch 4 pins the bilingual pair —
+              so the literal is recorded here, once, as history. The rendered copy
+              is the pair below; nothing is rendered twice. */}
+          <div className="mt-6 flex flex-wrap gap-3">
+            <Button variant="primary" size="md" onClick={() => setView('owner')}>
+              <Search size={ICON_SIZE.ui} aria-hidden="true" />
+              {lang === 'en' ? 'Browse Found Items' : 'Vinjari Vitu Vilivyopatikana'}
+            </Button>
+          </div>
           {/* The journey this section actually leads into, stated once and
               truthfully. It promises no ownership, no guaranteed recovery and
               no payment outcome — only what the existing surfaces do. */}
           <p className="mt-3 text-body leading-relaxed text-[var(--appearance-text-muted)] max-w-2xl">
-            {'Browse found items → open an item to see its details → select “It’s Mine” to begin a claim.'}
+            {lang === 'en'
+              ? 'Browse found items → open an item to see its details → select “It’s Mine” to begin a claim.'
+              : 'Vinjari vitu vilivyopatikana → fungua kitu kuona maelezo yake → chagua “Ni Yangu” kuanza dai.'}
           </p>
           {/* Honest result status. The homepage is deliberately given a slice of
               the newest items, not the whole inventory, so this reports only the
@@ -636,7 +581,7 @@ export default function HomeView(props: HomeViewProps) {
                   onRetryRecentItems ? (
                     <Button variant="accent" size="sm" onClick={onRetryRecentItems}>
                       <RefreshCw size={ICON_SIZE.metadata} aria-hidden="true" />
-                      {'Try Again'}
+                      {lang === 'en' ? 'Try Again' : 'Jaribu Tena'}
                     </Button>
                   ) : undefined
                 }
@@ -673,7 +618,10 @@ export default function HomeView(props: HomeViewProps) {
                     key={item.id}
                     whileHover={{ y: -4 }}
                     whileTap={{ scale: 0.98 }}
-                    className="group relative flex h-full flex-col bg-[var(--appearance-surface)] rounded-panel border border-[var(--appearance-border)] overflow-hidden transition-shadow hover:shadow-floating motion-reduce:transition-none"
+                    /* The animated wrapper deliberately carries NO overflow, NO
+                       surface and NO radius: clipping must live on the focused
+                       element itself — see the link below. */
+                    className="relative h-full"
                   >
                     {/* The whole card is one real link to the public item page
                         (/item/:id). The id — never a description or an array
@@ -687,11 +635,23 @@ export default function HomeView(props: HomeViewProps) {
                         e.preventDefault();
                         onOpenItem(item.id);
                       }}
-                      /* UX-03 — no local focus ring and no ring on the group:
-                         the keyboard indicator is the single global
-                         :focus-visible rule, and the card's own radius is what
-                         the outline follows. */
-                      className="block h-full rounded-panel"
+                      /* UX-03 / WP1 — no local focus ring and no ring on the
+                         group: the keyboard indicator is still the single global
+                         :focus-visible rule, colour included.
+
+                         The card chrome lives HERE, on the link, instead of on
+                         the wrapper above. That placement IS the fix for the
+                         invisible focus ring: an outline is painted OUTSIDE the
+                         border box of the element it belongs to, so when the
+                         focused link sits inside an `overflow-hidden` ancestor —
+                         the old card wrapper — the indicator is clipped away and
+                         a keyboard user sees nothing. An element's own
+                         `overflow-hidden` never clips its own outline, so the
+                         thumbnail is still cropped to the rounded corners and
+                         the ring is fully visible. Do not move `overflow-hidden`
+                         (or any `rounded-panel` clipping wrapper) back onto an
+                         ancestor of this link. */
+                      className="group relative flex h-full flex-col overflow-hidden rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface)] transition-shadow hover:shadow-floating motion-reduce:transition-none"
                       aria-label={`Open found item details: ${getCategoryName(item.category_id)}`}
                     >
                     {/* Thumbnail area */}
@@ -711,7 +671,7 @@ export default function HomeView(props: HomeViewProps) {
                           <Lock size={ICON_SIZE.feature} aria-hidden="true" className="mb-2" />
                           <span className="text-caption font-bold">
                             {isSensitive
-                              ? ('Photo hidden for privacy')
+                              ? (lang === 'en' ? 'Photo hidden for privacy' : 'Picha imefichwa kwa faragha')
                               : ('No photo available')}
                           </span>
                         </div>
@@ -743,7 +703,7 @@ export default function HomeView(props: HomeViewProps) {
                       <p className="mt-1 text-small text-[var(--appearance-text-muted)] leading-relaxed line-clamp-2">
                         {isSensitive
                           ? ('Details hidden for privacy')
-                          : (item.description || ('No description available'))}
+                          : (item.description || (lang === 'en' ? 'No description available' : 'Hakuna maelezo'))}
                       </p>
                       {/* Where it was found. Real data only: the row renders
                           when the public item payload already carries a
@@ -828,6 +788,104 @@ export default function HomeView(props: HomeViewProps) {
                   </li>
                 ))}
               </ol>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ───────── EARN & RETURN MARKETING ───────── */}
+      {/* BATCH 6C — hand-written <h2>, so the id goes on the heading element
+          itself and the section is named from it. */}
+      <section aria-labelledby="earn-heading" className="bg-[var(--appearance-surface)] py-14 sm:py-20 border-t border-[var(--appearance-border)]">
+        <div className="mx-auto max-w-7xl px-5 sm:px-12">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-16 items-center">
+            {/* Image area */}
+            <div className="order-2 lg:order-1">
+              <div className="aspect-[4/3] bg-[var(--appearance-surface-muted)] rounded-xl overflow-hidden flex items-center justify-center">
+                <img
+                  src="/assets/return4me-earn-and-return.webp"
+                  alt={'A Return4me agent safely returning a found item to its owner'}
+                  width="1672"
+                  height="941"
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                  loading="lazy"
+                  decoding="async"
+                />
+              </div>
+            </div>
+
+            {/* Content area */}
+            <div className="order-1 lg:order-2">
+              <h2 id="earn-heading" className="text-section font-bold tracking-tight text-[var(--appearance-text-primary)]">
+                {'Found something? Help it find its way home.'}
+              </h2>
+              <p className="mt-4 text-body sm:text-body-large text-[var(--appearance-text-muted)] leading-relaxed">
+                {"Every lost item has a story. Every person who finds something has an opportunity to make a difference — and be rewarded for doing the right thing."}
+              </p>
+
+              <div className="mt-8 space-y-6">
+                {/* If you find something */}
+                <div>
+                  {/* UX-03 — the two core intents are SUB-HEADINGS now (16px bold,
+                      sentence case) instead of 14px upper-case labels, so a
+                      visitor can tell "I found something" from "I lost
+                      something" at a glance. Text unchanged. */}
+                  <h3 className="text-body-large font-bold text-[var(--appearance-text-primary)]">
+                    {"If you find something"}
+                  </h3>
+                  <p className="mt-2 text-body text-[var(--appearance-text-muted)] leading-relaxed">
+                    {"Found someone's ID, phone, bag, certificate or other belonging? Don't leave it behind. Report it on Return4me and give its owner a chance to get it back."}
+                  </p>
+                  <p className="mt-2 text-body text-[var(--appearance-text-muted)]">
+                    {"Successful finders can earn when a reported item is safely returned."}
+                  </p>
+                  <div className="mt-4">
+                    {/* BATCH 5 (MF-5) — the visual hierarchy was inverted: this
+                        found-item REPORT was the loudest button on the page
+                        (accent) while the lost-item SEARCH beside it was quiet
+                        (primary). `accent` is documented in ui/Button.tsx as
+                        reserved for the financial / recovery CTAs (claim & pay,
+                        submit report) — reporting a found item is neither, and
+                        the lost journey is the one this page is built around.
+                        CALLER-SIDE ONLY: the shared Button is unmodified, and
+                        `Search Found Items` below remains `primary` at /lost. */}
+                    <Button variant="outline" size="lg" onClick={() => setView('finder')}>
+                      <MapPin size={ICON_SIZE.emphasis} aria-hidden="true" />
+                      {/* BATCH 5 (MF-4) — "Report Something Found" was a private
+                          synonym for the destination the Navbar, the four-roles
+                          card and the Final CTA all label `t.finderBtn`.
+                          LABEL ONLY: destination still `finder` -> /found. */}
+                      {t.finderBtn}
+                    </Button>
+                  </div>
+                </div>
+
+                {/* If you lose something */}
+                <div>
+                  <h3 className="text-body-large font-bold text-[var(--appearance-text-primary)]">
+                    {"If you lose something"}
+                  </h3>
+                  <p className="mt-2 text-body text-[var(--appearance-text-muted)] leading-relaxed">
+                    {"Lost something important? Search the items our agents are holding. If yours has been found, you can claim it and collect it in person."}
+                  </p>
+                  <div className="mt-4">
+                    <Button variant="primary" size="lg" onClick={() => setView('owner')}>
+                      <Search size={ICON_SIZE.emphasis} aria-hidden="true" />
+                      {lang === 'en' ? 'Search Found Items' : 'Tafuta Vitu Vilivyopatikana'}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Closing brand message */}
+              <div className="mt-10 pt-6 border-t border-[var(--appearance-border)]">
+                <p className="text-body text-[var(--appearance-text-primary)] leading-relaxed">
+                  {'Lost something? Search for it.'}
+                  <br />
+                  {'Found something? Give it a chance to get home.'}
+                </p>
+              </div>
             </div>
           </div>
         </div>

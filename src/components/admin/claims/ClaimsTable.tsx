@@ -101,7 +101,7 @@ function ClaimRow({
           onClick={() => onSelect(row.id)}
           disabled={disabled}
           aria-label={`Open claim ${row.id}`}
-          className="text-left rounded-md focus-visible:outline-2 focus-visible:outline-accent-orange disabled:opacity-60"
+          className="text-left rounded-md disabled:opacity-60"
         >
           <span className="font-mono text-xs font-bold text-brand-dark-text break-all">{row.id}</span>
           {!row.is_active && (

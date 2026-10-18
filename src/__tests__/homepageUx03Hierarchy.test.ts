@@ -262,7 +262,7 @@ describe('UX-03 homepage-local legacy audit (ladders, focus, palette)', () => {
       expect(source, `${name} must not use outline-none`).not.toContain('outline-none');
     }
     // The single global indicator is still the one focus language.
-    expect(indexCss).toContain('outline: 2px solid var(--color-accent-orange)');
+    expect(indexCss).toContain('outline: 2px solid var(--appearance-focus)');
     expect(indexCss).toContain('.bg-primary-green :focus-visible');
   });
 

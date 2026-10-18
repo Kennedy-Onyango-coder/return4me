@@ -59,8 +59,13 @@ export default function PublicItemView({
   onContinueClaim,
   onRequireAuth,
 }: PublicItemViewProps) {
-
-
+  // The active copy locale. The app renders English (the English-only decision,
+  // commit e073c8e) and this page owns no language state: the document language
+  // stays `en`. Naming the locale keeps the pair visible at each call site, so a
+  // label added here is translated in the same place it is written.
+  const lang: 'en' | 'sw' = 'en';
+  /** Resolves an English/Swahili pair for this page's copy. */
+  const t = (en: string, sw: string) => (lang === 'en' ? en : sw);
 
   const [state, setState] = useState<LoadState>('loading');
   const [item, setItem] = useState<any | null>(null);
@@ -252,7 +257,7 @@ export default function PublicItemView({
           navigate('/', 'home')), and it is not being given a return-to-results
           behaviour in this batch. Only the visible label changed, so it now
           describes the destination it actually has. */}
-      {'Back to home'}
+      {t('Back to home', 'Rudi nyumbani')}
     </a>
   );
 

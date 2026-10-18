@@ -79,7 +79,7 @@ export default function VerificationForm({
   // An uploaded ID proof must not be submitted without explicit ODPC consent
   const consentRequiredWhenUploaded = idProofBase64 ? idUploadConsent : true;
 
-  const baseInputClass = "w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-brand-beige focus:outline-none focus:border-accent-orange";
+  const baseInputClass = "w-full border border-stone-200 rounded-xl px-3 py-2.5 text-sm bg-brand-beige focus:border-[var(--appearance-focus)]";
   const sensitiveInputClass = `${baseInputClass} font-mono`;
 
   return (
@@ -163,7 +163,7 @@ export default function VerificationForm({
             value={ownerIdentifyingDetails}
             onChange={(e) => setOwnerIdentifyingDetails(e.target.value)}
             placeholder={'E.g. Full name, ID number, or unique physical characteristics'}
-            className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-xs focus:outline-none focus:border-accent-orange"
+            className="w-full border border-stone-200 rounded-xl px-3 py-2.5 text-xs focus:border-[var(--appearance-focus)]"
             rows={3}
             required
           />
@@ -196,7 +196,7 @@ export default function VerificationForm({
                     type="checkbox"
                     checked={idUploadConsent}
                     onChange={(e) => setIdUploadConsent(e.target.checked)}
-                    className="mt-0.5 h-3.5 w-3.5 rounded border-stone-300 text-primary-green focus:ring-primary-green cursor-pointer"
+                    className="mt-0.5 h-3.5 w-3.5 rounded border-stone-300 text-primary-green cursor-pointer"
                     required
                   />
                   <label htmlFor="verify-id-consent" className="text-caption text-stone-600 leading-tight select-none cursor-pointer">
@@ -215,7 +215,7 @@ export default function VerificationForm({
             type="checkbox"
             checked={isConfident}
             onChange={(e) => setIsConfident(e.target.checked)}
-            className="mt-1 h-4 w-4 rounded border-stone-300 text-primary-green focus:ring-primary-green cursor-pointer"
+            className="mt-1 h-4 w-4 rounded border-stone-300 text-primary-green cursor-pointer"
             required
           />
           <label htmlFor="confidence-checkbox" className="text-xs text-stone-700 leading-tight select-none cursor-pointer">

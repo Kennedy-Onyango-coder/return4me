@@ -222,6 +222,22 @@ describe('UX-01 semantic colour roles', () => {
     }
     expect(offenders, `\n${offenders.join('\n')}\n`).toEqual([]);
   });
+
+  // WP4: the public footer paints its links and actions on `surface-muted`, so the
+  // two roles it actually consumes there are pinned as well — the fixed brand
+  // green is NOT one of them (it fails on the dark muted surface).
+  it('keeps footer ink legible on the muted surface in both themes (AA, 4.5:1)', () => {
+    const pairs: Array<[string, string]> = [
+      ['primary', 'surface-muted'],
+      ['text-muted', 'surface-muted'],
+    ];
+    for (const [scopeName, scope] of [['light', lightRole], ['dark', darkRole]] as const) {
+      for (const [fgRole, bgRole] of pairs) {
+        const ratio = contrast(scope(fgRole) as string, scope(bgRole) as string);
+        expect(ratio, `${scopeName}: ${fgRole} on ${bgRole}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
 });
 
 describe('UX-01 elevation', () => {
@@ -280,8 +296,25 @@ describe('UX-01 focus language', () => {
   const focusBody = focusRule ? focusRule[1] : '';
 
   it('declares exactly one global keyboard-focus indicator', () => {
-    expect(focusBody).toContain('outline: 2px solid var(--color-accent-orange)');
+    // WP1: the ONE global ring is drawn with the themed focus token, so a single
+    // rule resolves correctly in both appearances instead of hard-coding a colour
+    // that can sink into one of the two backgrounds.
+    expect(focusBody).toContain('outline: 2px solid var(--appearance-focus)');
     expect(focusBody).toContain('outline-offset: 2px');
+  });
+
+  it('backs that indicator with a real token in both appearances', () => {
+    // The rule above is only as good as the token it points at: if either
+    // appearance stopped declaring `--appearance-focus`, keyboard users in that
+    // theme would get NO ring at all (an unresolvable `var()` in `outline`
+    // computes to no outline). Both values must also be distinct from the accent
+    // orange the old ring used, which measured ~2.8:1 on the cream background —
+    // under the 3:1 WCAG 1.4.11 minimum for a non-text indicator.
+    expect(lightRole('focus')).toBeTruthy();
+    expect(darkRole('focus')).toBeTruthy();
+    expect(lightRole('focus')).not.toBe(lightRole('accent'));
+    expect(darkRole('focus')).not.toBe(darkRole('accent'));
+    expect(lightRole('focus')).not.toBe('#EC7E0D');
   });
 
   it('does not override a control radius while focused (off-ladder regression)', () => {
@@ -292,8 +325,19 @@ describe('UX-01 focus language', () => {
   });
 
   it('keeps the white outline for dark brand surfaces', () => {
+    // The themed token is a dark green in the light appearance, which would sit
+    // invisibly on the brand-green surfaces; those keep a white ring (>=3:1).
     expect(cssCode).toContain('.bg-primary-green :focus-visible');
     expect(cssCode).toContain('outline-color: white');
+  });
+
+  it('re-states the indicator for Windows High Contrast / forced colours', () => {
+    // Under `forced-colors: active` the OS discards author colours, so both the
+    // token and the white override can vanish. The ring is re-stated with the
+    // system `Highlight` colour, which is never conditional on a theme.
+    const forced = /@media \(forced-colors: active\) \{([\s\S]*?)\n\}/.exec(cssCode);
+    expect(forced).not.toBeNull();
+    expect(forced![1]).toContain('outline: 3px solid Highlight');
   });
 });
 

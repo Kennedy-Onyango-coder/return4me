@@ -323,7 +323,7 @@ export default function PayoutSettingsCard({ token }: { token: string }) {
             placeholder={'07XX XXX XXX'}
             aria-describedby="agent-payout-proposed-number-hint"
             disabled={submitting}
-            className="min-h-11 flex-1 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface)] px-3 py-2 font-mono text-body text-[var(--appearance-text-primary)] outline-none focus:border-[var(--appearance-primary)] disabled:opacity-60"
+            className="min-h-11 flex-1 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface)] px-3 py-2 font-mono text-body text-[var(--appearance-text-primary)] focus:border-[var(--appearance-focus)] disabled:opacity-60"
           />
           <Button type="submit" variant="primary" size="md" disabled={submitting} aria-busy={submitting}>
             {submitting ? (

@@ -59,7 +59,7 @@ export default function AgentRejectionPanel({
       id={`reject-reason-${item.id}`}
       value={rejectionReason}
       onChange={(e) => setRejectionReason(e.target.value)}
-      className="w-full border border-stone-200 rounded-lg p-2 text-xs bg-white focus:outline-none focus:border-red-500"
+      className="w-full border border-stone-200 rounded-lg p-2 text-xs bg-white"
     >
       <option value="Not a real item">Not a real item</option>
       <option value="Item doesn't match description">Item doesn't match description</option>
@@ -74,7 +74,7 @@ export default function AgentRejectionPanel({
         onChange={(e) => setRejectionCustomText(e.target.value)}
         placeholder="Enter custom rejection reason..."
         aria-label="Custom rejection reason"
-        className="w-full border border-stone-200 rounded-lg p-2 text-xs focus:outline-none focus:border-red-500"
+        className="w-full border border-stone-200 rounded-lg p-2 text-xs"
         required
       />
     )}

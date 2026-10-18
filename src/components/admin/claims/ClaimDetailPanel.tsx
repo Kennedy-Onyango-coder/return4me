@@ -400,7 +400,7 @@ function SiblingRow({
       type="button"
       onClick={() => onOpenClaim(id)}
       aria-label={`Open claim ${id}`}
-      className="font-mono text-xs font-bold text-primary-green underline decoration-dotted underline-offset-4 rounded-md focus-visible:outline-2 focus-visible:outline-accent-orange"
+      className="font-mono text-xs font-bold text-primary-green underline decoration-dotted underline-offset-4 rounded-md"
     >
       {id}
     </button>

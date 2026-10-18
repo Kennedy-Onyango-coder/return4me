@@ -3564,7 +3564,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                             value={twoFaConfirmCode}
                             onChange={handleTwoFaCodeChange}
                             placeholder="123456"
-                            className="w-full h-11 border border-[var(--appearance-border)] rounded-xl px-3 text-body font-mono text-center tracking-widest focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30"
+                            className="w-full h-11 border border-[var(--appearance-border)] rounded-xl px-3 text-body font-mono text-center tracking-widest focus:border-[var(--appearance-focus)]"
                             required
                           />
                         </div>
@@ -3611,7 +3611,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                         autoComplete="current-password"
                         value={twoFaStartPassword}
                         onChange={(e) => setTwoFaStartPassword(e.target.value)}
-                        className="w-full h-11 border border-[var(--appearance-border)] rounded-xl px-3 text-body focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30"
+                        className="w-full h-11 border border-[var(--appearance-border)] rounded-xl px-3 text-body focus:border-[var(--appearance-focus)]"
                         required
                       />
                     </div>
@@ -3685,7 +3685,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                         autoComplete="current-password"
                         value={twoFaDisablePassword}
                         onChange={(e) => setTwoFaDisablePassword(e.target.value)}
-                        className="w-full h-11 border border-[var(--appearance-border)] rounded-xl px-3 text-body focus:outline-none focus:border-accent-orange focus:ring-2 focus:ring-accent-orange/30"
+                        className="w-full h-11 border border-[var(--appearance-border)] rounded-xl px-3 text-body focus:border-[var(--appearance-focus)]"
                         required
                       />
                     </div>
@@ -5041,7 +5041,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                           id="reviewIsDescriptionOnly"
                           checked={reviewIsDescriptionOnly}
                           onChange={(e) => setReviewIsDescriptionOnly(e.target.checked)}
-                          className="rounded text-[var(--appearance-primary)] focus:ring-[var(--appearance-primary)] h-4 w-4"
+                          className="rounded text-[var(--appearance-primary)] h-4 w-4"
                         />
                         <label htmlFor="reviewIsDescriptionOnly" className="text-caption font-bold text-[var(--appearance-text-primary)]">
                           Mark as Description-Only Item (e.g. keys, bags)
@@ -5317,7 +5317,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                             id="catFormIsSensitive"
                             checked={catFormIsSensitive}
                             onChange={(e) => setCatFormIsSensitive(e.target.checked)}
-                            className="mt-0.5 h-5 w-5 shrink-0 rounded border-[var(--appearance-border)] text-[var(--appearance-primary)] focus:ring-2 focus:ring-accent-orange/30 cursor-pointer"
+                            className="mt-0.5 h-5 w-5 shrink-0 rounded border-[var(--appearance-border)] text-[var(--appearance-primary)] cursor-pointer"
                           />
                           <span className="text-body text-[var(--appearance-text-primary)]">
                             <span className="font-bold">Sensitive document / Hati nyeti</span>
@@ -5352,7 +5352,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                             id="catFormElevatedReview"
                             checked={catFormElevatedReview}
                             onChange={(e) => setCatFormElevatedReview(e.target.checked)}
-                            className="mt-0.5 h-5 w-5 shrink-0 rounded border-[var(--appearance-border)] text-status-danger focus:ring-2 focus:ring-status-danger/30 cursor-pointer"
+                            className="mt-0.5 h-5 w-5 shrink-0 rounded border-[var(--appearance-border)] text-status-danger cursor-pointer"
                           />
                           <span className="text-body text-[var(--appearance-text-primary)]">
                             <span className="font-bold">Elevated review / Ukaguzi wa hali ya juu</span>
@@ -5451,7 +5451,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                           id="catFormIsAdminModified"
                           checked={catFormIsAdminModified}
                           onChange={(e) => setCatFormIsAdminModified(e.target.checked)}
-                          className="mt-0.5 h-5 w-5 shrink-0 rounded border-[var(--appearance-border)] text-status-warning focus:ring-2 focus:ring-status-warning/30 cursor-pointer"
+                          className="mt-0.5 h-5 w-5 shrink-0 rounded border-[var(--appearance-border)] text-status-warning cursor-pointer"
                         />
                         <span className="text-body text-[var(--appearance-text-primary)]">
                           <span className="font-bold">Use flat fee override / Tumia ada isiyobadilika</span>

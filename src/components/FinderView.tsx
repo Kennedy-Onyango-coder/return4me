@@ -221,7 +221,16 @@ export default function FinderView({ categories, categoriesLoading = false, cate
   // both the top-of-form validation errors and the post-submit ones.
   useEffect(() => {
     if (errorMsg && errorBannerRef.current) {
-      errorBannerRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // WP4 — honour the motion preference. `src/index.css` neutralises CSS
+      // motion under `prefers-reduced-motion: reduce`, but that rule cannot
+      // override an explicit `behavior: 'smooth'` option — the option wins. A
+      // smooth pan across this long single-screen form is exactly the movement
+      // the setting asks to be spared, so the banner is brought in instantly
+      // instead. Only the travel changes; `block: 'center'` keeps the same
+      // final position, so the form does not move relative to the error.
+      const reduceMotion = typeof window !== 'undefined'
+        && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      errorBannerRef.current.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'center' });
     }
   }, [errorMsg]);
 
@@ -811,7 +820,7 @@ export default function FinderView({ categories, categoriesLoading = false, cate
                       setCategoryId(e.target.value);
                       setCategoryManuallySet(true);
                     }}
-                    className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white focus:border-accent-orange focus:outline-none disabled:bg-stone-50 disabled:text-stone-400"
+                    className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white focus:border-[var(--appearance-focus)] disabled:bg-stone-50 disabled:text-stone-400"
                     required
                     disabled={categoriesLoading || categoriesError}
                   >

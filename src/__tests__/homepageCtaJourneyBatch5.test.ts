@@ -68,8 +68,13 @@ const HERO = homeCode.slice(heroStart, heroEnd);
 
 // The "Earn & Return" section, which holds both the relabelled found CTA (MF-4)
 // and the inverted hierarchy fix (MF-5).
+//
+// WP3 (discovery reorder) moved the Recently Found section up and this section
+// one slot down, so it now sits between "How it works" and the platform
+// section. The slice still covers exactly this section — from its own heading to
+// the section that follows it — so the assertions below stay scoped to it.
 const earnStart = homeCode.indexOf('Found something? Help it find its way home.');
-const earnEnd = homeCode.indexOf('id="found-items"');
+const earnEnd = homeCode.indexOf('id="platform-heading"');
 const EARN = homeCode.slice(earnStart, earnEnd);
 
 /** The id the hero's "How It Works" secondary scrolls to, read from the real
@@ -458,16 +463,23 @@ describe('BATCH 5 — preservation: Batch 3 / Batch 4 contracts', () => {
     expect(homeViewTsx).toContain('aria-live');
   });
 
-  it('does not reorder the homepage sections', () => {
+  it('keeps the homepage section order stable — WP3 puts discovery directly under the trust strip', () => {
     // Anchors taken from RENDERED markup only, so this asserts the order a
     // visitor actually scrolls through and is not tied to line numbers.
+    //
+    // WP3 (discovery reorder) DELIBERATELY moved the Recently Found section up
+    // one slot: a visitor's primary job is finding their own item, so the browse
+    // surface now sits immediately under the hero and the trust strip, and the
+    // Earn & Return recruitment block — which used to outrank it — follows.
+    // This test keeps its original purpose (no section may drift silently) by
+    // pinning the NEW order rather than being deleted.
     const body = homeViewTsx.slice(homeViewTsx.indexOf('return ('));
     const order = [
-      'aria-roledescription="carousel"',               // 1. hero
-      'Vetted Agents Only',                            // 2. trust strip
-      'Found something? Help it find its way home.', // 3. Earn & Return
-      'id="found-items"',                             // 4. Recently found
-      'id="how-it-works"',                            // 5. How it works
+      'aria-roledescription="carousel"',                // 1. hero
+      'Vetted Agents Only',                             // 2. trust strip
+      'id="found-items"',                               // 3. Recently found (WP3)
+      'id="how-it-works"',                              // 4. How it works
+      'Found something? Help it find its way home.',    // 5. Earn & Return
     ];
     let cursor = -1;
     for (const marker of order) {

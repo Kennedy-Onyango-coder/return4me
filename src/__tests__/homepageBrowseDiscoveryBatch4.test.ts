@@ -166,18 +166,41 @@ describe('HOMEPAGE BATCH 4 — discovery error retry', () => {
 
   it('re-invokes App fetchRecentItems rather than adding a second request', () => {
     // Exactly one wiring, no new endpoint, no page reload.
-    expect(appTsx.match(/onRetryRecentItems=\{fetchRecentItems\}/g) || []).toHaveLength(1);
+    //
+    // WP4 note: the wiring is now an ARROW, not the bare function reference.
+    // The 45s poll calls `fetchRecentItems({ background: true })`; passing the
+    // bare reference to `onClick` would hand the click event to the function as
+    // its options object. The arrow invokes it with no argument, so a retry is
+    // always a FOREGROUND load — which is what repairs the skeleton/error state
+    // when the visitor explicitly asks again.
+    expect(appTsx.match(/onRetryRecentItems=\{\(\) => \{ void fetchRecentItems\(\); \}\}/g) || []).toHaveLength(1);
+    // The bare reference must not come back: it would forward the event.
+    expect(appTsx).not.toContain('onRetryRecentItems={fetchRecentItems}');
     expect(DISCOVERY).not.toMatch(/fetch\(|window\.location|reload\(/);
   });
 
-  it('leaves fetchRecentItems itself, its polling and its guards untouched', () => {
+  it('keeps the single /api/items/search request, its guards and the 45s cadence', () => {
+    // WP4 narrated the background refresh inside the callback, so a fixed-width
+    // window (the previous `at + 1400`) no longer reached the body. Slice to the
+    // end of the callback instead: these assertions are about what the function
+    // DOES, not about how many characters its comments take.
     const at = appTsx.indexOf('const fetchRecentItems');
-    const fn = appTsx.slice(at, at + 1400);
+    expect(at, 'fetchRecentItems must still be a useCallback').toBeGreaterThan(-1);
+    const end = appTsx.indexOf('}, []);', at);
+    expect(end, 'the callback must still close with an empty dependency array').toBeGreaterThan(at);
+    const fn = appTsx.slice(at, end);
     expect(fn).toContain("fetch('/api/items/search', { signal: controller.signal })");
     expect(fn).toContain('isFetchingRecentItemsRef');
     expect(fn).toContain('recentItemsAbortRef');
     expect(fn).toContain('sorted.slice(0, 4)');
-    expect(appTsx).toContain('setInterval(fetchRecentItems, 45000)');
+    // WP4 keeps the cadence exactly as it was and only marks the tick as a
+    // background refresh, so the rendered list is updated in place instead of
+    // being replaced by the skeleton (or by the error card on one failed poll).
+    expect(appTsx).toContain('setInterval(() => fetchRecentItems({ background: true }), 45000)');
+    // The background flag must never become the default for a real load: the
+    // first load and the return-to-home effect call it with no argument.
+    // (Regex, not a literal, because App.tsx is CRLF-encoded.)
+    expect(appTsx).toMatch(/fetchRecentItems\(\);\r?\n\s*const intervalId = setInterval\(/);
   });
 
   it('does not add retry to unrelated sections', () => {
@@ -257,13 +280,19 @@ describe('HOMEPAGE BATCH 4 — preservation tripwires', () => {
   it('does not reorder the homepage sections', () => {
     // Anchors chosen from RENDERED markup only (not imports, not comments), so
     // this asserts the order a visitor actually scrolls through.
+    //
+    // WP3 (discovery reorder) moved the Recently Found section up to sit
+    // directly under the hero and the trust strip, so the browse surface a
+    // visitor came for is no longer behind the Earn & Return recruitment block.
+    // The purpose of this test is unchanged: the order is pinned, so it cannot
+    // drift again without a deliberate edit here.
     const body = homeViewTsx.slice(homeViewTsx.indexOf('return ('));
     const order = [
-      'aria-roledescription="carousel"',           // 1. hero
-      'Vetted Agents Only',                        // 2. trust strip
-      'Found something? Help it find its way home.', // 3. Earn & Return
-      'id="found-items"',                         // 4. Recently found
-      'id="how-it-works"',                        // 5. How it works
+      'aria-roledescription="carousel"',            // 1. hero
+      'Vetted Agents Only',                         // 2. trust strip
+      'id="found-items"',                           // 3. Recently found (WP3)
+      'id="how-it-works"',                          // 4. How it works
+      'Found something? Help it find its way home.', // 5. Earn & Return
     ];
     let cursor = -1;
     for (const marker of order) {

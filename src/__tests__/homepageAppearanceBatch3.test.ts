@@ -142,11 +142,22 @@ describe('HOMEPAGE BATCH 3 - appearance token migration', () => {
   // ---------------------------------------- content / IA preserved
   it('preserves the homepage section order', () => {
     // Section markers in their shipped order.
+    //
+    // WP3 (discovery reorder) moved RECENT FOUND ITEMS up to sit directly under
+    // the hero and the trust strip, so the browse surface comes before the
+    // Earn & Return recruitment block. The list below therefore records the new
+    // shipped order; it is still pinned, so it cannot drift silently.
+    //
+    // The "How it works" marker carries one box-drawing character from its banner
+    // comment on purpose: the phrase "HOW IT WORKS" also appears earlier in a
+    // data comment ("HOW IT WORKS STEPS"), and a plain substring match would
+    // resolve to that one and compare the wrong position.
     const order = [
       'HERO STORY SLIDESHOW',
       'TRUST STRIP',
-      'EARN & RETURN MARKETING',
       'RECENT FOUND ITEMS',
+      'HOW IT WORKS \u2500',
+      'EARN & RETURN MARKETING',
       'ONE NETWORK',
       'FINAL CTA',
     ];

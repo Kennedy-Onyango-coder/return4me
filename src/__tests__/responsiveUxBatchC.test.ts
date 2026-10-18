@@ -70,17 +70,40 @@ const code = (p: string) => stripComments(read(rel(p)));
 // `expect(HUB).toContain('focus-visible:ring-2')` and
 // agentHubModernizationBatch4B3.test.ts, same assertion). This batch does not
 // silently overturn a reviewed contract on another surface's behalf: it names
-// the residual and proves it has not spread past that one file.
+// the residual and proves it has not spread past that one file. WP1 keeps that
+// ring — its colour is already the themed `--appearance-focus` token — and
+// finishes the sweep the batch started: the plain `focus:outline-none` form
+// (no `-visible`) that the admin console, the agent/verification forms, the
+// privacy screen and FinderView still carried is gone too, so EVERY control in
+// the shipped views is now covered by the global outline.
 const FOCUS_RESIDUAL_FILE = 'src/components/agent/AgentHub.tsx';
 
+/** Files allowed to suppress the global outline, with the reason. */
+const OUTLINE_SUPPRESSORS_ALLOWED: Record<string, string> = {
+  [FOCUS_RESIDUAL_FILE]: 'replaces it with its own ring in the same focus token',
+  'src/App.tsx':
+    'the <main> skip-link target — a ring there would frame the whole page body',
+};
+
 describe('Batch C: the views keep the single global focus language', () => {
-  it('no shipped view outside the documented residual suppresses the global focus outline', () => {
+  it('no shipped view outside the documented residuals suppresses the global focus outline', () => {
+    // Both spellings count: `focus-visible:outline-none` AND the bare
+    // `focus:outline-none` (which the console/forms used) cancel the global
+    // indicator exactly the same way.
     const offenders: string[] = [];
     for (const file of FRONTEND_FILES) {
-      if (rel(file) === FOCUS_RESIDUAL_FILE) continue;
-      if (/focus-visible:outline-none/.test(code(file))) offenders.push(rel(file));
+      if (OUTLINE_SUPPRESSORS_ALLOWED[rel(file)]) continue;
+      if (/focus(-visible)?:outline-none/.test(code(file))) offenders.push(rel(file));
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('the allow-list stays exactly the two documented files', () => {
+    // If the allow-list ever grew, the sweep above would weaken silently.
+    expect(Object.keys(OUTLINE_SUPPRESSORS_ALLOWED)).toEqual([
+      FOCUS_RESIDUAL_FILE,
+      'src/App.tsx',
+    ]);
   });
 
   it('no shipped view outside the documented residual stacks a second focus-visible ring', () => {
@@ -100,16 +123,35 @@ describe('Batch C: the views keep the single global focus language', () => {
     expect(withLocalRing).toEqual([FOCUS_RESIDUAL_FILE]);
   });
 
-  it('the single global rule is still the indicator', () => {
-    const css = read('src/index.css');
-    expect(css).toMatch(/:focus-visible\s*\{/);
-    expect(css).toContain('outline: 2px solid var(--color-accent-orange)');
+  // WP1 — one focus COLOUR as well as one focus shape. The batch removed the
+  // duplicate rings; the views still painted their remaining focus affordance
+  // with brand orange (`#EC7E0D`, ~2.8:1 on cream) or brand green, i.e. two
+  // different focus colours for one control and, on the cream background, an
+  // indicator under the 3:1 non-text minimum. The themed token replaces them.
+  it('every focus affordance in the shipped views uses the themed focus token', () => {
+    const banned = [
+      'focus:border-accent-orange',
+      'focus:ring-accent-orange',
+      'focus:ring-primary-green',
+      'focus:ring-red-500',
+      'focus:border-[var(--appearance-primary)]',
+      'focus-visible:outline-accent-orange',
+    ];
+    const offenders: string[] = [];
+    for (const file of FRONTEND_FILES) {
+      const source = code(file);
+      if (banned.some((cls) => source.includes(cls))) offenders.push(rel(file));
+    }
+    expect(offenders).toEqual([]);
   });
 
   it('the guard is live, not decorative (mutation check)', () => {
     const mutant = `<button className="focus-visible:outline-none focus-visible:ring-2" />`;
     expect(/focus-visible:outline-none/.test(mutant)).toBe(true);
     expect(/focus-visible:ring-\d/.test(mutant)).toBe(true);
+    const bare = `<input className="focus:outline-none focus:border-accent-orange" />`;
+    expect(/focus(-visible)?:outline-none/.test(bare)).toBe(true);
+    expect(bare.includes('focus:border-accent-orange')).toBe(true);
   });
 });
 
@@ -381,5 +423,42 @@ describe('Batch C: the 12px type floor holds in every shipped view', () => {
     expect((`<p className="text-caption">x</p>`).match(SUB_CAPTION)).toEqual(null);
     // ...and it is not fooled by a comment that merely mentions the old sizes.
     expect(code('src/components/AdminView.tsx').match(SUB_CAPTION)).toEqual(null);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// 7. REDUCED MOTION IN JS SCROLLS  (WP4, docs/design-system.md §11)
+// -----------------------------------------------------------------------------
+// The stylesheet's `@media (prefers-reduced-motion: reduce)` block cannot
+// override an explicit `scrollIntoView({ behavior: 'smooth' })`: the option wins
+// over the CSS `scroll-behavior` property. A hard-coded `'smooth'` is therefore a
+// real motion path that ignores the user's preference, and every JS scroll in a
+// shipped view has to resolve the preference itself.
+const HARD_CODED_SMOOTH = /scrollIntoView\(\{[^}]*behavior:\s*'smooth'/;
+
+describe('WP4: JS scrolls honour prefers-reduced-motion', () => {
+  it('no shipped component hard-codes a smooth scroll', () => {
+    const offenders: string[] = [];
+    for (const file of FRONTEND_FILES) {
+      if (HARD_CODED_SMOOTH.test(code(file))) offenders.push(rel(file));
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('the scrolling views resolve the preference before they scroll', () => {
+    // The two views that call scrollIntoView with a behaviour of their own. Both
+    // must read the media query and choose between `auto` and `smooth`.
+    for (const file of ['src/components/HomeView.tsx', 'src/components/FinderView.tsx']) {
+      const source = code(path.resolve(repoRoot, file));
+      expect(source, file).toContain('prefers-reduced-motion: reduce');
+      expect(source, file).toMatch(/scrollIntoView\(\{ behavior: [^}]*\? 'auto' : 'smooth'/);
+    }
+  });
+
+  it('the guard is live, not decorative (mutation check)', () => {
+    expect(HARD_CODED_SMOOTH.test(`el.scrollIntoView({ behavior: 'smooth', block: 'center' })`)).toBe(true);
+    expect(HARD_CODED_SMOOTH.test(`el.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'center' })`)).toBe(false);
+    // ...and a comment that merely quotes the old call cannot trip it.
+    expect(HARD_CODED_SMOOTH.test(code('src/components/FinderView.tsx'))).toBe(false);
   });
 });

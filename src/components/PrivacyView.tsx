@@ -477,7 +477,7 @@ export default function PrivacyView({ setView }: PrivacyViewProps) {
                         value={phone}
                         onChange={(e) => setPhone(e.target.value)}
                         placeholder={'e.g. 0712345678'}
-                        className="w-full max-w-sm bg-white border border-stone-200 rounded-xl px-3 py-2 text-xs focus:ring-1 focus:ring-primary-green outline-none"
+                        className="w-full max-w-sm bg-white border border-stone-200 rounded-xl px-3 py-2 text-xs focus:border-[var(--appearance-focus)]"
                       />
                       <p className="text-xs text-stone-500 leading-relaxed max-w-xl">
                         {'We use this number only to find your account. The code is emailed to the verified email address on that account — it is never sent to this number, and getting it is not a check that the number is yours.'}
@@ -529,7 +529,7 @@ export default function PrivacyView({ setView }: PrivacyViewProps) {
                         onChange={(e) => setOtpCode(e.target.value)}
                         placeholder="e.g. 1234"
                         maxLength={6}
-                        className="w-full max-w-sm bg-white border border-stone-200 rounded-xl px-3 py-2 text-xs font-mono focus:ring-1 focus:ring-primary-green outline-none"
+                        className="w-full max-w-sm bg-white border border-stone-200 rounded-xl px-3 py-2 text-xs font-mono focus:border-[var(--appearance-focus)]"
                       />
                       <p className="text-xs text-stone-500 leading-relaxed max-w-xl">
                         {'The code confirms that this deletion request is really from you. It does not prove ownership of the phone number.'}
@@ -542,7 +542,7 @@ export default function PrivacyView({ setView }: PrivacyViewProps) {
                         id="consentCheck"
                         checked={consentChecked}
                         onChange={(e) => setConsentChecked(e.target.checked)}
-                        className="mt-0.5 border-stone-300 rounded focus:ring-red-500 text-red-600 cursor-pointer"
+                        className="mt-0.5 border-stone-300 rounded text-red-600 cursor-pointer"
                       />
                       <label htmlFor="consentCheck" className="text-xs text-stone-700 font-semibold leading-relaxed cursor-pointer select-none">
                         {'I understand that this will permanently delete or anonymize all my personal data from Return4me systems. This action is irreversible under Section 40 of the Kenya Data Protection Act 2019.'}

@@ -108,6 +108,25 @@ export default function App() {
   );
   const [currentView, setView] = useState<'home' | 'finder' | 'owner' | 'agent' | 'admin' | 'privacy' | 'terms' | 'help' | 'signin' | 'becomeAgent'>('home');
 
+  // WP4 — a section anchor the next Terms render should land on. The public
+  // footer's "Fee Schedule" button opens the Terms page, whose fee schedule is
+  // section 4; landing at the top of a long legal document made the reader hunt
+  // for the thing they clicked. TermsView is lazy-loaded, so the scroll cannot
+  // happen in this handler (the section may not exist yet) — the value is
+  // handed to the view, which scrolls once it has mounted. `null` means "no
+  // pending anchor".
+  const [termsAnchor, setTermsAnchor] = useState<string | null>(null);
+  // WP4 follow-up — the anchor is an INTENT, not a setting: it is consumed once
+  // and then dropped. TermsView reports back after applying it (or after finding
+  // no such section) and this clears it, so a later, ordinary visit to the Terms
+  // page — the "Terms of Service" footer link — mounts at the top of the
+  // document instead of being thrown back to section 4.
+  //
+  // The callback identity is stable on purpose: it is an effect dependency in
+  // TermsView, and a new function on every App render (App re-renders on the
+  // 45s stats/discovery poll) would re-run that effect.
+  const clearTermsAnchor = useCallback(() => setTermsAnchor(null), []);
+
   // English-only. document.documentElement.lang is pinned here (not merely in
   // index.html) so <html lang="en"> is guaranteed, and the stale
   // `return4me.language` preference is removed so it cannot resurface as UI.
@@ -566,18 +585,34 @@ export default function App() {
   // no risk of a slow, superseded response overwriting a newer one.
   const isFetchingRecentItemsRef = useRef(false);
   const recentItemsAbortRef = useRef<AbortController | null>(null);
+  // WP4 — has a list ever reached the screen? While it has not, a refresh SHOULD
+  // show the skeleton (there is nothing else to show). Once it has, a refresh is
+  // an update, not a page load.
+  const recentItemsHaveRenderedRef = useRef(false);
 
-  const fetchRecentItems = useCallback(async () => {
+  const fetchRecentItems = useCallback(async (options?: { background?: boolean }) => {
     if (isFetchingRecentItemsRef.current) return;
     isFetchingRecentItemsRef.current = true;
+
+    // WP4 — the 45s poll is a BACKGROUND refresh. It used to call the same code
+    // path as the first load, so every 45 seconds the four recent-item cards
+    // were torn down and replaced by the skeleton (a visible flash on a page the
+    // visitor may be reading), and one failed poll while offline replaced them
+    // with the error card. A background refresh now leaves the current list
+    // visible: on success it updates it in place, on failure it changes nothing.
+    // First load, return-to-home and the explicit "Try Again" retry are still
+    // foreground, so the skeleton/error states still appear when they should.
+    const background = options?.background === true && recentItemsHaveRenderedRef.current;
 
     recentItemsAbortRef.current?.abort();
     const controller = new AbortController();
     recentItemsAbortRef.current = controller;
 
     try {
-      setRecentItemsLoading(true);
-      setRecentItemsError(false);
+      if (!background) {
+        setRecentItemsLoading(true);
+        setRecentItemsError(false);
+      }
       const res = await fetch('/api/items/search', { signal: controller.signal });
       if (!res.ok) throw new Error('Failed to fetch recent items');
       const data = await res.json();
@@ -585,10 +620,11 @@ export default function App() {
       // Sort by created_at descending (most recent first)
       const sorted = data.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       setRecentItems(sorted.slice(0, 4));
+      recentItemsHaveRenderedRef.current = true;
     } catch (err: any) {
       if (err?.name === 'AbortError') return; // superseded by a newer request or unmount — not a real failure
       console.error('Failed to load recent items:', err);
-      setRecentItemsError(true);
+      if (!background) setRecentItemsError(true);
     } finally {
       if (!controller.signal.aborted) {
         setRecentItemsLoading(false);
@@ -613,7 +649,7 @@ export default function App() {
   useEffect(() => {
     if (currentView !== 'home') return;
     fetchRecentItems();
-    const intervalId = setInterval(fetchRecentItems, 45000);
+    const intervalId = setInterval(() => fetchRecentItems({ background: true }), 45000);
     return () => clearInterval(intervalId);
   }, [currentView, fetchRecentItems]);
 
@@ -763,6 +799,26 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[var(--appearance-background)] text-[var(--appearance-text-primary)] flex flex-col antialiased">
+      {/* WP4 — SKIP TO MAIN CONTENT.
+          The public shell puts the five-destination Navbar (plus its fixed mobile
+          tab bar) ahead of every page in DOM order, so a keyboard or switch user
+          had to step through the whole bar on each page before reaching the
+          content, and a screen reader announced it before anything else. This is
+          the standard bypass: it is `sr-only` until it receives focus, then
+          becomes a normal 44px-high control at the top-left (never hidden with
+          `display: none`, which would make it unfocusable), and it targets the
+          ONE public <main> below. That <main> carries `tabIndex={-1}` so focus
+          actually LANDS there — a fragment target that is not focusable leaves
+          focus on the link in several browsers, which silently defeats the
+          bypass. `z-[100]` keeps it above the Navbar; the colours are theme
+          tokens, so it is legible in both appearances. */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[100] focus:flex focus:min-h-[44px] focus:items-center focus:rounded-md focus:bg-primary-green focus:px-4 focus:py-2 focus:text-body focus:font-semibold focus:text-white"
+      >
+        Skip to main content
+      </a>
+
       {/* Global Brand Navbar */}
       <Navbar
         appearance={appearancePreference}
@@ -789,7 +845,7 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <main className="flex-grow flex flex-col md:flex-row max-w-7xl w-full mx-auto border-x border-[var(--appearance-border)] bg-[var(--appearance-surface)] text-[var(--appearance-text-primary)] shadow-sm pb-24 md:pb-0">
+      <main id="main-content" tabIndex={-1} className="flex-grow flex flex-col md:flex-row max-w-7xl w-full mx-auto border-x border-[var(--appearance-border)] bg-[var(--appearance-surface)] text-[var(--appearance-text-primary)] shadow-sm pb-24 md:pb-0 focus:outline-none">
         
         {/* FEATURE WORKSPACE ROUTING */}
         {/* Only one of these views ever renders at a time (mutually exclusive
@@ -893,8 +949,12 @@ export default function App() {
               /* Batch 4 — the discovery section's "Try Again" control. This is
                  the SAME fetchRecentItems used on mount, on return-to-home and
                  on the 45s poll; passing it is additive wiring only. No second
-                 request, no change to the polling, abort or overlap guards. */
-              onRetryRecentItems={fetchRecentItems}
+                 request, no change to the polling, abort or overlap guards.
+                 It is wrapped, not passed bare, because the retry is a
+                 FOREGROUND load (WP4): the visitor asked for it, so the
+                 skeleton may show, and it must not receive a click event as the
+                 background option. */
+              onRetryRecentItems={() => { void fetchRecentItems(); }}
               onOpenItem={(itemId: string) => navigate(itemPath(itemId), 'home')}
             />
           )}
@@ -992,7 +1052,7 @@ export default function App() {
 
           {currentView === 'terms' && (
             <div className="w-full p-4 sm:p-8">
-              <TermsView setView={setView} />
+              <TermsView setView={setView} anchor={termsAnchor} onAnchorApplied={clearTermsAnchor} />
             </div>
           )}
 
@@ -1019,28 +1079,56 @@ export default function App() {
             <p className="mt-1">Vetted &amp; Physical Handovers only.</p>
             <p className="mt-2">
               Privacy &amp; data requests:{' '}
-              <a href="mailto:privacy@return4me.co.ke" className="font-semibold text-primary-green hover:underline">
+              <a href="mailto:privacy@return4me.co.ke" className="font-semibold text-[var(--appearance-primary)] hover:underline">
                 privacy@return4me.co.ke
               </a>
             </p>
             <p className="mt-1">
               Help &amp; support:{' '}
-              <a href="mailto:support@return4me.co.ke" className="font-semibold text-primary-green hover:underline">
+              <a href="mailto:support@return4me.co.ke" className="font-semibold text-[var(--appearance-primary)] hover:underline">
                 support@return4me.co.ke
               </a>
             </p>
           </div>
+          {/* WP4 - 44px TOUCH FLOOR ON THE FOOTER ACTIONS.
+              These four are standalone controls, not links inside a sentence,
+              so they take the documented 44px floor (`min-h-11`) instead of a
+              12-14px line of text with a text-height hit area. `inline-flex`
+              keeps each label vertically centred, and the existing row/column
+              gaps still set the rhythm, so the footer reads exactly as before
+              on mobile and desktop. The two mailto links above stay inline on
+              purpose: WCAG 2.5.8 exempts a target inside a sentence, and their
+              colour and underline are unchanged. Their ink is the themed primary
+              token (`--appearance-primary`) rather than the fixed brand green,
+              which went dark-on-dark once `--appearance-surface-muted` flipped
+              in the dark theme; both resolutions clear AA. */}
           <div className="flex flex-col sm:flex-row gap-2 sm:gap-6">
-            <button onClick={() => goToView('help')} className="text-xs sm:text-sm font-bold text-primary-green hover:underline cursor-pointer">
+            <button onClick={() => goToView('help')} className="inline-flex min-h-11 items-center text-xs sm:text-sm font-bold text-[var(--appearance-primary)] hover:underline cursor-pointer">
               Help &amp; FAQ
             </button>
-            <button onClick={() => setView('privacy')} className="text-xs sm:text-sm font-bold text-primary-green hover:underline cursor-pointer">
+            <button onClick={() => setView('privacy')} className="inline-flex min-h-11 items-center text-xs sm:text-sm font-bold text-[var(--appearance-primary)] hover:underline cursor-pointer">
               Privacy Policy
             </button>
-            <button onClick={() => setView('terms')} className="text-xs sm:text-sm font-bold text-primary-green hover:underline cursor-pointer">
+            <button onClick={() => setView('terms')} className="inline-flex min-h-11 items-center text-xs sm:text-sm font-bold text-[var(--appearance-primary)] hover:underline cursor-pointer">
               Terms of Service
             </button>
-            <button onClick={() => setView('terms')} className="text-xs sm:text-sm font-bold text-primary-green hover:underline cursor-pointer">
+            {/* WP4 — "Fee Schedule" now lands ON the schedule (section 4 of the
+                Terms) instead of the top of the document. If the visitor is
+                already on the Terms page the view does not remount, so the
+                handler scrolls directly; otherwise the anchor is handed to the
+                view and applied once it mounts. Both entry points still call
+                `setView('terms')`, so routing/URL behaviour is unchanged. */}
+            <button
+              onClick={() => {
+                if (currentView === 'terms' && typeof document !== 'undefined') {
+                  document.getElementById('fee-schedule')?.scrollIntoView({ block: 'start' });
+                  return;
+                }
+                setTermsAnchor('fee-schedule');
+                setView('terms');
+              }}
+              className="inline-flex min-h-11 items-center text-xs sm:text-sm font-bold text-[var(--appearance-primary)] hover:underline cursor-pointer"
+            >
               Fee Schedule
             </button>
           </div>

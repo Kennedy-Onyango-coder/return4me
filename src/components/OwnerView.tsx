@@ -1205,7 +1205,7 @@ export default function OwnerView({ categories, categoriesLoading = false, categ
               <label className="grid gap-2 sm:grid-cols-[9rem_1fr] sm:items-center">
                 <span className="text-xs font-extrabold uppercase tracking-wider text-primary-green">{'Item details'}</span>
                 <span className="relative">
-                  <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder={t.searchPlaceholder} aria-label={t.searchPlaceholder} className="w-full rounded-2xl border border-line-subtle bg-brand-beige py-3 pl-10 pr-4 text-sm focus:border-accent-orange" />
+                  <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder={t.searchPlaceholder} aria-label={t.searchPlaceholder} className="w-full rounded-2xl border border-line-subtle bg-brand-beige py-3 pl-10 pr-4 text-sm focus:border-[var(--appearance-focus)]" />
                   <Search className="absolute left-3.5 top-3.5 text-ink-muted" size={18} aria-hidden="true" />
                 </span>
               </label>
@@ -1214,20 +1214,20 @@ export default function OwnerView({ categories, categoriesLoading = false, categ
                 <legend className="mb-1 text-xs font-extrabold uppercase tracking-wider text-primary-green sm:col-span-2">{'Where was it found?'}</legend>
                 <label className="grid gap-1.5">
                   <span className="text-xs font-bold text-ink-muted">{'Category'}</span>
-                  <select value={selectedCat} onChange={e => setSelectedCat(e.target.value)} aria-label={'Filter by category'} className="w-full rounded-2xl border border-line-subtle bg-white px-3 py-3 text-sm focus:border-accent-orange disabled:bg-brand-light-gray disabled:text-brand-muted-text" disabled={categoriesLoading || categoriesError}>
+                  <select value={selectedCat} onChange={e => setSelectedCat(e.target.value)} aria-label={'Filter by category'} className="w-full rounded-2xl border border-line-subtle bg-white px-3 py-3 text-sm focus:border-[var(--appearance-focus)] disabled:bg-brand-light-gray disabled:text-brand-muted-text" disabled={categoriesLoading || categoriesError}>
                     {categoriesLoading ? <option value="">{'Loading categories...'}</option> : categoriesError ? <option value="">{'Categories unavailable — please refresh'}</option> : [<option key="all-categories" value="">{'All categories'}</option>, ...categories.filter(cat => cat.name_en).map(cat => <option key={cat.id} value={cat.id}>{cat.name_en}</option>)]}
                   </select>
                 </label>
                 <label className="grid gap-1.5">
                   <span className="text-xs font-bold text-ink-muted">{'County'}</span>
-                  <select value={selectedCounty} onChange={e => { setSelectedCounty(e.target.value); setSelectedAdministrativeUnit(''); }} aria-label={'Filter by county'} className="w-full rounded-2xl border border-line-subtle bg-white px-3 py-3 text-sm focus:border-accent-orange">
+                  <select value={selectedCounty} onChange={e => { setSelectedCounty(e.target.value); setSelectedAdministrativeUnit(''); }} aria-label={'Filter by county'} className="w-full rounded-2xl border border-line-subtle bg-white px-3 py-3 text-sm focus:border-[var(--appearance-focus)]">
                     <option value="">{'All counties'}</option>
                     {COUNTY_GROUPS.map(group => <optgroup key={group.group} label={group.group}>{group.counties.map(county => <option key={county.code} value={county.name}>{county.name}</option>)}</optgroup>)}
                   </select>
                 </label>
                 <label className="grid gap-1.5 sm:col-span-2">
                   <span className="text-xs font-bold text-ink-muted">{'Sub-county'}</span>
-                  <select value={selectedAdministrativeUnit} onChange={e => setSelectedAdministrativeUnit(e.target.value)} disabled={!selectedCounty} aria-label={'Filter by sub-county'} className="w-full rounded-2xl border border-line-subtle bg-white px-3 py-3 text-sm focus:border-accent-orange disabled:bg-brand-light-gray disabled:text-brand-muted-text">
+                  <select value={selectedAdministrativeUnit} onChange={e => setSelectedAdministrativeUnit(e.target.value)} disabled={!selectedCounty} aria-label={'Filter by sub-county'} className="w-full rounded-2xl border border-line-subtle bg-white px-3 py-3 text-sm focus:border-[var(--appearance-focus)] disabled:bg-brand-light-gray disabled:text-brand-muted-text">
                     <option value="">{(selectedCounty ? 'All sub-counties' : 'Select county first')}</option>
                     {selectedCounty && administrativeUnitsForCounty(selectedCounty).map(unit => <option key={unit.id} value={unit.id}>{unit.name}</option>)}
                   </select>
@@ -1237,7 +1237,7 @@ export default function OwnerView({ categories, categoriesLoading = false, categ
               <label className="grid gap-2 sm:grid-cols-[9rem_1fr] sm:items-center">
                 <span className="text-xs font-extrabold uppercase tracking-wider text-primary-green">{'Exact place / area'}</span>
                 <span className="relative">
-                  <input type="text" value={selectedArea} onChange={e => setSelectedArea(e.target.value)} aria-label={'Exact place or area'} placeholder={'Street, estate, building, landmark, stage or market'} className="w-full rounded-2xl border border-line-subtle bg-brand-beige py-3 pl-10 pr-4 text-sm focus:border-accent-orange" />
+                  <input type="text" value={selectedArea} onChange={e => setSelectedArea(e.target.value)} aria-label={'Exact place or area'} placeholder={'Street, estate, building, landmark, stage or market'} className="w-full rounded-2xl border border-line-subtle bg-brand-beige py-3 pl-10 pr-4 text-sm focus:border-[var(--appearance-focus)]" />
                   <MapPin className="absolute left-3.5 top-3.5 text-ink-muted" size={18} aria-hidden="true" />
                 </span>
               </label>
@@ -1498,7 +1498,7 @@ export default function OwnerView({ categories, categoriesLoading = false, categ
                 autoComplete="tel"
                 value={ownerPhone}
                 onChange={(e) => setOwnerPhone(e.target.value)}
-                className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-brand-beige font-mono focus:border-accent-orange"
+                className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-brand-beige font-mono focus:border-[var(--appearance-focus)]"
                 placeholder="e.g. 0712345678"
                 required
               />
@@ -1514,7 +1514,7 @@ export default function OwnerView({ categories, categoriesLoading = false, categ
                 type="email"
                 value={ownerEmail}
                 onChange={(e) => setOwnerEmail(e.target.value)}
-                className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-brand-beige font-sans focus:border-accent-orange"
+                className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-brand-beige font-sans focus:border-[var(--appearance-focus)]"
                 placeholder="e.g. claimant@gmail.com"
               />
               <span className="text-caption text-ink-muted block leading-tight">
@@ -1635,7 +1635,7 @@ export default function OwnerView({ categories, categoriesLoading = false, categ
               value={otpCode}
               onChange={(e) => setOtpCode(e.target.value)}
               maxLength={4}
-              className="w-full border-2 border-line-subtle rounded-xl text-center py-3 text-xl font-mono tracking-widest focus:border-accent-orange"
+              className="w-full border-2 border-line-subtle rounded-xl text-center py-3 text-xl font-mono tracking-widest focus:border-[var(--appearance-focus)]"
               placeholder="••••"
               aria-label={'4-digit OTP code'}
               required
@@ -1808,7 +1808,7 @@ export default function OwnerView({ categories, categoriesLoading = false, categ
                 value={payerPhone || ownerPhone}
                 onChange={(e) => setPayerPhone(e.target.value)}
                 placeholder="e.g. 0712 345 678"
-                className="w-full border border-line-subtle rounded-xl px-3 py-3 text-base font-mono bg-white focus:border-accent-orange"
+                className="w-full border border-line-subtle rounded-xl px-3 py-3 text-base font-mono bg-white focus:border-[var(--appearance-focus)]"
                 aria-invalid={(payerPhone || ownerPhone).trim() !== '' && !isValidKenyanPhoneForPayer(payerPhone || ownerPhone)}
               />
               <p className="text-ink-muted text-xs">

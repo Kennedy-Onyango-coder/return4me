@@ -1398,7 +1398,7 @@ export default function AgentView({ token, setToken, categories, refreshCategori
               onChange={(e) => setPickupCodeModal({ ...pickupCodeModal, code: e.target.value })}
               placeholder={'Enter owner\'s secret pickup code'}
               aria-label={'Owner\'s secret pickup code'}
-              className="w-full min-h-11 rounded-standard border border-[var(--appearance-border-strong)] bg-[var(--appearance-surface)] px-4 py-3 text-center text-heading font-mono tracking-widest text-[var(--appearance-text-primary)] focus:outline-none focus:border-[var(--appearance-focus)]"
+              className="w-full min-h-11 rounded-standard border border-[var(--appearance-border-strong)] bg-[var(--appearance-surface)] px-4 py-3 text-center text-heading font-mono tracking-widest text-[var(--appearance-text-primary)] focus:border-[var(--appearance-focus)]"
             />
 
             <div className="space-y-2">

@@ -134,7 +134,7 @@ shadow → floating shadow.**
 One coherent keyboard language: the single global rule in `src/index.css`
 
 ```css
-:focus-visible { outline: 2px solid var(--color-accent-orange); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--appearance-focus); outline-offset: 2px; }
 ```
 
 with a white outline on dark-green surfaces. Shared controls keep only a
@@ -143,6 +143,32 @@ with a white outline on dark-green surfaces. Shared controls keep only a
 double-border look (guarded by `focusContract.test.ts` and the primitives
 suite). The rule deliberately sets **no** `border-radius`, so the outline
 follows each control's own radius instead of overriding it.
+
+The ring colour is the **theme** token, never a raw brand colour:
+
+| appearance | `--appearance-focus` | why |
+| --- | --- | --- |
+| light (cream `#FDF8EE`) | `#003820` | brand orange measured ~2.8:1 here, under the 3:1 a non-text indicator needs (WCAG 1.4.11) |
+| dark (near-black `#0B1511`) | `#7DD3A8` | the dark green above would be invisible on this surface |
+
+So one declaration resolves correctly in both appearances and agrees with the
+`focus:border-[var(--appearance-focus)]` affordance the inputs already carry —
+a control never shows two different focus colours. Under
+`forced-colors: active` the ring is re-stated with the system `Highlight`
+colour, because that mode discards author colours and both the token and the
+white override can vanish.
+
+Two documented residuals, both asserted rather than tolerated silently
+(`responsiveUxBatchC.test.ts`):
+
+1. `src/components/agent/AgentHub.tsx` — the drop-off-code input keeps its own
+   `focus:outline-none` + `focus-visible:ring-2`; the ring is drawn in the SAME
+   `--appearance-focus` token, and two UX suites pin that exact treatment.
+2. `src/App.tsx` — the `<main id="main-content" tabIndex={-1}>` skip-link
+   target keeps `focus:outline-none`: a ring there would be drawn around the
+   whole page body, and `<main>` is a landmark (not a user-interface component),
+   so WCAG 2.4.7 does not apply to it.
+
 
 ## 7. Buttons
 
@@ -158,6 +184,29 @@ Sizes: `sm` 36px (`text-caption`) · `md` 44px default (`text-body`) · `lg` 52p
 Never uppercase; labels are used verbatim. Loading, disabled and focus states
 are built in; the spinner replaces the leading icon slot without shifting
 layout, and the label stays rendered.
+
+**The 44px floor is not Button-only.** A standalone control made of text — the
+public footer's Help & FAQ / Privacy Policy / Terms of Service / Fee Schedule
+actions — carries `inline-flex min-h-11 items-center`, so its hit area is the
+44px floor instead of the ~16px text box it used to be (WCAG 2.5.8 alone would
+accept 24px; the product floor stays 44px, matching `Button` `md`, the navbar,
+the hero tabs and the bottom tab bar). Links set **inline inside a sentence** —
+the footer's two mailbox addresses — are exempt under WCAG 2.5.8 and
+deliberately keep their inline flow, colour and underline: growing them would
+reflow the paragraph. `appearanceSurfaceBatchF.test.ts` pins both halves of that
+rule.
+
+**Footer ink follows the surface, not the brand.** The footer's links and actions
+sit on `--appearance-surface-muted`, which is a warm off-white in the light theme
+and a dark green in the dark theme. They therefore use
+`text-[var(--appearance-primary)]` rather than the fixed `text-primary-green`
+utility: the brand green is a light-theme value and turned into
+near-invisible dark-on-dark text once the surface flipped. `--appearance-primary`
+is re-declared as `#6FD79B` under `html[data-theme='dark']`, so both themes clear
+AA for normal text (11.56:1 light, 8.43:1 dark on the muted surface). The muted
+body copy keeps `--appearance-text-muted` (5.90:1 / 6.40:1). Both pairs are pinned
+in `designSystemTokens.test.ts`, and `appearanceSurfaceBatchF.test.ts` asserts the
+footer carries no `text-primary-green`.
 
 ## 8. Form controls
 
@@ -224,6 +273,16 @@ Decorative icons pass `aria-hidden="true"`. No decorative icon overload.
 `prefers-reduced-motion: reduce` is honoured globally in `src/index.css`
 (animations and transitions are neutralised). No bounce, excessive scale,
 repeated pulsing, gratuitous parallax, or animation that delays a task.
+
+**JS scrolls resolve the preference themselves.** The global rule sets
+`scroll-behavior: auto`, but an explicit `scrollIntoView({ behavior: 'smooth' })`
+option wins over the CSS property, so a scroll written that way ignores the
+setting. Every JS scroll in a shipped view therefore reads
+`matchMedia('(prefers-reduced-motion: reduce)')` and picks `'auto'` instead of
+`'smooth'` when it matches (`HomeView`'s "How it works" jump, `FinderView`'s
+error banner); the destination is unchanged, only the travel is.
+`responsiveUxBatchC.test.ts` forbids a hard-coded `'smooth'` anywhere in
+`src/components`.
 
 ## 12. Modals and dialogs
 

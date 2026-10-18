@@ -294,8 +294,17 @@ body {
    don't see color borders (WCAG 2.4.7). This global rule guarantees a
    visible focus ring for keyboard navigation everywhere, without styling
    mouse clicks (modern browsers only apply :focus-visible to keyboard/
-   programmatic focus). Colors: accent-orange ring on cream surfaces,
-   white ring on dark green surfaces — both ≥3:1 against their backdrop.
+   programmatic focus).
+
+   WP1: the ring colour is now the THEMED focus token, not brand orange. The
+   orange (#EC7E0D) measured ~2.8:1 against the cream background (#FDF8EE),
+   under the 3:1 non-text contrast a focus indicator needs (WCAG 1.4.11), and it
+   did not match the `focus:border-[var(--appearance-focus)]` affordance the
+   shared inputs keep on mouse focus — two focus colours for one control. The
+   token is declared per appearance (dark green on cream, mint on near-black), so
+   one rule now resolves correctly in both themes and agrees with the borders.
+   On the two brand-green surfaces the token itself would sink into the surface,
+   so those keep the white ring (>=3:1 against brand green).
 
    UX-01: this rule no longer sets its own `border-radius`. It used to apply
    0.25rem, and because an unlayered rule beats every `@layer utilities` rule
@@ -305,7 +314,7 @@ body {
    own border-radius, so there is exactly one focus language and the radius
    ladder is never overridden by focusing. */
 :focus-visible {
-  outline: 2px solid var(--color-accent-orange);
+  outline: 2px solid var(--appearance-focus);
   outline-offset: 2px;
 }
 
@@ -313,6 +322,23 @@ body {
 .bg-primary-hover :focus-visible,
 .bg-stone-900 :focus-visible {
   outline-color: white;
+}
+
+/* WINDOWS HIGH CONTRAST / FORCED COLORS (WP1).
+   Under `forced-colors: active` the OS discards author colours and repaints with
+   the user's own palette, so a ring drawn with `--color-accent-orange` — or the
+   `white` override above — can collapse into the surface behind it and vanish.
+   `Highlight` is the single system colour the user has already chosen to be
+   distinguishable from `Canvas`, so the indicator is re-stated with it. The
+   stroke is 3px (one pixel thicker than the themed ring): forced-colors mode
+   draws its own borders around controls, and a 2px outline can be swallowed by
+   them. The offset is unchanged, so the ring still never touches the control.
+   Nothing here is conditional on a theme, so it holds in light and dark alike. */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 3px solid Highlight;
+    outline-offset: 2px;
+  }
 }
 
 /* HERO PHOTOGRAPH SCRIM (Phase 9 — hero text legibility)

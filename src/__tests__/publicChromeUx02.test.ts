@@ -307,7 +307,7 @@ describe('UX-02 focus, touch and motion', () => {
       expect(source, `${name} must not use a focus-within ring`).not.toMatch(/focus-within:ring/);
     }
     // The one global indicator is still there, including its inverse-surface case.
-    expect(indexCss).toContain('outline: 2px solid var(--color-accent-orange)');
+    expect(indexCss).toContain('outline: 2px solid var(--appearance-focus)');
     expect(indexCss).toContain('.bg-primary-green :focus-visible');
   });
 

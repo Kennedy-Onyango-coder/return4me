@@ -1,10 +1,44 @@
-import React from 'react';
+import React, { useEffect } from 'react';
+import { applyPendingTermsAnchor } from '../utils/termsAnchor';
 
 interface TermsViewProps {
   setView: (view: any) => void;
+  /**
+   * WP4 — id of a section to land on once this view has mounted (the public
+   * footer's "Fee Schedule" button passes `fee-schedule`). Optional, and `null`
+   * means "start at the top" — the previous behaviour.
+   */
+  anchor?: string | null;
+  /**
+   * WP4 follow-up — called after the pending `anchor` has been consumed, so the
+   * owner can drop it. Without this the anchor stayed set for the rest of the
+   * session, and because a pending anchor is applied on MOUNT, every later visit
+   * to the Terms page jumped to section 4 again. Optional: a caller with no
+   * pending-anchor state can ignore it.
+   */
+  onAnchorApplied?: () => void;
 }
 
-export default function TermsView({ setView }: TermsViewProps) {
+export default function TermsView({ setView, anchor, onAnchorApplied }: TermsViewProps) {
+  // WP4 — App cannot scroll to this section itself: the view is lazy, so at the
+  // moment the footer button is clicked the section does not exist in the DOM.
+  // The scroll therefore happens here, after the sections are rendered. It is
+  // deliberately a one-shot per `anchor` value: no listener, no polling, and no
+  // scroll hijacking of the reader's own position afterwards.
+  //
+  // WP4 follow-up — "one-shot" is now enforced rather than merely intended: the
+  // helper applies the anchor and reports back, and App clears the pending
+  // value, so a LATER, ordinary mount (the "Terms of Service" link) starts at
+  // the top. Both dependencies are stable — `anchor` changes only when a new
+  // deep link is requested, and `onAnchorApplied` is a `useCallback` in App — so
+  // this effect never re-scrolls on an unrelated re-render.
+  useEffect(() => {
+    applyPendingTermsAnchor({
+      anchor,
+      documentRef: typeof document === 'undefined' ? null : document,
+      onApplied: onAnchorApplied,
+    });
+  }, [anchor, onAnchorApplied]);
   return (
     <div className="max-w-4xl mx-auto px-6 py-12 space-y-12 fade-in">
       {/* Header */}
@@ -84,8 +118,11 @@ export default function TermsView({ setView }: TermsViewProps) {
           </p>
         </section>
 
-        {/* Section 4 */}
-        <section className="space-y-3">
+        {/* Section 4 — WP4: real fragment id, so the public footer's
+            "Fee Schedule" link can land on the schedule instead of the top of
+            the document. `scroll-mt-24` keeps the heading clear of the sticky
+            navbar when the jump lands. */}
+        <section id="fee-schedule" className="space-y-3 scroll-mt-24">
           <h2 className="text-lg font-extrabold text-primary-green flex items-center gap-2">
             <span className="text-accent-orange">4.</span> Fee Schedule and Settlement
           </h2>
