@@ -281,11 +281,18 @@ node node_modules/typescript/bin/tsc --noEmit   # exit 0, no diagnostics
 
 ### Outstanding
 
-- The Admin Console still shows who approved and when; the approved TOTAL is not
-  rendered separately (the ledger rows it covers are). The backend refuses any
-  mismatch regardless of what the console displays.
+- ~~The Admin Console still shows who approved and when; the approved TOTAL is not
+  rendered separately (the ledger rows it covers are).~~ **Corrected after G2
+  (`d3e1660`):** the console now renders the PERSISTED `settlement_authorized_total`
+  and the exact `role:id` rows the approval covered, each annotated with the amount
+  booked on its ledger row (`config/settlementApprovalDisplay.ts`,
+  `SettlementApprovalSummary.tsx`). A legacy, half-written or unreadable snapshot is
+  named as unavailable — never replaced by the claim fee or a fresh sum. The backend
+  refusal is unchanged.
 - No production migration has been run; that is a deployment action, not part of
-  this batch.
+  this batch. A reviewed runbook now exists at
+  [`settlement-snapshot-migration-runbook.md`](settlement-snapshot-migration-runbook.md);
+  it has not been executed.
 
 ---
 
@@ -310,6 +317,9 @@ misleading copy, and produce an honest launch-readiness report.
    `docs/payment-launch-readiness.md`, including the honest limit that it was not
    baselined before this queue. 170 failures exist in 36 files; **none is a
    payment/payout/wallet/settlement suite**, and none is a file this queue changed.
+   *(See "Correction recorded after G2" below for what has since been established
+   about those failures, and for the 147 that remain unattributed.)*
+
 3. **Admin console copy review.** `SettlementApproveAndPayConfirmation` and
    `SettlementPayoutConfirmation` described the locked total as an amount
    "released". That total includes the platform share, so it is not the amount paid
@@ -340,6 +350,37 @@ node node_modules/vitest/vitest.mjs run \
 node node_modules/typescript/bin/tsc --noEmit
 # exit 0
 ```
+
+### Correction recorded after G2 (2026-10-18)
+
+The historical full-suite result above — **286 files: 250 passed / 36 failed;
+5,480 tests: 5,310 passed / 170 failed, exit 1** — is preserved exactly as recorded
+and remains the only **full-suite** run in this programme. It was taken on the
+Batch 4 working tree (commit `786525e`) and **has not been re-run since**. Nothing
+in this correction claims a post-G2 full-suite pass.
+
+What the later work actually established (evidence in
+[`test-failure-matrix.md`](test-failure-matrix.md)):
+
+- The 36/170 figures were re-derived from the run's own `FAIL` blocks and are exact:
+  36 files, 170 failures, per-file counts summing to 170.
+- **Baseline comparison was performed on 8 files only.** The five failing files in
+  that set (`adminConsoleUx15Closure`, `adminConsoleUx15F`, `adminLostReportsUi`,
+  `adminTwoFactorEnrollmentUx`, `phase16ProductRemediation` = 22 failures) fail
+  **identically at `12a3c20` and at HEAD**, so those 22 are baseline-attributed.
+- `claimsPresentation` (1) is pre-existing by string-level evidence, not by a test
+  run. `logMasking` (1) is pre-existing by source invariance: its 2,000-character
+  slice covers a refund function this work never modified, and the masking call it
+  protects is present.
+- **30 files / 147 failures have no baseline evidence and remain unclassified in
+  origin.** The full suite was never run at `12a3c20`, and never at HEAD.
+- Post-G2 **targeted** runs (not a full-suite substitute): `g2-tests4` 184/184
+  tests, exit 0; `g2-tests5` 118/118 tests with 0 `FAIL` lines, exit 0;
+  `tsc --noEmit` exit 0.
+
+The earlier statement "none is a payment/payout/wallet/settlement suite" still
+holds as a statement about *suite ownership*. It does not prove those failures
+pre-date this programme, and 147 of them remain unattributed.
 
 ### Launch status
 

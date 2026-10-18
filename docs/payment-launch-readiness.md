@@ -63,13 +63,29 @@ gap.
 - The failures are concentrated in unrelated Admin Console copy/2FA, public
   recognition/masking and navigation/accessibility suites — the area with a
   documented history of pre-existing copy failures in this repository.
-- **Honest limit:** the full suite was not baselined before this queue, so this
+- **Honest limit:** the full suite was not baselined before that queue, so this
   report does not claim those 170 failures pre-date it. It claims only what is
-  evidenced: they are in files these commits did not touch and outside the audited
+  evidenced: they are in files those commits did not touch and outside the audited
   money lifecycle. The money-path suites listed above were run directly and pass.
   The full run was also taken just before the two console-copy edits at the end of
   Batch 4; those components' rendering suite plus the new gate-ordering test were
   run afterwards against the final bytes (6 files, 83 tests, exit 0).
+- **What has since been established about those 170 failures** (details, per-file
+  counts and evidence in [`test-failure-matrix.md`](test-failure-matrix.md)):
+  - The 170/36 figures were re-derived from the run's own `FAIL` blocks and are
+    exact: 36 files, 170 failures, summing to the recorded total.
+  - **5 files / 22 failures** were reproduced **at `12a3c20` and at HEAD** with an
+    identical file list and identical totals (`22 failed | 182 passed (204)`), so
+    those are baseline-attributed.
+  - **1 file** (`claimsPresentation`) is documented pre-existing by a
+    string-absence check, not by a test run; **1 file** (`logMasking`) is
+    pre-existing by source invariance — the assertion slices a refund function the
+    change set never touched, and the masking call it protects is present.
+  - **30 files / 147 failures remain unclassified in origin.** No baseline run ever
+    covered them, and the full suite has never been run at HEAD. That is a gap, not
+    a clean bill of health.
+  - No failing suite imports the changed money-path modules, and the two suites that
+    read changed files assert regions the change set did not modify.
 
 ## 2. Verified by static inspection
 
@@ -130,7 +146,10 @@ against a stubbed `fetch` (mocked tests), not against the provider.
 
 ## 6. Required manual configuration and deployment steps
 
-1. Apply the Batch 3 migration before deploying its code:
+1. Apply the Batch 3 migration before deploying its code — full procedure,
+   preflight queries, backup/restore proof, verification queries, smoke tests,
+   rollback rules and go/no-go conditions in
+   [`settlement-snapshot-migration-runbook.md`](settlement-snapshot-migration-runbook.md):
    ```sql
    ALTER TABLE claims ADD COLUMN IF NOT EXISTS settlement_authorized_total NUMERIC(10,2);
    ALTER TABLE claims ADD COLUMN IF NOT EXISTS settlement_authorized_ledger_ids TEXT;
@@ -141,6 +160,12 @@ against a stubbed `fetch` (mocked tests), not against the provider.
    identity check is active; leave it empty if the ID is unknown.
 4. Keep the working wallet funded through the documented operator procedure; no
    code path moves collected float.
+5. Complete the provider checklist in
+   [`intasend-provider-verification.md`](intasend-provider-verification.md) —
+   merchant/wallet identity, collection routing, settlement→working transfer
+   mechanics, fees and limits, payout idempotency and finality, webhook delivery
+   semantics, and the support questionnaire for everything the published contract
+   does not answer. **None of it is done yet.**
 
 ## 7. Remaining risks
 
