@@ -2,6 +2,9 @@ import React from 'react';
 import Button from '../../ui/Button';
 import Input from '../../ui/Input';
 import Textarea from '../../ui/Textarea';
+import SettlementApprovalSummary, {
+  type SettlementApprovedLedgerRowProp,
+} from './SettlementApprovalSummary';
 
 // =============================================================================
 // D-2B-B BATCH 4 — THE COMBINED "APPROVE & PAY" STEP, AS ONE PRESENTATIONAL BLOCK.
@@ -41,6 +44,16 @@ export interface SettlementApproveAndPayConfirmationProps {
   /** The locked settlement fee, when the row has one. Omitted rather than guessed
    *  when the payload carries none — this view invents no amounts. */
   lockedTotalFee?: number | null;
+  /** GATE 2 — the approval on file, exactly as the server described it. This
+   *  step never computes an approved amount: when the snapshot is missing,
+   *  legacy or unreadable the shared summary says so instead. */
+  approvalState?: string | null;
+  /** The PERSISTED approved total, already formatted by the server. */
+  approvedTotal?: string | null;
+  /** The persisted payout rows the approval covers, with booked amounts. */
+  approvedLedgerRows?: readonly SettlementApprovedLedgerRowProp[] | null;
+  /** Server diagnostic: do the booked rows still add up to the approved total? */
+  approvedRowsAgree?: boolean | null;
   /** The approval reason. Required by the route; collected here, trimmed there. */
   reason: string;
   onReasonChange: (event: React.ChangeEvent<HTMLTextAreaElement>) => void;
@@ -61,6 +74,10 @@ export default function SettlementApproveAndPayConfirmation({
   claimId,
   itemId,
   lockedTotalFee,
+  approvalState,
+  approvedTotal,
+  approvedLedgerRows,
+  approvedRowsAgree,
   reason,
   onReasonChange,
   reasonError,
@@ -80,6 +97,16 @@ export default function SettlementApproveAndPayConfirmation({
       <p className="text-caption text-[var(--appearance-text-muted)]">
         {`This records the settlement approval AND then submits the payout for item ${itemId}${amount ? ` (${amount} claim fee)` : ''} in one action. The approval is saved with your reason; the payout is submitted immediately afterwards and cannot be undone from here. The amount each recipient is paid is the amount booked on its payout row and is verified against the ledger before submission. Nothing has been sent yet.`}
       </p>
+      {/* GATE 2 — the approval the payout will be checked against, from the
+          server. With no approval on file yet this states what confirming
+          records; it never presents a freshly calculated amount as approved. */}
+      <SettlementApprovalSummary
+        approvalState={approvalState}
+        approvedTotal={approvedTotal}
+        approvedLedgerRows={approvedLedgerRows}
+        approvedRowsAgree={approvedRowsAgree}
+        notApprovedNote={'No settlement approval is on file yet. Confirming records it for the payout rows booked at handover; the approved total is what those rows book, and it is then shown on this claim and checked against the payout before anything is sent.'}
+      />
       <Textarea
         label={'Reason (recorded in the audit log)'}
         id={'settlement-approve-and-pay-reason-' + claimId}

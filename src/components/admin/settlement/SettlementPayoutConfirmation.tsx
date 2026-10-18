@@ -1,6 +1,9 @@
 import React from 'react';
 import Button from '../../ui/Button';
 import Input from '../../ui/Input';
+import SettlementApprovalSummary, {
+  type SettlementApprovedLedgerRowProp,
+} from './SettlementApprovalSummary';
 
 // =============================================================================
 // D-2B-B BATCH 2 — THE PAYOUT CONFIRMATION STEP, AS ONE PRESENTATIONAL BLOCK.
@@ -37,6 +40,16 @@ export interface SettlementPayoutConfirmationProps {
   /** The locked settlement fee, when the row has one. Omitted rather than
    *  guessed when the payload carries none — this view invents no amounts. */
   lockedTotalFee?: number | null;
+  /** GATE 2 — the approval on file, exactly as the server described it. This
+   *  step never computes an approved amount: when the snapshot is missing,
+   *  legacy or unreadable the shared summary says so instead. */
+  approvalState?: string | null;
+  /** The PERSISTED approved total, already formatted by the server. */
+  approvedTotal?: string | null;
+  /** The persisted payout rows the approval covers, with booked amounts. */
+  approvedLedgerRows?: readonly SettlementApprovedLedgerRowProp[] | null;
+  /** Server diagnostic: do the booked rows still add up to the approved total? */
+  approvedRowsAgree?: boolean | null;
   /** BATCH 1 (D) — the administrator's own password, re-verified by the server
    *  before the payout request is even considered. Held by the caller only, and
    *  cleared as soon as the attempt resolves. */
@@ -55,6 +68,10 @@ export default function SettlementPayoutConfirmation({
   claimId,
   itemId,
   lockedTotalFee,
+  approvalState,
+  approvedTotal,
+  approvedLedgerRows,
+  approvedRowsAgree,
   password,
   onPasswordChange,
   passwordError,
@@ -71,6 +88,14 @@ export default function SettlementPayoutConfirmation({
       <p className="text-caption text-[var(--appearance-text-muted)]">
         {`This starts payout processing for item ${itemId}${amount ? ` (${amount} claim fee)` : ''}. Money may leave the platform on this action and it cannot be undone from here. The amount each recipient is paid is the amount booked on its payout row and is verified against the ledger before submission. Nothing has been sent yet: the payout is submitted only if you confirm below, and the provider's result is reported separately.`}
       </p>
+      {/* GATE 2 — the SAME authorization the row shows and the server enforces.
+          Rendered from server-supplied values only; no amount is derived here. */}
+      <SettlementApprovalSummary
+        approvalState={approvalState}
+        approvedTotal={approvedTotal}
+        approvedLedgerRows={approvedLedgerRows}
+        approvedRowsAgree={approvedRowsAgree}
+      />
       <Input
         label={'Your password'}
         id={'settlement-payout-password-' + claimId}

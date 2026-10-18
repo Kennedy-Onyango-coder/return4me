@@ -1039,3 +1039,67 @@ describe('BATCH 1.1 — a payout that does not match its booked ledger row is re
     expect((await auditsFor(claimId, 'CLAIM_SETTLEMENT_PAYOUT_ATTEMPTED')).length).toBe(0);
   });
 });
+
+// ===========================================================================
+// K. GATE 2 — THE DASHBOARD PUBLISHES WHAT THE APPROVAL AUTHORIZED.
+// ===========================================================================
+// The console can only show an approved total if GET /api/admin/dashboard
+// carries it, from the PERSISTED snapshot and from nowhere else. These tests
+// drive the real route and compare its payload with the real claim row and the
+// real ledger rows, so a view fed by a computed or client-supplied amount would
+// fail here even if its rendering looked right.
+// ===========================================================================
+describe('GATE 2 — the dashboard describes the approval on file', () => {
+  const pendingEntryFor = async (claimId: string) => {
+    const dashboard = await http('/api/admin/dashboard', { token: adminToken });
+    expect(dashboard.status).toBe(200);
+    const entry = (dashboard.body?.pendingSettlements ?? []).find(
+      (candidate: any) => candidate.claimId === claimId,
+    );
+    expect(entry, `claim ${claimId} was not in pendingSettlements`).toBeTruthy();
+    return entry;
+  };
+
+  it('publishes the PERSISTED approved total and the covered ledger rows', async () => {
+    const { claimId } = await makeClaim('approval-visible');
+    const claim = await db.getClaim(claimId);
+    const payoutRows = await payoutLegs(claimId);
+
+    const entry = await pendingEntryFor(claimId);
+
+    expect(entry.hasSettlementApproval).toBe(true);
+    expect(entry.settlementApproval.state).toBe('authorized');
+    // The stored snapshot, formatted — not a figure the payload recalculated.
+    expect(claim!.settlement_authorized_total).toBe('250.00');
+    expect(entry.settlementApproval.authorizedTotal).toBe(claim!.settlement_authorized_total);
+    expect(entry.settlementApproval.ledgerRows.map((row: any) => row.ledgerEntryId).sort()).toEqual(
+      payoutRows.map((row: any) => row.id).sort(),
+    );
+    for (const row of entry.settlementApproval.ledgerRows) {
+      const booked = payoutRows.find((ledgerRow: any) => ledgerRow.id === row.ledgerEntryId);
+      expect(booked, `covered row ${row.ledgerEntryId} is not a payout leg`).toBeTruthy();
+      expect(row.bookedAmount).toBe(Number(booked!.amount).toFixed(2));
+      expect(row.ledgerRowFound).toBe(true);
+      expect(row.ledgerRowRoleMatches).toBe(true);
+    }
+    expect(entry.settlementApproval.bookedRowsAgreeWithApproval).toBe(true);
+    // The claim fee and the platform share are separate persisted figures.
+    expect(entry.lockedTotalFee).toBe(250);
+    expect(entry.platformFee).toBe('0.00');
+    // The approval rows carry no recipient destination.
+    expect(JSON.stringify(entry.settlementApproval)).not.toContain('+2547');
+  });
+
+  it('reports an unapproved claim explicitly, with no total and no rows', async () => {
+    const { claimId } = await makeClaim('approval-not-yet', { approve: false });
+
+    const entry = await pendingEntryFor(claimId);
+
+    expect(entry.hasSettlementApproval).toBe(false);
+    expect(entry.settlementApproval.state).toBe('not_approved');
+    expect(entry.settlementApproval.authorizedTotal).toBeNull();
+    expect(entry.settlementApproval.ledgerRows).toEqual([]);
+    // The claim fee is still published as the claim fee — never as an approval.
+    expect(entry.lockedTotalFee).toBe(250);
+  });
+});

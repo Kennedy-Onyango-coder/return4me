@@ -54,6 +54,13 @@ import {
   compareSettlementAuthorization,
   type SettlementAuthorizationVerdict,
 } from './config/settlementAuthorizationSnapshot';
+// GATE 2 (post-Batch-4) — the read-only description of the approval on file, so
+// the Admin Console can show the approved total and the covered payout rows.
+// It reads the SAME persisted columns the gate above compares; it decides nothing.
+import {
+  describeSettlementApproval,
+  formatPersistedCurrencyAmount,
+} from './config/settlementApprovalDisplay';
 import { OcrService } from './services/ocr';
 import { uploadBase64Image } from './services/storage';
 import { SocialService } from './services/social';
@@ -4113,11 +4120,42 @@ async function createApp() {
       // Claims sitting in the dispute window, most-soon-to-settle first â€”
       // lets an admin see (and, if needed, override) exactly what's about to
       // be disbursed and when.
+      // GATE 2 — index each claim's own ledger rows ONCE from the full ledger
+      // already loaded above, so a pending settlement can be described without an
+      // extra query per claim. Only the payout legs and the platform leg are read,
+      // and no recipient field (phone/till) is copied anywhere.
+      const settlementLedgerByClaim = new Map<string, any[]>();
+      for (const row of ledger) {
+        if (!row.claim_id) continue;
+        const existingRows = settlementLedgerByClaim.get(row.claim_id);
+        if (existingRows) existingRows.push(row);
+        else settlementLedgerByClaim.set(row.claim_id, [row]);
+      }
+
       const pendingSettlements = claims
         .filter(c => c.status === 'pending_settlement')
         .sort((a, b) => new Date(a.settle_at || 0).getTime() - new Date(b.settle_at || 0).getTime())
         .map(c => {
           const item = items.find(i => i.id === c.item_id);
+          const claimLedgerRows = settlementLedgerByClaim.get(c.id) ?? [];
+          const payoutRows = claimLedgerRows.filter(
+            row => row.type === 'finder_payout' || row.type === 'agent_payout',
+          );
+          const platformFeeRow = claimLedgerRows.find(row => row.type === 'platform_fee') ?? null;
+          // GATE 2 — the approval on file, described from the PERSISTED snapshot
+          // columns only. This never recomputes the total from the rows or from the
+          // claim fee: if the snapshot is absent, half-written or unreadable it
+          // says so, and the console renders that state instead of a substitute
+          // amount. Display only — the payout gate stays
+          // compareSettlementAuthorization().
+          const settlementApproval = describeSettlementApproval(
+            {
+              approvedAt: c.settlement_approved_at,
+              authorizedTotal: c.settlement_authorized_total,
+              authorizedLedgerIds: c.settlement_authorized_ledger_ids,
+            },
+            payoutRows.map(row => ({ id: row.id, type: row.type, amount: row.amount })),
+          );
           return {
             claimId: c.id,
             itemId: c.item_id,
@@ -4139,6 +4177,30 @@ async function createApp() {
             hasSettlementApproval: c.settlement_approved_at != null,
             settlementApprovedBy: c.settlement_approved_by ?? null,
             settlementApprovedAt: c.settlement_approved_at ?? null,
+            // GATE 2 — WHAT that approval covered. `authorizedTotal` is the
+            // persisted column the payout gate compares, formatted at currency
+            // precision; `ledgerRows` are the exact persisted `role:id` rows it
+            // compares, annotated only with the amount BOOKED on each ledger row.
+            // `state` names every unusable case (legacy / incomplete / unreadable)
+            // so the console shows an explicit unavailable state rather than
+            // deriving an amount from the claim fee. Display only.
+            settlementApproval: {
+              state: settlementApproval.state,
+              authorizedTotal: settlementApproval.authorizedTotal,
+              ledgerRows: settlementApproval.rows.map(row => ({
+                role: row.role,
+                ledgerEntryId: row.ledgerEntryId,
+                bookedAmount: row.bookedAmount,
+                ledgerRowFound: row.ledgerRowFound,
+                ledgerRowRoleMatches: row.ledgerRowRoleMatches,
+              })),
+              bookedRowsAgreeWithApproval: settlementApproval.bookedRowsAgreeWithApproval,
+              note: settlementApproval.note,
+            },
+            // The platform's share of the same claim fee, read from the BOOKED
+            // platform_fee row so it is a persisted fact rather than a subtraction
+            // the browser performs. Null when no such row exists.
+            platformFee: platformFeeRow ? formatPersistedCurrencyAmount(platformFeeRow.amount) : null,
           };
         });
 

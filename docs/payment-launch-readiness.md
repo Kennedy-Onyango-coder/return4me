@@ -126,7 +126,7 @@ against a stubbed `fetch` (mocked tests), not against the provider.
 | Webhook delivery semantics under provider retry | Modelled and tested locally; provider retry behaviour is not observed | A sandbox webhook replay |
 | Rate limiting across instances | `express-rate-limit`'s default store is process-local | A shared store or a deployment-level control |
 | Approval-time destination snapshot | Destinations are bound via the immutable ledger row, not copied onto `claims` | Accepted design; no further verification needed |
-| Admin Console display of the approved total | Shown as who/when only | A UI change (the backend already refuses mismatches) |
+| Admin Console display of the approved total | **Closed in the Gates 1–6 queue.** The console now shows the PERSISTED `settlement_authorized_total` and the exact `role:id` rows the approval covered, each annotated with the amount booked on its ledger row. A legacy, half-written or unreadable snapshot is named as unavailable — it is never replaced by the claim fee or a fresh sum. Display only: the refusal is still `compareSettlementAuthorization()` | Nothing further for display; the remaining unverified item is the provider contract above |
 
 ## 6. Required manual configuration and deployment steps
 

@@ -4879,6 +4879,21 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                       // column counts, so a payload that omits the field can
                       // never read as approved.
                       const hasApproval = ps.hasSettlementApproval === true;
+                      // GATE 2 — the approval snapshot exactly as the server
+                      // described it. A payload that omits or malforms it fails
+                      // closed to an explicit "unavailable" state; this view never
+                      // calculates an approved amount of its own, and never falls
+                      // back to the claim fee.
+                      const approvalSnapshot = ps.settlementApproval && typeof ps.settlementApproval === 'object' ? ps.settlementApproval : null;
+                      const approvalState: string = typeof approvalSnapshot?.state === 'string'
+                        ? approvalSnapshot.state
+                        : hasApproval ? 'unavailable' : 'not_approved';
+                      const approvedTotal: string | null = typeof approvalSnapshot?.authorizedTotal === 'string'
+                        ? approvalSnapshot.authorizedTotal
+                        : null;
+                      const approvedLedgerRows: any[] = Array.isArray(approvalSnapshot?.ledgerRows)
+                        ? approvalSnapshot.ledgerRows
+                        : [];
                       const isApproving = isActionInFlight(consoleActions.inFlight, settlementApprovalActionKey(ps.claimId));
                       const isInitiating = isActionInFlight(consoleActions.inFlight, settlementInitiateActionKey(ps.claimId));
                       const isReleasing = isActionInFlight(consoleActions.inFlight, legacySettlementReleaseActionKey(ps.claimId));
@@ -4903,7 +4918,10 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                                 {settleAtDate ? (isDue ? 'Due now' : `Settles ${settleAtDate.toLocaleString()}`) : 'No settle time set'}
                               </span>
                               {ps.lockedTotalFee !== null && (
-                                <span className="text-[var(--appearance-text-muted)]"> · KES {ps.lockedTotalFee}</span>
+                                <span className="text-[var(--appearance-text-muted)]"> · KES {ps.lockedTotalFee} claim fee</span>
+                              )}
+                              {typeof ps.platformFee === 'string' && (
+                                <span className="text-[var(--appearance-text-muted)]"> · KES {ps.platformFee} platform share (not paid to a recipient)</span>
                               )}
                             </div>
                             <div className="flex flex-wrap items-center gap-2">
@@ -4970,6 +4988,62 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                               : 'No settlement approval recorded. Payout initiation is refused until one is on file.'}
                           </p>
 
+                          {/* GATE 2 — WHAT the approval covered, from the
+                              PERSISTED snapshot the server described. The approved
+                              total is rendered only when that snapshot is
+                              readable; every other case is NAMED (legacy,
+                              incomplete/unreadable, or unavailable in this
+                              payload), so the console can never show a freshly
+                              calculated amount in its place. The rows listed are
+                              the exact payout rows the server compares, annotated
+                              with the amount BOOKED on each row. */}
+                          {hasApproval && (
+                            <div className="space-y-1 border-t border-[var(--appearance-border)] pt-2 text-caption text-[var(--appearance-text-muted)]">
+                              {approvalState === 'authorized' && approvedTotal !== null ? (
+                                <>
+                                  <p>
+                                    <span className="font-bold text-[var(--appearance-text-primary)]">{`Approved payout total KES ${approvedTotal}`}</span>
+                                    {approvedLedgerRows.length > 0
+                                      ? ' across these payout rows, each shown with the amount booked on it:'
+                                      : ' (no covered payout rows were recorded).'}
+                                  </p>
+                                  {approvedLedgerRows.map((row: any) => (
+                                    <p key={String(row?.ledgerEntryId)} className="font-mono text-caption">
+                                      {`${row?.role === 'agent' ? 'agent' : 'finder'}:${String(row?.ledgerEntryId)} — ${
+                                        row?.ledgerRowFound === false
+                                          ? 'row not found in the current ledger'
+                                          : typeof row?.bookedAmount === 'string'
+                                            ? `KES ${row.bookedAmount} booked`
+                                            : 'booked amount unreadable'
+                                      }`}
+                                    </p>
+                                  ))}
+                                  <p>
+                                    {'Recipients are paid the booked amount on each payout row; the platform share shown above is retained and is not paid to a recipient.'}
+                                  </p>
+                                  {approvalSnapshot?.bookedRowsAgreeWithApproval === false && (
+                                    <p className="font-bold text-status-warning">
+                                      {'The booked payout rows no longer add up to the approved total. The server refuses this payout until the claim and the approval are reviewed.'}
+                                    </p>
+                                  )}
+                                  {approvedLedgerRows.some((row: any) => row?.ledgerRowRoleMatches === false) && (
+                                    <p className="font-bold text-status-warning">
+                                      {'A covered ledger row is not the payout leg its approval records. The server refuses this payout until it is reviewed.'}
+                                    </p>
+                                  )}
+                                </>
+                              ) : (
+                                <p>
+                                  {approvalState === 'legacy'
+                                    ? 'This approval predates approved-amount storage, so the approved total and covered payout rows are not available. The payout remains bound to the payout rows booked at handover and is refused if any row or amount has changed.'
+                                    : approvalState === 'incomplete' || approvalState === 'unreadable' || approvalState === 'unavailable'
+                                      ? 'The approval on file carries no readable amount/row record, so the approved total and covered payout rows cannot be shown. The server refuses this payout until the claim and the approval are reviewed.'
+                                      : 'The approved total and covered payout rows are unavailable in this dashboard payload.'}
+                                </p>
+                              )}
+                            </div>
+                          )}
+
                           {/* The reason step, inline in this row and NOT a new
                               dialog: it collects the REQUIRED reason the approval
                               mutation is unreachable without, and cancelling it
@@ -5011,6 +5085,10 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                               claimId={ps.claimId}
                               itemId={ps.itemId}
                               lockedTotalFee={typeof ps.lockedTotalFee === 'number' ? ps.lockedTotalFee : null}
+                              approvalState={approvalState}
+                              approvedTotal={approvedTotal}
+                              approvedLedgerRows={approvedLedgerRows}
+                              approvedRowsAgree={typeof approvalSnapshot?.bookedRowsAgreeWithApproval === 'boolean' ? approvalSnapshot.bookedRowsAgreeWithApproval : null}
                               password={settlementPayoutPassword}
                               onPasswordChange={(e) => {
                                 setSettlementPayoutPassword(e.target.value);
@@ -5035,6 +5113,10 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                               claimId={ps.claimId}
                               itemId={ps.itemId}
                               lockedTotalFee={typeof ps.lockedTotalFee === 'number' ? ps.lockedTotalFee : null}
+                              approvalState={approvalState}
+                              approvedTotal={approvedTotal}
+                              approvedLedgerRows={approvedLedgerRows}
+                              approvedRowsAgree={typeof approvalSnapshot?.bookedRowsAgreeWithApproval === 'boolean' ? approvalSnapshot.bookedRowsAgreeWithApproval : null}
                               reason={settlementApproveAndPayReason}
                               onReasonChange={(e) => {
                                 setSettlementApproveAndPayReason(e.target.value);
