@@ -29,10 +29,11 @@
 // WHAT IS DELIBERATELY UNCHANGED
 //   The key VOCABULARY is byte-for-byte what the view already used
 //   (`pause:<scope>`, `<itemId><action>`, `social-pause`, `settlement:<claimId>`,
-//   `settlement-approve:<claimId>`, `settlement-initiate:<claimId>`), so every
-//   existing control keeps its own identity and no unrelated action flow changes
-//   meaning. The builders below exist so those strings are constructed in ONE
-//   place instead of being hand-concatenated at each call site.
+//   `settlement-approve:<claimId>`, `settlement-initiate:<claimId>`,
+//   `settlement-approve-and-pay:<claimId>`), so every existing control keeps its
+//   own identity and no unrelated action flow changes meaning. The builders below
+//   exist so those strings are constructed in ONE place instead of being
+//   hand-concatenated at each call site.
 
 /** The set of action keys currently in flight. Immutable: every transition
  *  returns either the same value (nothing changed) or a new set. */
@@ -60,6 +61,13 @@ export const settlementInitiateActionKey = (claimId: string): string => `settlem
 /** The retained legacy manual release. Deliberately DISTINCT from
  *  `settlementInitiateActionKey` so the two routes can never mask each other. */
 export const legacySettlementReleaseActionKey = (claimId: string): string => `settlement:${claimId}`;
+
+/** D-2B-B BATCH 4 — the combined, password-confirmed "approve & pay" action.
+ *  A THIRD, DISTINCT key: it must never mask (or be masked by) an approval or an
+ *  initiation already in flight for the same claim, because it is the only action
+ *  that records the approval AND submits the payout. */
+export const settlementApproveAndPayActionKey = (claimId: string): string =>
+  `settlement-approve-and-pay:${claimId}`;
 
 /** Is this exact key in flight? */
 export function isActionInFlight(inFlight: InFlightActions, key: string): boolean {

@@ -89,7 +89,9 @@ const serverTs = [
 ].join('\n');
 
 function findAdminRoutes(source: string): Array<{ method: string; route: string; body: string }> {
-  const routeRegex = /app\.(get|post|put|delete)\('(\/api\/admin[^']*)',\s*authenticateJWT,/g;
+  // BATCH 1 (B) — whitespace tolerant after the opening paren, so how a route is
+  // formatted can never decide whether it is audited (see adminRouteAudit.test.ts).
+  const routeRegex = /app\.(get|post|put|delete)\(\s*'(\/api\/admin[^']*)',\s*authenticateJWT,/g;
   const matches: Array<{ method: string; route: string; index: number }> = [];
   let m: RegExpExecArray | null;
   while ((m = routeRegex.exec(source)) !== null) {
@@ -113,6 +115,35 @@ describe('requireCurrentAdminSession is wired into every /api/admin route', () =
       expect(body).toMatch(/authenticateJWT,\s*requireCurrentAdminSession,/);
     });
   }
+
+// ---------------------------------------------------------------------------
+// BATCH 1 (B) — THE PAYOUT ROUTES ARE NAMED, NOT MERELY COUNTED.
+//
+// The generic test above passes vacuously for a route the scanner never matched,
+// so a route that was reformatted, renamed or moved would simply stop being
+// session-checked with no failure. Each route that can submit a real payout is
+// therefore named here and its exact middleware chain is pinned.
+// ---------------------------------------------------------------------------
+describe('BATCH 1 (B) — every route that can submit a real payout validates the current admin session', () => {
+  const PAYOUT_ROUTES = [
+    '/api/admin/claims/:id/settlement/approve-and-pay',
+    '/api/admin/claims/:id/settlement/initiate',
+    '/api/admin/claims/:id/release-settlement',
+  ];
+
+  for (const route of PAYOUT_ROUTES) {
+    it(`POST ${route} is discovered and carries authenticateJWT, requireCurrentAdminSession and the payout limiter`, () => {
+      const found = findAdminRoutes(serverTs).find((r) => r.method === 'post' && r.route === route);
+      expect(found, `the scanner must discover ${route}`).toBeDefined();
+      expect(found!.body).toMatch(/authenticateJWT,\s*requireCurrentAdminSession,/);
+      // The failed-attempt ceiling is part of the guard chain, not decoration: a
+      // route that re-authenticates without it can be brute-forced by a stolen
+      // session.
+      expect(found!.body).toContain('adminSettlementPayoutLimiter,');
+    });
+  }
+});
+
 });
 
 describe('requireCurrentAdminSession is wired into all three admin-2FA routes under /api/auth', () => {

@@ -1,5 +1,6 @@
 import React from 'react';
 import Button from '../../ui/Button';
+import Input from '../../ui/Input';
 
 // =============================================================================
 // D-2B-B BATCH 2 — THE PAYOUT CONFIRMATION STEP, AS ONE PRESENTATIONAL BLOCK.
@@ -36,6 +37,14 @@ export interface SettlementPayoutConfirmationProps {
   /** The locked settlement fee, when the row has one. Omitted rather than
    *  guessed when the payload carries none — this view invents no amounts. */
   lockedTotalFee?: number | null;
+  /** BATCH 1 (D) — the administrator's own password, re-verified by the server
+   *  before the payout request is even considered. Held by the caller only, and
+   *  cleared as soon as the attempt resolves. */
+  password: string;
+  onPasswordChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+  passwordError?: string;
+  /** A request for this claim is in flight: both controls are disabled. */
+  submitting?: boolean;
   /** Cancellation: closes the step. The caller sends no request when this runs. */
   onCancel: () => void;
   /** Confirmation: the caller now initiates the payout, exactly once. */
@@ -46,23 +55,41 @@ export default function SettlementPayoutConfirmation({
   claimId,
   itemId,
   lockedTotalFee,
+  password,
+  onPasswordChange,
+  passwordError,
+  submitting = false,
   onCancel,
   onConfirm,
 }: SettlementPayoutConfirmationProps) {
   const amount = typeof lockedTotalFee === 'number' ? `KES ${lockedTotalFee}` : null;
   return (
-    <div className="space-y-2 border-t border-[var(--appearance-border)] pt-3">
+    <div className="space-y-3 border-t border-[var(--appearance-border)] pt-3">
       <p className="text-caption font-bold text-[var(--appearance-text-primary)]">
         {`Confirm payout initiation for claim ${claimId}`}
       </p>
       <p className="text-caption text-[var(--appearance-text-muted)]">
         {`This starts payout processing for item ${itemId}${amount ? ` (${amount} released)` : ''}. Money may leave the platform on this action and it cannot be undone from here. Nothing has been sent yet: the payout is submitted only if you confirm below, and the provider's result is reported separately.`}
       </p>
+      <Input
+        label={'Your password'}
+        id={'settlement-payout-password-' + claimId}
+        type="password"
+        autoComplete="current-password"
+        value={password}
+        onChange={onPasswordChange}
+        required
+        disabled={submitting}
+        error={passwordError || undefined}
+        hint={
+          'Your own administrator password, verified on the server before the payout is initiated. It is never stored and never logged.'
+        }
+      />
       <div className="flex flex-wrap justify-end gap-2">
-        <Button variant="secondary" size="sm" onClick={onCancel}>
+        <Button variant="secondary" size="sm" onClick={onCancel} disabled={submitting}>
           {'Cancel'}
         </Button>
-        <Button variant="accent" size="sm" onClick={onConfirm}>
+        <Button variant="accent" size="sm" loading={submitting} onClick={onConfirm}>
           {'Confirm and initiate payout'}
         </Button>
       </div>

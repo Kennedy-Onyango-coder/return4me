@@ -2065,14 +2065,14 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
 
   it('8.2 refuses an INVALID token (403) and an unauthorized AGENT identity (403)', async () => {
     const before = await financialSnapshot(claimId);
-    const bad = await http(RELEASE(claimId), { token: 'not-a-real-jwt', body: {} });
+    const bad = await http(RELEASE(claimId), { token: 'not-a-real-jwt', body: { password: ADMIN_PASSWORD } });
     // Real contract (services/auth.ts): 401 = no header, 403 = unverifiable token.
     expect(bad.status).toBe(403);
 
     // A genuine, correctly signed, ACTIVE agent token â€” the very agent that
     // performed the handover. Releasing escrow is NOT part of its role, so the
     // route's own role check must refuse it.
-    const asAgent = await http(RELEASE(claimId), { token: agentToken(AGENT_ID), body: {} });
+    const asAgent = await http(RELEASE(claimId), { token: agentToken(AGENT_ID), body: { password: ADMIN_PASSWORD } });
     expect(asAgent.status).toBe(403);
 
     expect(payout.calls.length).toBe(0);
@@ -2091,7 +2091,7 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     await db.bumpAdminTokenVersion(ADMIN_USERNAME);
 
     const before = await financialSnapshot(claimId);
-    const r = await http(RELEASE(claimId), { token: revokedAdminToken, body: {} });
+    const r = await http(RELEASE(claimId), { token: revokedAdminToken, body: { password: ADMIN_PASSWORD } });
     expect(r.status).toBe(401);
     expect(payout.calls.length).toBe(0);
     expect(await financialSnapshot(claimId)).toEqual(before);
@@ -2111,7 +2111,7 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     const before = await financialSnapshot(secondClaimId);
     const auditsBefore = (await auditFor('ADMIN_RELEASE_SETTLEMENT', secondClaimId)).length;
 
-    const r = await http(RELEASE(secondClaimId), { token: adminToken, body: {} });
+    const r = await http(RELEASE(secondClaimId), { token: adminToken, body: { password: ADMIN_PASSWORD } });
     expect(r.status).toBe(409);
     // The eligibility guard fired BEFORE the release lock, so there is no
     // provider call, no ledger movement and no release audit row.
@@ -2140,7 +2140,9 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
 
     const r = await http(RELEASE(dueClaimId), {
       token: adminToken,
-      body: { amount: 1, fee: 1, total_fee: 1, finder_share: 1, agent_share: 1, payout: 1 },
+      // BATCH 1 (D) — every payout route re-authenticates, so the injected
+      // financial fields below are accompanied by the operator's own password.
+      body: { password: ADMIN_PASSWORD, amount: 1, fee: 1, total_fee: 1, finder_share: 1, agent_share: 1, payout: 1 },
     });
     // An accepted B2C batch is deliberately 'pending' per-recipient (IntaSend
     // accepting the batch is not the same as the transfer having completed),
@@ -2198,7 +2200,7 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     const before = await financialSnapshot(dueClaimId);
     const callsBefore = payout.calls.length;
 
-    const r = await http(RELEASE(dueClaimId), { token: adminToken, body: {} });
+    const r = await http(RELEASE(dueClaimId), { token: adminToken, body: { password: ADMIN_PASSWORD } });
 
     // The claim is still releasable (it is back in pending_settlement and still
     // carries its durable approval, so the release CAS succeeds) but the
@@ -2227,7 +2229,7 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     payout.mode = 'network-error';
 
     const before = await financialSnapshot(c);
-    const r = await http(RELEASE(c), { token: adminToken, body: {} });
+    const r = await http(RELEASE(c), { token: adminToken, body: { password: ADMIN_PASSWORD } });
     // executeClaimSettlement() found an unresolved payout, reverted the
     // releasing lock and returned a non-success result, surfaced as 500.
     expect(r.status).toBe(500);
@@ -2253,7 +2255,7 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     // E3A - and the next attempt does NOT resend it: a timeout is not proof
     // that nothing executed.
     const callsBefore = payout.calls.length;
-    const again = await http(RELEASE(c), { token: adminToken, body: {} });
+    const again = await http(RELEASE(c), { token: adminToken, body: { password: ADMIN_PASSWORD } });
     expect(again.status).toBe(500);
     expect(payout.calls.length, 'an ambiguous outcome must never be resubmitted').toBe(callsBefore);
     expect((await financialSnapshot(c)).ledger).toEqual(after.ledger);
@@ -2267,7 +2269,7 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     payout.mode = 'reject';
     payout.rejectStatus = 422;
 
-    const r4 = await http(RELEASE(refused.claimId), { token: adminToken, body: {} });
+    const r4 = await http(RELEASE(refused.claimId), { token: adminToken, body: { password: ADMIN_PASSWORD } });
     expect(r4.status).toBe(500);
     const after4 = await financialSnapshot(refused.claimId);
     expect(after4.status).toBe('pending_settlement');
@@ -2282,7 +2284,7 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     payout.mode = 'reject';
     payout.rejectStatus = 503;
 
-    const r5 = await http(RELEASE(ambiguous.claimId), { token: adminToken, body: {} });
+    const r5 = await http(RELEASE(ambiguous.claimId), { token: adminToken, body: { password: ADMIN_PASSWORD } });
     expect(r5.status).toBe(500);
     const after5 = await financialSnapshot(ambiguous.claimId);
     expect(after5.status).toBe('pending_settlement');
@@ -2292,8 +2294,8 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     // Neither state is eligible for another automatic submission: one more
     // release makes no provider call at all.
     const callsBefore = payout.calls.length;
-    expect((await http(RELEASE(ambiguous.claimId), { token: adminToken, body: {} })).status).toBe(500);
-    expect((await http(RELEASE(refused.claimId), { token: adminToken, body: {} })).status).toBe(500);
+    expect((await http(RELEASE(ambiguous.claimId), { token: adminToken, body: { password: ADMIN_PASSWORD } })).status).toBe(500);
+    expect((await http(RELEASE(refused.claimId), { token: adminToken, body: { password: ADMIN_PASSWORD } })).status).toBe(500);
     expect(payout.calls.length, 'a refusal and an ambiguity are both resolved by an operator, not by a retry').toBe(callsBefore);
   });
 
@@ -2311,7 +2313,7 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     payout.reset();
     const before = await financialSnapshot(c);
 
-    const r = await http(RELEASE(c), { token: adminToken, body: {} });
+    const r = await http(RELEASE(c), { token: adminToken, body: { password: ADMIN_PASSWORD } });
     expect(r.status).toBe(200);
     expect(r.body?.success).toBe(true);
     // Nothing reached the controlled provider: the app took its simulated
@@ -2349,7 +2351,7 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     const callsBefore = payout.calls.length;
     const auditsBefore = (await auditFor('FINALIZE_SETTLEMENT', releasedClaimId)).length;
 
-    const r = await http(RELEASE(releasedClaimId), { token: adminToken, body: {} });
+    const r = await http(RELEASE(releasedClaimId), { token: adminToken, body: { password: ADMIN_PASSWORD } });
     // The CAS requires status==='pending_settlement'; a released claim matches
     // nothing, so the lock is never won and the route answers 409.
     expect(r.status).toBe(409);
@@ -2370,6 +2372,10 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     const r = await http(RELEASE(secondClaimId), {
       token: adminToken,
       body: {
+        // BATCH 1 (D) — the route now requires the operator's password before it
+        // re-decides eligibility. Everything else here is the cross-claim
+        // injection this test exists to prove is ignored.
+        password: ADMIN_PASSWORD,
         claimId, payment_reference: claimId, payout_reference: 'E2E-BATCH-1',
         providerTransactionId: 'E2E-TXN-R4M-FINDER', amount: 1,
       },
@@ -2502,13 +2508,13 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     payout.reset();
 
     // Supported path: no approval -> 409 naming the real cause, no payout.
-    const blocked = await http(INITIATE(c), { token: adminToken, body: {} });
+    const blocked = await http(INITIATE(c), { token: adminToken, body: { password: ADMIN_PASSWORD } });
     expect(blocked.status).toBe(409);
     expect(blocked.body?.reasons).toEqual(['no_durable_approval']);
 
     // Legacy path: the SAME refusal - it no longer force-releases ahead of the
     // window or without approval - and it points at the supported workflow.
-    const legacy = await http(RELEASE(c), { token: adminToken, body: {} });
+    const legacy = await http(RELEASE(c), { token: adminToken, body: { password: ADMIN_PASSWORD } });
     expect(legacy.status).toBe(409);
     expect(String(legacy.body?.next?.approve)).toContain('/settlement/approve');
     expect(String(legacy.body?.next?.initiate)).toContain('/settlement/initiate');
@@ -2519,7 +2525,7 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     expect((await http(APPROVE(c), { token: adminToken, body: { reason: 'approved for payout' } })).status).toBe(200);
     process.env.INTASEND_SECRET_KEY = '';
     payout.reset();
-    const paid = await http(INITIATE(c), { token: adminToken, body: {} });
+    const paid = await http(INITIATE(c), { token: adminToken, body: { password: ADMIN_PASSWORD } });
     process.env.INTASEND_SECRET_KEY = FAKE_INTASEND_KEY;
     expect(paid.status).toBe(200);
     expect(paid.body?.success).toBe(true);
@@ -2537,8 +2543,8 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     payout.reset();
 
     expect((await http(APPROVE(claimId), { token: adminToken, body: { reason: 'release it early please' } })).status).toBe(409);
-    expect((await http(RELEASE(claimId), { token: adminToken, body: {} })).status).toBe(409);
-    const initiate = await http(INITIATE(claimId), { token: adminToken, body: {} });
+    expect((await http(RELEASE(claimId), { token: adminToken, body: { password: ADMIN_PASSWORD } })).status).toBe(409);
+    const initiate = await http(INITIATE(claimId), { token: adminToken, body: { password: ADMIN_PASSWORD } });
     expect(initiate.status).toBe(409);
     // The reported reasons are the REAL ones the CAS enforces - not a hard-coded
     // list claiming a pause/hold failure this method cannot even detect.
@@ -2555,7 +2561,7 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     await db.setItemReviewStatus(ci, 'legal_hold', 'E2E: court order received', 'SYSTEM');
     payout.reset();
 
-    const r = await http(INITIATE(c), { token: adminToken, body: {} });
+    const r = await http(INITIATE(c), { token: adminToken, body: { password: ADMIN_PASSWORD } });
     // The lock was won (approval + window were valid) and then given back: the
     // provider was never called and the claim is not stranded in 'releasing'.
     expect(r.status).toBe(500);
@@ -2574,7 +2580,7 @@ describe('stage 8 â€” settlement release to `released` over real HTTP', () 
     try {
       const { claimId: c } = await makeReleasableClaim('PAUSED-PAYOUT', { approve: true });
       payout.reset();
-      const r = await http(INITIATE(c), { token: adminToken, body: {} });
+      const r = await http(INITIATE(c), { token: adminToken, body: { password: ADMIN_PASSWORD } });
       expect(r.status).toBe(500);
       expect(payout.calls.length, 'no payout may be submitted while paused').toBe(0);
       expect((await db.getClaim(c))!.status).toBe('pending_settlement');
@@ -2951,7 +2957,7 @@ describe('stage 8.9 — phone-only payout destinations (BATCH 1 launch policy)',
     payout.reset();
     const before = await financialSnapshot(c);
 
-    const r = await http(RELEASE(c), { token: adminToken, body: {} });
+    const r = await http(RELEASE(c), { token: adminToken, body: { password: ADMIN_PASSWORD } });
     expect(r.status).toBe(500);
 
     // (1) THE core assertion: not one request reached the provider.
@@ -2993,7 +2999,7 @@ describe('stage 8.9 — phone-only payout destinations (BATCH 1 launch policy)',
     const { claimId: c } = await makeReleasableClaim('DEST-AGENT-METHOD', { agentId: UNSUPPORTED_METHOD_AGENT_ID });
     payout.reset();
 
-    const r = await http(RELEASE(c), { token: adminToken, body: {} });
+    const r = await http(RELEASE(c), { token: adminToken, body: { password: ADMIN_PASSWORD } });
     expect(r.status).toBe(500);
     expect(payout.calls.length).toBe(0);
     expect((await financialSnapshot(c)).status).toBe('pending_settlement');
@@ -3016,7 +3022,7 @@ describe('stage 8.9 — phone-only payout destinations (BATCH 1 launch policy)',
     payout.reset();
     const before = await financialSnapshot(c);
 
-    const r = await http(RELEASE(c), { token: adminToken, body: {} });
+    const r = await http(RELEASE(c), { token: adminToken, body: { password: ADMIN_PASSWORD } });
     expect(r.status).toBe(500);
     expect(payout.calls.length, 'no leg was eligible, so nothing may be sent').toBe(0);
 
@@ -3052,7 +3058,7 @@ describe('stage 8.9 — phone-only payout destinations (BATCH 1 launch policy)',
 
     await withEnv({ NODE_ENV: 'staging', INTASEND_SECRET_KEY: '' }, async () => {
       payout.reset();
-      const r = await http(RELEASE(c), { token: adminToken, body: {} });
+      const r = await http(RELEASE(c), { token: adminToken, body: { password: ADMIN_PASSWORD } });
       expect(r.status).toBe(500);
 
       // No simulation ran, and nothing reached the provider.
@@ -3113,7 +3119,7 @@ describe('stage 8.9 — phone-only payout destinations (BATCH 1 launch policy)',
 
       await withEnv({ NODE_ENV: value, INTASEND_SECRET_KEY: '' }, async () => {
         payout.reset();
-        const r = await http(RELEASE(c), { token: adminToken, body: {} });
+        const r = await http(RELEASE(c), { token: adminToken, body: { password: ADMIN_PASSWORD } });
         expect(r.status, `${label}: the payout attempt must fail`).toBe(500);
         expect(payout.calls.length, `${label}: no provider request`).toBe(0);
 
@@ -3151,7 +3157,7 @@ describe('stage 8.9 — phone-only payout destinations (BATCH 1 launch policy)',
     const { claimId: c } = await makeReleasableClaim('DEST-BOTH-ELIGIBLE');
     payout.reset();
 
-    const r = await http(RELEASE(c), { token: adminToken, body: {} });
+    const r = await http(RELEASE(c), { token: adminToken, body: { password: ADMIN_PASSWORD } });
 
     // The provider ACCEPTED the batch, which is not a completion, so the claim
     // is returned to pending_settlement - exactly as before the correction.
@@ -3187,7 +3193,7 @@ describe('stage 8.9 — phone-only payout destinations (BATCH 1 launch policy)',
     const before = await financialSnapshot(c);
     payout.reset();
 
-    const r = await http(RELEASE(c), { token: adminToken, body: {} });
+    const r = await http(RELEASE(c), { token: adminToken, body: { password: ADMIN_PASSWORD } });
     expect(r.status).toBe(500);
 
     // No additional leg was submitted, so no new submission marker exists.
@@ -3225,7 +3231,7 @@ describe('stage 8.9 — phone-only payout destinations (BATCH 1 launch policy)',
     const before = await financialSnapshot(c);
     payout.reset();
 
-    const r = await http(RELEASE(c), { token: adminToken, body: {} });
+    const r = await http(RELEASE(c), { token: adminToken, body: { password: ADMIN_PASSWORD } });
     expect(r.status).toBe(500);
     expect(payout.calls.length).toBe(0);
     expect(await financialSnapshot(c)).toEqual(before);
@@ -3249,7 +3255,7 @@ describe('stage 8.9 — phone-only payout destinations (BATCH 1 launch policy)',
     });
 
     payout.reset();
-    const r = await http(RELEASE(c), { token: adminToken, body: {} });
+    const r = await http(RELEASE(c), { token: adminToken, body: { password: ADMIN_PASSWORD } });
 
     // The agent leg is only ACCEPTED, not confirmed, so the claim is not closed.
     expect(r.status).toBe(500);
@@ -3282,7 +3288,7 @@ describe('stage 8.9 — phone-only payout destinations (BATCH 1 launch policy)',
     const before = await financialSnapshot(c);
     payout.reset();
 
-    const r = await http(RELEASE(c), { token: adminToken, body: {} });
+    const r = await http(RELEASE(c), { token: adminToken, body: { password: ADMIN_PASSWORD } });
     expect(r.status).toBe(500);
     expect(payout.calls.length).toBe(0);
     // The outstanding leg is refused AND the completed leg is not disturbed to
@@ -3311,7 +3317,7 @@ describe('stage 8.9 — phone-only payout destinations (BATCH 1 launch policy)',
     const before = await financialSnapshot(c);
     payout.reset();
 
-    const r = await http(RELEASE(c), { token: adminToken, body: {} });
+    const r = await http(RELEASE(c), { token: adminToken, body: { password: ADMIN_PASSWORD } });
     expect(r.status).toBe(500);
     expect(payout.calls.length).toBe(0);
     expect(await financialSnapshot(c)).toEqual(before);

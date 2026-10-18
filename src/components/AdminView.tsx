@@ -84,11 +84,13 @@ import {
   SOCIAL_PUBLISHING_PAUSE_ACTION_KEY,
   settlementApprovalActionKey,
   settlementInitiateActionKey,
+  settlementApproveAndPayActionKey,
   legacySettlementReleaseActionKey,
   reduceConsoleActions,
 } from './admin/consoleActionState';
 import type { ConsoleActions, ConsoleActionEvent } from './admin/consoleActionState';
 import SettlementPayoutConfirmation from './admin/settlement/SettlementPayoutConfirmation';
+import SettlementApproveAndPayConfirmation from './admin/settlement/SettlementApproveAndPayConfirmation';
 // BATCH B0 — modern shell chrome (sidebar groups + contextual top bar). These
 // are presentation components only: they hold no data, make no requests and
 // change no behaviour. The nav registry mirrors the ten existing sections so
@@ -2236,16 +2238,25 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
   //   via admin override"): nothing ever auto-releases and there is no override,
   //   so an elapsed but unapproved claim is simply never paid.
   //
-  //   The two supported actions are now offered as two:
+  //   The console offers THREE actions, and the first two stay deliberately
+  //   separate:
   //     * "Approve settlement" records the human sign-off and its REQUIRED,
   //       audit-logged reason. It moves no money, changes no claim status and
   //       never reaches the provider.
   //     * "Initiate payout" moves the money, and the server accepts it only for a
   //       claim that already carries that durable approval once `settle_at` has
   //       elapsed.
-  //   Approving cannot initiate and initiating cannot approve: there is no
-  //   chaining in either direction, so an approval recorded early disburses
-  //   nothing, and an initiation can never stand in for a missing approval.
+  //     * "Approve & pay" (D-2B-B Batch 4) is the combined action for the case the
+  //       two-step flow handles badly: one operator has decided to pay NOW, so the
+  //       approval and the initiation are confirmed ONCE, behind the operator's
+  //       OWN password. It is the SAME money path, not a second one: it calls the
+  //       same approval CAS and the same release CAS + executor, and it can only
+  //       approve what the approval route could approve and initiate what the
+  //       initiate route could initiate.
+  //   Approving cannot initiate, initiating cannot approve, and the combined
+  //   action is never a shortcut around either check: there is no chaining in any
+  //   direction, so an approval recorded early disburses nothing, and an
+  //   initiation can never stand in for a missing approval.
   //
   //   The route is the authority in every case. The Initiate control is DISABLED
   //   while the dashboard reports that either precondition is unmet — a missing
@@ -2259,12 +2270,30 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
   //   (handleReleaseSettlementNow => the release route), which the server applies
   //   the same durable-approval + elapsed-window checks to. What D-2B-B Batch 3
   //   removed is its last UI call site: the pending-settlement interface renders
-  //   no second money-moving action, so the endpoint is retained for
-  //   compatibility (docs/api.md) while the console offers ONE current path.
+  //   no legacy release control, so the endpoint is retained for compatibility
+  //   (docs/api.md) while the console offers exactly ONE money PATH — approve
+  //   then initiate, or both confirmed together as "Approve & pay".
   // ---------------------------------------------------------------------------
   const [settlementApprovalPrompt, setSettlementApprovalPrompt] = useState<{ claimId: string } | null>(null);
   const [settlementApprovalReason, setSettlementApprovalReason] = useState('');
   const [settlementApprovalReasonError, setSettlementApprovalReasonError] = useState('');
+
+  // D-2B-B BATCH 4 — the combined action's step. `null` means closed, and only the
+  // claim id is kept: the approval reason is transient, and the password is a
+  // credential that lives in component state ONLY until this request is over (it
+  // is cleared on cancel, on success and on failure, so a retry re-types it).
+  const [settlementApproveAndPayPrompt, setSettlementApproveAndPayPrompt] = useState<{ claimId: string } | null>(null);
+  const [settlementApproveAndPayReason, setSettlementApproveAndPayReason] = useState('');
+  const [settlementApproveAndPayPassword, setSettlementApproveAndPayPassword] = useState('');
+  const [settlementApproveAndPayReasonError, setSettlementApproveAndPayReasonError] = useState('');
+  const [settlementApproveAndPayPasswordError, setSettlementApproveAndPayPasswordError] = useState('');
+
+  // BATCH 1 (D) — the single-purpose payout step now re-authenticates too, so it
+  // holds its OWN transient password + error. Deliberately separate from the
+  // combined action's state: the two steps can be open on different rows, and a
+  // credential typed into one must never be submitted by the other.
+  const [settlementPayoutPassword, setSettlementPayoutPassword] = useState('');
+  const [settlementPayoutPasswordError, setSettlementPayoutPasswordError] = useState('');
 
   /** Cancel / dismiss: closes the reason step with no request, no mutation and no
    *  approval recorded — an abandoned approval records nothing at all. */
@@ -2339,20 +2368,36 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
    * eligibility itself (status + durable approval + elapsed settle_at), so the
    * control's disabled state is a courtesy and the server is what refuses; a
    * refusal's `reasons[]` are surfaced verbatim (see settlementRefusalMessage).
-   * No body is sent: the request carries no approval, because the approval is the
-   * claim's own persisted state and never a value the browser can supply.
+   * BATCH 1 (D) — THE REQUEST NOW CARRIES THE OPERATOR'S PASSWORD, NOT AN APPROVAL.
+   *
+   * The approval is still the claim's own persisted state and is never a value the
+   * browser can supply. What IS supplied is the caller's own password, which the
+   * server bcrypt-compares against the authenticated administrator's stored hash
+   * BEFORE it takes the release lock — so a stolen session alone cannot pay. The
+   * value goes in this one request body and nowhere else: never a URL, never a
+   * banner, and it is cleared from state as soon as the attempt resolves.
    */
-  const handleInitiateSettlementPayout = async (claimId: string) => {
+  const handleInitiateSettlementPayout = async (claimId: string, password: string) => {
     setActionSuccess('');
     setActionWarning('');
     setDataError('');
     try {
       const response = await fetch(`/api/admin/claims/${claimId}/settlement/initiate`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ password }),
       });
-      const data = await response.json();
+      const data = await response.json().catch(() => null);
+      // Single-use per attempt: whatever the outcome, the credential does not stay
+      // in state for a retry to replay.
+      setSettlementPayoutPassword('');
       if (!response.ok) {
+        if (data?.code === 'password_incorrect') {
+          setSettlementPayoutPasswordError('Incorrect password.');
+        }
         throw new Error(settlementRefusalMessage(data, 'Failed to initiate payout.'));
       }
       // The banner states what was SUBMITTED, never that money has arrived: the
@@ -2361,6 +2406,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
       setActionSuccess(data.message || 'Payout initiation submitted — the provider result is not yet confirmed.');
       fetchDashboardData();
     } catch (e: any) {
+      setSettlementPayoutPassword('');
       setDataError(e.message);
     } finally {
       // ONLY this claim's initiation key is cleared. A completion here can never
@@ -2385,21 +2431,139 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
    * verbatim rather than replaced by a sentence the browser invents.
    */
   const promptSettlementPayoutConfirmation = (claimId: string) => {
+    // BATCH 1 (D) — never pre-filled and never carried over from a previous row.
+    setSettlementPayoutPassword('');
+    setSettlementPayoutPasswordError('');
     applyConsoleAction({ type: 'open-payout-confirmation', claimId });
   };
 
-  /** Cancel / dismiss: the step closes. No request is sent and no settlement
-   *  state changes — an abandoned confirmation records nothing at all. */
+  /** Cancel / dismiss: the step closes, the password is dropped from state and no
+   *  request is sent, so an abandoned confirmation records nothing at all. */
   const cancelSettlementPayoutConfirmation = () => {
+    setSettlementPayoutPassword('');
+    setSettlementPayoutPasswordError('');
     applyConsoleAction({ type: 'cancel-payout-confirmation' });
   };
 
-  /** Confirms the step that is open FOR THIS CLAIM. The reducer refuses a
-   *  confirmation for any other claim, and refuses a duplicate while a payout
-   *  request for this claim is in flight, so this can never send two requests. */
+  /** Confirms the step that is open FOR THIS CLAIM. An empty password is refused
+   *  IN PLACE — the request is never sent and the step stays open — and the reducer
+   *  still refuses a confirmation for any other claim, or a duplicate while a
+   *  payout request for this claim is in flight, so this can never send two
+   *  requests. The reducer's refusal closes the step without sending anything; the
+   *  password is cleared so a refused duplicate cannot leave a credential behind. */
   const confirmSettlementPayout = (claimId: string) => {
+    const password = settlementPayoutPassword;
+    if (!password) {
+      setSettlementPayoutPasswordError('Your password is required to confirm this payout.');
+      return;
+    }
     const requested = applyConsoleAction({ type: 'confirm-payout', claimId });
-    if (requested) void handleInitiateSettlementPayout(requested);
+    if (!requested) {
+      setSettlementPayoutPassword('');
+      return;
+    }
+    void handleInitiateSettlementPayout(requested, password);
+  };
+
+  /**
+   * D-2B-B BATCH 4 — "APPROVE & PAY": ONE DECISION, ONE PASSWORD, ONE MONEY PATH.
+   *
+   * Opens the combined step for ONE claim. Like the other prompts this records
+   * the target only: no request, no approval, no payout, and no audit row.
+   */
+  const promptSettlementApproveAndPay = (claimId: string) => {
+    setSettlementApproveAndPayReason('');
+    setSettlementApproveAndPayPassword('');
+    setSettlementApproveAndPayReasonError('');
+    setSettlementApproveAndPayPasswordError('');
+    setSettlementApproveAndPayPrompt({ claimId });
+  };
+
+  /** Cancel / dismiss: the step closes, the password is dropped from state and
+   *  nothing is sent. An abandoned combined action records nothing at all. */
+  const closeSettlementApproveAndPayPrompt = () => {
+    setSettlementApproveAndPayPrompt(null);
+    setSettlementApproveAndPayReason('');
+    setSettlementApproveAndPayPassword('');
+    setSettlementApproveAndPayReasonError('');
+    setSettlementApproveAndPayPasswordError('');
+  };
+
+  /**
+   * Validates IN PLACE, exactly as the route would (a blank reason and an empty
+   * password are both 400s), then submits the TRIMMED reason and the password to
+   * the combined route. The password is used as that request's body and nowhere
+   * else: it is never put in a URL, a banner, an audit field or a log line, and it
+   * is cleared from state as soon as the attempt resolves.
+   */
+  const handleSettlementApproveAndPay = async (claimId: string, reason: string, password: string) => {
+    setActionSuccess('');
+    setActionWarning('');
+    setDataError('');
+    applyConsoleAction({ type: 'begin', key: settlementApproveAndPayActionKey(claimId) });
+    try {
+      const response = await fetch(`/api/admin/claims/${claimId}/settlement/approve-and-pay`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ reason, password }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        // The credential is single-use per attempt: a refused attempt never
+        // leaves it sitting in state for a retry to replay.
+        setSettlementApproveAndPayPassword('');
+        if (data?.code === 'password_incorrect') {
+          setSettlementApproveAndPayPasswordError('Incorrect password.');
+          setDataError('Incorrect password.');
+          return;
+        }
+        // PARTIAL SUCCESS IS NOT A FAILURE AND IS NOT A SUCCESS. The server may
+        // have recorded the approval and still refused/failed the payout; it says
+        // which, and this banner repeats that — never "paid", never "nothing
+        // happened". The dashboard is refreshed so the row shows the approval.
+        if (data?.code === 'payout_not_eligible' || data?.code === 'payout_not_confirmed') {
+          setActionWarning(settlementRefusalMessage(data, 'The payout was not confirmed.'));
+          fetchDashboardData();
+          return;
+        }
+        throw new Error(settlementRefusalMessage(data, 'Failed to approve and pay.'));
+      }
+      // "Submitted", never "paid": the provider's per-recipient outcome is what
+      // reconciliation reports.
+      setActionSuccess(data?.message || 'Approval recorded and payout initiation submitted — the provider result is not yet confirmed.');
+      closeSettlementApproveAndPayPrompt();
+      fetchDashboardData();
+    } catch (e: any) {
+      setSettlementApproveAndPayPassword('');
+      setDataError(e.message);
+    } finally {
+      // ONLY this claim's combined action key is cleared.
+      applyConsoleAction({ type: 'finish', key: settlementApproveAndPayActionKey(claimId) });
+    }
+  };
+
+  /** Submits the combined step. A blank reason or an empty password is refused in
+   *  place — the request is never sent — and the step stays open so the missing
+   *  input can be supplied. */
+  const confirmSettlementApproveAndPay = () => {
+    if (!settlementApproveAndPayPrompt) return;
+    const { claimId } = settlementApproveAndPayPrompt;
+    const reason = settlementApproveAndPayReason.trim();
+    const password = settlementApproveAndPayPassword;
+    let invalid = false;
+    if (!reason) {
+      setSettlementApproveAndPayReasonError('A reason is required.');
+      invalid = true;
+    }
+    if (!password) {
+      setSettlementApproveAndPayPasswordError('Your password is required to confirm this payout.');
+      invalid = true;
+    }
+    if (invalid) return;
+    void handleSettlementApproveAndPay(claimId, reason, password);
   };
 
   const handleToggleSocialPause = async (paused: boolean) => {
@@ -4698,7 +4862,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                 <div>
                   <h3 className="text-heading font-extrabold text-[var(--appearance-text-primary)]">Pending Settlements</h3>
                   <p className="text-caption text-[var(--appearance-text-muted)]">
-                    Handover confirmed, payout booked, dispute window still open. Settlement is two separate steps: record the approval (a reason is required and audit-logged), then initiate the payout, which the server accepts only once the review window has elapsed and the approval is on file. Neither step triggers the other, no payout is automatic, and initiating a payout asks you to confirm the exact settlement first — a submitted request is not reported as a completed payout.
+                    Handover confirmed, payout booked, dispute window still open. Settlement is two separate steps: record the approval (a reason is required and audit-logged), then initiate the payout, which the server accepts only once the review window has elapsed and the approval is on file. Neither step triggers the other, no payout is automatic, and both payout actions ask you to confirm the exact settlement and re-enter your own password first — a submitted request is not reported as a completed payout.
                   </p>
                 </div>
                 {(!dashboardData.pendingSettlements || dashboardData.pendingSettlements.length === 0) ? (
@@ -4718,10 +4882,15 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                       const isApproving = isActionInFlight(consoleActions.inFlight, settlementApprovalActionKey(ps.claimId));
                       const isInitiating = isActionInFlight(consoleActions.inFlight, settlementInitiateActionKey(ps.claimId));
                       const isReleasing = isActionInFlight(consoleActions.inFlight, legacySettlementReleaseActionKey(ps.claimId));
+                      // D-2B-B BATCH 4 — the combined action is its own in-flight
+                      // identity: it neither masks nor is masked by the approval or
+                      // the initiation already running for this claim.
+                      const isApprovingAndPaying = isActionInFlight(consoleActions.inFlight, settlementApproveAndPayActionKey(ps.claimId));
                       // The payout confirmation is PER CLAIM: it is open for this
                       // row only while this row is the settlement being confirmed.
                       const payoutConfirmOpen = isPayoutConfirmationOpenFor(consoleActions, ps.claimId);
                       const reasonStepOpen = settlementApprovalPrompt?.claimId === ps.claimId;
+                      const approveAndPayStepOpen = settlementApproveAndPayPrompt?.claimId === ps.claimId;
                       return (
                         <div key={ps.claimId} className="border border-[var(--appearance-border)] rounded-xl p-3 bg-[var(--appearance-surface-muted)]/40 space-y-3">
                           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -4744,7 +4913,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                                 variant="primary"
                                 size="sm"
                                 loading={isApproving}
-                                disabled={hasApproval || reasonStepOpen || isInitiating || isReleasing}
+                                disabled={hasApproval || reasonStepOpen || isInitiating || isReleasing || approveAndPayStepOpen}
                                 onClick={() => promptSettlementApproval(ps.claimId)}
                               >
                                 {'Approve settlement'}
@@ -4764,11 +4933,32 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                                 variant="accent"
                                 size="sm"
                                 loading={isInitiating}
-                                disabled={!hasApproval || !isDue || isApproving || isReleasing}
+                                disabled={!hasApproval || !isDue || isApproving || isReleasing || approveAndPayStepOpen}
                                 onClick={() => promptSettlementPayoutConfirmation(ps.claimId)}
                               >
                                 {'Initiate payout'}
                               </Button>
+                              {/* D-2B-B BATCH 4 — "Approve & pay". The combined path
+                                  for a due settlement with NO approval on file: it
+                                  records the approval and initiates the payout in ONE
+                                  password-confirmed action, through the same approval
+                                  CAS and the same release CAS + executor as the two
+                                  controls above. Offered only while no approval is on
+                                  file, so it can never become a shortcut around the
+                                  review of an approval that already exists, and
+                                  disabled until the review window has elapsed, because
+                                  the server refuses an unelapsed settle_at regardless. */}
+                              {!hasApproval && (
+                                <Button
+                                  variant="accent"
+                                  size="sm"
+                                  loading={isApprovingAndPaying}
+                                  disabled={!isDue || isApproving || isInitiating || isReleasing || reasonStepOpen}
+                                  onClick={() => promptSettlementApproveAndPay(ps.claimId)}
+                                >
+                                  {'Approve & pay'}
+                                </Button>
+                              )}
                             </div>
                           </div>
 
@@ -4821,25 +5011,63 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                               claimId={ps.claimId}
                               itemId={ps.itemId}
                               lockedTotalFee={typeof ps.lockedTotalFee === 'number' ? ps.lockedTotalFee : null}
+                              password={settlementPayoutPassword}
+                              onPasswordChange={(e) => {
+                                setSettlementPayoutPassword(e.target.value);
+                                if (settlementPayoutPasswordError) setSettlementPayoutPasswordError('');
+                              }}
+                              passwordError={settlementPayoutPasswordError}
+                              submitting={isInitiating}
                               onCancel={cancelSettlementPayoutConfirmation}
                               onConfirm={() => confirmSettlementPayout(ps.claimId)}
                             />
                           )}
 
-                          {/* D-2B-B BATCH 3 — NO SECOND MONEY-MOVING CONTROL AT
-                              ALL. Batch 2 kept the legacy manual release behind a
-                              closed disclosure, which still left a second,
-                              misleading affordance one keystroke away from the
-                              supported action. The pending-settlement interface now
-                              offers exactly ONE current path — record the approval,
-                              then confirm the due-checked payout initiation — and
-                              renders no legacy release control anywhere.
-                              NOTHING SERVER-SIDE CHANGED: the legacy endpoint, its
-                              durable-approval + elapsed-window checks and the
-                              handler that reaches it all stay (see docs/api.md and
+                          {/* D-2B-B BATCH 4 — the combined step, inline in the same
+                              row and no new dialog. It names the claim, the item and
+                              (when the payload carries one) the amount, collects the
+                              REQUIRED approval reason AND the administrator's own
+                              password, and sends nothing until the operator confirms.
+                              Cancelling drops the password from state and records
+                              nothing. */}
+                          {approveAndPayStepOpen && (
+                            <SettlementApproveAndPayConfirmation
+                              claimId={ps.claimId}
+                              itemId={ps.itemId}
+                              lockedTotalFee={typeof ps.lockedTotalFee === 'number' ? ps.lockedTotalFee : null}
+                              reason={settlementApproveAndPayReason}
+                              onReasonChange={(e) => {
+                                setSettlementApproveAndPayReason(e.target.value);
+                                if (settlementApproveAndPayReasonError) setSettlementApproveAndPayReasonError('');
+                              }}
+                              reasonError={settlementApproveAndPayReasonError}
+                              password={settlementApproveAndPayPassword}
+                              onPasswordChange={(e) => {
+                                setSettlementApproveAndPayPassword(e.target.value);
+                                if (settlementApproveAndPayPasswordError) setSettlementApproveAndPayPasswordError('');
+                              }}
+                              passwordError={settlementApproveAndPayPasswordError}
+                              submitting={isApprovingAndPaying}
+                              onCancel={closeSettlementApproveAndPayPrompt}
+                              onConfirm={confirmSettlementApproveAndPay}
+                            />
+                          )}
+
+                          {/* D-2B-B BATCH 3 — NO SECOND MONEY PATH. Batch 2 kept the
+                              legacy manual release behind a closed disclosure, which
+                              still left a second, misleading affordance one keystroke
+                              away from the supported action. The pending-settlement
+                              interface renders no legacy release control anywhere.
+                              BATCH 4 ADDS NO PATH EITHER: "Approve & pay" above is the
+                              SAME approval CAS and the SAME release CAS + executor as
+                              the two single-purpose controls, confirmed once behind a
+                              password — it is not a third way to move money.
+                              NOTHING SERVER-SIDE WAS REMOVED: the legacy endpoint, its
+                              durable-approval + elapsed-window checks and the handler
+                              that reaches it all stay (see docs/api.md and
                               docs/claims-and-payments.md), and `isReleasing` above
-                              still makes an in-flight legacy release gate the
-                              supported controls. */}
+                              still makes an in-flight legacy release gate every
+                              supported control. */}
                         </div>
                       );
                     })}

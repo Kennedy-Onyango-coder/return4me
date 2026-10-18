@@ -224,7 +224,10 @@ Settlement is a durable, human-gated process. A claim does not leave
 button can release. The operator must first record a **durable approval**
 (POST /api/admin/claims/:id/settlement/approve) and then deliberately **initiate**
 the payout (POST /api/admin/claims/:id/settlement/initiate). Each step is a
-separate, permissioned action with its own eligibility checks.
+separate, permissioned action with its own eligibility checks. The combined
+`POST /api/admin/claims/:id/settlement/approve-and-pay` performs those two steps
+in that order for a single operator decision — it is a wrapper over them, not a
+third money path.
 
 - **Approval** does not change claim status and never touches the provider.
   It records who approved and when (settlement_approved_at /
@@ -245,6 +248,47 @@ separate, permissioned action with its own eligibility checks.
   and calls executeClaimSettlement(). On success the claim moves to `released`
   and the ledger rows are completed. On failure the lock is reverted and the
   claim returns to `pending_settlement`; no money moves.
+
+  **The payout must match the ledger it was booked against.** Before any
+  submission marker is written, the executor compares each planned leg with its
+  own booked ledger row: the amount at `NUMERIC(10,2)` precision and the
+  destination in canonical phone form. Any difference — an edited category for an
+  item booked before shares were locked, or a payout destination activated after
+  the booking — refuses the **whole** claim payout. No leg is sent, no ledger
+  amount is rewritten, and the claim returns to `pending_settlement`, so a later
+  initiation can pay once the data agrees with the ledger again.
+
+  **Initiation re-authenticates.** The operator supplies their own password in
+  the request body; it is bcrypt-compared against the authenticated
+  administrator's stored hash *before* the release lock is attempted, so a wrong
+  password takes no lock, writes nothing and reaches no provider. A missing
+  password is `400 password_required`, an over-long one `400 password_too_long`
+  (the ceiling is 200 characters), and a mismatch `401 password_incorrect`.
+  Failed confirmations are rate-limited per administrator account, not per IP
+  address, so one operator cannot lock colleagues out behind a shared NAT. That
+  bucket is process-local (`express-rate-limit`'s default store): the ceiling is
+  per instance, not per deployment, and a restart clears it — see
+  [deployment.md](deployment.md).
+
+
+- **Combined approval + payout** (POST
+  /api/admin/claims/:id/settlement/approve-and-pay) is offered in the admin
+  console as "Approve & pay" for a due settlement that has no approval on file.
+  It requires **both** settlement permissions and the operator's own password,
+  which is bcrypt-compared before anything is written and is never logged,
+  echoed back, or stored. It then takes exactly the two steps above in order:
+  the same approval CAS, then the same release CAS and executor. Consequences
+  worth knowing:
+
+  - it cannot shortcut a claim that is already approved (the approval reads as
+    `already_on_file` and the payout proceeds), cannot pay inside the settle_at
+    window, and cannot stand in for the separate `initiate` route's checks;
+  - a fee/pause/eligibility refusal *after* the approval row committed is
+    reported as a partial outcome — `recoverable: true` with `reasons[]` and
+    `next: { initiate }` — because the approval is durable and the payout is
+    still outstanding;
+  - a wrong password, a missing reason, or a caller lacking either permission
+    writes nothing at all.
 
 The legacy `POST /api/admin/claims/:id/release-settlement` route is retained for
 compatibility and delegates to exactly the same rule. It cannot force anything:

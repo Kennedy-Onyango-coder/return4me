@@ -56,6 +56,21 @@ import {
   resolveItemLockedPricing,
 } from './services/feeEngine';
 import { validateVerificationAnswers, toAgentVerificationEvidence, isAnswerValidationFailure, compareVerificationAnswers } from './services/verificationValidation';
+// BATCH 1 (E) — the settlement payout snapshot/format/drift rules live in one
+// pure module so the audit trail's CONTENT is decidable by a test, and so a
+// destination is never written to the log unmasked.
+import {
+  buildSettlementPayoutPlan,
+  formatSettlementPayoutPlanForAudit,
+  settlementDestinationFacts,
+  describeSettlementDestinationDrift,
+  type SettlementPayoutLeg,
+} from './services/settlementPayoutAudit';
+// BATCH 1.1 — the ledger-integrity rule for a payout attempt (amount + booked
+// destination) is pure and lives here, for the same reason: the executor must
+// be able to ASK a testable "does this attempt pay what the ledger booked?"
+// instead of re-deriving the answer beside the provider call.
+import { resolveSettlementPayoutIntegrity } from './config/settlementPayoutIntegrity';
 import {
   CUSTOMER_SESSION_COOKIE,
   CUSTOMER_SESSION_TTL_MS,
@@ -750,6 +765,112 @@ const adminTwoFactorLimiter = rateLimit({
   validate: false,
   message: { error: 'Too many 2FA management attempts. Please wait 15 minutes and try again.' }
 });
+
+// D-2B-B BATCH 4 — settlement payout confirmation hardening.
+//
+// BATCH 1 (D) — THE BUCKET IS NOW THE ADMINISTRATOR, NOT THE IP ADDRESS.
+//
+// Three administrative routes can submit a real payout
+// (settlement/approve-and-pay, settlement/initiate and the legacy
+// release-settlement). Each re-verifies the signed-in administrator's PASSWORD
+// before it records or submits anything, so without a ceiling a stolen admin
+// session could brute-force the account password through them. But a bucket
+// keyed by IP address punishes the wrong principal: every administrator behind
+// one office NAT or one reverse-proxy address shares a single 10-attempt budget,
+// so one careless operator (or one attacker) can lock out every legitimate
+// administrator on that network.
+//
+// The key is therefore the AUTHENTICATED administrator's username, taken from
+// the verified token (never from the request body), and `skipSuccessfulRequests`
+// means only FAILED confirmations consume the budget: ten wrong passwords in
+// fifteen minutes for ONE account, while everyone else is untouched. The
+// fallback to the user id (and only then the address) keeps the limiter
+// fail-closed if a future token shape omits the username.
+//
+// The ceiling is deliberately the same 10/15min as adminTwoFactorLimiter — a
+// password re-check is a password re-check — but a DISTINCT bucket, so a burst
+// of payout confirmations cannot consume the 2FA-management budget.
+const SETTLEMENT_PAYOUT_MAX_PASSWORD_LENGTH = 200;
+
+const adminSettlementPayoutLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // 10 WRONG PASSWORD confirmations per administrator per 15 minutes
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: false,
+  // A correct password is not an attack: the request is counted when it arrives
+  // and released again when it succeeds.
+  skipSuccessfulRequests: true,
+  // ...and ONLY a rejected credential counts. `skipSuccessfulRequests` alone
+  // treats every reply >= 400 as a failure, which would let an operator's
+  // legitimate work exhaust the budget: a 409 "settle_at has not elapsed" or a
+  // 500 "provider not confirmed" are refusals of the PAYOUT, not wrong passwords,
+  // and an operator retrying a failed payout must not be locked out of the
+  // password check. A brute-forcer, by contrast, always gets 401.
+  requestWasSuccessful: (_req: any, res: any) => res.statusCode !== 401,
+  keyGenerator: (req: any) =>
+    `settlement-payout:${String(
+      req.user?.username ?? req.user?.userId ?? req.ip ?? 'unknown',
+    ).toLowerCase()}`,
+  message: { error: 'Too many failed settlement payout confirmations. Please wait 15 minutes and try again.' }
+});
+
+/**
+ * BATCH 1 (D) — THE ONE SERVER-SIDE RE-AUTHENTICATION CHECK FOR A PAYOUT.
+ *
+ * "The person behind the session, not merely whoever holds its token." Every
+ * route that can submit a real payout calls exactly this, against the
+ * AUTHENTICATED administrator's own stored bcrypt hash — never a hash supplied
+ * by the request, never a session flag.
+ *
+ * Returns `null` when the password is correct, otherwise the exact refusal the
+ * route should send. All failures are RETURNED rather than thrown, so the three
+ * payout routes cannot answer differently:
+ *   400 `password_required`  — no password in the body
+ *   400 `password_too_long`  — over SETTLEMENT_PAYOUT_MAX_PASSWORD_LENGTH
+ *   404 `admin_not_found`    — the token names an account that no longer exists
+ *   401 `password_incorrect` — bcrypt mismatch
+ *
+ * The supplied value is used for the comparison and nowhere else: it is never
+ * logged, echoed, buffered into an audit row or persisted. The length ceiling
+ * exists because bcrypt silently ignores everything past 72 BYTES, so an
+ * unbounded field would let a caller submit a megabyte of input and would make
+ * "long password" behaviour unreportable.
+ */
+type AdminPayoutReauthenticationFailure = {
+  status: number;
+  body: { error: string; code: string };
+};
+
+async function checkAdminPayoutReauthentication(
+  req: any,
+  password: unknown,
+): Promise<AdminPayoutReauthenticationFailure | null> {
+  if (typeof password !== 'string' || password.length === 0) {
+    return {
+      status: 400,
+      body: { error: 'Your password is required to confirm this payout.', code: 'password_required' },
+    };
+  }
+  if (password.length > SETTLEMENT_PAYOUT_MAX_PASSWORD_LENGTH) {
+    return {
+      status: 400,
+      body: {
+        error: `Your password must be at most ${SETTLEMENT_PAYOUT_MAX_PASSWORD_LENGTH} characters.`,
+        code: 'password_too_long',
+      },
+    };
+  }
+  const admin = await db.getAdminByUsername(req.user?.username || '');
+  if (!admin) {
+    return { status: 404, body: { error: 'Administrator not found.', code: 'admin_not_found' } };
+  }
+  const passwordMatches = await bcrypt.compare(password, admin.password_hash);
+  if (!passwordMatches) {
+    return { status: 401, body: { error: 'Incorrect password.', code: 'password_incorrect' } };
+  }
+  return null;
+}
 
 const otpIpLimiter = rateLimit({
   windowMs: 5 * 60 * 1000, // 5 minutes
@@ -4841,11 +4962,23 @@ async function createApp() {
   // A caller that has not recorded an approval therefore gets a clear,
   // non-success response pointing at the supported workflow instead of a
   // payout.
-  app.post('/api/admin/claims/:id/release-settlement', authenticateJWT, requireCurrentAdminSession, requireAdminPermission(ADMIN_PERMISSIONS.CLAIMS_SETTLEMENT_INITIATE), async (req, res) => {
+  app.post('/api/admin/claims/:id/release-settlement', authenticateJWT, requireCurrentAdminSession, requireAdminPermission(ADMIN_PERMISSIONS.CLAIMS_SETTLEMENT_INITIATE), adminSettlementPayoutLimiter, async (req, res) => {
     const claimId = req.params.id;
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'Administrator access required.' });
+      }
+      // BATCH 1 (D) — THIS ROUTE CAN MOVE REAL MONEY, SO IT RE-AUTHENTICATES TOO.
+      //
+      // It has no UI call site any more, but it is still reachable over HTTP and
+      // still delegates to the same release CAS + executor. Leaving it
+      // passwordless would leave a stolen admin session a working payout button
+      // that makes the re-authentication on the other two routes decorative. This
+      // is a deliberate breaking change for a compatibility endpoint: the
+      // password is now required, and the docs record the transition.
+      const reauthenticated = await checkAdminPayoutReauthentication(req, (req.body ?? {}).password);
+      if (reauthenticated) {
+        return res.status(reauthenticated.status).json(reauthenticated.body);
       }
       const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
       const won = await db.attemptSettlementRelease(claimId);
@@ -4858,12 +4991,17 @@ async function createApp() {
           },
         });
       }
-      await db.logAudit(adminIdentifier, 'ADMIN_RELEASE_SETTLEMENT', `Admin ${adminIdentifier} released settlement for claim ${claimId} through the legacy release route (durable approval on file; settle_at deadline enforced - nothing is force-released).`);
-      const result = await executeClaimSettlement(claimId);
+      await db.logAudit(adminIdentifier, 'ADMIN_RELEASE_SETTLEMENT', `Admin ${adminIdentifier} won the settlement release lock for claim ${claimId} through the legacy release route (durable approval on file; settle_at deadline enforced - nothing is force-released). No provider request has been made at this point.`);
+      const result = await executeClaimSettlement(claimId, adminIdentifier);
       if (!result.success) {
-        return res.status(500).json({ error: result.message });
+        return res.status(500).json({
+          error: result.message,
+          code: 'payout_not_confirmed',
+          recoverable: true,
+          next: { initiate: `/api/admin/claims/${claimId}/settlement/initiate` },
+        });
       }
-      res.json({ success: true, message: result.message });
+      res.json({ success: true, message: result.message, payout: 'submitted' });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
@@ -4963,7 +5101,7 @@ async function createApp() {
   // provider. On success the claim moves to 'released' and the ledger rows are
   // completed; on failure the lock is reverted and the claim returns to
   // 'pending_settlement'.
-  app.post('/api/admin/claims/:id/settlement/initiate', authenticateJWT, requireCurrentAdminSession, requireAdminPermission(ADMIN_PERMISSIONS.CLAIMS_SETTLEMENT_INITIATE), async (req, res) => {
+  app.post('/api/admin/claims/:id/settlement/initiate', authenticateJWT, requireCurrentAdminSession, requireAdminPermission(ADMIN_PERMISSIONS.CLAIMS_SETTLEMENT_INITIATE), adminSettlementPayoutLimiter, async (req, res) => {
       const claimId = req.params.id;
       try {
         if (req.user?.role !== 'admin') {
@@ -4971,6 +5109,19 @@ async function createApp() {
         }
         if (!claimId) {
           return res.status(400).json({ error: 'Claim ID is required.' });
+        }
+        // BATCH 1 (D) — RE-AUTHENTICATION IS PART OF INITIATION, NOT ONLY OF THE
+        // COMBINED ACTION.
+        //
+        // This route is the documented recovery path after a partial failure and
+        // the supported single-purpose payout action, so leaving it passwordless
+        // made the combined route's re-check decorative: a stolen session could
+        // simply call THIS one. The caller's own bcrypt hash is verified BEFORE
+        // the release lock is even attempted, so a wrong password takes no lock,
+        // writes nothing and reaches no provider.
+        const reauthenticated = await checkAdminPayoutReauthentication(req, (req.body ?? {}).password);
+        if (reauthenticated) {
+          return res.status(reauthenticated.status).json(reauthenticated.body);
         }
         const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
         // D-2B-B-E — the CAS is the entire decision (status + durable approval +
@@ -5002,16 +5153,291 @@ async function createApp() {
             reasons,
           });
         }
+        // BATCH 1 (E) — "AUTHORIZED", NOT "INITIATED".
+        //
+        // Winning the release CAS means this operator's payout is authorized; the
+        // provider has NOT been called yet. The old wording ("initiated payout")
+        // claimed an attempt that had not happened, which made the audit trail
+        // unable to answer the only question that matters after an incident: was a
+        // request actually sent? `CLAIM_SETTLEMENT_PAYOUT_ATTEMPTED` is now written
+        // by the executor immediately before the provider call, and
+        // CONFIRMED/UNRESOLVED after it. The action name is unchanged so existing
+        // queries keep working; only its claim is now accurate.
         await db.logAudit(
           adminIdentifier,
           'CLAIM_SETTLEMENT_INITIATED',
-          `Admin ${adminIdentifier} initiated payout for claim ${claimId}.`
+          `Admin ${adminIdentifier} won the settlement release lock for claim ${claimId}: payout submission is authorized. No provider request has been made at this point - the attempt and its outcome are recorded separately.`
         );
-        const result = await executeClaimSettlement(claimId);
+        const result = await executeClaimSettlement(claimId, adminIdentifier);
         if (!result.success) {
-          return res.status(500).json({ error: result.message });
+          // 500 is this repository's established status for "the payout was not
+          // confirmed" on every settlement route; the body now says which claim
+          // state the operator is left with and how to recover, in the same shape
+          // the combined route uses.
+          return res.status(500).json({
+            error: result.message,
+            code: 'payout_not_confirmed',
+            recoverable: true,
+            next: { initiate: `/api/admin/claims/${claimId}/settlement/initiate` },
+          });
         }
-        res.json({ success: true, message: result.message });
+        // SUBMITTED, never "paid": only completed ledger rows prove a payout.
+        res.json({ success: true, message: result.message, payout: 'submitted' });
+      } catch (e: any) {
+        sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
+      }
+    }
+  );
+
+  // -------------------------------------------------------------------------
+  // D-2B-B BATCH 4 — APPROVE & PAY: ONE EXPLICIT, PASSWORD-CONFIRMED ACTION.
+  //
+  // WHY THIS EXISTS
+  //   An operator looking at a due, unapproved settlement otherwise has to make
+  //   two round trips (approve, then initiate) and re-enter the same context
+  //   twice — which is exactly where "approve now, pay later" mistakes happen.
+  //   This route records the approval and initiates the payout in ONE request,
+  //   so the decision to pay and the act of paying cannot drift apart.
+  //
+  // WHAT IT DELIBERATELY DOES NOT RELAX
+  //   * BOTH permissions are required (claims.settlement_approve AND
+  //     claims.settlement_initiate), on top of authenticateJWT +
+  //     requireCurrentAdminSession + role === 'admin'. No new permission is
+  //     invented: this action can only ever do what the two separate actions
+  //     could do together.
+  //   * The caller's OWN password is re-verified against the stored bcrypt hash.
+  //     The password is never logged, never echoed and never persisted; the
+  //     request-redaction middleware already scrubs `password` from logs. A wrong
+  //     password writes NOTHING — the approval is reached only after the check.
+  //   * The approval is the SAME CAS-guarded write db.approveSettlement()
+  //     performs for the dedicated route, with its reason and its
+  //     CLAIM_SETTLEMENT_APPROVED audit row in the same transaction. A claim that
+  //     is not pending_settlement, has no review window, or is still inside it is
+  //     refused here exactly as it is there — this route cannot approve anything
+  //     the approval route could not.
+  //   * The money still moves only through db.attemptSettlementRelease() +
+  //     executeClaimSettlement(), with the same release CAS, the same
+  //     settle_at/wallet guards and the same payout-pause / item-hold /
+  //     reconciliation behaviour. The provider is reached by the executor, never
+  //     by this route directly.
+  //
+  // PARTIAL FAILURE IS A RECOVERABLE STATE, NEVER A SILENT SUCCESS
+  //   If the approval is recorded but the release cannot be won, or the payout is
+  //   not confirmed, the response says which of the two happened (approval
+  //   'recorded' vs 'already_on_file'), returns the refusal reasons verbatim and
+  //   points at the retained initiate route. It never reports a submitted payout
+  //   as a completed one.
+  // -------------------------------------------------------------------------
+  app.post('/api/admin/claims/:id/settlement/approve-and-pay',
+    authenticateJWT,
+    requireCurrentAdminSession,
+    requireAdminPermission(ADMIN_PERMISSIONS.CLAIMS_SETTLEMENT_APPROVE),
+    requireAdminPermission(ADMIN_PERMISSIONS.CLAIMS_SETTLEMENT_INITIATE),
+    adminSettlementPayoutLimiter,
+    async (req, res) => {
+      const claimId = req.params.id;
+      try {
+        if (req.user?.role !== 'admin') {
+          return res.status(403).json({ error: 'Administrator access required.' });
+        }
+        if (!claimId) {
+          return res.status(400).json({ error: 'Claim ID is required.' });
+        }
+        const { reason, password } = req.body ?? {};
+        if (typeof reason !== 'string' || !reason.trim()) {
+          return res.status(400).json({
+            error: 'A reason is required to record the approval.',
+            code: 'reason_required',
+          });
+        }
+        // RE-AUTHENTICATION. This is the person behind the session, not merely
+        // whoever holds its token. BATCH 1 (D) moved the check into the ONE shared
+        // helper the initiate and legacy release routes now use too, so the three
+        // payout routes cannot drift apart: same ordering (before ANY write), same
+        // length ceiling, same status codes and the same `code` vocabulary. The
+        // supplied value is used for the comparison and nowhere else, so it cannot
+        // reach a log line, a response body or a stored row.
+        const reauthenticated = await checkAdminPayoutReauthentication(req, password);
+        if (reauthenticated) {
+          return res.status(reauthenticated.status).json(reauthenticated.body);
+        }
+        const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
+        const trimmedReason = reason.trim();
+        // STEP 1 — the durable approval, through the same CAS-guarded method the
+        // dedicated route calls (approval + CLAIM_SETTLEMENT_APPROVED audit row in
+        // one transaction). 'already_approved' is NOT a failure of this action:
+        // the approval on file is preserved untouched — this route must never
+        // rewrite who approved a claim, or when — and the payout proceeds, with
+        // this action's own reason recorded on the approval-and-pay audit row.
+        // Every other code is a refusal, and in every one of them nothing was
+        // written.
+        const approval = await db.approveSettlement(claimId, adminIdentifier, trimmedReason);
+        const approvalRecorded = approval.ok;
+        if (!approval.ok && approval.code !== 'already_approved') {
+          if (approval.code === 'claim_not_found') {
+            return res.status(404).json({ error: 'Claim not found.', code: approval.code });
+          }
+          if (approval.code === 'reason_required') {
+            return res.status(400).json({
+              error: 'A reason is required to record the approval.',
+              code: approval.code,
+            });
+          }
+          if (approval.code === 'not_pending_settlement') {
+            return res.status(409).json({
+              error: `Claim is not eligible for settlement review: currently in status '${approval.claim?.status ?? 'unknown'}'.`,
+              code: approval.code,
+            });
+          }
+          if (approval.code === 'outside_review_window') {
+            return res.status(409).json({
+              error: 'Claim is not eligible for settlement review: its settle_at review window has not elapsed yet.',
+              code: approval.code,
+            });
+          }
+          if (approval.code === 'no_review_window') {
+            return res.status(409).json({
+              error: 'Claim is not eligible for settlement review: its settle_at review window was never set, so there is nothing to review.',
+              code: approval.code,
+            });
+          }
+          return res.status(500).json({
+            error: 'Failed to record the settlement approval.',
+            code: approval.code,
+          });
+        }
+        const approvalState = approvalRecorded ? 'recorded' : 'already_on_file';
+        const approvedBy = approval.claim?.settlement_approved_by ?? adminIdentifier;
+        const approvedAt = approval.claim?.settlement_approved_at ?? null;
+        // BATCH 1 (E) — WHAT THIS APPROVAL AUTHORIZED, CAPTURED BEFORE THE ATTEMPT.
+        //
+        // `claims` has no destination-snapshot column, so a durable
+        // approval-time snapshot needs a schema migration (reported separately -
+        // deliberately NOT half-migrated here). What CAN be done without one is to
+        // capture the destinations at the moment this action recorded the
+        // approval and re-read them immediately before the attempt, inside this
+        // same request: an operator-induced or concurrent change to the finder's
+        // phone or the agent's payout target during the action is then detected
+        // rather than silently paid. Amounts are not compared because they live on
+        // the ledger rows booked at handover and are immutable thereafter.
+        const approvedClaim = approval.claim ?? (await db.getClaim(claimId));
+        const approvedItem = approvedClaim ? await db.getItem(approvedClaim.item_id) : null;
+        const approvedAgent =
+          approvedItem?.assigned_agent_id ? await db.getAgent(approvedItem.assigned_agent_id) : null;
+        const authorizedDestinations = settlementDestinationFacts({
+          finderPhone: approvedItem?.finder_phone ?? null,
+          agentDestination: approvedAgent?.mpesa_till_or_paybill ?? null,
+          agentPayoutMethodType: approvedAgent?.payout_method_type ?? null,
+        });
+        // STEP 2 — the same release CAS the initiate route uses. Eligibility is
+        // decided by the DATABASE (status + durable approval + elapsed settle_at);
+        // the reasons below are derived from the durable state, never hard-coded.
+        const won = await db.attemptSettlementRelease(claimId);
+        if (!won) {
+          const claim = await db.getClaim(claimId);
+          const reasons: string[] = [];
+          if (!claim) {
+            reasons.push('claim_not_found');
+          } else if (claim.status === 'releasing') {
+            reasons.push('settlement_already_in_flight');
+          } else if (claim.status !== 'pending_settlement') {
+            reasons.push(`not_in_pending_settlement:${claim.status}`);
+          } else {
+            if (claim.settlement_approved_at == null) reasons.push('no_durable_approval');
+            if (!claim.settle_at || new Date(claim.settle_at).getTime() > Date.now()) {
+              reasons.push('settle_at_not_elapsed');
+            }
+            if (reasons.length === 0) reasons.push('release_lock_lost');
+          }
+          return res.status(409).json({
+            error: approvalRecorded
+              ? 'The approval was recorded, but this claim is not eligible for payout initiation yet.'
+              : 'This claim is not eligible for payout initiation.',
+            code: 'payout_not_eligible',
+            reasons,
+            approval: approvalState,
+            approved_by: approvedBy,
+            approved_at: approvedAt,
+            recoverable: true,
+            next: { initiate: `/api/admin/claims/${claimId}/settlement/initiate` },
+          });
+        }
+        // The approval and the initiation are one operator decision, so they get
+        // ONE audit row naming both, in addition to the approval's own
+        // CLAIM_SETTLEMENT_APPROVED row written inside the transaction above.
+        //
+        // BATCH 1 (E) — THIS ROW NO LONGER CLAIMS A SUBMISSION. It used to say the
+        // admin "approved and initiated payout" while nothing had been sent yet.
+        // It now records the DECISION (approval recorded + submission authorized);
+        // the attempt and its outcome are written by the executor, immediately
+        // before and after the provider call.
+        await db.logAudit(
+          adminIdentifier,
+          'CLAIM_SETTLEMENT_APPROVE_AND_PAY',
+          `Admin ${adminIdentifier} recorded the settlement approval (${approvalState}) and authorized the payout submission for claim ${claimId} in one password-confirmed action. No provider request has been made at this point. Reason: ${trimmedReason}`
+        );
+        // BATCH 1 (E) — DESTINATION DRIFT, DETECTED BEFORE THE ATTEMPT.
+        const executionClaim = await db.getClaim(claimId);
+        const executionItem = executionClaim ? await db.getItem(executionClaim.item_id) : null;
+        const executionAgent =
+          executionItem?.assigned_agent_id ? await db.getAgent(executionItem.assigned_agent_id) : null;
+        const executionDestinations = settlementDestinationFacts({
+          finderPhone: executionItem?.finder_phone ?? null,
+          agentDestination: executionAgent?.mpesa_till_or_paybill ?? null,
+          agentPayoutMethodType: executionAgent?.payout_method_type ?? null,
+        });
+        const destinationDrift = describeSettlementDestinationDrift(
+          authorizedDestinations,
+          executionDestinations,
+        );
+        if (destinationDrift.length > 0) {
+          // Never the values themselves: which LEG moved and which FIELD moved is
+          // enough for an operator to act on, and keeps a phone number out of the
+          // audit log. This notice does NOT authorize anything: the executor
+          // compares the destination it is about to submit with the one BOOKED in
+          // the ledger row (BATCH 1.1) and refuses the whole payout on a
+          // difference, so a change that also moved the booked destination stops
+          // the payout instead of riding along with it. A change that is only a
+          // different spelling of the booked number is paid, and the operator
+          // still sees that something changed.
+          await db.logAudit(
+            adminIdentifier,
+            'CLAIM_SETTLEMENT_DESTINATION_CHANGED',
+            `Claim ${claimId}: a payout destination changed between the approval this action recorded and the payout attempt. Changed: ${destinationDrift.join('; ')}. The attempt proceeds against the CURRENTLY stored destinations (re-read and enforced by the executor). Verify the recipients before the next settlement. Destination values are deliberately not recorded.`
+          );
+        }
+        const result = await executeClaimSettlement(claimId, adminIdentifier);
+        if (!result.success) {
+          // The executor has already restored the claim's durable state (a payout
+          // that was not confirmed is never re-queued); report that truthfully as
+          // a recoverable, operator-visible state instead of a success.
+          return res.status(500).json({
+            error: result.message,
+            code: 'payout_not_confirmed',
+            approval: approvalState,
+            approved_by: approvedBy,
+            approved_at: approvedAt,
+            recoverable: true,
+            next: { initiate: `/api/admin/claims/${claimId}/settlement/initiate` },
+          });
+        }
+        res.json({
+          success: true,
+          message: result.message,
+          approval: approvalState,
+          approved_by: approvedBy,
+          approved_at: approvedAt,
+          // BATCH 1 (E) — true only when the destinations this action approved
+          // differ from the ones the attempt actually read. Reaching this body
+          // means the attempt was not refused, so the destinations it submitted
+          // still matched the BOOKED ledger rows (BATCH 1.1); this flag and the
+          // CLAIM_SETTLEMENT_DESTINATION_CHANGED audit row make the change
+          // visible to the operator.
+          destination_changed: destinationDrift.length > 0,
+          // SUBMITTED, never "paid": the provider's per-recipient outcome is what
+          // reconciliation reports, and only completed ledger rows prove a payout.
+          payout: 'submitted',
+        });
       } catch (e: any) {
         sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
       }
@@ -6057,7 +6483,7 @@ async function expireStaleClaims() {
  * It re-checks the claim's approval and lock state, and the item's hold state,
  * from the database immediately before the provider call.
  */
-async function executeClaimSettlement(claimId: string): Promise<{ success: boolean; message: string }> {
+async function executeClaimSettlement(claimId: string, initiatedBy: string = 'SYSTEM'): Promise<{ success: boolean; message: string }> {
   if (await isPlatformOperationPaused(pauseSettingKey('payouts'))) {
     // The claim has already won the attemptSettlementRelease() lock
     // (status='releasing') by the time this function is called - reverting
@@ -6218,6 +6644,88 @@ async function executeClaimSettlement(claimId: string): Promise<{ success: boole
     if (preSubmitItem.status === 'suspected_stolen' || preSubmitItem.status === 'legal_hold') {
       return await abandonRelease(`the item is under '${preSubmitItem.status}' review.`);
     }
+
+    // BATCH 1.1 — PAY WHAT THE LEDGER BOOKED, TO THE DESTINATION IT BOOKED.
+    //
+    // WHAT THIS FIXES. The amounts in `claimed` are NOT read from the ledger:
+    // they are recomputed above from `item.locked_finder_share` /
+    // `item.locked_agent_share`, falling back to the CURRENT `category.*_share`
+    // when an item's locked shares are NULL (items reported before locking
+    // existed). The ledger rows keep the amounts booked at handover. If the
+    // category was edited after a legacy item was booked, the transfer would
+    // send a different amount from the one recorded, and
+    // `finalizeSettlement()` would still mark the booked row 'completed' —
+    // money out that the ledger does not describe.
+    //
+    // The destinations have the same shape of gap, but the opposite way round:
+    // `ledger.phone_or_till` is a booking-time SNAPSHOT (written once by
+    // enterPendingSettlement and never rewritten, not even by
+    // recordPayoutAttempt), while `claimed` carries the CURRENTLY stored
+    // `items.finder_phone` / `agents.mpesa_till_or_paybill`. An agent who
+    // activates a new payout destination after booking — a supported flow —
+    // would otherwise be paid at the new number with a ledger row that records
+    // the old one.
+    //
+    // THE RULE. Every OUTSTANDING required leg (the same set the destination
+    // policy and finalizeSettlement() use, not only the submittable ones) must
+    // match its own booked row on BOTH amount (at the ledger's currency
+    // precision, NUMERIC(10,2)) and destination (in canonical phone form).
+    // Comparison is delegated to config/settlementPayoutIntegrity.ts.
+    //
+    // ALL-OR-NOTHING. One mismatch refuses the WHOLE claim payout: no leg is
+    // sent, not even the matching one. Half a claim cannot be corrected after
+    // the money leaves, and `submittable` is deliberately not narrowed to the
+    // matching legs.
+    //
+    // FAIL-CLOSED, BEFORE ANY DURABLE MARKER. The refusal happens here — before
+    // `markPayoutSubmissionStarted()` and before the request body exists — and
+    // goes back through abandonRelease(), so the claim returns to
+    // pending_settlement with every payout row still 'pending' /
+    // 'not_submitted'. It is NEVER a silent correction: no ledger amount is
+    // rewritten and nothing is marked completed. A later initiation re-runs the
+    // same check, so a corrected item/category can still be paid.
+    //
+    // The refusal text carries ledger row ids, amounts and MASKED destinations
+    // only (the module masks with the platform's own helper), so it is safe for
+    // the audit log and the operator response.
+    const ledgerIntegrity = resolveSettlementPayoutIntegrity(
+      outstandingLegs.map((candidate) => ({
+        recipientType: candidate.payload.recipientType,
+        ledgerEntryId: candidate.row.id,
+        bookedAmount: candidate.row.amount,
+        bookedDestination: candidate.row.phone_or_till,
+        plannedAmount: candidate.payload.amount,
+        plannedDestination: candidate.payload.destination,
+      })),
+    );
+    if (!ledgerIntegrity.ok) {
+      if (ledgerIntegrity.amountMismatches.length > 0) {
+        await db.logAudit(
+          'SYSTEM',
+          'PAYOUT_AMOUNT_MISMATCH',
+          `Claim ${claimId}: payout NOT submitted - ${ledgerIntegrity.amountMismatches.join('; ')}. ` +
+          `Refused BEFORE any payout row was marked as submitted and before any provider request: nothing was sent, nothing was paid and no ledger amount was rewritten. ` +
+          `The amount a transfer carries must be the amount booked for that row; correct the item's locked shares (or the category, for an item booked before shares were locked) so the booked and payable amounts agree, then initiate the settlement again.`
+        );
+      }
+      if (ledgerIntegrity.destinationMismatches.length > 0) {
+        await db.logAudit(
+          'SYSTEM',
+          'PAYOUT_DESTINATION_MISMATCH',
+          `Claim ${claimId}: payout NOT submitted - ${ledgerIntegrity.destinationMismatches.join('; ')}. ` +
+          `The ledger row's phone_or_till is the destination this payout was booked for; the currently stored recipient destination is different. ` +
+          `Refused BEFORE any payout row was marked as submitted and before any provider request: nothing was sent and nothing was paid. ` +
+          `Destinations are masked in this record. An administrator must review the recipient's payout destination before this claim is paid.`
+        );
+      }
+      return await abandonRelease(
+        `the payout about to be submitted does not match what the ledger booked (${[
+          ...ledgerIntegrity.amountMismatches,
+          ...ledgerIntegrity.destinationMismatches,
+        ].join('; ')}). No leg of this claim was sent.`
+      );
+    }
+
     // BATCH 1 CORRECTION A — A WOULD-BE SIMULATED PAYOUT IS REFUSED BEFORE ANY
     // DURABLE SUBMISSION MARKER.
     //
@@ -6359,6 +6867,32 @@ async function executeClaimSettlement(claimId: string): Promise<{ success: boole
     }
 
     if (claimed.length > 0) {
+      // BATCH 1 (E) — THE ATTEMPT IS RECORDED IMMEDIATELY BEFORE THE REQUEST.
+      //
+      // Placed here, after every pre-submission gate and after the per-row
+      // submission markers were won, and immediately before
+      // triggerIntasendPayout(): the row therefore means "a provider request is
+      // being made now", not "someone clicked a button". Destinations are MASKED by
+      // the pure formatter, so the audit trail names each recipient strongly enough
+      // to reconcile against a provider statement without storing a full phone
+      // number or payout target. The ledger row id is included because the ROW, not
+      // the claim, is the unit of submission idempotency.
+      const attemptedPlan = buildSettlementPayoutPlan({
+        claimId,
+        paymentReference: claim.payment_reference ?? null,
+        legs: claimed.map((c): SettlementPayoutLeg => ({
+          ledgerEntryId: c.row.id,
+          recipientType: c.payload.recipientType,
+          destination: c.payload.destination,
+          payoutMethodType: c.payload.payoutMethodType || 'unspecified',
+          amount: c.payload.amount,
+        })),
+      });
+      await db.logAudit(
+        initiatedBy,
+        'CLAIM_SETTLEMENT_PAYOUT_ATTEMPTED',
+        `Settlement payout submission starting for claim ${claimId} (authorized by ${initiatedBy}). ${formatSettlementPayoutPlanForAudit(attemptedPlan)}. Destinations are masked; the full values exist only in memory and at the provider.`
+      );
       const payoutResult = await PaymentService.triggerIntasendPayout(claimId, claimed.map(c => c.payload));
 
       for (const result of payoutResult.results) {
@@ -6412,6 +6946,14 @@ async function executeClaimSettlement(claimId: string): Promise<{ success: boole
     // legacy row whose outcome column is NULL.
     const outcomeLabel = unresolvedPayout.payout_outcome ?? 'no submission history recorded';
     await db.logAudit('SYSTEM', 'PAYOUT_RECONCILIATION_REQUIRED', `Claim ${claimId}: ${unresolvedPayout.type} payout row ${unresolvedPayout.id} is unresolved (outcome: ${outcomeLabel}). Claim returned to pending_settlement. No automatic resubmission - verify with IntaSend before reissuing.`);
+    // BATCH 1 (E) — the operator-facing outcome of this attempt, distinct from the
+    // internal reconciliation flag above. Attributed to the administrator who
+    // authorized the attempt.
+    await db.logAudit(
+      initiatedBy,
+      'CLAIM_SETTLEMENT_PAYOUT_UNRESOLVED',
+      `Claim ${claimId}: payout outcome UNRESOLVED (${unresolvedPayout.type} row ${unresolvedPayout.id}, outcome: ${outcomeLabel}). The claim was returned to pending_settlement and nothing is resubmitted automatically; verify with IntaSend before reissuing.`
+    );
     return {
       success: false,
       message: `Settlement not completed - ${unresolvedPayout.type} is unresolved (${outcomeLabel}). The claim was returned to pending_settlement and this payout will NOT be resubmitted automatically; it needs provider reconciliation.`,
@@ -6426,6 +6968,14 @@ async function executeClaimSettlement(claimId: string): Promise<{ success: boole
     // flags it for manual admin reconciliation rather than risking a
     // duplicate payout via an automatic retry.
     await db.logAudit('SYSTEM', 'SETTLEMENT_FINALIZE_DB_FAILURE_AFTER_PAYOUT', `Claim ${claimId}: all payouts confirmed but finalizeSettlement failed: ${finalized.message}. Left in 'releasing' â€” requires manual admin review.`);
+    // BATCH 1 (E) — its own outcome, because "the provider paid but the claim was
+    // not recorded" is neither a confirmation nor an unresolved provider result.
+    await db.logAudit(
+      initiatedBy,
+      'CLAIM_SETTLEMENT_PAYOUT_RECORDING_FAILED',
+      `Claim ${claimId}: every required payout leg is recorded completed, but the settlement could not be finalized (${finalized.message}). The claim is left in 'releasing' for manual review; nothing is retried automatically.`
+    );
+
     return { success: false, message: 'Payouts confirmed but recording the final settlement failed. Flagged for manual admin review.' };
   }
   // BATCH 3 / P7 - customer notification for the completed claim.
@@ -6437,6 +6987,14 @@ async function executeClaimSettlement(claimId: string): Promise<{ success: boole
   // early and never notifies twice. This is the single choke point every payout
   // path reaches the claim through: the supported initiate route and the legacy
   // release route (the periodic sweep no longer executes settlement at all).
+  // BATCH 1 (E) — CONFIRMED, and confirmed by a RE-READ of the ledger rather than
+  // by the fact that a request was sent: finalizeSettlement() only succeeds when
+  // every required leg is 'completed'. Attributed to the authorizing operator.
+  await db.logAudit(
+    initiatedBy,
+    'CLAIM_SETTLEMENT_PAYOUT_CONFIRMED',
+    `Claim ${claimId}: settlement completed - every required payout leg is recorded completed and the claim moved from 'releasing' to 'released'. Confirmed from the ledger rows, not from the submission request.`
+  );
   await produceClaimComplete(claimId);
   return finalized;
 

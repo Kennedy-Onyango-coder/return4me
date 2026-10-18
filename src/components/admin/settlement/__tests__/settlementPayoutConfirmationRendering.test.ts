@@ -22,7 +22,14 @@ import SettlementPayoutConfirmation from '../SettlementPayoutConfirmation';
 // components/admin/__tests__/consoleActionState.test.ts.
 // =============================================================================
 
-const handlers = { onCancel: () => {}, onConfirm: () => {} };
+const handlers = {
+  onCancel: () => {},
+  onConfirm: () => {},
+  // BATCH 1 (D) — the step now collects the operator's own password, so every
+  // rendering assertion supplies it explicitly rather than relying on a default.
+  password: '',
+  onPasswordChange: () => {},
+};
 
 const render = (props: Partial<React.ComponentProps<typeof SettlementPayoutConfirmation>> = {}) =>
   renderToStaticMarkup(
@@ -63,6 +70,33 @@ describe('D-2B-B Batch 2: the confirmation states the financial consequence', ()
     // The provider's outcome is reported elsewhere, never assumed here.
     expect(html).toContain('provider');
     expect(html).not.toMatch(/has been paid|payment sent|payout complete/i);
+  });
+});
+
+describe('BATCH 1 (D): the confirmation re-authenticates the operator', () => {
+  it('renders a real password field that is never pre-filled or auto-submitted', () => {
+    const html = render();
+    expect(html).toContain('type="password"');
+    expect(html).toContain('Your password');
+    expect(html).toContain('autoComplete="current-password"');
+    // No value is ever supplied by the component itself.
+    expect(html).not.toMatch(/value="[^"]+"/);
+  });
+
+  it('states that the password is verified server-side and never stored', () => {
+    const html = render();
+    expect(html).toContain('verified on the server');
+    expect(html).toContain('never stored and never logged');
+  });
+
+  it('shows the field error it is given, in place', () => {
+    const html = render({ passwordError: 'Incorrect password.' });
+    expect(html).toContain('Incorrect password.');
+  });
+
+  it('disables both controls while the request is in flight', () => {
+    const html = render({ submitting: true });
+    expect((html.match(/disabled=""/g) ?? []).length).toBeGreaterThanOrEqual(3);
   });
 });
 

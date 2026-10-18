@@ -35,6 +35,7 @@ import path from 'path';
 const repoRoot = path.resolve(__dirname, '../..');
 const read = (rel: string) => fs.readFileSync(path.resolve(repoRoot, rel), 'utf8');
 const adminView = read('src/components/AdminView.tsx');
+const consoleActionState = read('src/components/admin/consoleActionState.ts');
 
 /** De-comment: these assertions are about shipped code, never about the prose
  *  that explains it. The D-2B-B comments quote the endpoints, the old copy and
@@ -65,18 +66,30 @@ const CLOSE_HANDLER = sliceBetween(HANDLERS, 'const closeSettlementApprovalPromp
 const PROMPT_HANDLER = sliceBetween(HANDLERS, 'const promptSettlementApproval', 'const handleApproveSettlement');
 const APPROVE_HANDLER = sliceBetween(HANDLERS, 'const handleApproveSettlement', 'const confirmSettlementApproval');
 const CONFIRM_HANDLER = sliceBetween(HANDLERS, 'const confirmSettlementApproval', 'const handleInitiateSettlementPayout');
-const INITIATE_HANDLER = tailFrom(HANDLERS, 'const handleInitiateSettlementPayout');
+const INITIATE_HANDLER = sliceBetween(HANDLERS, 'const handleInitiateSettlementPayout', 'const promptSettlementApproveAndPay');
 const LEDGER_JSX = sliceBetween(code, 'dashboardData.pendingSettlements.map(', 'Recent ledger transactions');
 const REFUSAL_HELPER = sliceBetween(code, 'function settlementRefusalMessage', 'export default function AdminView');
 // D-2B-B BATCH 2 — the three handlers that make the payout a CONFIRMED step,
 // isolated from the reason step and from the request itself.
-const PAYOUT_STEP_HANDLERS = tailFrom(HANDLERS, 'const promptSettlementPayoutConfirmation');
+const PAYOUT_STEP_HANDLERS = sliceBetween(HANDLERS, 'const promptSettlementPayoutConfirmation', 'const promptSettlementApproveAndPay');
 const PAYOUT_OPENER = sliceBetween(PAYOUT_STEP_HANDLERS, 'const promptSettlementPayoutConfirmation', 'const cancelSettlementPayoutConfirmation');
 const PAYOUT_CANCELLER = sliceBetween(PAYOUT_STEP_HANDLERS, 'const cancelSettlementPayoutConfirmation', 'const confirmSettlementPayout');
+// D-2B-B BATCH 4 — the combined action, isolated from the two single-purpose
+// actions so its request body can be asserted without weakening the "initiating
+// carries NO approval" pin above.
+const APPROVE_AND_PAY_HANDLERS = tailFrom(HANDLERS, 'const promptSettlementApproveAndPay');
+const APPROVE_AND_PAY_OPENER = sliceBetween(APPROVE_AND_PAY_HANDLERS, 'const promptSettlementApproveAndPay', 'const closeSettlementApproveAndPayPrompt');
+const APPROVE_AND_PAY_CANCELLER = sliceBetween(APPROVE_AND_PAY_HANDLERS, 'const closeSettlementApproveAndPayPrompt', 'const handleSettlementApproveAndPay');
+const APPROVE_AND_PAY_REQUEST = sliceBetween(APPROVE_AND_PAY_HANDLERS, 'const handleSettlementApproveAndPay', 'const confirmSettlementApproveAndPay');
+const APPROVE_AND_PAY_CONFIRM = tailFrom(APPROVE_AND_PAY_HANDLERS, 'const confirmSettlementApproveAndPay');
 
 describe('D-2B-B: approve and initiate are two separate admin actions', () => {
   it('slices shipped code, not an empty region', () => {
     [HANDLERS, CLOSE_HANDLER, PROMPT_HANDLER, APPROVE_HANDLER, CONFIRM_HANDLER, INITIATE_HANDLER, LEDGER_JSX, REFUSAL_HELPER]
+      .forEach((slice) => expect(slice.length).toBeGreaterThan(0));
+    // BATCH 4 — the combined action's slices are real regions too, so no
+    // Batch 4 pin below can pass against an empty string.
+    [APPROVE_AND_PAY_HANDLERS, APPROVE_AND_PAY_OPENER, APPROVE_AND_PAY_CANCELLER, APPROVE_AND_PAY_REQUEST, APPROVE_AND_PAY_CONFIRM]
       .forEach((slice) => expect(slice.length).toBeGreaterThan(0));
   });
 
@@ -94,12 +107,26 @@ describe('D-2B-B: approve and initiate are two separate admin actions', () => {
     expect(APPROVE_HANDLER).toContain('body: JSON.stringify({ reason })');
   });
 
-  it('initiates the payout through settlement/initiate with NO body', () => {
+  it('initiates the payout through settlement/initiate with the operator password, never an approval', () => {
     expect(INITIATE_HANDLER).toContain('fetch(`/api/admin/claims/${claimId}/settlement/initiate`');
     expect(INITIATE_HANDLER).toContain("method: 'POST'");
-    // The approval can never be supplied by the browser: no body at all.
-    expect(INITIATE_HANDLER).not.toContain('body:');
-    expect(INITIATE_HANDLER).not.toContain('JSON.stringify');
+    // BATCH 1 (D) — the body carries the caller's own password and NOTHING else.
+    // The approval is still the claim's persisted state and is never a value the
+    // browser can supply; there is no `approval`, `force` or `reason` field here.
+    expect(INITIATE_HANDLER).toContain('body: JSON.stringify({ password })');
+    expect(INITIATE_HANDLER).not.toContain('approval:');
+    expect(INITIATE_HANDLER).not.toContain('force');
+    expect(INITIATE_HANDLER).not.toContain('reason');
+  });
+
+  it('never leaves the initiate password in state after any outcome', () => {
+    // Cleared on success/failure (before the response is even interpreted) and
+    // again on the exception path, so a retry must re-type it.
+    const occurrences = INITIATE_HANDLER.split("setSettlementPayoutPassword('')").length - 1;
+    expect(occurrences).toBeGreaterThanOrEqual(2);
+    // The credential is never echoed into a banner or an audit field.
+    expect(INITIATE_HANDLER).not.toContain('setActionSuccess(password');
+    expect(INITIATE_HANDLER).not.toContain('setDataError(password');
   });
 
   it('cannot chain: neither action can stand in for the other', () => {
@@ -162,7 +189,7 @@ describe('D-2B-B: both preconditions fail closed in the console', () => {
   });
 
   it('gates the money on both, and blocks a second in-flight action', () => {
-    expect(LEDGER_JSX).toContain('disabled={!hasApproval || !isDue || isApproving || isReleasing}');
+    expect(LEDGER_JSX).toContain('disabled={!hasApproval || !isDue || isApproving || isReleasing || approveAndPayStepOpen}');
     expect(LEDGER_JSX).toContain('loading={isInitiating}');
     expect(LEDGER_JSX).toContain('loading={isApproving}');
   });
@@ -227,23 +254,44 @@ describe('D-2B-B Batch 2: the payout is CONFIRMED before it is sent', () => {
     expect(LEDGER_JSX).not.toContain('<Modal');
   });
 
+  it('collects the re-authentication password in the step and refuses an empty one before sending', () => {
+    expect(LEDGER_JSX).toContain('password={settlementPayoutPassword}');
+    expect(LEDGER_JSX).toContain('passwordError={settlementPayoutPasswordError}');
+    const guard = PAYOUT_STEP_HANDLERS.indexOf('if (!password) {');
+    const dispatch = PAYOUT_STEP_HANDLERS.indexOf("applyConsoleAction({ type: 'confirm-payout', claimId })");
+    expect(guard).toBeGreaterThan(-1);
+    expect(dispatch).toBeGreaterThan(guard);
+    expect(PAYOUT_STEP_HANDLERS).toContain(
+      "setSettlementPayoutPasswordError('Your password is required to confirm this payout.')",
+    );
+    // A refused duplicate (the reducer returns nothing) clears the credential
+    // instead of leaving it in state for the next click to replay.
+    const refusal = PAYOUT_STEP_HANDLERS.indexOf('if (!requested) {');
+    expect(refusal).toBeGreaterThan(dispatch);
+    expect(PAYOUT_STEP_HANDLERS.slice(refusal)).toContain("setSettlementPayoutPassword('')");
+  });
+
   it('decides nothing itself and reaches the handler only through the reducer', () => {
     expect(PAYOUT_STEP_HANDLERS).not.toContain('fetch(');
     expect(PAYOUT_STEP_HANDLERS).toContain("applyConsoleAction({ type: 'open-payout-confirmation', claimId })");
     expect(PAYOUT_STEP_HANDLERS).toContain("applyConsoleAction({ type: 'cancel-payout-confirmation' })");
     expect(PAYOUT_STEP_HANDLERS).toContain("applyConsoleAction({ type: 'confirm-payout', claimId })");
-    expect(PAYOUT_STEP_HANDLERS).toContain('handleInitiateSettlementPayout(requested)');
+    expect(PAYOUT_STEP_HANDLERS).toContain('handleInitiateSettlementPayout(requested, password)');
   });
 
-  it('exposes ONE current payout action and no legacy release control', () => {
+  it('exposes no legacy release control, only the supported money path', () => {
     // BATCH 3 — the disclosure is gone, not merely closed, so the pending
-    // settlement interface shows the one current path and no second, misleading
-    // money-moving control anywhere in the row.
+    // settlement interface shows no second, misleading money-moving control
+    // anywhere in the row.
     expect(LEDGER_JSX).not.toContain('<details');
     expect(LEDGER_JSX).not.toContain('Release Now');
     expect(LEDGER_JSX).not.toContain('handleReleaseSettlementNow');
     // ...and the supported path is still what the interface offers.
     expect(LEDGER_JSX.indexOf("'Initiate payout'")).toBeGreaterThan(-1);
+    // BATCH 4 — the combined confirmation is that SAME path offered once, for a
+    // due settlement with no approval on file; it is not a third route to money.
+    expect(LEDGER_JSX.indexOf("'Approve & pay'")).toBeGreaterThan(-1);
+    expect(LEDGER_JSX).toContain('{!hasApproval && (');
   });
 });
 
@@ -280,4 +328,78 @@ describe('D-2B-B Batch 3: a submitted payout is never reported as a completed on
   });
 });
 
+describe('D-2B-B Batch 4: approve & pay is ONE password-confirmed action', () => {
+  it('is a third, distinct in-flight identity that gates its siblings', () => {
+    // A distinct key, so a payout confirmation can never mask (or be masked by)
+    // an approval or an initiation already running for the same claim.
+    expect(consoleActionState).toContain('`settlement-approve-and-pay:${claimId}`');
+    // ...and distinct from the two single-purpose keys it sits beside (plus the
+    // retained legacy one), so no prefix can alias another action's marker.
+    expect(consoleActionState).toContain('`settlement-approve:${claimId}`');
+    expect(consoleActionState).toContain('`settlement-initiate:${claimId}`');
+    expect(consoleActionState).toContain('`settlement:${claimId}`');
+    expect(LEDGER_JSX).toContain(
+      'isActionInFlight(consoleActions.inFlight, settlementApproveAndPayActionKey(ps.claimId))',
+    );
+    expect(LEDGER_JSX).toContain(
+      'disabled={!isDue || isApproving || isInitiating || isReleasing || reasonStepOpen}',
+    );
+    expect(APPROVE_AND_PAY_REQUEST).toContain(
+      "applyConsoleAction({ type: 'finish', key: settlementApproveAndPayActionKey(claimId) })",
+    );
+  });
+
+  it('opens an in-row step and sends nothing until it is confirmed', () => {
+    expect(LEDGER_JSX).toContain('onClick={() => promptSettlementApproveAndPay(ps.claimId)}');
+    expect(LEDGER_JSX).toContain('<SettlementApproveAndPayConfirmation');
+    expect(LEDGER_JSX).toContain('password={settlementApproveAndPayPassword}');
+    // No dialog, no native prompt — the established in-row pattern.
+    expect(LEDGER_JSX).not.toContain('<Modal');
+    expect(APPROVE_AND_PAY_OPENER).not.toContain('fetch(');
+    expect(APPROVE_AND_PAY_OPENER).not.toContain('handleSettlementApproveAndPay');
+    expect(APPROVE_AND_PAY_CANCELLER).not.toContain('fetch(');
+    expect(APPROVE_AND_PAY_CANCELLER).not.toContain('handleSettlementApproveAndPay');
+  });
+
+  it('sends the reason AND the password to the combined route, only from confirm', () => {
+    expect(APPROVE_AND_PAY_REQUEST).toContain(
+      'fetch(`/api/admin/claims/${claimId}/settlement/approve-and-pay`',
+    );
+    expect(APPROVE_AND_PAY_REQUEST).toContain("method: 'POST'");
+    expect(APPROVE_AND_PAY_REQUEST).toContain('body: JSON.stringify({ reason, password })');
+    // The step itself never calls the request: confirmation is the only door.
+    expect(APPROVE_AND_PAY_CONFIRM).toContain('handleSettlementApproveAndPay(claimId, reason, password)');
+  });
+
+  it('never lets a blank reason or an empty password reach the route', () => {
+    expect(APPROVE_AND_PAY_CONFIRM).toContain("setSettlementApproveAndPayReasonError('A reason is required.')");
+    expect(APPROVE_AND_PAY_CONFIRM).toContain(
+      "setSettlementApproveAndPayPasswordError('Your password is required to confirm this payout.')",
+    );
+    expect(APPROVE_AND_PAY_CONFIRM).toContain('if (invalid) return;');
+    // The trimmed reason is what is submitted, exactly as the route stores it.
+    expect(APPROVE_AND_PAY_CONFIRM).toContain('const reason = settlementApproveAndPayReason.trim();');
+  });
+
+  it('drops the password from state on every refusal instead of replaying it', () => {
+    expect(APPROVE_AND_PAY_REQUEST).toContain("setSettlementApproveAndPayPassword('')");
+    // The password is never echoed into a banner, an audit field or a URL.
+    expect(APPROVE_AND_PAY_REQUEST).not.toContain('setActionSuccess(password');
+    expect(APPROVE_AND_PAY_REQUEST).not.toContain('setActionSuccess(data.password');
+    expect(APPROVE_AND_PAY_REQUEST).not.toContain('logAudit(password');
+  });
+
+  it('reports a post-approval refusal as a recoverable WARNING, not a success', () => {
+    expect(APPROVE_AND_PAY_REQUEST).toContain(
+      "data?.code === 'payout_not_eligible' || data?.code === 'payout_not_confirmed'",
+    );
+    expect(APPROVE_AND_PAY_REQUEST).toContain('setActionWarning(settlementRefusalMessage(data');
+  });
+
+  it('reports a submitted payout as SUBMITTED, never as paid', () => {
+    expect(APPROVE_AND_PAY_REQUEST).toContain(
+      "'Approval recorded and payout initiation submitted — the provider result is not yet confirmed.'",
+    );
+  });
+});
 

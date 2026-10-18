@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+﻿import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 // PHASE 9D (F3) — the ONE shared coordinate validator. Imported here so the
@@ -49,7 +49,16 @@ const serverTs = [
 ].join('\n');
 
 function findAdminRoutes(source: string): Array<{ method: string; route: string; body: string }> {
-  const routeRegex = /app\.(get|post|put|delete)\('(\/api\/admin[^']*)',\s*authenticateJWT,/g;
+  // BATCH 1 (B) — WHITESPACE TOLERANT ON BOTH SIDES OF THE PATH.
+  //
+  // The previous expression required the quote IMMEDIATELY after `app.post(` and
+  // `authenticateJWT,` immediately (modulo whitespace) after the closing quote.
+  // A route written across two lines was already handled by the `\s*` before
+  // authenticateJWT, but ONE reformat — `app.post(\n  '/api/admin/...',` — would
+  // have dropped the route out of this audit silently, which is precisely the
+  // regression this scanner exists to prevent. Allowing `\s*` after the opening
+  // paren makes a route's formatting irrelevant to whether it is AUDITED.
+  const routeRegex = /app\.(get|post|put|delete)\(\s*'(\/api\/admin[^']*)',\s*authenticateJWT,/g;
   const matches: Array<{ method: string; route: string; index: number }> = [];
   let m: RegExpExecArray | null;
   while ((m = routeRegex.exec(source)) !== null) {
@@ -171,5 +180,45 @@ describe('PHASE 9D — admin agent-location coordinates use the shared validator
     expect(normalizeCoordinateInput('-91', '36.82')).toBeNull();
     expect(normalizeCoordinateInput('-1.29', '180.5')).toBeNull();
     expect(normalizeCoordinateInput('-1.29', '-181')).toBeNull();
+  });
+});
+// ---------------------------------------------------------------------------
+// BATCH 1 (B) — EXPLICIT COVERAGE FOR THE COMBINED SETTLEMENT PAYOUT ROUTE.
+//
+// The scanner above is generic, so a route that is MISSING from its output is
+// invisible: there is no assertion that names it. That is the failure mode worth
+// guarding against for the one route in this file that both records an approval
+// AND submits a payout, because "the audit no longer sees it" and "the audit is
+// satisfied" look identical from the outside.
+//
+// These assertions therefore name the exact route, pin its full middleware chain
+// (authentication, current-session validation, BOTH settlement permissions, the
+// payout limiter) and pin the inline admin-role check. They fail if the route is
+// renamed, moved, reformatted out of the scanner's reach, or loses a guard.
+// ---------------------------------------------------------------------------
+describe('BATCH 1 (B) — the combined settlement payout route is inside this audit', () => {
+  const APPROVE_AND_PAY = '/api/admin/claims/:id/settlement/approve-and-pay';
+
+  it('is discovered by the scanner (not merely present in the file)', () => {
+    const routes = findAdminRoutes(serverTs);
+    const route = routes.find((r) => r.route === APPROVE_AND_PAY);
+    expect(route, `the scanner must discover ${APPROVE_AND_PAY}`).toBeDefined();
+    expect(route!.method).toBe('post');
+  });
+
+  it('carries authentication, current-session validation, BOTH permissions and the payout limiter', () => {
+    const route = findAdminRoutes(serverTs).find((r) => r.route === APPROVE_AND_PAY)!;
+    // Order matters: identity, then live session, then authorization, then the
+    // failed-attempt ceiling, all BEFORE the handler body.
+    expect(route.body).toMatch(
+      /authenticateJWT,\s*requireCurrentAdminSession,\s*requireAdminPermission\(ADMIN_PERMISSIONS\.CLAIMS_SETTLEMENT_APPROVE\),\s*requireAdminPermission\(ADMIN_PERMISSIONS\.CLAIMS_SETTLEMENT_INITIATE\),\s*adminSettlementPayoutLimiter,/,
+    );
+    // ...and the inline role check this whole file exists to verify.
+    expect(route.body).toMatch(/role\s*!==\s*['"]admin['"]/);
+  });
+
+  it('is the ONLY combined payout route, so no second money path can hide beside it', () => {
+    const combined = findAdminRoutes(serverTs).filter((r) => r.route.includes('approve-and-pay'));
+    expect(combined.map((r) => `${r.method} ${r.route}`)).toEqual(['post ' + APPROVE_AND_PAY]);
   });
 });
