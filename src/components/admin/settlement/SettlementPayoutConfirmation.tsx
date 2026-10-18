@@ -69,7 +69,7 @@ export default function SettlementPayoutConfirmation({
         {`Confirm payout initiation for claim ${claimId}`}
       </p>
       <p className="text-caption text-[var(--appearance-text-muted)]">
-        {`This starts payout processing for item ${itemId}${amount ? ` (${amount} released)` : ''}. Money may leave the platform on this action and it cannot be undone from here. Nothing has been sent yet: the payout is submitted only if you confirm below, and the provider's result is reported separately.`}
+        {`This starts payout processing for item ${itemId}${amount ? ` (${amount} claim fee)` : ''}. Money may leave the platform on this action and it cannot be undone from here. The amount each recipient is paid is the amount booked on its payout row and is verified against the ledger before submission. Nothing has been sent yet: the payout is submitted only if you confirm below, and the provider's result is reported separately.`}
       </p>
       <Input
         label={'Your password'}

@@ -286,3 +286,64 @@ node node_modules/typescript/bin/tsc --noEmit   # exit 0, no diagnostics
   mismatch regardless of what the console displays.
 - No production migration has been run; that is a deployment action, not part of
   this batch.
+
+---
+
+## Queued Batch 4 — end-to-end verification and launch readiness
+
+Scope: verify the combined result of Batches 2 and 3 across the lifecycle, add a
+regression net for the combined gate ordering, review the admin payment screens for
+misleading copy, and produce an honest launch-readiness report.
+
+### What was verified
+
+1. **Every pre-submission gate precedes the durable markers and the provider call.**
+   New `src/__tests__/payoutGateOrdering.test.ts` pins the COMBINED ordering:
+   `PAYOUT_DESTINATION_NOT_ELIGIBLE` (Batch 1), `PAYOUT_AMOUNT_MISMATCH` and
+   `PAYOUT_DESTINATION_MISMATCH` (Batch 1.1), `SETTLEMENT_AUTHORIZATION_MISMATCH`
+   (Batch 3), `PAYOUT_SIMULATION_REFUSED` (Batch 1) and
+   `PAYOUT_WALLET_ROUTING_REFUSED` (Batch 2) are all written before
+   `db.markPayoutSubmissionStarted`, and the provider call follows the markers.
+   It also asserts every failure inside the submission block returns through
+   `abandonRelease()`.
+2. **The full suite was run** and its result is recorded in
+   `docs/payment-launch-readiness.md`, including the honest limit that it was not
+   baselined before this queue. 170 failures exist in 36 files; **none is a
+   payment/payout/wallet/settlement suite**, and none is a file this queue changed.
+3. **Admin console copy review.** `SettlementApproveAndPayConfirmation` and
+   `SettlementPayoutConfirmation` described the locked total as an amount
+   "released". That total includes the platform share, so it is not the amount paid
+   to the recipients. Both now label it the **claim fee**, state that each
+   recipient is paid the amount booked on its payout row (verified against the
+   ledger before submission), and the rendering suite still passes.
+4. **Launch-readiness report** — `docs/payment-launch-readiness.md` separates
+   automated-test evidence, static inspection, sandbox (nothing), production
+   configuration inspection, and unverified/blocked items, plus required manual
+   configuration, migration steps and remaining risks.
+
+### Verification
+
+```
+node node_modules/vitest/vitest.mjs run
+# 286 files: 250 passed / 36 failed; 5,480 tests: 5,310 passed / 170 failed
+# no payment/payout/wallet/settlement suite among the failures
+
+node node_modules/vitest/vitest.mjs run \
+  src/__tests__/payoutGateOrdering.test.ts \
+  src/components/admin/settlement/__tests__/settlementPayoutConfirmationRendering.test.ts \
+  src/__tests__/adminSettlementLifecycleUx.test.ts \
+  src/config/__tests__/settlementAuthorizationSnapshot.test.ts \
+  src/db/__tests__/settlementAuthorizationSnapshot.test.ts \
+  src/__tests__/settlementAuthorizationEnforcement.test.ts
+# 6/6 files, 83/83 tests passed, exit 0
+
+node node_modules/typescript/bin/tsc --noEmit
+# exit 0
+```
+
+### Launch status
+
+**Not declared production-ready.** The money-path defences are tested and the
+provider contract is the remaining unverified dependency: no sandbox payout, wallet
+transfer or balance read has been performed. See
+[`payment-launch-readiness.md`](payment-launch-readiness.md).

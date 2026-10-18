@@ -78,7 +78,7 @@ export default function SettlementApproveAndPayConfirmation({
         {`Approve and pay claim ${claimId}`}
       </p>
       <p className="text-caption text-[var(--appearance-text-muted)]">
-        {`This records the settlement approval AND then submits the payout for item ${itemId}${amount ? ` (${amount} released)` : ''} in one action. The approval is saved with your reason; the payout is submitted immediately afterwards and cannot be undone from here. Nothing has been sent yet.`}
+        {`This records the settlement approval AND then submits the payout for item ${itemId}${amount ? ` (${amount} claim fee)` : ''} in one action. The approval is saved with your reason; the payout is submitted immediately afterwards and cannot be undone from here. The amount each recipient is paid is the amount booked on its payout row and is verified against the ledger before submission. Nothing has been sent yet.`}
       </p>
       <Textarea
         label={'Reason (recorded in the audit log)'}
