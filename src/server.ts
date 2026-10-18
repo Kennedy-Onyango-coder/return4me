@@ -48,6 +48,12 @@ import { PaymentService, isDisbursementWalletConfigured, isPlaceholderKey, isPay
 // the declared collection wallet is refused BEFORE any durable marker is
 // written, exactly like a missing wallet ID.
 import { resolveConfiguredPayoutWalletRouting, describePayoutWalletRoutingForAudit } from './config/walletRouting';
+// BATCH 3 — the pure rule that compares WHAT was approved with WHAT is about to
+// be paid (total + payout ledger rows).
+import {
+  compareSettlementAuthorization,
+  type SettlementAuthorizationVerdict,
+} from './config/settlementAuthorizationSnapshot';
 import { OcrService } from './services/ocr';
 import { uploadBase64Image } from './services/storage';
 import { SocialService } from './services/social';
@@ -5093,6 +5099,14 @@ async function createApp() {
               error: 'Claim is not eligible for settlement review: its settle_at review window was never set, so there is nothing to review.',
             });
           }
+          if (result.code === 'payout_ledger_unreadable') {
+            return res.status(409).json({
+              error:
+                'The payout rows for this claim could not be read unambiguously (missing, duplicated or unreadable amounts), so no approval was recorded. ' +
+                'An approval that cannot describe the amount and rows it authorizes is not recorded; the claim needs a data review first.',
+              code: result.code,
+            });
+          }
           return res.status(500).json({ error: 'Could not record the settlement approval.' });
         }
         res.json({
@@ -5318,6 +5332,14 @@ async function createApp() {
               code: approval.code,
             });
           }
+          if (approval.code === 'payout_ledger_unreadable') {
+            return res.status(409).json({
+              error:
+                'The payout rows for this claim could not be read unambiguously (missing, duplicated or unreadable amounts), so no approval was recorded and no payout was attempted. ' +
+                'An approval that cannot describe the amount and rows it authorizes is not recorded; the claim needs a data review first.',
+              code: approval.code,
+            });
+          }
           return res.status(500).json({
             error: 'Failed to record the settlement approval.',
             code: approval.code,
@@ -5326,17 +5348,25 @@ async function createApp() {
         const approvalState = approvalRecorded ? 'recorded' : 'already_on_file';
         const approvedBy = approval.claim?.settlement_approved_by ?? adminIdentifier;
         const approvedAt = approval.claim?.settlement_approved_at ?? null;
-        // BATCH 1 (E) — WHAT THIS APPROVAL AUTHORIZED, CAPTURED BEFORE THE ATTEMPT.
+        // BATCH 3 — WHAT THIS APPROVAL AUTHORIZED.
         //
-        // `claims` has no destination-snapshot column, so a durable
-        // approval-time snapshot needs a schema migration (reported separately -
-        // deliberately NOT half-migrated here). What CAN be done without one is to
-        // capture the destinations at the moment this action recorded the
-        // approval and re-read them immediately before the attempt, inside this
-        // same request: an operator-induced or concurrent change to the finder's
-        // phone or the agent's payout target during the action is then detected
-        // rather than silently paid. Amounts are not compared because they live on
-        // the ledger rows booked at handover and are immutable thereafter.
+        // The durable approval now records the approved TOTAL and the exact
+        // payout ledger ROWS it covers (claims.settlement_authorized_total /
+        // _ledger_ids), written in the same transaction as the sign-off. The
+        // executor compares that snapshot with the claim's payout rows before
+        // submission (config/settlementAuthorizationSnapshot.ts), so an amount or
+        // a re-booked row that changed after approval cannot be paid as if it had
+        // been approved.
+        //
+        // The destination binding is the ledger row's own `phone_or_till` — an
+        // immutable booking-time snapshot that the Batch 1.1 integrity check
+        // compares against the destination about to be paid. There is deliberately
+        // no third copy of a phone number on `claims`.
+        //
+        // The in-request snapshot below is narrower and still useful: it captures
+        // the destinations at the moment this action recorded the approval and
+        // re-reads them immediately before the attempt, so an operator-induced or
+        // concurrent change DURING this action is reported as `destination_changed`.
         const approvedClaim = approval.claim ?? (await db.getClaim(claimId));
         const approvedItem = approvedClaim ? await db.getItem(approvedClaim.item_id) : null;
         const approvedAgent =
@@ -6662,6 +6692,59 @@ async function executeClaimSettlement(claimId: string, initiatedBy: string = 'SY
       return await abandonRelease(`the item is under '${preSubmitItem.status}' review.`);
     }
 
+    // BATCH 1 - PHONE-ONLY PAYOUT DESTINATION ELIGIBILITY (LAUNCH POLICY).
+    //
+    // The launch policy pays PERSONAL M-PESA PHONE DESTINATIONS ONLY, on both
+    // legs. The recipients' stored values are free-form text the platform does
+    // not control: an agent's `mpesa_till_or_paybill` may hold a Till number, a
+    // Paybill number, a Pochi la Biashara handle, a blank value or a malformed
+    // number, and the finder's recorded phone may be anything the report form
+    // accepted. Sending any of those to the B2C disbursement endpoint is a
+    // request the provider cannot execute as intended - at best a refusal, at
+    // worst money to an account nobody verified.
+    //
+    // So the guard runs HERE, on freshly re-read state, BEFORE the per-row
+    // markers and before the request body is built: the same seam, and the same
+    // recovery, as the production wallet gate below. It asks the pure predicate
+    // in config/payoutDestinations.ts, which requires
+    //   * a destination that normalises to exactly `254` followed by nine
+    //     digits, and
+    //   * the single supported method, `Personal M-Pesa`,
+    // and refuses everything else (Till, Paybill, Pochi la Biashara, unknown or
+    // differently-cased methods, missing/malformed/non-Kenyan numbers).
+    //
+    // ALL-OR-NOTHING: eligibility is evaluated across EVERY required leg of the
+    // claim that is not already completed (see `outstandingLegs` above - NOT
+    // only the rows this attempt can submit), and ONE ineligible leg aborts the
+    // whole batch. No
+    // partial or mixed batch is ever sent - a valid finder leg is never paid
+    // alongside an ineligible agent leg. Every refused leg is named in a system
+    // audit row, with a MASKED destination and a reason code, so an operator can
+    // see exactly which recipient to correct. Nothing is marked as submitted, so
+    // a corrected destination can still be paid by a later initiation.
+    //
+    // WHAT THIS GUARD IS NOT: a FORMAT and PERMITTED-METHOD check only. It does
+    // not verify that the number is registered with M-Pesa, that it belongs to
+    // the intended person, or that the provider will accept it for this
+    // transfer - those remain provider and operator responsibilities.
+    // BATCH 1 CORRECTION B: the batch checked here is the set of OUTSTANDING
+    // required legs, not `submittable`. A leg that is outstanding but not
+    // submittable (already 'submitting' / 'accepted' / 'unknown' / 'rejected')
+    // would otherwise be invisible to this guard, which is exactly how an
+    // eligible leg could be paid while an unpayable leg stayed behind. Treating
+    // it as part of the batch makes the policy hold for the claim as a whole.
+    const destinationEligibility = resolvePayoutBatchEligibility(outstandingLegs.map((candidate) => candidate.payload));
+    if (!destinationEligibility.eligible) {
+      const refusal = destinationEligibility.ineligible.map(describePayoutDestinationRefusal).join('; ');
+      await db.logAudit(
+        'SYSTEM',
+        'PAYOUT_DESTINATION_NOT_ELIGIBLE',
+        `Claim ${claimId}: payout NOT submitted - ${refusal}. The launch policy pays Kenyan personal M-Pesa phone destinations only (254 followed by nine digits) and requires the "Personal M-Pesa" method on both legs. No batch was submitted and no payout row was marked as submitted; correct the recipient's payout destination and initiate the payout again.`
+      );
+      return await abandonRelease(
+        `a payout destination is not eligible under the phone-only payout policy (${refusal}).`
+      );
+    }
     // BATCH 1.1 — PAY WHAT THE LEDGER BOOKED, TO THE DESTINATION IT BOOKED.
     //
     // WHAT THIS FIXES. The amounts in `claimed` are NOT read from the ledger:
@@ -6743,6 +6826,59 @@ async function executeClaimSettlement(claimId: string, initiatedBy: string = 'SY
       );
     }
 
+    // BATCH 3 — PAY WHAT THE ADMINISTRATOR APPROVED, NOT SOMETHING ELSE.
+    //
+    // The durable approval now records WHAT it authorized (the payout total and
+    // the exact ledger rows), in the same transaction as the sign-off itself.
+    // This compares that snapshot with the claim's payout rows before anything is
+    // marked as submitted:
+    //   * a changed amount, a changed/re-booked row, a half-written snapshot or
+    //     unreadable rows REFUSES the whole payout through abandonRelease();
+    //   * an approval recorded BEFORE this batch carries no snapshot. That is
+    //     reported as `legacy_approval` and audited, NOT refused: approval is
+    //     immutable, so refusing would permanently block a legitimately approved
+    //     payout. It remains bound to its booked rows by the integrity check
+    //     immediately above.
+    //
+    // The comparison is pure (config/settlementAuthorizationSnapshot.ts), so the
+    // whole refusal matrix is unit-tested; this seam only supplies the data.
+    const authorizationVerdict = compareSettlementAuthorization(
+      {
+        authorizedTotal: claim.settlement_authorized_total ?? null,
+        authorizedLedgerIds: claim.settlement_authorized_ledger_ids ?? null,
+      },
+      claimLedgerRows
+        .filter(row => row.type === 'finder_payout' || row.type === 'agent_payout')
+        .map(row => ({
+          ledgerEntryId: row.id,
+          recipientType: row.type === 'agent_payout' ? ('agent' as const) : ('finder' as const),
+          amount: row.amount,
+        })),
+    );
+    if (!authorizationVerdict.ok) {
+      // Explicit narrowing: the verdict is a union of two successes and one
+      // refusal, and the refusal is the only member that carries a message.
+      const refusal = authorizationVerdict as Extract<SettlementAuthorizationVerdict, { ok: false }>;
+      await db.logAudit(
+        'SYSTEM',
+        'SETTLEMENT_AUTHORIZATION_MISMATCH',
+        `Claim ${claimId}: payout NOT submitted - ${refusal.message}. ` +
+        `Refused BEFORE any payout row was marked as submitted and before any provider request: nothing was sent and nothing was paid. ` +
+        `The approved payout and the payout about to be submitted must be the same amount, to the same ledger rows; an administrator must review the claim and the approval on file.`
+      );
+      return await abandonRelease(
+        `the payout does not match the settlement approval (${refusal.code}). No leg of this claim was sent.`
+      );
+    }
+    if (authorizationVerdict.code === 'legacy_approval') {
+      await db.logAudit(
+        'SYSTEM',
+        'SETTLEMENT_AUTHORIZATION_SNAPSHOT_MISSING',
+        `Claim ${claimId}: the settlement approval on file predates the approval snapshot (Batch 3) and records no approved total or payout rows. ` +
+        `The payout proceeds bound to the ledger rows booked at handover (the Batch 1.1 integrity check above), which is the strongest record available for this approval.`
+      );
+    }
+
     // BATCH 1 CORRECTION A — A WOULD-BE SIMULATED PAYOUT IS REFUSED BEFORE ANY
     // DURABLE SUBMISSION MARKER.
     //
@@ -6788,59 +6924,6 @@ async function executeClaimSettlement(claimId: string, initiatedBy: string = 'SY
       );
       return await abandonRelease(
         `this deployment would have to SIMULATE the payout (it holds no usable IntaSend credentials) and NODE_ENV is ${observedEnv}, which is not a payout-simulation environment. A production-like environment must never report a transfer as paid when nothing was sent.`
-      );
-    }
-    // BATCH 1 - PHONE-ONLY PAYOUT DESTINATION ELIGIBILITY (LAUNCH POLICY).
-    //
-    // The launch policy pays PERSONAL M-PESA PHONE DESTINATIONS ONLY, on both
-    // legs. The recipients' stored values are free-form text the platform does
-    // not control: an agent's `mpesa_till_or_paybill` may hold a Till number, a
-    // Paybill number, a Pochi la Biashara handle, a blank value or a malformed
-    // number, and the finder's recorded phone may be anything the report form
-    // accepted. Sending any of those to the B2C disbursement endpoint is a
-    // request the provider cannot execute as intended - at best a refusal, at
-    // worst money to an account nobody verified.
-    //
-    // So the guard runs HERE, on freshly re-read state, BEFORE the per-row
-    // markers and before the request body is built: the same seam, and the same
-    // recovery, as the production wallet gate below. It asks the pure predicate
-    // in config/payoutDestinations.ts, which requires
-    //   * a destination that normalises to exactly `254` followed by nine
-    //     digits, and
-    //   * the single supported method, `Personal M-Pesa`,
-    // and refuses everything else (Till, Paybill, Pochi la Biashara, unknown or
-    // differently-cased methods, missing/malformed/non-Kenyan numbers).
-    //
-    // ALL-OR-NOTHING: eligibility is evaluated across EVERY required leg of the
-    // claim that is not already completed (see `outstandingLegs` above - NOT
-    // only the rows this attempt can submit), and ONE ineligible leg aborts the
-    // whole batch. No
-    // partial or mixed batch is ever sent - a valid finder leg is never paid
-    // alongside an ineligible agent leg. Every refused leg is named in a system
-    // audit row, with a MASKED destination and a reason code, so an operator can
-    // see exactly which recipient to correct. Nothing is marked as submitted, so
-    // a corrected destination can still be paid by a later initiation.
-    //
-    // WHAT THIS GUARD IS NOT: a FORMAT and PERMITTED-METHOD check only. It does
-    // not verify that the number is registered with M-Pesa, that it belongs to
-    // the intended person, or that the provider will accept it for this
-    // transfer - those remain provider and operator responsibilities.
-    // BATCH 1 CORRECTION B: the batch checked here is the set of OUTSTANDING
-    // required legs, not `submittable`. A leg that is outstanding but not
-    // submittable (already 'submitting' / 'accepted' / 'unknown' / 'rejected')
-    // would otherwise be invisible to this guard, which is exactly how an
-    // eligible leg could be paid while an unpayable leg stayed behind. Treating
-    // it as part of the batch makes the policy hold for the claim as a whole.
-    const destinationEligibility = resolvePayoutBatchEligibility(outstandingLegs.map((candidate) => candidate.payload));
-    if (!destinationEligibility.eligible) {
-      const refusal = destinationEligibility.ineligible.map(describePayoutDestinationRefusal).join('; ');
-      await db.logAudit(
-        'SYSTEM',
-        'PAYOUT_DESTINATION_NOT_ELIGIBLE',
-        `Claim ${claimId}: payout NOT submitted - ${refusal}. The launch policy pays Kenyan personal M-Pesa phone destinations only (254 followed by nine digits) and requires the "Personal M-Pesa" method on both legs. No batch was submitted and no payout row was marked as submitted; correct the recipient's payout destination and initiate the payout again.`
-      );
-      return await abandonRelease(
-        `a payout destination is not eligible under the phone-only payout policy (${refusal}).`
       );
     }
     // PRODUCTION DISBURSEMENT-WALLET CONFIGURATION GUARD

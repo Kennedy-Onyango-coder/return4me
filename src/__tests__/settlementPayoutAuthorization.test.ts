@@ -615,6 +615,43 @@ describe('BATCH 1 — a combined approval + payout actually does both, exactly o
     expect((await auditsFor(claimId, 'CLAIM_SETTLEMENT_PAYOUT_UNRESOLVED')).length).toBeGreaterThanOrEqual(1);
     expect((await auditsFor(claimId, 'CLAIM_SETTLEMENT_PAYOUT_CONFIRMED')).length).toBe(0);
   });
+
+  // BATCH 3 — THE PAYOUT MUST BE THE ONE THAT WAS APPROVED.
+  //
+  // A payout row that did not exist when the approval was recorded changes the
+  // set of rows the approval covers. The executor must refuse BEFORE the
+  // provider, return the release lock, and record the refusal — never pay the
+  // original two legs and leave the third unexplained.
+  it('refuses a payout whose ledger rows changed after the approval (approval snapshot)', async () => {
+    useProviderSeam();
+    const { claimId } = await makeClaim('approval-drift', { approve: false });
+    const approval = await db.approveSettlement(claimId, 'B3 drift admin', 'approve before the extra row');
+    expect(approval.ok, approval.code).toBe(true);
+
+    // `logTransaction` is the real booker the payment services use; this fixture
+    // adds a payout-looking row through it rather than writing the table directly.
+    await db.logTransaction({
+      claim_id: claimId,
+      item_id: null,
+      type: 'finder_payout',
+      amount: 1,
+      phone_or_till: '254700000999',
+      status: 'pending',
+    });
+
+    const r = await http(INITIATE(claimId), {
+      token: adminToken,
+      body: { password: ADMIN_PASSWORD },
+    });
+
+    expect(r.status).toBe(500);
+    expect(r.body?.code).toBe('payout_not_confirmed');
+    // Fail-closed BEFORE the provider: nothing was sent and nothing was attempted.
+    expect(payout.calls.length).toBe(0);
+    expect((await claimState(claimId)).status).toBe('pending_settlement');
+    expect((await auditsFor(claimId, 'SETTLEMENT_AUTHORIZATION_MISMATCH')).length).toBe(1);
+    expect((await auditsFor(claimId, 'CLAIM_SETTLEMENT_PAYOUT_ATTEMPTED')).length).toBe(0);
+  });
 });
 
 // ===========================================================================

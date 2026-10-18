@@ -258,6 +258,22 @@ third money path.
   amount is rewritten, and the claim returns to `pending_settlement`, so a later
   initiation can pay once the data agrees with the ledger again.
 
+  **And it must be the payout an administrator approved.** The approval write
+  records *what* it authorized, in the same transaction as the sign-off: the
+  payout total (`settlement_authorized_total`) and the exact payout ledger rows
+  it covers (`settlement_authorized_ledger_ids`, canonical `role:id` pairs).
+  Before submission the executor compares that snapshot with the claim's payout
+  rows. A changed amount, a different/re-booked row, a half-written snapshot or
+  unreadable rows refuses the whole payout (`SETTLEMENT_AUTHORIZATION_MISMATCH`)
+  through the same `abandonRelease()` path: nothing is sent, nothing is marked as
+  submitted and no provider request is made. Approvals recorded before this
+  snapshot existed carry neither column; they are audited as
+  `SETTLEMENT_AUTHORIZATION_SNAPSHOT_MISSING` and remain bound to their booked
+  ledger rows rather than being refused (approval is immutable, so refusing would
+  strand a legitimately approved payout forever). Destinations are not copied
+  onto `claims`: each leg is bound to its ledger row, whose `phone_or_till` is
+  the immutable booking-time destination snapshot.
+
   **Initiation re-authenticates.** The operator supplies their own password in
   the request body; it is bcrypt-compared against the authenticated
   administrator's stored hash *before* the release lock is attempted, so a wrong

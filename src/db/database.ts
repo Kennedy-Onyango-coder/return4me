@@ -72,6 +72,9 @@ import {
   PERSONAL_MPESA_PAYOUT_METHOD,
   maskPayoutDestinationForLog,
 } from "../config/payoutDestinations";
+// BATCH 3 — the approval-time snapshot (total + payout rows) is built by the one
+// pure rule in config/; this layer only persists it and reads it back.
+import { buildSettlementAuthorizationSnapshot } from "../config/settlementAuthorizationSnapshot";
 // AGENT DASHBOARD BATCH 2 — the ONE payout-destination-change policy. The data
 // layer asks these pure functions rather than restating the activation rule, so
 // the route, the console projection and the persistence guard cannot disagree
@@ -326,6 +329,14 @@ export interface Claim {
   // this column is never misread as approved. See schema.ts / adminSettlements.
   settlement_approved_at?: string | null;
   settlement_approved_by?: string | null;
+  // BATCH 3 — WHAT that approval covered, written in the same CAS-guarded
+  // transaction: the finder+agent total and the payout ledger rows (as canonical
+  // `role:id` pairs). Both NULL = an approval recorded before this batch (a
+  // legacy approval: reported, never refused, and still bound to its booked
+  // ledger rows). Exactly one NULL = unverifiable state, refused at initiation.
+  // See config/settlementAuthorizationSnapshot.ts.
+  settlement_authorized_total?: string | null;
+  settlement_authorized_ledger_ids?: string | null;
   // Set the first (and only) time POST /api/claims/:id/rate succeeds for
   // this claim — see the comment on that route. Without this, the same
   // guessable claim ID could be POSTed to repeatedly to arbitrarily
@@ -818,6 +829,22 @@ function parseItemVerificationChange(row: any): ItemVerificationChange {
   };
 }
 
+/**
+ * Normalise a nullable approval-snapshot column read through either driver.
+ *
+ * An absent value (or the literal 'undefined'/'null' string the in-memory double
+ * produces for a column that was never written) becomes NULL — the legacy
+ * approval case. Any OTHER value is preserved verbatim, so a genuinely corrupt
+ * snapshot is REFUSED by config/settlementAuthorizationSnapshot.ts rather than
+ * being silently downgraded to a legacy approval.
+ */
+function normaliseSnapshotValue(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  if (text === '' || text === 'undefined' || text === 'null') return null;
+  return text;
+}
+
 function parseClaim(row: any): Claim {
   return {
     id: row.id,
@@ -836,6 +863,14 @@ function parseClaim(row: any): Claim {
     settle_at: row.settle_at ? new Date(row.settle_at).toISOString() : null,
     settlement_approved_at: row.settlement_approved_at ? new Date(row.settlement_approved_at).toISOString() : null,
     settlement_approved_by: row.settlement_approved_by ?? null,
+    // NUMERIC arrives as a string from PostgreSQL and as a number/string from
+    // the in-memory double; both are normalised to the string NUMERIC form so a
+    // caller never has to guess which it received. The double represents a column
+    // that was never written as the literal 'undefined'/'null' string, which is
+    // normalised back to NULL here; any OTHER unreadable value is preserved so the
+    // payout gate can refuse it rather than silently treating it as legacy.
+    settlement_authorized_total: normaliseSnapshotValue(row.settlement_authorized_total),
+    settlement_authorized_ledger_ids: normaliseSnapshotValue(row.settlement_authorized_ledger_ids),
     agent_rated_at: row.agent_rated_at ? new Date(row.agent_rated_at).toISOString() : null,
     created_at: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
     updated_at: row.updated_at ? new Date(row.updated_at).toISOString() : new Date().toISOString(),
@@ -1116,6 +1151,20 @@ const CUSTOMER_OTP_ATTEMPT_CAS_ROUNDS = 8;
 // customer-facing behaviour.
 // -----------------------------------------------------------------------------
 const CUSTOMER_IDENTITY_CHANGE_ATTEMPT_CAS_ROUNDS = 8;
+
+/**
+ * BATCH 3 — raised inside approveSettlement()'s transaction when the claim's
+ * payout rows cannot be described unambiguously. Throwing is deliberate: it
+ * aborts the transaction, so the approval CAS performed moments earlier is
+ * rolled back and NO approval is recorded. The catch maps it to the
+ * `payout_ledger_unreadable` refusal.
+ */
+class SettlementAuthorizationSnapshotUnreadable extends Error {
+  constructor(readonly reason: string) {
+    super(`settlement authorization snapshot unreadable: ${reason}`);
+    this.name = 'SettlementAuthorizationSnapshotUnreadable';
+  }
+}
 
 class DatabaseEngine {
   constructor() {}
@@ -4794,6 +4843,7 @@ class DatabaseEngine {
       | 'no_review_window'
       | 'outside_review_window'
       | 'reason_required'
+      | 'payout_ledger_unreadable'
       | 'error';
     claim: Claim | null;
   }> {
@@ -4824,13 +4874,60 @@ class DatabaseEngine {
           .returning();
 
         if (rows.length > 0) {
+          // BATCH 3 — WHAT was approved is captured in the SAME transaction as
+          // the approval itself: the payout total and the exact ledger rows the
+          // approval covers. A later initiation compares against this snapshot,
+          // so an amount or a row that changed after approval can never be paid
+          // as if it had been approved.
+          //
+          // FAIL-CLOSED: if the payout rows cannot be read unambiguously (none,
+          // duplicated ids, unreadable amounts), the snapshot cannot describe
+          // what the approval authorized. The transaction is ABORTED (the throw
+          // below rolls the approval CAS back), so no approval is recorded at all
+          // — an approval that cannot say what it authorized is worse than none.
+          const payoutRows = await tx
+            .select()
+            .from(ledgerTable)
+            .where(and(
+              eq(ledgerTable.claim_id, claimId),
+              inArray(ledgerTable.type, ["finder_payout", "agent_payout"]),
+            ));
+          const authorization = buildSettlementAuthorizationSnapshot(
+            payoutRows.map((row) => ({
+              ledgerEntryId: row.id,
+              recipientType: row.type === "agent_payout" ? ("agent" as const) : ("finder" as const),
+              amount: row.amount,
+            })),
+          );
+          if (!authorization.readable) {
+            throw new SettlementAuthorizationSnapshotUnreadable(authorization.reason ?? 'unknown');
+          }
+
+          await tx
+            .update(claimsTable)
+            .set({
+              // Canonical minor-unit total, written back as NUMERIC(10,2).
+              settlement_authorized_total: ((authorization.totalMinorUnits ?? 0) / 100).toFixed(2),
+              settlement_authorized_ledger_ids: authorization.serializedLedgerIds,
+            })
+            .where(eq(claimsTable.id, claimId));
+
+          const refreshed = await tx.select().from(claimsTable).where(eq(claimsTable.id, claimId));
+
           await this.logAuditInTx(
             tx,
             adminIdentifier,
             "CLAIM_SETTLEMENT_APPROVED",
-            `Admin ${adminIdentifier} approved settlement for claim ${claimId}. Reason: ${trimmedReason}`
+            `Admin ${adminIdentifier} approved settlement for claim ${claimId}. Reason: ${trimmedReason} ` +
+              `Approved payout total KES ${((authorization.totalMinorUnits ?? 0) / 100).toFixed(2)} ` +
+              `across rows [${authorization.ledgerIds.join(', ')}].`
           );
-          return { ok: true, alreadyApproved: false, code: 'approved' as const, claim: parseClaim(rows[0]) };
+          return {
+            ok: true,
+            alreadyApproved: false,
+            code: 'approved' as const,
+            claim: parseClaim(refreshed[0] ?? rows[0]),
+          };
         }
 
         // Zero rows were affected: NO approval was written, so report why using
@@ -4853,6 +4950,12 @@ class DatabaseEngine {
         return { ok: false, alreadyApproved, code, claim: parseClaim(claim) };
       });
     } catch (error) {
+      if (error instanceof SettlementAuthorizationSnapshotUnreadable) {
+        // The approval CAS was rolled back with this throw, so nothing was
+        // recorded — no timestamp, no approver, no audit row.
+        console.error("Settlement approval refused: payout snapshot unreadable:", error.reason);
+        return { ok: false, alreadyApproved: false, code: 'payout_ledger_unreadable', claim: null };
+      }
       console.error("Failed to record settlement approval:", error);
       return { ok: false, alreadyApproved: false, code: 'error', claim: null };
     }

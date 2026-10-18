@@ -120,6 +120,9 @@ removed or renamed.
 | `CLAIM_SETTLEMENT_DESTINATION_CHANGED` | Combined route, if a destination changed between approval and attempt | Which leg and which field moved — **never the values**. Informational only: the executor independently refuses any leg whose destination differs from the one booked in its ledger row. |
 | `PAYOUT_AMOUNT_MISMATCH` | Executor, before any submission marker is written | The attempt would send an amount that differs from `ledger.amount` on its own payout row (for example a legacy item whose category was edited after booking). The whole claim payout was refused: no leg was submitted, no provider request was made, and no ledger amount was rewritten. |
 | `PAYOUT_DESTINATION_MISMATCH` | Executor, before any submission marker is written | The attempt would send to a destination that is not the one recorded in `ledger.phone_or_till` — including a booked Till/Paybill or blank value that cannot be a personal M-Pesa phone. Carries masked values only. |
+| `SETTLEMENT_AUTHORIZATION_MISMATCH` | Executor, before any submission marker is written | The payout rows/amount about to be submitted are not the ones the durable approval covered (a changed amount, a re-booked or extra payout row, a half-written or unreadable snapshot). The whole claim payout was refused before any provider request. |
+| `SETTLEMENT_AUTHORIZATION_SNAPSHOT_MISSING` | Executor, when the approval predates the snapshot | The approval on file records no approved total/rows (recorded before Batch 3). The payout proceeds bound to the ledger rows booked at handover, which is the strongest record available for that approval. Not a refusal. |
+| `PAYOUT_WALLET_ROUTING_REFUSED` | Executor, before any submission marker is written | The configured payout wallet is missing/placeholder, or it is the declared collection (settlement) wallet. No provider request was made. Masked wallet IDs only. |
 
 The snapshot's destinations are masked with the platform's single phone masker,
 so the audit trail is reconcilable against a provider statement without storing a
@@ -132,17 +135,23 @@ ledger's `NUMERIC(10,2)` precision, destination in canonical phone form — and 
 whole payout is refused on any difference, so an attempt that reaches this
 snapshot has already been proven to match the ledger it was booked against.
 
-**What is still not recorded (needs a schema change, not implemented):** `claims`
-has no approval-time destination or amount snapshot. Drift across requests is
-closed on the money path — every attempt is compared with the *booked* ledger row,
-so a destination activated after booking, or a category edited after a legacy item
-was booked, refuses the payout instead of paying something the ledger does not
-describe. What cannot be shown is the exact state a particular *approver*
-authorized when approval and initiation are separate requests: the booked row is
-the handover-time record, not the approval-time one. Adding
-`settlement_authorized_destination` / `settlement_authorized_amount` columns (and
-populating them inside the approval transaction) would record that, and is
-reported separately rather than half-migrated here.
+**What an approval records (Batch 3).** `claims.settlement_authorized_total` and
+`claims.settlement_authorized_ledger_ids` are written in the SAME transaction as
+the approval CAS: the payout total the approver saw, and the exact payout ledger
+rows the approval covers (canonical `role:id` pairs). Before any submission marker
+the executor compares that snapshot with the claim's payout rows; a changed
+amount, a different/re-booked row, a half-written snapshot or unreadable rows
+refuses the whole payout (`SETTLEMENT_AUTHORIZATION_MISMATCH`), before any
+provider request. An approval recorded before these columns existed carries
+neither; it is audited as `SETTLEMENT_AUTHORIZATION_SNAPSHOT_MISSING` and remains
+bound to its booked ledger rows, because refusing it would permanently block a
+payout that cannot be re-approved.
+
+Destinations are deliberately NOT copied onto `claims`: each leg is bound to its
+ledger row, and that row's `phone_or_till` is the immutable booking-time
+destination snapshot the integrity check compares against. The drift across
+requests that this closes is therefore the *approval-time amount and row set*;
+the destination is covered by the booked row plus the pre-submission comparison.
 
 
 ### Notification retry

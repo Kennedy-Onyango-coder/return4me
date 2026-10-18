@@ -182,3 +182,107 @@ node node_modules/typescript/bin/tsc --noEmit   # exit 0, no diagnostics
 - Provider-side confirmation that collections can (or cannot) be settled into a
   working wallet for this merchant account — dashboard action / provider support.
 - The float top-up remains a manual, verified operator procedure.
+
+---
+
+## Queued Batch 3 — approve & pay and durable payout recovery
+
+Scope: make the durable approval record WHAT it authorized, enforce that the payout
+matches it, and keep approval and initiation separate, explicit operations.
+
+### Audit findings (evidence)
+
+| Fact | Where it is proven |
+| --- | --- |
+| Approval is a CAS-guarded write of `settlement_approved_at` / `_by` plus a `CLAIM_SETTLEMENT_APPROVED` audit row in one transaction. | `db.approveSettlement`, `src/db/database.ts` |
+| Before this batch the approval recorded **who** and **when**, not **what**: no approved amount, no approved payout rows. | `src/config/settlementAuthorizationSnapshot.ts` header; the previous text in `docs/operations.md` |
+| Initiation re-reads the claim/approval and requires `pending_settlement`, a durable approval and an elapsed `settle_at`, then wins a release CAS. | `db.attemptSettlementRelease`, `executeClaimSettlement` |
+| The payout rows are booked at handover (immutable amounts + `phone_or_till` snapshot), and Batch 1.1 already refuses a planned leg that differs from its booked row. | `enterPendingSettlement`; `config/settlementPayoutIntegrity.ts` |
+| There is one payout state machine (`pending_settlement` → `releasing` → `released`, with `abandonRelease` on refusal); no second one was added. | `src/config/claimStatuses.ts`, the executor |
+| Approval is immutable (`already_approved` is final), so a pre-snapshot approval cannot be "re-created". | `db.approveSettlement` CAS; the HTTP E2E duplicate-approval tests |
+
+### What was implemented
+
+1. **`src/config/settlementAuthorizationSnapshot.ts`** — one pure rule: build the
+   approved snapshot (total in minor units + canonical `role:id` pairs), parse it,
+   and compare it with the payout rows an attempt would submit. Every ambiguity
+   (missing/duplicate/unreadable id, unreadable amount, half-written snapshot,
+   changed row set, changed total) is a REFUSAL. A pre-snapshot approval is
+   `legacy_approval` — reported, not refused. Money parsing is string-based
+   (half-up at the second decimal) so `250.005` cannot round DOWN through binary
+   floating point.
+2. **Two new `claims` columns** (reviewed migration, idempotent):
+   `settlement_authorized_total NUMERIC(10,2)` and
+   `settlement_authorized_ledger_ids TEXT`. Declared in `src/db/schema.ts`,
+   `sql/schema.sql` and the incremental `ALTER TABLE ... IF NOT EXISTS` list in
+   `src/db/index.ts`; pinned by a parity test. **Not applied to production.**
+3. **The approval write captures the snapshot in the same transaction** — only
+   after the approval CAS wins, so an ineligible claim still reports its real
+   reason (`not_pending_settlement`, `outside_review_window`, …). If the payout
+   rows cannot be described unambiguously, the transaction is ABORTED
+   (`SettlementAuthorizationSnapshotUnreadable`), so no approval exists without
+   its snapshot; both approval routes report `409 payout_ledger_unreadable`.
+4. **The executor compares the snapshot before any durable marker.**
+   `SETTLEMENT_AUTHORIZATION_MISMATCH` + `abandonRelease()` on any difference;
+   `SETTLEMENT_AUTHORIZATION_SNAPSHOT_MISSING` (informational) for a legacy
+   approval. Nothing is sent, nothing is marked submitted, and the claim returns
+   to `pending_settlement`.
+
+5. **A pre-existing Batch 1.1 ordering defect, found by re-running the HTTP E2E
+   suite.** The ledger-integrity destination check ran BEFORE the phone-only
+   payout policy, so a Till/Paybill leg was refused as a
+   `PAYOUT_DESTINATION_MISMATCH` ("booked destination unreadable") and the
+   operator-facing `PAYOUT_DESTINATION_NOT_ELIGIBLE` audit was never written. The
+   policy gate now runs first; the integrity check still runs for every
+   policy-eligible leg, before any marker. This repairs `lifecycleHttpE2E` stage
+   8.9 (which Batch 1.1 did not re-run) without weakening either check.
+6. **Documentation** — `docs/claims-and-payments.md` (what an approval records and
+   how it is enforced), `docs/operations.md` (audit vocabulary + the replaced
+   "not recorded" paragraph), `docs/api.md` (`payout_ledger_unreadable`).
+7. **Tests** — `config/__tests__/settlementAuthorizationSnapshot.test.ts` (15),
+   `db/__tests__/settlementAuthorizationSnapshot.test.ts` (3, real write path),
+   `__tests__/settlementAuthorizationEnforcement.test.ts` (9, seams + schema
+   parity), a ledger-row-drift case in `settlementPayoutAuthorization.test.ts`,
+   plus the re-pinned order in `paymentProviderContract.test.ts`.
+
+### Migration status
+
+Reviewed and idempotent, **not applied** to any database by this batch:
+
+```sql
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS settlement_authorized_total NUMERIC(10,2);
+ALTER TABLE claims ADD COLUMN IF NOT EXISTS settlement_authorized_ledger_ids TEXT;
+```
+
+Both are nullable with no default, so existing rows read as legacy approvals and
+no backfill is required or performed. Reads tolerate the columns being absent
+(legacy path), but approval WRITES require them — apply the migration before
+deploying Batch 3.
+
+### Verification
+
+```
+node node_modules/vitest/vitest.mjs run \
+  src/config/__tests__/settlementAuthorizationSnapshot.test.ts \
+  src/db/__tests__/settlementAuthorizationSnapshot.test.ts \
+  src/__tests__/settlementAuthorizationEnforcement.test.ts \
+  src/__tests__/settlementPayoutAuthorization.test.ts \
+  src/__tests__/lifecycleHttpE2E.test.ts \
+  src/db/__tests__/settlementReconciliation.test.ts \
+  src/db/__tests__/settlementEarnings.test.ts \
+  src/db/__tests__/paymentConfirmedSessionRecovery.test.ts \
+  src/db/__tests__/financialInvariants.test.ts \
+  src/__tests__/paymentProviderContract.test.ts \
+  src/db/__tests__/schemaSyncIdempotency.test.ts
+# 11/11 files, 296/296 tests passed, exit 0
+
+node node_modules/typescript/bin/tsc --noEmit   # exit 0, no diagnostics
+```
+
+### Outstanding
+
+- The Admin Console still shows who approved and when; the approved TOTAL is not
+  rendered separately (the ledger rows it covers are). The backend refuses any
+  mismatch regardless of what the console displays.
+- No production migration has been run; that is a deployment action, not part of
+  this batch.

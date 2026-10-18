@@ -999,6 +999,13 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     // is never misread as approved.
     `ALTER TABLE claims ADD COLUMN IF NOT EXISTS settlement_approved_at TIMESTAMPTZ`,
     `ALTER TABLE claims ADD COLUMN IF NOT EXISTS settlement_approved_by VARCHAR(100)`,
+    // BATCH 3 - the approval-time snapshot of WHAT was approved. Additive and
+    // idempotent. Both columns NULL means an approval recorded before this batch
+    // (reported as legacy and still bound to its booked ledger rows); a
+    // half-present snapshot is refused at payout initiation rather than read as
+    // an authorization. See config/settlementAuthorizationSnapshot.ts.
+    `ALTER TABLE claims ADD COLUMN IF NOT EXISTS settlement_authorized_total NUMERIC(10,2)`,
+    `ALTER TABLE claims ADD COLUMN IF NOT EXISTS settlement_authorized_ledger_ids TEXT`,
     // Platform-wide admin toggles (currently just the social publishing
     // emergency stop) — same gap, this table didn't exist in the
     // incremental path at all.

@@ -508,6 +508,21 @@ export const claims = pgTable("claims", {
   // ==========================================================================
   settlement_approved_at: timestamp("settlement_approved_at", { withTimezone: true }),
   settlement_approved_by: varchar("settlement_approved_by", { length: 100 }),
+  // BATCH 3 — WHAT the approval covered, recorded in the same CAS-guarded write.
+  //
+  // settlement_authorized_total: the payout total (finder + agent legs) as it
+  // stood at approval time, NUMERIC(10,2) like `ledger.amount`.
+  // settlement_authorized_ledger_ids: the payout ROWS the approval covered,
+  // as canonical `role:id` pairs. Rows rather than destinations, because each
+  // row's `phone_or_till` is already the immutable booking-time destination
+  // snapshot (see config/settlementPayoutIntegrity.ts) — duplicating phone
+  // numbers onto `claims` would add PII without adding a comparison.
+  //
+  // BOTH NULL = an approval recorded before this batch: reported as a legacy
+  // approval and still bound to its booked rows by the Batch 1.1 check. Exactly
+  // ONE set = corrupt/unverifiable state and is refused at initiation.
+  settlement_authorized_total: numeric("settlement_authorized_total", { precision: 10, scale: 2 }),
+  settlement_authorized_ledger_ids: text("settlement_authorized_ledger_ids"),
   // End D-2B-B
 
   // Set the first time POST /api/claims/:id/rate succeeds for this claim —

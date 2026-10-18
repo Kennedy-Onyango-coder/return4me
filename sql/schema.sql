@@ -237,6 +237,18 @@ CREATE TABLE claims (
     -- the matching idempotent ALTER statements in src/db/index.ts.
     settlement_approved_at TIMESTAMP WITH TIME ZONE,
     settlement_approved_by VARCHAR(100),
+    -- BATCH 3 — WHAT the approval covered (see src/db/schema.ts and the matching
+    -- idempotent ALTER statements in src/db/index.ts).
+    -- settlement_authorized_total: the finder+agent payout total at approval
+    -- time, NUMERIC(10,2) like ledger.amount.
+    -- settlement_authorized_ledger_ids: canonical `role:id` pairs of the payout
+    -- ledger rows the approval covered. Rows rather than destinations, because
+    -- ledger.phone_or_till is already the immutable booking-time snapshot.
+    -- BOTH NULL = approval recorded before this batch (legacy; reported, still
+    -- bound to its booked rows by the Batch 1.1 integrity check). EXACTLY ONE
+    -- NULL = unverifiable state, refused at payout initiation.
+    settlement_authorized_total NUMERIC(10, 2),
+    settlement_authorized_ledger_ids TEXT,
     -- Set the first time POST /api/claims/:id/rate succeeds for this claim —
     -- dedup guard so the same claim can't be rated twice. Mirrors
     -- src/db/schema.ts (agent_rated_at) and the matching ALTER statement in
