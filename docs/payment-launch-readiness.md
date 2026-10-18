@@ -58,7 +58,8 @@ gap.
   Every `FAIL` line was matched against `settlement|wallet|payout|payment` and
   produced no matches.
 - All failing files are outside the files this queue changed: `git diff --name-only
-  6857bc3..HEAD` lists 23 files, and none of them is a failing suite.
+  6857bc3..HEAD` lists only the queue's own files (gate, tests, docs, schema and
+  two console components), and none of them is a failing suite.
 - The failures are concentrated in unrelated Admin Console copy/2FA, public
   recognition/masking and navigation/accessibility suites — the area with a
   documented history of pre-existing copy failures in this repository.
@@ -66,6 +67,9 @@ gap.
   report does not claim those 170 failures pre-date it. It claims only what is
   evidenced: they are in files these commits did not touch and outside the audited
   money lifecycle. The money-path suites listed above were run directly and pass.
+  The full run was also taken just before the two console-copy edits at the end of
+  Batch 4; those components' rendering suite plus the new gate-ordering test were
+  run afterwards against the final bytes (6 files, 83 tests, exit 0).
 
 ## 2. Verified by static inspection
 

@@ -343,6 +343,9 @@ node node_modules/typescript/bin/tsc --noEmit
 
 ### Launch status
 
+The full-suite run above predates the two console-copy edits; the delta run beneath
+it covers those components (and the new gate-ordering test) on the final bytes.
+
 **Not declared production-ready.** The money-path defences are tested and the
 provider contract is the remaining unverified dependency: no sandbox payout, wallet
 transfer or balance read has been performed. See
