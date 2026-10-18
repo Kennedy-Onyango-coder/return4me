@@ -7,6 +7,9 @@ import {
   isBatchApprovalRequired,
   type PayoutTransactionVerdict,
 } from '../config/payoutOutcomes';
+// BATCH 2 — the wallet-routing rule lives in config/ so the payout seam and the
+// settlement executor call ONE implementation.
+import { resolveConfiguredPayoutWalletRouting } from '../config/walletRouting';
 
 // Local copy of the phone-masking helper (also in services/auth.ts as
 // maskPhoneForLog, and database.ts) — duplicated rather than imported to
@@ -110,6 +113,22 @@ export function isDisbursementWalletConfigured(): boolean {
   return !isPlaceholderKey(getDisbursementWalletId());
 }
 
+// BATCH 2 — THE OPTIONAL SETTLEMENT-WALLET IDENTITY.
+//
+// The wallet IntaSend takes collections into. This application CANNOT select a
+// collection destination (the STK request it sends carries no wallet field), so
+// this value routes nothing: it is read ONLY so the payout path can prove the
+// wallet it debits is not the wallet that receives collections. Absent, blank or
+// placeholder-shaped means "undeclared" — payouts are unchanged and the identity
+// check is reported as unavailable rather than guessed. It is never sent to the
+// provider and never logged unmasked.
+export function getSettlementWalletId(): string | null {
+  const raw = process.env.INTASEND_SETTLEMENT_WALLET_ID;
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
 const INTASEND_SEND_MONEY_INITIATE_PATH = '/send-money/initiate/';
 
 // Recognizes an unset/placeholder API key under any of the common
@@ -120,6 +139,18 @@ const INTASEND_SEND_MONEY_INITIATE_PATH = '/send-money/initiate/';
 // and does nothing": a key literally set to the word "placeholder" wasn't
 // recognized as fake, so the app made a real network call with an invalid
 // key instead of using the safe built-in simulation.
+//
+// WHY THIS IS *NOT* DELEGATED TO config/walletRouting.ts (BATCH 2): this module
+// sits in a genuine import cycle (payments -> db/database -> paymentStrikePolicy
+// -> services/auth -> payments), and auth.ts calls this predicate at MODULE
+// EVALUATION time. A delegation to an imported binding fails there with
+// "Cannot access ... before initialization" — the import is assigned only when
+// payments.ts's own body starts, which the cycle defers. The same constraint the
+// phone masker at the top of this file documents applies here: a small, pure
+// predicate is duplicated rather than imported across the cycle. The copy in
+// config/walletRouting.ts must agree with this one, and
+// payoutInitiationContract.test.ts asserts that they do over every placeholder
+// shape.
 export function isPlaceholderKey(key: string | undefined | null): boolean {
   if (!key || key.trim() === '') return true;
   const normalized = key.trim().toLowerCase();
@@ -918,14 +949,21 @@ export const PaymentService = {
     //
     // Non-production environments never apply this gate, and never send a
     // configured production wallet ID to a sandbox/test provider.
-    const disbursementWalletConfigured =
-      process.env.NODE_ENV !== 'production' || isDisbursementWalletConfigured();
-    if (!disbursementWalletConfigured) {
-      throw new Error(
-        'FATAL: INTASEND_DISBURSEMENT_WALLET_ID is not configured in production. ' +
-          'Configure a non-blank, non-placeholder working-wallet ID before initiating payouts (IntaSend requires it to be ' +
-          'KES-denominated with can_disburse enabled; that is enforced by the provider, not checked here).'
-      );
+    // BATCH 2 — ONE ROUTING DECISION, TWO REFUSALS.
+    //
+    // resolveConfiguredPayoutWalletRouting() answers both questions this seam
+    // must ask before a payout request exists:
+    //   1. is a usable working-wallet ID configured? (the pre-existing gate), and
+    //   2. is that ID the declared collection/settlement wallet? (new)
+    //
+    // A wallet that both receives collections and pays disbursements re-creates
+    // the provider default this configuration exists to avoid: collected funds
+    // and payout float become one indistinguishable balance. The refusal happens
+    // here, before the request body is built, and again in executeClaimSettlement()
+    // before any durable pre-submission marker is written.
+    const walletRouting = resolveConfiguredPayoutWalletRouting();
+    if (!walletRouting.ok) {
+      throw new Error(`FATAL: ${walletRouting.message}`);
     }
 
     // BATCH 1B-C1 — the payload and its binding inputs are built together, so

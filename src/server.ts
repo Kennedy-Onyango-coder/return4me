@@ -43,6 +43,11 @@ import { smsRateLimit } from './services/smsRateLimit';
 // here"), and render the observed NODE_ENV with the same fail-closed helper. One
 // simulation policy, evaluated at two seams - never two policies.
 import { PaymentService, isDisbursementWalletConfigured, isPlaceholderKey, isPayoutSimulationRequired, isPaymentSimulationEnvironment, describeNodeEnvForRefusal, reconcileWebhookAmount } from './services/payments';
+// BATCH 2 — the ONE wallet-routing decision. The settlement executor calls the
+// same resolver the payout request seam calls, so a payout wallet that equals
+// the declared collection wallet is refused BEFORE any durable marker is
+// written, exactly like a missing wallet ID.
+import { resolveConfiguredPayoutWalletRouting, describePayoutWalletRoutingForAudit } from './config/walletRouting';
 import { OcrService } from './services/ocr';
 import { uploadBase64Image } from './services/storage';
 import { SocialService } from './services/social';
@@ -511,6 +516,18 @@ console.log(`INTASEND_SECRET:         ${process.env.INTASEND_SECRET_KEY ? '[OK] 
 // closed, so it is reported as a warning here at boot rather than surfacing
 // only at the first payout attempt.
 console.log(`INTASEND_WALLET_ID:      ${process.env.NODE_ENV !== 'production' || isDisbursementWalletConfigured() ? '[OK] Configured' : '[WARNING] Missing or placeholder (production payouts refuse to start)'}`);
+// BATCH 2 — the OPTIONAL settlement-wallet identity, reported by NAME only. It
+// routes nothing (the collection request has no wallet field); it exists so the
+// payout gate can prove the wallet it debits is not the wallet that receives
+// collections. 'Not declared' is informational, not a failure: payouts still run,
+// they are simply not checked against a known settlement wallet. A pair of EQUAL
+// IDs is the one state that makes production payouts refuse to start, so it is
+// surfaced here as a warning rather than only at the first attempt.
+const bootWalletRouting = resolveConfiguredPayoutWalletRouting();
+console.log(`INTASEND_SETTLEMENT_WALLET: ${bootWalletRouting.settlementWalletState === 'declared' ? '[OK] Declared (payout/settlement identity check active)' : '[INFO] Not declared (payout wallet cannot be checked against the collection wallet)'}`);
+if (bootWalletRouting.code === 'payout_wallet_is_settlement_wallet') {
+  console.warn('WALLET ROUTING: [WARNING] INTASEND_DISBURSEMENT_WALLET_ID equals INTASEND_SETTLEMENT_WALLET_ID. Production payouts will refuse to start until the two wallet IDs differ.');
+}
 console.log(`ALLOW_MOCK_OTP_BYPASS:   ${process.env.ALLOW_MOCK_OTP_BYPASS === 'true' ? '[WARNING] ENABLED (Insecure)' : '[OK] Disabled'}`);
 console.log(`GEMINI_API_KEY:          ${process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY' ? '[OK] Configured (Real OCR Active)' : '[WARNING] Missing or placeholder'}`);
 console.log(`GROQ_API_KEY:            ${process.env.GROQ_API_KEY && process.env.GROQ_API_KEY !== 'MY_GROQ_API_KEY' ? '[OK] Configured (Secondary OCR Active)' : '[WARNING] Missing or placeholder'}`);
@@ -6846,6 +6863,38 @@ async function executeClaimSettlement(claimId: string, initiatedBy: string = 'SY
       return await abandonRelease(
         'INTASEND_DISBURSEMENT_WALLET_ID is not configured in production. ' +
         'Production payouts require a configured, non-blank, non-placeholder working-wallet ID before initiation.'
+      );
+    }
+
+    // BATCH 2 — THE PAYOUT WALLET MUST NOT BE THE COLLECTION WALLET.
+    //
+    // The guard above answers "is a working wallet configured?". This one answers
+    // "is the wallet we are about to debit the wallet that receives collections?".
+    // It can only answer that when the operator has declared the settlement
+    // wallet's identity (INTASEND_SETTLEMENT_WALLET_ID, optional and
+    // identity-only); an undeclared value is reported as such and does not block
+    // a payout, because inventing an identity would be a guess.
+    //
+    // WHY IT MATTERS: paying out of the wallet that collects re-creates the
+    // provider's default settlement-wallet debit, mixing customer funds with
+    // payout float so neither balance can be reconciled. The refusal is
+    // all-or-nothing and happens BEFORE markPayoutSubmissionStarted(), so every
+    // payout row is still 'not_submitted' and the release lock goes back through
+    // abandonRelease() — no provider request is made, and nothing is retried
+    // automatically.
+    //
+    // The audit line names the verdict and MASKED wallet IDs only; the full IDs
+    // never enter audit_log.
+    const walletRouting = resolveConfiguredPayoutWalletRouting();
+    if (!walletRouting.ok) {
+      await db.logAudit(
+        'SYSTEM',
+        'PAYOUT_WALLET_ROUTING_REFUSED',
+        `Claim ${claimId}: payout NOT submitted - ${walletRouting.message} [${describePayoutWalletRoutingForAudit(walletRouting)}]. No batch was requested and no payout row was marked as submitted.`
+      );
+      return await abandonRelease(
+        `the payout wallet routing is unsafe (${walletRouting.code}). ` +
+        'The working wallet that pays disbursements must be a different wallet from the one that receives collections.'
       );
     }
 

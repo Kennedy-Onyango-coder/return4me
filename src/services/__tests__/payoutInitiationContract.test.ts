@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { PaymentService, buildPayoutLegIdempotencyKey, isDisbursementWalletConfigured } from '../payments';
+import { PaymentService, buildPayoutLegIdempotencyKey, isDisbursementWalletConfigured, isPlaceholderKey } from '../payments';
+import { isConfiguredWalletId } from '../../config/walletRouting';
 
 // =============================================================================
 // BATCH 1B-C1 — THE PAYOUT INITIATION CONTRACT.
@@ -539,6 +540,37 @@ describe('PRODUCTION WALLET SELECTION — reachable fail-closed gate, exact inje
     expect(isDisbursementWalletConfigured()).toBe(true);
   });
 
+  // BATCH 2 — the wallet-routing module carries its own copy of the placeholder
+  // rule (see the cycle note there). The copy is only safe if it agrees with the
+  // payment gate in every case, so the two are compared directly here.
+  it('the wallet-routing placeholder rule agrees with the payment gate', () => {
+    const cases: Array<string | null | undefined> = [
+      undefined,
+      null,
+      '',
+      '   ',
+      '\t\n',
+      'REPLACE_WITH_KES_WORKING_WALLET_ID',
+      '  REPLACE_WITH_KES_WORKING_WALLET_ID  ',
+      'replace_with_a_wallet',
+      'placeholder',
+      'PASTE_YOUR_KEY_HERE',
+      'CHANGEME',
+      'change_me_wallet',
+      'xxx',
+      'TODO',
+      'tbd',
+      REALISTIC_WALLET_FIXTURE,
+      'KES-PROD-WALLET-1',
+    ];
+    for (const value of cases) {
+      expect(
+        isConfiguredWalletId(value),
+        `wallet-routing and payment rules disagree for ${String(value)}`
+      ).toBe(!isPlaceholderKey(value));
+    }
+  });
+
   it('keeps the production secret-key refusal intact and independent of the wallet gate', async () => {
     process.env.NODE_ENV = 'production';
     process.env.INTASEND_SECRET_KEY = 'REPLACE_WITH_REAL_INTASEND_KEY';
@@ -588,5 +620,40 @@ describe('PRODUCTION WALLET SELECTION — reachable fail-closed gate, exact inje
     expect(result.results.every(r => r.status === 'unknown')).toBe(true);
     expect(result.results.every(r => r.status !== 'success')).toBe(true);
     expect(result.results.every(r => r.providerTransactionId === null)).toBe(true);
+  });
+
+  // BATCH 2 — THE ROUTING COLLISION, AT THE REAL SEAM.
+  //
+  // A working wallet that IS the declared collection wallet is not a usable
+  // payout configuration: it re-creates the provider's default settlement-wallet
+  // debit and mixes customer funds with payout float. The refusal must be
+  // reachable on the normal production path (a REAL key, a CONFIGURED wallet) and
+  // must happen before the request is built or sent.
+  it('refuses a production payout when the working wallet IS the declared settlement wallet', async () => {
+    useProductionKey('KES-PROD-WALLET-1');
+    process.env.INTASEND_SETTLEMENT_WALLET_ID = 'KES-PROD-WALLET-1';
+    const calls = stubProvider({ tracking_id: 'TRK-MUST-NOT-BE-USED', transactions: [] });
+
+    await expect(PaymentService.triggerIntasendPayout('CLAIM-1', twoLegs()))
+      .rejects.toThrow(/names the same wallet as INTASEND_SETTLEMENT_WALLET_ID/);
+
+    // Fail-closed means the provider was never contacted at all.
+    expect(calls.length).toBe(0);
+    delete process.env.INTASEND_SETTLEMENT_WALLET_ID;
+  });
+
+  it('still sends the batch when the settlement wallet is declared and DIFFERENT (identity-only, never in the request)', async () => {
+    useProductionKey('KES-PROD-WALLET-1');
+    process.env.INTASEND_SETTLEMENT_WALLET_ID = 'KES-PROD-SETTLEMENT-9';
+    const calls = stubProvider({ tracking_id: 'TRK-W3', transactions: [] });
+
+    await PaymentService.triggerIntasendPayout('CLAIM-1', twoLegs());
+
+    expect(calls.length).toBe(1);
+    expect(calls[0].body.wallet_id).toBe('KES-PROD-WALLET-1');
+    // The settlement wallet is an identity check, NOT a routing input: it must
+    // never appear anywhere in the provider request body.
+    expect(JSON.stringify(calls[0].body)).not.toContain('KES-PROD-SETTLEMENT-9');
+    delete process.env.INTASEND_SETTLEMENT_WALLET_ID;
   });
 });

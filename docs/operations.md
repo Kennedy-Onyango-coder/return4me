@@ -315,6 +315,23 @@ by the platform does not appear where it is spent. When that working wallet runs
 low, payouts fail at the provider while the account as a whole still holds the
 funds.
 
+**What the application checks (Batch 2) — and what it still does not do.** The
+collection request carries no wallet selector, so the application cannot route a
+collection; the payout request does name a wallet, and two rules now protect it.
+A production payout refuses to start when `INTASEND_DISBURSEMENT_WALLET_ID` is
+missing, blank or placeholder-shaped (the original gate), and also when that ID is
+the wallet declared in the optional `INTASEND_SETTLEMENT_WALLET_ID` (the Batch 2
+gate). The second refusal is audited as `PAYOUT_WALLET_ROUTING_REFUSED` with
+masked wallet IDs, happens before any payout row is marked as submitted, and
+returns the claim to `pending_settlement`. Declaring the settlement wallet is
+optional: when it is absent the identity check is reported as "undeclared" and
+payouts behave exactly as before — an unknown identity is never guessed.
+
+None of that moves money. The application still performs no wallet balance read,
+no wallet list call and no intra-wallet transfer; the procedure below remains the
+only supported way to move collected funds into the working wallet. A
+source-invariant test fails if a transfer or balance call is added to `src/`.
+
 **Nothing in this codebase performs this transfer, reads a provider wallet
 balance, or reports one.** The Admin Console cannot do it and no endpoint was
 added for it. It is an IntaSend-side operation performed by the account owner
@@ -458,7 +475,9 @@ A 2xx is not proof either: verify with step 6 in every case.
   takes settlement time, and leaves no internal transfer to reconcile.
 - Do not add this call to the application. Payout initiation, the debit wallet
   and all of its gates live in one place in `services/payments.ts`; a second
-  money path beside it would be a new, unaudited route to the same funds.
+  money path beside it would be a new, unaudited route to the same funds. This is
+  not merely advice: a source-invariant test fails the build if a wallet
+  transfer, wallet-balance read or wallet-list call appears anywhere in `src/`.
 - Do not record the transfer as a settlement, a refund or a payout in this
   system. It settles nothing between a customer, a finder and a hub; it only
   moves the platform's own float between two provider wallets, and it belongs to

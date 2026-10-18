@@ -306,6 +306,41 @@ unknown — the sweep never resets or retries a payout.
 For the ledger outcome model and the payment_received / finder_payout /
 agent_payout / platform_fee row types, see [claims-and-payments.md](claims-and-payments.md#ledger-outcomes).
 
+## Where collections land, and which wallet pays out
+
+Two provider wallets are involved and they are **not interchangeable**.
+
+- **Collections.** The STK request the platform sends
+  (`POST /payment/mpesa-stk-push/`) carries exactly four fields — `public_key`,
+  `phone_number`, `amount`, `api_ref`. It has **no wallet selector**, so the
+  application cannot choose where a collection settles: IntaSend credits the
+  KES **settlement** wallet for the merchant account. Whether the provider can be
+  configured (per request or in the dashboard) to settle collections directly into
+  a working wallet has **not been verified for this merchant account**, and the
+  code makes no claim that it can.
+- **Payouts.** A settlement payout debits the wallet named by
+  `INTASEND_DISBURSEMENT_WALLET_ID` via the documented `wallet_id` field of
+  `POST /send-money/initiate/`. That variable is required in production (a
+  missing, blank or placeholder value refuses the payout before any provider
+  request) and is never sent outside production.
+
+Because collected money and payout float sit in different wallets, a payout can
+fail for want of float while the account as a whole holds funds. Moving that float
+is an **operator-run provider operation** — it is not implemented in this
+application, by design (see [operations.md](operations.md)). The application reads
+no wallet balance, so a settlement balance is never treated as available
+working-wallet money.
+
+**The routing guard (Batch 2).** If the deployment declares the settlement
+wallet's identity in the optional `INTASEND_SETTLEMENT_WALLET_ID`, the payout path
+requires the two wallet IDs to differ. A production deployment whose payout wallet
+**is** the settlement wallet refuses to initiate: the settlement executor returns
+the release lock (`abandonRelease`), every payout row is still `not_submitted`, no
+provider request is made, and the refusal is recorded as
+`PAYOUT_WALLET_ROUTING_REFUSED` with **masked** wallet IDs. An undeclared
+settlement wallet does not block payouts; the identity check is simply reported as
+unavailable rather than guessed.
+
 ## Disputes
 
 A dispute can be filed from `escrow_held`, `pending_settlement` or `disputed`, and

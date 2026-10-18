@@ -138,6 +138,8 @@ a staging operator may choose them deliberately.
 | `INTASEND_PUBLISHABLE_KEY` | Publishable key, sent to the client | No |
 | `INTASEND_SECRET_KEY` | Server-side API key | Yes |
 | `INTASEND_WEBHOOK_CHALLENGE` | Authenticates inbound collection webhooks (challenge value) | Yes |
+| `INTASEND_DISBURSEMENT_WALLET_ID` | Working wallet that payout batches debit (required in production) | No |
+| `INTASEND_SETTLEMENT_WALLET_ID` | Optional identity of the wallet that receives collections (identity check only) | No |
 | `DISPUTE_WINDOW_HOURS` | Hours between handover and settlement eligibility | No |
 | `ENABLE_DEV_PAYMENT_SIMULATION` | Enables the payment simulation routes | No |
 
@@ -159,6 +161,38 @@ shorter one pays agents faster.
 `ENABLE_DEV_PAYMENT_SIMULATION` must not be set in production. The simulation
 routes are additionally guarded by `NODE_ENV`, but the flag is the primary
 control and should be absent.
+
+### Wallet routing
+
+Two IntaSend wallets are involved, and they are **not interchangeable**:
+
+| Wallet | Role | How the application uses it |
+|---|---|---|
+| Settlement wallet | Receives collections | None. The STK request carries **no wallet field**, so the application cannot choose a collection destination. |
+| Working wallet | Pays disbursements | Named by `INTASEND_DISBURSEMENT_WALLET_ID` and sent as `wallet_id` on `POST /send-money/initiate/` — **production only**. |
+
+`INTASEND_DISBURSEMENT_WALLET_ID` is **required in production**: a missing, empty,
+whitespace-only or placeholder-shaped value refuses the payout before any provider
+request, never falling back to the provider's default settlement-wallet debit.
+
+`INTASEND_SETTLEMENT_WALLET_ID` is **optional and identity-only**. It routes
+nothing, is never sent to the provider, and is written to logs/audit rows only in
+masked form. When it is set, the payout path requires it to differ from
+`INTASEND_DISBURSEMENT_WALLET_ID`; a production deployment where the two are equal
+refuses to initiate payouts (`PAYOUT_WALLET_ROUTING_REFUSED`), before any payout
+row is marked as submitted. Leave it empty if the settlement wallet ID is unknown —
+payouts run unchanged and the identity check is reported as "undeclared" rather
+than guessed.
+
+**Not implemented, deliberately:** there is no wallet-balance read, wallet list
+call or settlement→working-wallet transfer in this application. Moving collected
+funds into the working wallet is the operator-run IntaSend procedure documented in
+[operations.md](operations.md); adding it here would be a second, unaudited path
+to the same funds.
+
+**External dependency (unverified):** whether IntaSend can be configured for this
+merchant account to settle collections directly into a working wallet. This
+repository has no evidence either way, so the code makes no claim about it.
 
 ## Object storage
 

@@ -26,6 +26,8 @@ const WEBHOOKS = read('src/routes/webhooks.ts');
 const PAYMENTS = read('src/services/payments.ts');
 const SERVER = read('src/server.ts');
 const DATABASE = read('src/db/database.ts');
+// BATCH 2 — the one wallet-routing rule both payout seams consult.
+const WALLET_ROUTING = read('src/config/walletRouting.ts');
 
 // =============================================================================
 // SOURCE SLICING — WHY THERE IS NO CHARACTER BUDGET HERE
@@ -328,21 +330,33 @@ describe('production wallet gate abandons the settlement release instead of stra
     const initiation = PAYMENTS.slice(start, end);
 
     const simulationReturn = initiation.indexOf('SIM-BATCH-');
-    const serviceGuard = initiation.indexOf('if (!disbursementWalletConfigured) {');
+    const serviceGuard = initiation.indexOf('const walletRouting = resolveConfiguredPayoutWalletRouting();');
+    const refusal = initiation.indexOf('if (!walletRouting.ok) {');
+    const requestBody = initiation.indexOf('const requestBody = {');
     const providerCall = initiation.indexOf('await fetchWithTimeout(');
     expect(simulationReturn, 'the placeholder-key simulation branch was not found').toBeGreaterThan(-1);
     expect(serviceGuard, 'the service-level wallet guard was not found').toBeGreaterThan(-1);
+    expect(refusal, 'the service-level wallet refusal was not found').toBeGreaterThan(-1);
+    expect(requestBody, 'the request body was not found').toBeGreaterThan(-1);
     expect(providerCall, 'the provider call was not found').toBeGreaterThan(-1);
 
     // AFTER the placeholder-key branch returns, i.e. OUTSIDE it: a real
     // production key reaches the guard. Inside that branch it was dead code on
     // the only path that matters — the defect this assertion pins.
     expect(serviceGuard).toBeGreaterThan(simulationReturn);
-    // ...and still before any provider request is built or sent.
-    expect(serviceGuard).toBeLessThan(providerCall);
-    // Independent of the API key: it answers from the wallet configuration.
-    expect(initiation).toContain("process.env.NODE_ENV !== 'production' || isDisbursementWalletConfigured()");
+    // ...and still before any provider request is built or sent. BATCH 2 folded
+    // the "is a wallet configured?" question and the "is that wallet the
+    // collection wallet?" question into ONE resolver; the refusal and its throw
+    // therefore precede the request-body construction itself.
+    expect(refusal).toBeGreaterThan(serviceGuard);
+    expect(refusal).toBeLessThan(requestBody);
+    expect(requestBody).toBeLessThan(providerCall);
+    expect(initiation).toContain('throw new Error(`FATAL: ${walletRouting.message}`);');
     // The wallet itself is injected production-only, from the one accessor.
     expect(initiation).toContain("process.env.NODE_ENV === 'production' ? getDisbursementWalletId() : null");
+    // The shared module carries BOTH production refusals, so moving the gate did
+    // not drop the missing-wallet refusal or invent a weaker one.
+    expect(WALLET_ROUTING).toContain('INTASEND_DISBURSEMENT_WALLET_ID is not configured in production');
+    expect(WALLET_ROUTING).toContain('names the same wallet as INTASEND_SETTLEMENT_WALLET_ID');
   });
 });
