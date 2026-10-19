@@ -183,6 +183,10 @@ import { registerAdminDisputeRoutes } from './routes/adminDisputes';
 // can be exercised over real HTTP (same pattern as routes/adminDisputes.ts).
 import { registerPublicCategoryRoutes, registerAdminCategoryRoutes } from './routes/categories';
 import { registerAdminClaimRoutes } from './routes/adminClaims';
+// PHASE 1 (payout readiness) — the two dual-controlled payout repair endpoints.
+// Registered explicitly (never by a wildcard) so their permission guards are
+// visible at the registration site. Both permissions are granted to NO role.
+import { registerAdminPayoutRepairRoutes } from './routes/adminPayoutRepair';
 // D-2B-B — the settlement approval/initiation endpoints live here (not in the
 // deliberately read-only routes/adminClaims.ts) because they are mutations and
 // because their executor, executeClaimSettlement(), is defined in this module.
@@ -4483,6 +4487,16 @@ async function createApp() {
   // endpoint is registered here â€” lifecycle changes remain the exclusive
   // province of transitionClaimStatus() and the existing admin actions.
   registerAdminClaimRoutes(app, { requireCurrentAdminSession, sendServerError });
+
+  // PHASE 1 (payout readiness) — dual-controlled payout repair.
+  //
+  // POST /api/admin/payout-repairs                       (propose)
+  // POST /api/admin/payout-repairs/:requestId/confirm    (confirm)
+  //
+  // Neither endpoint submits, retries or executes a payout, and neither can be
+  // called by any role today: claims.payout_repair_propose/confirm are granted
+  // to nobody until a separate authorization decision says otherwise.
+  registerAdminPayoutRepairRoutes(app, { requireCurrentAdminSession, sendServerError });
 
   // ============================================================
   // LOST-REPORT ADMIN VISIBILITY (READ-ONLY, PHASE 11A)

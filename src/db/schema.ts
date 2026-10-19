@@ -2,6 +2,14 @@ import { pgTable, varchar, text, numeric, integer, timestamp, jsonb, boolean, in
 import { sql } from "drizzle-orm";
 import { CLAIM_SLOT_EXCLUDED_SQL_LIST } from "../config/claimStatuses";
 import { PAYOUT_OUTCOME_SQL_LIST } from "../config/payoutOutcomes";
+// PHASE 1 (payout readiness) — the repair-request vocabulary and its SQL lists.
+// Imported rather than restated so the Drizzle definition, sql/schema.sql and the
+// idempotent runtime DDL in src/db/index.ts are all generated from one list.
+import {
+  PAYOUT_REPAIR_LEG_TYPE_SQL_LIST,
+  PAYOUT_REPAIR_OPERATION_SQL_LIST,
+  PAYOUT_REPAIR_STATUS_SQL_LIST,
+} from "../config/payoutRepairPolicy";
 // B1 — the ONE payout-method policy, imported from the pure config module the
 // settlement executor itself asks rather than restated as a literal, so the
 // column default, the Drizzle definition, sql/schema.sql and the runtime
@@ -671,6 +679,126 @@ export const ledger = pgTable("ledger", {
     ),
   };
 });
+
+// 6B. PAYOUT REPAIR REQUESTS (Phase 1 — payout readiness)
+//
+// WHY A SEPARATE TABLE AND NOT COLUMNS ON `ledger` (D2)
+// ----------------------------------------------------
+// The repair is a DUAL-CONTROLLED, time-boxed, auditable PROCESS, not a property
+// of a payout row. Keeping it beside the ledger means:
+//   * `ledger` stays the record of what happened at the provider, and nothing
+//     about a request to change it is written into it;
+//   * a request can expire, be refused or be superseded without touching the
+//     money row at all;
+//   * the "at most one OPEN request per ledger row" invariant is expressible as
+//     a partial unique index on THIS table instead of a nullable column dance.
+//
+// WHAT THIS TABLE IS NOT
+// ----------------------
+// It grants nothing. Creating a row changes no payout state; only the
+// confirmation path in src/db/database.ts, inside one transaction, after
+// re-reading and re-evaluating the evidence, may apply the single supported
+// transition, and only for a DIFFERENT administrator than the proposer.
+//
+// `from_payout_outcome` is nullable because the legacy rows this phase is
+// designed to investigate may carry NULL. Those rows are never eligible (see
+// config/payoutRepairPolicy.ts), and the operation CHECK below makes an
+// operation row with a NULL source outcome IMPOSSIBLE, so the nullable column
+// can never be used to encode "repair from unknown".
+//
+// The CHECK constraints are the database-level expression of dual control (D4):
+// a confirmed row MUST carry a confirmer distinct from the proposer. The
+// service enforces the same rule before writing; the constraint means a bug in
+// that code cannot produce a self-confirmed repair.
+export const payout_repair_requests = pgTable(
+  "payout_repair_requests",
+  {
+    id: varchar("id", { length: 50 }).primaryKey(),
+    // The ONE payout leg this request is about. Never cascade-deleted: ledger
+    // rows are financial records, and evidence must not disappear with them.
+    ledger_entry_id: varchar("ledger_entry_id", { length: 50 })
+      .notNull()
+      .references(() => ledger.id),
+    // Denormalised for reporting only; the ledger row remains authoritative.
+    claim_id: varchar("claim_id", { length: 50 }).references(() => claims.id),
+    entry_type: varchar("entry_type", { length: 30 }).notNull(),
+    repair_operation: varchar("repair_operation", { length: 50 }).notNull(),
+    from_status: varchar("from_status", { length: 20 }).notNull(),
+    from_payout_outcome: varchar("from_payout_outcome", { length: 20 }),
+    to_status: varchar("to_status", { length: 20 }).notNull(),
+    to_payout_outcome: varchar("to_payout_outcome", { length: 20 }).notNull(),
+    // The operator's stated reason. Free text, stored verbatim, never used as
+    // evidence (an assertion is not proof).
+    reason: text("reason").notNull(),
+    // Structured evidence digest + decision, as JSON text. Kept as text so this
+    // table needs no jsonb migration on any existing deployment; the content is
+    // written by the service from PayoutRepairEvidenceDigest, which contains no
+    // full destination.
+    evidence_json: text("evidence_json").notNull(),
+    // SHA-256 of the target row exactly as reviewed, and of the request itself.
+    row_fingerprint: varchar("row_fingerprint", { length: 128 }).notNull(),
+    request_fingerprint: varchar("request_fingerprint", { length: 128 }).notNull(),
+    // Lifecycle. `proposed` is the only non-terminal value.
+    status: varchar("status", { length: 20 }).default("proposed").notNull(),
+    proposed_by: varchar("proposed_by", { length: 100 }).notNull(),
+    proposed_at: timestamp("proposed_at", { withTimezone: true }).defaultNow().notNull(),
+    expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+    confirmed_by: varchar("confirmed_by", { length: 100 }),
+    confirmed_at: timestamp("confirmed_at", { withTimezone: true }),
+    outcome: varchar("outcome", { length: 40 }),
+    outcome_detail: text("outcome_detail"),
+    // Ties the request to the audit rows written for it, so the trail is
+    // queryable in both directions without parsing free text.
+    audit_correlation_id: varchar("audit_correlation_id", { length: 50 }).notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => {
+    return {
+      idx_payout_repair_requests_ledger: index("idx_payout_repair_requests_ledger").on(
+        table.ledger_entry_id,
+        table.status
+      ),
+      idx_payout_repair_requests_expiry: index("idx_payout_repair_requests_expiry").on(
+        table.status,
+        table.expires_at
+      ),
+      // AT MOST ONE OPEN REQUEST PER LEDGER ROW. Terminal rows accumulate as
+      // history. This is the database-level answer to "two administrators
+      // proposed at the same moment".
+      uq_payout_repair_open_per_ledger: uniqueIndex("uq_payout_repair_open_per_ledger")
+        .on(table.ledger_entry_id)
+        .where(sql`${table.status} = 'proposed'`),
+      payout_repair_requests_status_check: check(
+        "payout_repair_requests_status_check",
+        sql`${table.status} IN (${sql.raw(PAYOUT_REPAIR_STATUS_SQL_LIST)})`
+      ),
+      payout_repair_requests_operation_check: check(
+        "payout_repair_requests_operation_check",
+        sql`${table.repair_operation} IN (${sql.raw(PAYOUT_REPAIR_OPERATION_SQL_LIST)})`
+      ),
+      payout_repair_requests_entry_type_check: check(
+        "payout_repair_requests_entry_type_check",
+        sql`${table.entry_type} IN (${sql.raw(PAYOUT_REPAIR_LEG_TYPE_SQL_LIST)})`
+      ),
+      // THE state transition this table may ever describe. Anything else is
+      // rejected by the database, not merely by the service.
+      payout_repair_requests_operation_target_check: check(
+        "payout_repair_requests_operation_target_check",
+        sql`${table.repair_operation} = 'release_rejected_leg' AND ${table.from_status} = 'failed' AND ${table.from_payout_outcome} = 'rejected' AND ${table.to_status} = 'pending' AND ${table.to_payout_outcome} = 'not_submitted'`
+      ),
+      // DUAL CONTROL (D4), enforced by the database as well as the service.
+      payout_repair_requests_dual_control_check: check(
+        "payout_repair_requests_dual_control_check",
+        sql`${table.confirmed_by} IS NULL OR ${table.confirmed_by} <> ${table.proposed_by}`
+      ),
+      payout_repair_requests_confirmation_check: check(
+        "payout_repair_requests_confirmation_check",
+        sql`${table.status} <> 'confirmed' OR (${table.confirmed_by} IS NOT NULL AND ${table.confirmed_at} IS NOT NULL)`
+      ),
+    };
+  }
+);
 
 // 7. AUDIT LOG TABLE
 export const audit_log = pgTable("audit_log", {

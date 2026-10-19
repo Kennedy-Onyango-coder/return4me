@@ -934,3 +934,69 @@ CREATE TABLE agent_payout_destination_changes (
 CREATE INDEX idx_agent_payout_changes_agent ON agent_payout_destination_changes(agent_id, status);
 CREATE INDEX idx_agent_payout_changes_expiry ON agent_payout_destination_changes(expires_at);
 CREATE UNIQUE INDEX uq_agent_payout_changes_live ON agent_payout_destination_changes(live_key);
+
+-- =============================================================================
+-- PHASE 1 (payout readiness) — PAYOUT REPAIR REQUESTS
+-- =============================================================================
+-- A DUAL-CONTROLLED, 24-hour, auditable proposal to release ONE payout leg that
+-- the provider positively refused before execution, from `failed` + `rejected`
+-- back to the canonical `pending` + `not_submitted` state. Nothing here submits,
+-- retries or executes a payout; the row only becomes ELIGIBLE for the ordinary,
+-- separately authorized submission path.
+--
+-- A `failed` row with payout_outcome NULL ("no submission history recorded") is
+-- never eligible: absence of a record is not proof that no transfer was made.
+--
+-- `from_payout_outcome` is nullable only because the investigated legacy rows may
+-- carry NULL; the operation target CHECK makes a row with a NULL source outcome
+-- impossible, so it can never encode "repair from unknown".
+--
+-- The matching Drizzle definition is in src/db/schema.ts and the idempotent
+-- runtime statements are in src/db/index.ts. The vocabulary lists are generated
+-- from src/config/payoutRepairPolicy.ts.
+-- =============================================================================
+CREATE TABLE payout_repair_requests (
+    id VARCHAR(50) PRIMARY KEY,
+    ledger_entry_id VARCHAR(50) NOT NULL REFERENCES ledger(id),
+    claim_id VARCHAR(50) REFERENCES claims(id),
+    entry_type VARCHAR(30) NOT NULL,
+    repair_operation VARCHAR(50) NOT NULL,
+    from_status VARCHAR(20) NOT NULL,
+    from_payout_outcome VARCHAR(20),
+    to_status VARCHAR(20) NOT NULL,
+    to_payout_outcome VARCHAR(20) NOT NULL,
+    reason TEXT NOT NULL,
+    evidence_json TEXT NOT NULL,
+    row_fingerprint VARCHAR(128) NOT NULL,
+    request_fingerprint VARCHAR(128) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'proposed',
+    proposed_by VARCHAR(100) NOT NULL,
+    proposed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    confirmed_by VARCHAR(100),
+    confirmed_at TIMESTAMP WITH TIME ZONE,
+    outcome VARCHAR(40),
+    outcome_detail TEXT,
+    audit_correlation_id VARCHAR(50) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT payout_repair_requests_status_check
+        CHECK (status IN ('proposed', 'confirmed', 'expired', 'rejected')),
+    CONSTRAINT payout_repair_requests_operation_check
+        CHECK (repair_operation IN ('release_rejected_leg')),
+    CONSTRAINT payout_repair_requests_entry_type_check
+        CHECK (entry_type IN ('finder_payout', 'agent_payout')),
+    CONSTRAINT payout_repair_requests_operation_target_check
+        CHECK (repair_operation = 'release_rejected_leg'
+               AND from_status = 'failed'
+               AND from_payout_outcome = 'rejected'
+               AND to_status = 'pending'
+               AND to_payout_outcome = 'not_submitted'),
+    CONSTRAINT payout_repair_requests_dual_control_check
+        CHECK (confirmed_by IS NULL OR confirmed_by <> proposed_by),
+    CONSTRAINT payout_repair_requests_confirmation_check
+        CHECK (status <> 'confirmed' OR (confirmed_by IS NOT NULL AND confirmed_at IS NOT NULL))
+);
+CREATE INDEX idx_payout_repair_requests_ledger ON payout_repair_requests(ledger_entry_id, status);
+CREATE INDEX idx_payout_repair_requests_expiry ON payout_repair_requests(status, expires_at);
+CREATE UNIQUE INDEX uq_payout_repair_open_per_ledger ON payout_repair_requests(ledger_entry_id) WHERE status = 'proposed';

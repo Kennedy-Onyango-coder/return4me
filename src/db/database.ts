@@ -56,8 +56,12 @@ import {
   // N6 — the durable SMS rate-limit bucket. See the table comment in schema.ts
   // for why the window is three timestamps rather than one counter.
   sms_rate_limit_buckets as smsRateLimitBucketsTable,
+  // PHASE 1 (payout readiness) — the audited repair request table. See the
+  // table comment in schema.ts: it is PROCESS state next to the ledger, never a
+  // property of a payout row.
+  payout_repair_requests as payoutRepairRequestsTable,
 } from "./schema.ts";
-import { eq, and, or, isNull, isNotNull, inArray, notInArray, lt, lte, gte, ne, desc, asc, sql } from "drizzle-orm";
+import { eq, and, or, isNull, isNotNull, inArray, notInArray, lt, lte, gte, ne, desc, asc, sql, like } from "drizzle-orm";
 import { isAllowedClaimTransition, TERMINAL_CLAIM_STATUSES } from "../config/claimStatuses";
 // E3A — the single source of truth for the payout submission-outcome
 // vocabulary and the retry-eligibility rule. Imported here (not re-derived) so
@@ -75,6 +79,22 @@ import {
 // BATCH 3 — the approval-time snapshot (total + payout rows) is built by the one
 // pure rule in config/; this layer only persists it and reads it back.
 import { buildSettlementAuthorizationSnapshot } from "../config/settlementAuthorizationSnapshot";
+// PHASE 1 (payout readiness) — the ONE repair policy. Imported rather than
+// restated so the decision, the request fingerprint and the audit vocabulary are
+// identical in the service, the dry-run tool and this transaction.
+import {
+  evaluatePayoutRepairEligibility,
+  isPayoutRepairRequestExpired,
+  payoutRepairRequestFingerprint,
+  payoutRowFingerprint,
+  maskLedgerDestination,
+  redactPayoutFailureReasonForAudit,
+  PAYOUT_REPAIR_AUDIT_ACTIONS,
+  PAYOUT_REPAIR_BATCH_SCOPED_AUDIT_ACTIONS,
+  type PayoutRepairEligibility,
+  type PayoutRepairEvidence,
+  type PayoutRepairLedgerSnapshot,
+} from "../config/payoutRepairPolicy";
 // AGENT DASHBOARD BATCH 2 — the ONE payout-destination-change policy. The data
 // layer asks these pure functions rather than restating the activation rule, so
 // the route, the console projection and the persistence guard cannot disagree
@@ -2442,6 +2462,561 @@ class DatabaseEngine {
     } catch (error) {
       console.error("Database query failed:", error);
       throw new Error("Failed to query unresolved payouts.", { cause: error });
+    }
+  }
+
+  // =========================================================================
+  // PHASE 1 (payout readiness) — PAYOUT REPAIR EVIDENCE AND REQUESTS
+  // =========================================================================
+  // LAYERING
+  //   * the RULE lives in src/config/payoutRepairPolicy.ts (pure);
+  //   * this layer only READS evidence, and applies the rule inside the one
+  //     transaction that also writes the audit row and the ledger repair;
+  //   * src/services/payoutRepair.ts does authorization, input validation and
+  //     error-code mapping.
+  //
+  // WHAT THESE METHODS CANNOT DO
+  //   * They never call a provider, never submit a payout and never touch any
+  //     ledger row other than the exact, fingerprinted target of a request.
+  //   * They cannot mark an arbitrary row eligible: the only transition is the
+  //     single operation encoded by the CHECK constraints in schema.ts, and the
+  //     destination state is recomputed from the row itself at confirmation.
+
+  /** Map a raw ledger row to the snapshot the policy reads. No field is invented. */
+  private toPayoutRepairSnapshot(row: any): PayoutRepairLedgerSnapshot {
+    return {
+      id: row.id,
+      claim_id: row.claim_id ?? null,
+      item_id: row.item_id ?? null,
+      type: row.type,
+      amount: row.amount ?? null,
+      phone_or_till: row.phone_or_till ?? null,
+      status: row.status ?? null,
+      payout_outcome: row.payout_outcome ?? null,
+      provider_batch_id: row.provider_batch_id ?? null,
+      provider_transaction_id: row.provider_transaction_id ?? null,
+      failure_reason: row.failure_reason ?? null,
+      created_at: row.created_at ?? null,
+    };
+  }
+
+  /**
+   * Read every piece of evidence the repair policy is allowed to consider, in
+   * one place, so the proposal path and the confirmation path (which calls this
+   * with its transaction handle) see EXACTLY the same inputs.
+   *
+   * READ-ONLY. `handle` is either the pooled Drizzle instance or a transaction.
+   */
+  private async readPayoutRepairEvidence(handle: any, ledgerEntryId: string): Promise<PayoutRepairEvidence> {
+    const ledgerRows = await handle.select().from(ledgerTable).where(eq(ledgerTable.id, ledgerEntryId));
+    const row = ledgerRows[0];
+    if (!row) {
+      return { ledgerEntry: null, claim: null, claimLedger: [], auditEntries: [] };
+    }
+
+    let claim: { id: string; status: string | null } | null = null;
+    let claimLedgerRows: any[] = [row];
+    if (row.claim_id) {
+      // The claim's STATUS is part of the decision (only `pending_settlement`
+      // is repairable), and a missing claim is itself a blocking condition —
+      // never treated as "probably fine".
+      const claimRows = await handle.select().from(claimsTable).where(eq(claimsTable.id, row.claim_id));
+      claim = claimRows[0] ? { id: claimRows[0].id, status: claimRows[0].status ?? null } : null;
+      claimLedgerRows = await handle.select().from(ledgerTable).where(eq(ledgerTable.claim_id, row.claim_id));
+    }
+
+    // AUDIT EVIDENCE (F6). `details` is free text, so the SQL LIKE is only a
+    // coarse pre-filter; the policy re-checks every id with a word-boundary
+    // match and applies an INVERTED allowlist (any unrecognised action that
+    // names the row blocks).
+    //
+    // Three sets are fetched:
+    //   * rows naming this ledger row — no action filter, so a future or
+    //     manually written action cannot be silently ignored;
+    //   * rows naming any provider batch this row or a sibling leg carries;
+    //   * EVERY batch-scoped provider-verification event, because such a record
+    //     may name only the batch. The policy decides relevance; a claim with no
+    //     batch id cannot exclude any of them and therefore fails closed.
+    const batchIds = Array.from(
+      new Set(
+        claimLedgerRows
+          .map((r: any) => (r?.provider_batch_id ? String(r.provider_batch_id) : null))
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+    const auditFilters = [
+      like(auditLogTable.details, `%${ledgerEntryId}%`),
+      ...batchIds.map((batchId) => like(auditLogTable.details, `%${batchId}%`)),
+      inArray(auditLogTable.action, [...PAYOUT_REPAIR_BATCH_SCOPED_AUDIT_ACTIONS]),
+    ];
+    const auditRows = await handle
+      .select()
+      .from(auditLogTable)
+      .where(auditFilters.length === 1 ? auditFilters[0] : or(...auditFilters));
+
+    return {
+      ledgerEntry: this.toPayoutRepairSnapshot(row),
+      claim,
+      claimLedger: claimLedgerRows.map((r) => this.toPayoutRepairSnapshot(r)),
+      auditEntries: auditRows.map((a: any) => ({ id: a.id, action: a.action, details: a.details ?? null })),
+    };
+  }
+
+  /**
+   * Evidence for one payout leg — PUBLIC and read-only.
+   *
+   * The dry-run script does NOT use this method (it must talk to the database
+   * with SELECT-only SQL of its own, so its read-only property is provable from
+   * its source); this exists for the service and for tests.
+   */
+  public async getPayoutRepairEvidence(ledgerEntryId: string): Promise<PayoutRepairEvidence> {
+    try {
+      return await this.readPayoutRepairEvidence(drizzleDb, ledgerEntryId);
+    } catch (error) {
+      console.error("Database query failed:", error);
+      throw new Error("Failed to read payout repair evidence.", { cause: error });
+    }
+  }
+
+  /** Read one repair request by id. Read-only. */
+  public async getPayoutRepairRequestById(requestId: string): Promise<any | null> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(payoutRepairRequestsTable)
+        .where(eq(payoutRepairRequestsTable.id, requestId));
+      return rows[0] ?? null;
+    } catch (error) {
+      console.error("Database query failed:", error);
+      throw new Error("Failed to read the payout repair request.", { cause: error });
+    }
+  }
+
+  /** The current OPEN request for a ledger row, if any. Read-only. */
+  public async getOpenPayoutRepairRequestForLedger(ledgerEntryId: string): Promise<any | null> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(payoutRepairRequestsTable)
+        .where(
+          and(
+            eq(payoutRepairRequestsTable.ledger_entry_id, ledgerEntryId),
+            eq(payoutRepairRequestsTable.status, "proposed"),
+          ),
+        );
+      return rows[0] ?? null;
+    } catch (error) {
+      console.error("Database query failed:", error);
+      throw new Error("Failed to read the open payout repair request.", { cause: error });
+    }
+  }
+
+  /**
+   * Persist a PROPOSAL and its audit row in one transaction.
+   *
+   * Nothing about the ledger is touched here. The caller (the service) has
+   * already evaluated eligibility and computed both fingerprints; this method
+   * does not re-decide anything, it only records what was reviewed.
+   *
+   * DUPLICATE HANDLING IS TWO-LAYERED:
+   *   * the pre-check gives a deterministic, readable refusal in every
+   *     environment (including the in-memory test double, which does not model
+   *     partial indexes);
+   *   * the real guarantee is `uq_payout_repair_open_per_ledger`, and a 23505
+   *     from it is mapped to the same code — so two simultaneous proposals
+   *     cannot both win.
+   */
+  public async createPayoutRepairRequest(record: {
+    /** Generated by the service, so the request fingerprint can cover it before insert. */
+    requestId: string;
+    ledgerEntryId: string;
+    claimId: string | null;
+    entryType: string;
+    fromStatus: string;
+    fromPayoutOutcome: string | null;
+    toStatus: string;
+    toPayoutOutcome: string;
+    reason: string;
+    evidenceJson: string;
+    rowFingerprint: string;
+    requestFingerprint: string;
+    proposedBy: string;
+    now: Date;
+    expiresAt: Date;
+    auditCorrelationId: string;
+  }): Promise<{ ok: boolean; code: string; request?: any }> {
+    try {
+      // The id comes from the caller, because the request fingerprint covers it
+      // and is computed before the insert. Generating a different id here would
+      // silently break the integrity check at confirmation.
+      if (!record.requestId) return { ok: false, code: "INVALID_REQUEST_ID" };
+      const requestId = record.requestId;
+
+      // FAST PATH — a genuinely open request refuses without a write. An
+      // EXPIRED-but-still-'proposed' row is deliberately not treated as open:
+      // F3, an expired proposal must never block a replacement forever.
+      const existing = await this.getOpenPayoutRepairRequestForLedger(record.ledgerEntryId);
+      if (existing && !isPayoutRepairRequestExpired(existing, record.now)) {
+        return { ok: false, code: "DUPLICATE_OPEN_REQUEST", request: existing };
+      }
+
+      const row = await drizzleDb.transaction(async (tx: any) => {
+        // EXPIRE STALE PROPOSALS FIRST (F3). The CAS names the exact prior state
+        // and the elapsed window, so it is idempotent and single-winner: a
+        // concurrent confirmation that already moved the row to `confirmed` is
+        // never overwritten, and only rows this statement actually changed are
+        // audited. The partial unique index remains untouched.
+        const expiredRows = await tx
+          .update(payoutRepairRequestsTable)
+          .set({
+            status: "expired",
+            outcome_detail:
+              "The 24-hour proposal window elapsed; superseded when a replacement was proposed.",
+            updated_at: record.now,
+          })
+          .where(
+            and(
+              eq(payoutRepairRequestsTable.ledger_entry_id, record.ledgerEntryId),
+              eq(payoutRepairRequestsTable.status, "proposed"),
+              lte(payoutRepairRequestsTable.expires_at, record.now),
+            ),
+          )
+          .returning();
+        for (const stale of expiredRows ?? []) {
+          await this.logAuditInTx(
+            tx,
+            "SYSTEM",
+            PAYOUT_REPAIR_AUDIT_ACTIONS.EXPIRED,
+            `Payout repair ${stale.id} (correlation ${stale.audit_correlation_id}) EXPIRED without repair: ` +
+              `the 24-hour window ended before confirmation (superseded by proposal ${requestId}). ` +
+              `Ledger row ${stale.ledger_entry_id} was not modified.`,
+          );
+        }
+
+        const inserted = await tx
+          .insert(payoutRepairRequestsTable)
+          .values({
+            id: requestId,
+            ledger_entry_id: record.ledgerEntryId,
+            claim_id: record.claimId ?? null,
+            entry_type: record.entryType,
+            repair_operation: "release_rejected_leg",
+            from_status: record.fromStatus,
+            from_payout_outcome: record.fromPayoutOutcome ?? null,
+            to_status: record.toStatus,
+            to_payout_outcome: record.toPayoutOutcome,
+            reason: record.reason,
+            evidence_json: record.evidenceJson,
+            row_fingerprint: record.rowFingerprint,
+            request_fingerprint: record.requestFingerprint,
+            status: "proposed",
+            proposed_by: record.proposedBy,
+            proposed_at: record.now,
+            expires_at: record.expiresAt,
+            audit_correlation_id: record.auditCorrelationId,
+            created_at: record.now,
+            updated_at: record.now,
+          })
+          .returning();
+
+        await this.logAuditInTx(
+          tx,
+          record.proposedBy,
+          PAYOUT_REPAIR_AUDIT_ACTIONS.PROPOSED,
+          `Payout repair ${requestId} (correlation ${record.auditCorrelationId}) PROPOSED by ${record.proposedBy} ` +
+            `for ledger row ${record.ledgerEntryId} (${record.entryType}). Reviewed state: ` +
+            `status '${record.fromStatus}', payout outcome '${record.fromPayoutOutcome ?? "NULL"}'; ` +
+            `proposed state: status '${record.toStatus}', payout outcome '${record.toPayoutOutcome}'. ` +
+            `Row fingerprint ${record.rowFingerprint.slice(0, 16)}. ` +
+            `Expires ${record.expiresAt.toISOString()}. No payout was submitted; a DIFFERENT administrator must confirm.`,
+        );
+
+        return inserted[0];
+      });
+      return { ok: true, code: "PROPOSED", request: row };
+    } catch (error: any) {
+      if (error?.code === "23505") return { ok: false, code: "DUPLICATE_OPEN_REQUEST" };
+      console.error("Database write failed:", error);
+      return { ok: false, code: "WRITE_FAILED" };
+    }
+  }
+
+  /**
+   * CONFIRM a proposal — the ONLY code path in this application that may return
+   * a stranded payout leg to the canonical never-submitted state.
+   *
+   * ORDER OF OPERATIONS (each step fails closed, and nothing is assumed):
+   *   1. re-read the request inside the transaction;
+   *   2. refuse a non-open request (duplicate/replay), and report an already
+   *      expired request as EXPIRED without writing a second audit row;
+   *   3. expire an elapsed proposal BEFORE the self-confirmation check, so the
+   *      proposer can clean it up — and check the CAS result before auditing;
+   *   4. refuse self-confirmation of a still-live proposal;
+   *   5. verify the request is byte-for-byte what was reviewed (fingerprint);
+   *   6. re-read ALL evidence and re-run the eligibility rule;
+   *   7. verify the target row is unchanged since the proposal;
+   *   8. claim the request with a CAS, so concurrent confirmations cannot both
+   *      proceed;
+   *   9. write the confirmation audit row BEFORE the money row is touched;
+   *  10. apply the ONE ledger CAS, guarded on the exact reviewed state.
+   *
+   * CONCURRENCY. `SELECT ... FOR UPDATE` is not used: it appears nowhere in this
+   * repository and is not supported by the in-memory database double the tests
+   * run against. The guarantee is the same one every other payout write in this
+   * codebase uses — a single conditional UPDATE whose WHERE clause names the
+   * exact prior state, with `.returning()` deciding the winner. In PostgreSQL
+   * that statement takes the row lock itself, so two confirmations serialise and
+   * the loser matches zero rows.
+   *
+   * ATOMICITY. Everything above happens in one `drizzleDb.transaction`, so in
+   * PostgreSQL the audit row, the request transition and the ledger repair
+   * commit together or not at all. If the audit insert throws, the repair is
+   * rolled back — an unaudited repair is impossible. (The in-memory test double
+   * executes BEGIN/COMMIT as no-ops and cannot model rollback; tests therefore
+   * assert the ORDER — audit attempted before the ledger write — and that a
+   * thrown audit write aborts before any state change.)
+   */
+  public async confirmPayoutRepairRequest(params: {
+    requestId: string;
+    confirmer: string;
+    now?: Date;
+  }): Promise<{
+    ok: boolean;
+    code: string;
+    request?: any;
+    eligibility?: PayoutRepairEligibility;
+    detail?: string;
+  }> {
+    const now = params.now ?? new Date();
+    try {
+      return await drizzleDb.transaction(async (tx: any) => {
+        const requestRows = await tx
+          .select()
+          .from(payoutRepairRequestsTable)
+          .where(eq(payoutRepairRequestsTable.id, params.requestId));
+        const request = requestRows[0];
+        if (!request) return { ok: false, code: "NOT_FOUND" };
+        if (request.status === "confirmed") return { ok: false, code: "ALREADY_CONFIRMED", request };
+        if (request.status === "expired") return { ok: false, code: "EXPIRED", request };
+        if (request.status !== "proposed") return { ok: false, code: "REQUEST_NOT_OPEN", request };
+
+        // F3 — EXPIRY IS EVALUATED BEFORE SELF-CONFIRMATION.
+        // The proposer is allowed to drive their own request to `expired` (and
+        // therefore to clean it up) when the window has elapsed; they are still
+        // never allowed to CONFIRM it. Checking self-confirmation first trapped
+        // expired proposals behind a second administrator.
+        if (isPayoutRepairRequestExpired(request, now)) {
+          const expiredRows = await tx
+            .update(payoutRepairRequestsTable)
+            .set({
+              status: "expired",
+              outcome_detail: "The 24-hour proposal window elapsed before confirmation.",
+              updated_at: now,
+            })
+            .where(
+              and(
+                eq(payoutRepairRequestsTable.id, params.requestId),
+                eq(payoutRepairRequestsTable.status, "proposed"),
+                lte(payoutRepairRequestsTable.expires_at, now),
+              ),
+            )
+            .returning();
+          // THE CAS RESULT IS CHECKED BEFORE ANY EXPIRY AUDIT IS WRITTEN. Under
+          // READ COMMITTED a concurrent confirmation can win this race; the
+          // loser matches zero rows, must not claim an expiry that did not
+          // happen, and must never overwrite the successful confirmation.
+          if (!expiredRows[0]) {
+            const latestRows = await tx
+              .select()
+              .from(payoutRepairRequestsTable)
+              .where(eq(payoutRepairRequestsTable.id, params.requestId));
+            const latest = latestRows[0] ?? request;
+            if (latest.status === "confirmed") {
+              return { ok: false, code: "ALREADY_CONFIRMED", request: latest };
+            }
+            if (latest.status === "expired") {
+              return { ok: false, code: "EXPIRED", request: latest };
+            }
+            return { ok: false, code: "REQUEST_NOT_OPEN", request: latest };
+          }
+          await this.logAuditInTx(
+            tx,
+            "SYSTEM",
+            PAYOUT_REPAIR_AUDIT_ACTIONS.EXPIRED,
+            `Payout repair ${request.id} (correlation ${request.audit_correlation_id}) EXPIRED without repair: ` +
+              `the 24-hour window ended before confirmation. Ledger row ${request.ledger_entry_id} was not modified.`,
+          );
+          return { ok: false, code: "EXPIRED", request };
+        }
+
+        // DUAL CONTROL (D4): the proposer may never confirm their own request.
+        // Enforced here, in the service and by a CHECK constraint in the table.
+        if (String(request.proposed_by) === String(params.confirmer)) {
+          return { ok: false, code: "SELF_CONFIRMATION_FORBIDDEN", request };
+        }
+
+        // The request must be exactly what was reviewed. A rewritten proposal
+        // (an operation, source state, fingerprint or expiry changed in the
+        // database) can never be confirmed.
+        const expectedRequestFingerprint = payoutRepairRequestFingerprint(request);
+        if (
+          !request.request_fingerprint ||
+          String(request.request_fingerprint) !== expectedRequestFingerprint
+        ) {
+          await this.logAuditInTx(
+            tx,
+            params.confirmer,
+            PAYOUT_REPAIR_AUDIT_ACTIONS.REFUSED,
+            `Payout repair ${request.id} REFUSED at confirmation: the stored request does not match its own ` +
+              `reviewed fingerprint. Ledger row ${request.ledger_entry_id} was not modified.`,
+          );
+          return { ok: false, code: "REQUEST_TAMPERED", request };
+        }
+        if (String(request.repair_operation) !== "release_rejected_leg") {
+          return { ok: false, code: "UNSUPPORTED_OPERATION", request };
+        }
+
+        // ---- 5. RE-READ AND RE-EVALUATE (D3) --------------------------------
+        // Nothing about the proposal is trusted at this point: the evidence is
+        // read again inside this transaction and the rule is applied again.
+        const evidence = await this.readPayoutRepairEvidence(tx, String(request.ledger_entry_id));
+        const eligibility = evaluatePayoutRepairEligibility(evidence);
+
+        if (!eligibility.eligible) {
+          await this.logAuditInTx(
+            tx,
+            params.confirmer,
+            PAYOUT_REPAIR_AUDIT_ACTIONS.REFUSED,
+            `Payout repair ${request.id} REFUSED at confirmation: the row is no longer eligible ` +
+              `(${eligibility.blockingCodes.join(", ")}). Ledger row ${request.ledger_entry_id} was not modified.`,
+          );
+          return { ok: false, code: "INELIGIBLE", eligibility, request };
+        }
+
+        // ---- 6. THE ROW MUST BE EXACTLY WHAT WAS REVIEWED -------------------
+        const currentRowFingerprint = payoutRowFingerprint(evidence.ledgerEntry);
+        const sameOutcome =
+          (eligibility.fromOutcome ?? null) === (request.from_payout_outcome ?? null);
+        if (
+          String(currentRowFingerprint) !== String(request.row_fingerprint) ||
+          String(eligibility.fromStatus ?? "") !== String(request.from_status ?? "") ||
+          !sameOutcome
+        ) {
+          await this.logAuditInTx(
+            tx,
+            params.confirmer,
+            PAYOUT_REPAIR_AUDIT_ACTIONS.REFUSED,
+            `Payout repair ${request.id} REFUSED at confirmation: the ledger row changed after the proposal ` +
+              `(stale state). Ledger row ${request.ledger_entry_id} was not modified.`,
+          );
+          return { ok: false, code: "STALE_TARGET_STATE", eligibility, request };
+        }
+
+        // ---- 7. CLAIM THE REQUEST (CAS) -------------------------------------
+        // The proposal becomes `confirmed` exactly once. A concurrent or replayed
+        // confirmation matches zero rows and can never reach the ledger write.
+        const confirmedRows = await tx
+          .update(payoutRepairRequestsTable)
+          .set({
+            status: "confirmed",
+            confirmed_by: params.confirmer,
+            confirmed_at: now,
+            outcome: "applied",
+            outcome_detail:
+              `Eligibility re-evaluated at confirmation (${eligibility.blockingCodes.length} blocking conditions). ` +
+              `Reviewed row fingerprint ${String(request.row_fingerprint).slice(0, 16)} re-verified before the write.`,
+            updated_at: now,
+          })
+          .where(
+            and(
+              eq(payoutRepairRequestsTable.id, params.requestId),
+              eq(payoutRepairRequestsTable.status, "proposed"),
+              isNull(payoutRepairRequestsTable.confirmed_by),
+            ),
+          )
+          .returning();
+        if (!confirmedRows[0]) return { ok: false, code: "ALREADY_CONFIRMED", request };
+
+        // ---- 8. AUDIT BEFORE THE MONEY ROW IS TOUCHED -----------------------
+        // Placed before the ledger write on purpose: if this insert fails, the
+        // surrounding transaction rolls back and the repair never happens, so a
+        // repaired row can never exist without its audit record. The details name
+        // the row, the transition, both administrators and the correlation id —
+        // and only a MASKED destination.
+        // F4 — the ONLY local corroboration of the refusal (`failure_reason`) is
+        // preserved here before the ledger write appends to it. The copy is
+        // redacted (phone-like runs masked, length bounded) so the audit trail
+        // cannot become a destination leak.
+        const previousFailureReason = evidence.ledgerEntry?.failure_reason ?? null;
+        const previousFailureForAudit = redactPayoutFailureReasonForAudit(previousFailureReason);
+        await this.logAuditInTx(
+          tx,
+          params.confirmer,
+          PAYOUT_REPAIR_AUDIT_ACTIONS.CONFIRMED,
+          `Payout repair ${request.id} (correlation ${request.audit_correlation_id}) CONFIRMED by ${params.confirmer}; ` +
+            `proposed by ${request.proposed_by}. Ledger row ${request.ledger_entry_id} (${request.entry_type}) ` +
+            `released from 'failed'/'rejected' to 'pending'/'not_submitted'. Destination ` +
+            `${maskLedgerDestination(evidence.ledgerEntry?.phone_or_till) ?? "unknown"}. ` +
+            `Pre-repair evidence preserved: status '${String(evidence.ledgerEntry?.status ?? "NULL")}', ` +
+            `outcome '${String(evidence.ledgerEntry?.payout_outcome ?? "NULL")}', ` +
+            `provider batch '${String(evidence.ledgerEntry?.provider_batch_id ?? "NULL")}', ` +
+            `failure reason "${previousFailureForAudit ?? "(none)"}". ` +
+            `No payout was submitted, retried or executed by this repair; the row is merely eligible again for the ` +
+            `ordinary, separately authorized submission path.`,
+        );
+
+        // ---- 9. THE ONE LEDGER TRANSITION -----------------------------------
+        // Guarded on the exact reviewed state, so a row that changed between the
+        // read above and this write (another worker, a provider webhook, a manual
+        // edit) is NOT repaired. Failure throws: in PostgreSQL that rolls back
+        // the request claim and the audit row with it.
+        // F4 — the original text is APPENDED, never replaced, so the ledger row
+        // itself continues to carry the refusal evidence that made it eligible.
+        const repairNote =
+          `Released to unsubmitted by audited payout repair ${request.id}. ` +
+          `A provider refusal was recorded for the earlier attempt; no transfer was executed then. ` +
+          `This repair submitted no payout.`;
+        const preservedFailureReason =
+          previousFailureReason && String(previousFailureReason).trim() !== ""
+            ? `${String(previousFailureReason).trim()} | ${repairNote}`
+            : repairNote;
+        const ledgerRows = await tx
+          .update(ledgerTable)
+          .set({
+            status: "pending",
+            payout_outcome: "not_submitted",
+            // The failure reason keeps the original refusal and appends the
+            // causal record of the repair itself. Provider identity columns are
+            // deliberately NOT cleared: destroying them would erase evidence,
+            // and they are the only handle an operator has for reconciling the
+            // earlier attempt.
+            failure_reason: preservedFailureReason,
+          })
+          .where(
+            and(
+              eq(ledgerTable.id, request.ledger_entry_id),
+              eq(ledgerTable.status, "failed"),
+              eq(ledgerTable.payout_outcome, "rejected"),
+              isNull(ledgerTable.provider_transaction_id),
+            ),
+          )
+          .returning({ id: ledgerTable.id });
+
+        if (!ledgerRows[0]) {
+          throw new Error(
+            "Ledger row changed between the confirmation read and the repair write; aborting the repair.",
+          );
+        }
+
+        return { ok: true, code: "CONFIRMED", request: confirmedRows[0], eligibility };
+      });
+    } catch (error) {
+      console.error("Database write failed:", error);
+      return {
+        ok: false,
+        code: "WRITE_FAILED",
+        detail: "The repair transaction failed. Nothing is reported as applied; re-read the request before retrying.",
+      };
     }
   }
 

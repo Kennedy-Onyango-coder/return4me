@@ -8,6 +8,14 @@ import * as Sentry from "@sentry/node";
 // Administrative 2FA hardening — the one-time plaintext -> encrypted TOTP secret
 // migration below reuses the SAME primitives the application uses at runtime.
 import { TOTP_CIPHER_PREFIX, encryptTOTPSecret, isEncryptedTOTPSecret } from "../services/totpCrypto";
+// PHASE 1 (payout readiness) — the CHECK-constraint vocabularies for
+// `payout_repair_requests`, generated from the one policy module so this DDL,
+// src/db/schema.ts and sql/schema.sql cannot drift apart.
+import {
+  PAYOUT_REPAIR_LEG_TYPE_SQL_LIST,
+  PAYOUT_REPAIR_OPERATION_SQL_LIST,
+  PAYOUT_REPAIR_STATUS_SQL_LIST,
+} from "../config/payoutRepairPolicy";
 
 dotenv.config();
 
@@ -43,6 +51,11 @@ const mockDatabaseState: Record<string, any[]> = {
   // on first insert by executeMockQuery(), but listed here with the other
   // tables so the in-memory shape is explicit.
   agent_payout_destination_changes: [],
+  // PHASE 1 (payout readiness) — the audited, dual-control repair request table.
+  // Only Drizzle writes touch it, and only through the guarded proposal /
+  // confirmation paths in src/db/database.ts. Listed here so the in-memory shape
+  // is explicit rather than appearing by accident on first insert.
+  payout_repair_requests: [],
 };
 
 // Uniqueness invariants the in-memory mock enforces on a PLAIN insert.
@@ -1788,7 +1801,63 @@ created_at TIMESTAMP WITH TIME ZONE NOT NULL
     `CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_payout_changes_live ON agent_payout_destination_changes(live_key)`,
     `ALTER TABLE agent_payout_destination_changes DROP CONSTRAINT IF EXISTS agent_payout_changes_status_check`,
     `ALTER TABLE agent_payout_destination_changes ADD CONSTRAINT agent_payout_changes_status_check CHECK (status IN ('pending_verification', 'pending_admin_approval', 'activated', 'rejected', 'expired'))`,
+    // PHASE 1 (payout readiness) — the dual-control repair request table.
+    // Additive and idempotent: CREATE TABLE IF NOT EXISTS + IF NOT EXISTS
+    // indexes, and DROP-then-ADD for every CHECK, so re-running this list on a
+    // database that already has the table converges instead of failing.
+    //
+    // No backfill and no data migration: the table starts empty, which is the
+    // only safe starting point for "no repair has ever been authorized".
+    //
+    // Constraint vocabularies come from src/config/payoutRepairPolicy.ts, so this
+    // DDL, schema.ts and sql/schema.sql cannot drift apart.
+    `CREATE TABLE IF NOT EXISTS payout_repair_requests (
+      id VARCHAR(50) PRIMARY KEY,
+      ledger_entry_id VARCHAR(50) NOT NULL REFERENCES ledger(id),
+      claim_id VARCHAR(50) REFERENCES claims(id),
+      entry_type VARCHAR(30) NOT NULL,
+      repair_operation VARCHAR(50) NOT NULL,
+      from_status VARCHAR(20) NOT NULL,
+      from_payout_outcome VARCHAR(20),
+      to_status VARCHAR(20) NOT NULL,
+      to_payout_outcome VARCHAR(20) NOT NULL,
+      reason TEXT NOT NULL,
+      evidence_json TEXT NOT NULL,
+      row_fingerprint VARCHAR(128) NOT NULL,
+      request_fingerprint VARCHAR(128) NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'proposed',
+      proposed_by VARCHAR(100) NOT NULL,
+      proposed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+      confirmed_by VARCHAR(100),
+      confirmed_at TIMESTAMP WITH TIME ZONE,
+      outcome VARCHAR(40),
+      outcome_detail TEXT,
+      audit_correlation_id VARCHAR(50) NOT NULL,
+      created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_payout_repair_requests_ledger ON payout_repair_requests(ledger_entry_id, status)`,
+    `CREATE INDEX IF NOT EXISTS idx_payout_repair_requests_expiry ON payout_repair_requests(status, expires_at)`,
+    // ONE OPEN REQUEST PER LEDGER ROW, enforced by the database rather than by a
+    // read-then-insert in the service.
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_payout_repair_open_per_ledger ON payout_repair_requests(ledger_entry_id) WHERE status = 'proposed'`,
+    `ALTER TABLE payout_repair_requests DROP CONSTRAINT IF EXISTS payout_repair_requests_status_check`,
+    `ALTER TABLE payout_repair_requests ADD CONSTRAINT payout_repair_requests_status_check CHECK (status IN (${PAYOUT_REPAIR_STATUS_SQL_LIST}))`,
+    `ALTER TABLE payout_repair_requests DROP CONSTRAINT IF EXISTS payout_repair_requests_operation_check`,
+    `ALTER TABLE payout_repair_requests ADD CONSTRAINT payout_repair_requests_operation_check CHECK (repair_operation IN (${PAYOUT_REPAIR_OPERATION_SQL_LIST}))`,
+    `ALTER TABLE payout_repair_requests DROP CONSTRAINT IF EXISTS payout_repair_requests_entry_type_check`,
+    `ALTER TABLE payout_repair_requests ADD CONSTRAINT payout_repair_requests_entry_type_check CHECK (entry_type IN (${PAYOUT_REPAIR_LEG_TYPE_SQL_LIST}))`,
+    `ALTER TABLE payout_repair_requests DROP CONSTRAINT IF EXISTS payout_repair_requests_operation_target_check`,
+    `ALTER TABLE payout_repair_requests ADD CONSTRAINT payout_repair_requests_operation_target_check CHECK (repair_operation = 'release_rejected_leg' AND from_status = 'failed' AND from_payout_outcome = 'rejected' AND to_status = 'pending' AND to_payout_outcome = 'not_submitted')`,
+    // DUAL CONTROL — the confirmer can never be the proposer, even if the
+    // service-level check were skipped by a future caller.
+    `ALTER TABLE payout_repair_requests DROP CONSTRAINT IF EXISTS payout_repair_requests_dual_control_check`,
+    `ALTER TABLE payout_repair_requests ADD CONSTRAINT payout_repair_requests_dual_control_check CHECK (confirmed_by IS NULL OR confirmed_by <> proposed_by)`,
+    `ALTER TABLE payout_repair_requests DROP CONSTRAINT IF EXISTS payout_repair_requests_confirmation_check`,
+    `ALTER TABLE payout_repair_requests ADD CONSTRAINT payout_repair_requests_confirmation_check CHECK (status <> 'confirmed' OR (confirmed_by IS NOT NULL AND confirmed_at IS NOT NULL))`,
   ];
+
   let migrationFailureCount = 0;
   for (const sql of statements) {
     try {

@@ -5,8 +5,17 @@ import {
   readProviderTransactionStatus,
   resolvePayoutTransactionBindings,
   isBatchApprovalRequired,
+  classifyPayoutSubmissionHttpFailure,
   type PayoutTransactionVerdict,
 } from '../config/payoutOutcomes';
+// Phase 1 remediation (F7) — the idempotency key is a shared pure contract:
+// the policy must be able to check that imported evidence names the exact key
+// the submission path would re-use. Re-exported below so existing imports from
+// this module keep working.
+import { buildPayoutLegIdempotencyKey } from '../config/payoutIdempotency';
+
+export { buildPayoutLegIdempotencyKey };
+
 // BATCH 2 — the wallet-routing rule lives in config/ so the payout seam and the
 // settlement executor call ONE implementation.
 import { resolveConfiguredPayoutWalletRouting } from '../config/walletRouting';
@@ -351,12 +360,12 @@ export function reconcileWebhookAmount(
 // cannot occur for a real settlement (the claim row must exist for
 // executeClaimSettlement() to be called at all), and the provider answers a
 // duplicate key with a rejection, which fails closed rather than paying twice.
-export function buildPayoutLegIdempotencyKey(
-  claimId: string,
-  recipientType: 'finder' | 'agent'
-): string {
-  return `PAYOUT_LEG_${recipientType.toUpperCase()}:${String(claimId ?? '').trim()}`;
-}
+//
+// PHASE 1 REMEDIATION (F7): the builder itself lives in
+// config/payoutIdempotency.ts so the repair policy can check imported evidence
+// against the same function. It is imported and re-exported above; there is no
+// second implementation of the key format.
+
 
 // fetch() has no built-in timeout — without one, a request to a third-party
 // API that's unreachable (blocked network, DNS failure, provider outage) can
@@ -1064,25 +1073,34 @@ export const PaymentService = {
       if (!response.ok) {
         const errorText = await response.text();
         console.warn(`[INTASEND DISBURSEMENT] API error (${response.status}): ${errorText.substring(0, 200)}.`);
-        // E3A — A NON-2xx RESPONSE IS NOT ONE FACT. Earlier this path reported
-        // 'failed' for every non-ok status, and the caller recorded that as a
-        // definitive provider rejection. That is only supportable for a status
-        // that PROVES the request was refused before execution:
+        // E3A / PHASE 1 F1 — A NON-2xx RESPONSE IS NOT ONE FACT.
+        //
+        // A status class alone never proves that no transfer executed. The
+        // classification below is deliberately conservative about which
+        // statuses are even ALLOWED to be recorded as a refusal:
         //
         //   * 5xx — the provider (or its gateway) failed while handling an
         //     already-transmitted request. It may have accepted and executed the
-        //     batch before the error surfaced, so this is 'unknown'.
-        //   * 408 Request Timeout — same ambiguity: the request may have been
-        //     received and processed.
-        //   * every other non-ok status (400/401/403/404/409/422/429/… and an
-        //     unexpected 3xx surfaced by fetch) means the provider refused the
-        //     request itself, with no transfer executed, so 'failed' is safe.
+        //     batch before the error surfaced → 'unknown'.
+        //   * 408 Request Timeout, 499 (client closed) → the request may have
+        //     been received and processed → 'unknown'.
+        //   * 409 (duplicate idempotency key) → the provider may be rejecting a
+        //     repeat of a request it ALREADY EXECUTED. This is the canonical
+        //     ambiguity, not a refusal → 'unknown'.
+        //   * 429 (rate limited) → a limiter may reject a request that was
+        //     already forwarded; ambiguity cannot be excluded → 'unknown'.
+        //   * an unexpected 3xx surfaced by fetch → the request may have been
+        //     redirected and processed → 'unknown'.
         //
-        // The distinction matters because 'failed' is recorded as a REJECTION
-        // while 'unknown' is recorded as unresolved — treating a 5xx as a
-        // rejection would have let a possibly-executed transfer be re-sent on
-        // the next attempt.
-        const mayHaveBeenProcessed = response.status === 408 || response.status >= 500;
+        // Everything else (400/401/403/404/422/…) is recorded as 'failed', which
+        // this codebase persists as payout_outcome 'rejected'. That value means
+        // ONLY "the submission path recorded a refusal-class failure": the HTTP
+        // status is not persisted, the provider's key-retention semantics are
+        // unproven, and an audited repair therefore requires separately imported
+        // provider evidence (see config/payoutRepairPolicy.ts). It is never
+        // treated as proof of non-execution by the repair policy.
+        const mayHaveBeenProcessed =
+          classifyPayoutSubmissionHttpFailure(response.status) === 'ambiguous';
         return {
           batchId: null,
           results: payouts.map(p => ({

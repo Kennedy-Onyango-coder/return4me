@@ -46,6 +46,23 @@ export const ADMIN_PERMISSIONS = {
    *  inside its settle_at deadline, and is not payout-paused or on hold.
    *  Requires durable approval already recorded in the database. */
   CLAIMS_SETTLEMENT_INITIATE: 'claims.settlement_initiate',
+  /**
+   * PHASE 1 (payout readiness) — PROPOSE an audited repair of one stranded
+   * payout leg. Proposing changes NO money and NO ledger state: it records a
+   * 24-hour, evidence-backed proposal that a DIFFERENT administrator must
+   * confirm.
+   *
+   * GRANTED TO NO ROLE. See ADMIN_ROLE_GRANTS below — deliberately absent.
+   */
+  CLAIMS_PAYOUT_REPAIR_PROPOSE: 'claims.payout_repair_propose',
+  /**
+   * PHASE 1 (payout readiness) — CONFIRM someone else's payout repair
+   * proposal. This is the only permission that can release a `failed` +
+   * `rejected` leg back to `pending` + `not_submitted`.
+   *
+   * GRANTED TO NO ROLE. See ADMIN_ROLE_GRANTS below — deliberately absent.
+   */
+  CLAIMS_PAYOUT_REPAIR_CONFIRM: 'claims.payout_repair_confirm',
 } as const;
 
 export type AdminPermission = (typeof ADMIN_PERMISSIONS)[keyof typeof ADMIN_PERMISSIONS];
@@ -58,6 +75,21 @@ export type AdminPermission = (typeof ADMIN_PERMISSIONS)[keyof typeof ADMIN_PERM
  */
 const ADMIN_ROLE_GRANTS: Record<string, readonly string[]> = {
   admin: [ADMIN_PERMISSIONS.CLAIMS_READ, ADMIN_PERMISSIONS.CLAIMS_DETAIL, ADMIN_PERMISSIONS.CLAIMS_SETTLEMENT_APPROVE, ADMIN_PERMISSIONS.CLAIMS_SETTLEMENT_INITIATE],
+  // PHASE 1 (payout readiness) — INTENTIONALLY ABSENT:
+  //   claims.payout_repair_propose
+  //   claims.payout_repair_confirm
+  //
+  // The two permissions are DEFINED above so the routes can declare them and
+  // enforce them, but they are granted to NO role — not `admin`, not `owner`,
+  // not an agent, not any future role by default. Widening this map is a
+  // separate, explicitly reviewed authorization decision (which administrator
+  // identity may release a payout leg, and how proposer/confirmer separation is
+  // staffed). Until that decision exists, both endpoints answer 403 for every
+  // caller, including the existing seeded administrator, and no repair can be
+  // proposed or confirmed through the API at all.
+  //
+  // This is the "denied by default" requirement expressed in the ONLY place
+  // that resolves permissions, so there is no second table to forget.
 };
 
 /** Permissions held by this authenticated principal. Unknown roles hold none. */

@@ -59,9 +59,16 @@ export const PAYOUT_OUTCOME_VALUES = [
    */
   'unknown',
   /**
-   * Reliable evidence that THIS attempt was refused before execution (a 4xx
-   * provider rejection, excluding 408). No transfer happened. Not retried
-   * automatically in this batch — see isPayoutSubmittable().
+   * The submission path RECORDED a refusal-class failure for this attempt.
+   *
+   * IMPORTANT (Phase 1 remediation, F1): this value is a LOCAL CLASSIFICATION,
+   * NOT proof that no transfer executed. It is written when a non-2xx provider
+   * response is not classified as ambiguous (see
+   * classifyPayoutSubmissionHttpFailure), and the HTTP status itself is not
+   * persisted. It therefore cannot, on its own, establish non-execution — the
+   * repair policy requires separately imported provider evidence before a row
+   * in this state may be released. Not retried automatically — see
+   * isPayoutSubmittable().
    */
   'rejected',
   /** Authoritative evidence that the transfer completed. Terminal. */
@@ -630,4 +637,45 @@ export function resolvePayoutTransactionBindings(
       (entry) => entry.account === null || !knownAccounts.has(entry.account),
     ).length,
   };
+}
+
+/**
+ * F1 (Phase 1 remediation) — CLASSIFY A NON-2xx SUBMISSION RESPONSE.
+ *
+ * WHAT THIS FUNCTION IS ALLOWED TO DECIDE
+ * ---------------------------------------
+ * It decides only whether the LOCAL code should record the attempt as
+ * definitely-known-not-to-have-executed (`refusal_reported`) or as unresolved
+ * (`ambiguous`). It NEVER decides that money did not move, and its result is
+ * never accepted by the repair policy as proof of non-execution.
+ *
+ * A duplicate-idempotency response (409) is the canonical counterexample: the
+ * provider may be rejecting a repeat of a request it already executed. A 3xx
+ * surfaced by fetch, 408, 429 (a rate limiter may reject a request that was
+ * already forwarded), 499 and every 5xx are equally ambiguous. Those all become
+ * `unknown` in the ledger, which is unresolved and blocks both automatic
+ * resubmission and repair.
+ *
+ * `refusal_reported` therefore means: "this status is documented as a refusal of
+ * the request itself, and no transfer is expected". A repair still requires the
+ * external, row-level evidence contract in config/payoutRepairPolicy.ts.
+ */
+export type PayoutSubmissionFailureClass = 'ambiguous' | 'refusal_reported';
+
+/** Statuses whose semantics cannot establish that the provider did not execute. */
+export const AMBIGUOUS_PAYOUT_FAILURE_STATUSES = [408, 409, 429, 499] as const;
+
+export function classifyPayoutSubmissionHttpFailure(
+  status: number | null | undefined,
+): PayoutSubmissionFailureClass {
+  // Number(null) is 0 and Number('') is 0; neither is a provider status.
+  if (status === null || status === undefined) return 'ambiguous';
+  const numeric = Number(status);
+  if (!Number.isFinite(numeric)) return 'ambiguous'; // no status at all is not a refusal
+  if (numeric >= 300 && numeric < 400) return 'ambiguous'; // unexpected redirect
+  if ((AMBIGUOUS_PAYOUT_FAILURE_STATUSES as readonly number[]).includes(numeric)) {
+    return 'ambiguous';
+  }
+  if (numeric >= 500) return 'ambiguous'; // provider/gateway failed while handling the request
+  return 'refusal_reported';
 }
