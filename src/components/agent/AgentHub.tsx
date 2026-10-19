@@ -15,6 +15,11 @@ import AgentRejectionPanel from './AgentRejectionPanel';
 // helpers only; the Hub remains hook-free and presentation-only.
 import { panelTriggerId } from './panelFocus';
 import { formatEarnings, isFiniteNumber } from '../../utils/formatMoney';
+// SEC-002 / AGT-006 — the ONE canonical destination masker, the same function the
+// settlement executor writes into audit rows and the payout-settings surface
+// renders. Imported rather than re-implemented so the visible form of a payout
+// number cannot drift between the agent's own screens and an operator's.
+import { maskPayoutDestinationForLog } from '../../config/payoutDestinations';
 
 /**
  * AGENTHUB STRUCTURAL EXTRACTION — BATCH A (typed domain prop contracts).
@@ -749,7 +754,14 @@ export default function AgentHub({ t, ...props }: AgentHubProps) {
             </div>
             <div className="bg-white/10 p-4 rounded-standard border border-white/10 text-right font-mono">
               <span className="text-caption text-white/70 block uppercase font-sans font-bold">Payout via {props.agentProfile.payout_method_type || "Till Number"}</span>
-              <span className="text-body-large font-extrabold text-accent-orange">{props.agentProfile.mpesa_till_or_paybill}</span>
+              {/* SEC-002 / AGT-006 — MASKED. This banner is on the agent's
+                  landing screen, readable by anyone standing at the counter and
+                  captured by any screenshot. The agent does not need the full
+                  number to recognise their own destination, and the payout
+                  settings card is the place where a change is proposed (and
+                  shows the masked value too). The server keeps the canonical
+                  value; only this render is masked. */}
+              <span className="text-body-large font-extrabold text-accent-orange">{maskPayoutDestinationForLog(props.agentProfile.mpesa_till_or_paybill)}</span>
             </div>
           </div>
 

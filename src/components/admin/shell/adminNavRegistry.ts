@@ -178,7 +178,14 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         label: 'Payment Strikes',
         icon: AlertTriangle,
         title: 'Payment Strikes',
-        description: 'Review agent strikes and enforcement history.',
+        // ADM-003 — the section lists CLAIMANT payment-failure strikes
+        // (claim_payment_strikes, keyed by the claimant's phone number), not
+        // anything an agent accrues. The old description said "agent strikes",
+        // which sent operators to the wrong mental model: agent standing is
+        // reviewed in the Agents Hub. Both the sidebar label and the page
+        // heading are unchanged, so no route, permission check or test that
+        // pins 'Payment Strikes' moves with this wording fix.
+        description: 'Review claimant payment-failure strikes and the restrictions they trigger.',
       },
       {
         id: 'audit',

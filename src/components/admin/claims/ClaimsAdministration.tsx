@@ -48,7 +48,21 @@ import type {
  */
 const SEARCH_DEBOUNCE_MS = 350;
 
-export default function ClaimsAdministration({ token }: {  token: string | null }) {
+export default function ClaimsAdministration({
+  token,
+  pendingSettlementClaimIds,
+  settlementQueueLoaded,
+  onOpenSettlement,
+}: {
+  token: string | null;
+  /** ADM-001 — the claims that currently have a Pending Settlements row. */
+  pendingSettlementClaimIds?: readonly string[];
+  /** ADM-001 — whether the settlement list has actually been loaded (a missing
+   *  list is "unknown", never "this claim has no settlement"). */
+  settlementQueueLoaded?: boolean;
+  /** ADM-001 — navigate to that claim's settlement row in Money → Ledger. */
+  onOpenSettlement?: (claimId: string) => void;
+}) {
   const [draftFilters, setDraftFilters] = useState<ClaimFilterState>(EMPTY_CLAIM_FILTERS);
   const [appliedFilters, setAppliedFilters] = useState<ClaimFilterState>(EMPTY_CLAIM_FILTERS);
   const [offset, setOffset] = useState(0);
@@ -261,6 +275,14 @@ export default function ClaimsAdministration({ token }: {  token: string | null 
         onClose={() => setSelectedClaimId(null)}
         onRetry={() => selectedClaimId && loadDetail(selectedClaimId)}
         onOpenClaim={setSelectedClaimId}
+        settlementRowState={
+          settlementQueueLoaded
+            ? (pendingSettlementClaimIds ?? []).includes(selectedClaimId ?? '')
+              ? 'available'
+              : 'not_listed'
+            : 'unknown'
+        }
+        onOpenSettlement={onOpenSettlement}
       />
     </div>
   );

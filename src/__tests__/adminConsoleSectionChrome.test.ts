@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import {
+  ADMIN_SECTION_IDS,
+  describeAdminSection,
+  describeAdminSectionCopy,
+} from '../components/admin/shell/adminNavRegistry';
 
 // =============================================================================
 // BATCH 2 — ADMIN CONSOLE SECTION CHROME
@@ -131,5 +136,41 @@ describe('Batch 2: the actions those sections drive are still wired', () => {
     // silently stop the form from ever being sent.
     const submitButtons = [...code.matchAll(/<Button\s[^>]*type="submit"/g)];
     expect(submitButtons.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('ADM-003: the Payment Strikes section says WHOSE strikes it lists', () => {
+  // The defect: the section description said "agent strikes", which sent an
+  // operator looking for an agent's standing — that is reviewed in the Agents
+  // Hub. The rows here come from `claim_payment_strikes`, keyed by the CLAIMANT's
+  // phone number, so the copy must name the claimant and the restriction those
+  // failed payments trigger.
+  const copy = describeAdminSectionCopy('strikes');
+  const navItem = describeAdminSection('strikes')?.item;
+
+  it('describes claimant payment-failure strikes, not anything an agent accrues', () => {
+    expect(copy.description).toBe(
+      'Review claimant payment-failure strikes and the restrictions they trigger.',
+    );
+    expect(copy.description).toMatch(/claimant/i);
+    expect(copy.description).not.toMatch(/agent/i);
+  });
+
+  it('states the consequence the section exists for', () => {
+    expect(copy.description).toMatch(/restriction/i);
+  });
+
+  it('keeps the label, the title and the section id unchanged', () => {
+    // A copy-only fix: no route, permission check or pinned label may move.
+    expect(copy.title).toBe('Payment Strikes');
+    expect(navItem?.label).toBe('Payment Strikes');
+    expect(ADMIN_SECTION_IDS).toContain('strikes');
+  });
+
+  it('is the copy the console band actually renders', () => {
+    expect(adminView).toContain('const sectionCopy = describeAdminSectionCopy(activeTab);');
+    expect(adminView).toContain('{sectionCopy.description}');
+    // The retired wording must not survive anywhere in the console source.
+    expect(adminView).not.toContain('agent strikes');
   });
 });

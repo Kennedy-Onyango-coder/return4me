@@ -43,6 +43,8 @@ export default function ClaimDetailPanel({
   onClose,
   onRetry,
   onOpenClaim,
+  settlementRowState = 'unknown',
+  onOpenSettlement,
 }: {
   claimId: string | null;
   claim: AdminClaimDetailView | null;
@@ -51,6 +53,14 @@ export default function ClaimDetailPanel({
   onClose: () => void;
   onRetry: () => void;
   onOpenClaim: (claimId: string) => void;
+  /**
+   * ADM-001 — whether this claim currently has a Pending Settlements row.
+   * 'unknown' means the settlement list itself has not loaded, which is a
+   * different fact from 'not_listed' and is worded differently.
+   */
+  settlementRowState?: 'available' | 'not_listed' | 'unknown';
+  /** ADM-001 — select that row in Money → Ledger. Navigation only. */
+  onOpenSettlement?: (claimId: string) => void;
 }) {
   if (!claimId) return null;
 
@@ -65,14 +75,14 @@ export default function ClaimDetailPanel({
         role="dialog"
         aria-modal="true"
         aria-labelledby="r4m-claim-detail-title"
-        className="relative bg-brand-beige w-full sm:max-w-2xl h-full overflow-y-auto border-l border-brand-border"
+        className="relative bg-[var(--appearance-surface)] w-full sm:max-w-2xl h-full overflow-y-auto border-l border-[var(--appearance-border)]"
       >
-        <header className="sticky top-0 z-10 bg-white border-b border-brand-border px-5 py-4 flex items-start justify-between gap-3">
+        <header className="sticky top-0 z-10 bg-[var(--appearance-surface)] border-b border-[var(--appearance-border)] px-5 py-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-caption font-extrabold uppercase tracking-widest text-brand-muted-text">
+            <p className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">
               {'Claim details'}
             </p>
-            <h2 id="r4m-claim-detail-title" className="font-mono text-sm font-extrabold text-brand-dark-text break-all">
+            <h2 id="r4m-claim-detail-title" className="font-mono text-sm font-extrabold text-[var(--appearance-text-primary)] break-all">
               {claimId}
             </h2>
           </div>
@@ -96,7 +106,12 @@ export default function ClaimDetailPanel({
           )}
 
           {!loading && !error && claim && (
-            <ClaimDetailBody claim={claim} onOpenClaim={onOpenClaim} />
+            <ClaimDetailBody
+              claim={claim}
+              onOpenClaim={onOpenClaim}
+              settlementRowState={settlementRowState}
+              onOpenSettlement={onOpenSettlement}
+            />
           )}
         </div>
       </aside>
@@ -118,9 +133,9 @@ function DetailSkeleton() {
 /** A titled block. Keeps the hierarchy consistent across every section. */
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="bg-white border border-brand-border rounded-2xl px-4 py-3">
-      <h3 className="text-caption font-extrabold uppercase tracking-widest text-brand-muted-text mb-2">{title}</h3>
-      <div className="space-y-1.5 text-sm text-brand-dark-text">{children}</div>
+    <section className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl px-4 py-3">
+      <h3 className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)] mb-2">{title}</h3>
+      <div className="space-y-1.5 text-sm text-[var(--appearance-text-primary)]">{children}</div>
     </section>
   );
 }
@@ -128,8 +143,8 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-      <span className="text-xs text-brand-muted-text min-w-[9.5rem]">{label}</span>
-      <span className="text-xs font-medium text-brand-dark-text flex-1 min-w-0 break-words">{children}</span>
+      <span className="text-xs text-[var(--appearance-text-muted)] min-w-[9.5rem]">{label}</span>
+      <span className="text-xs font-medium text-[var(--appearance-text-primary)] flex-1 min-w-0 break-words">{children}</span>
     </div>
   );
 }
@@ -137,9 +152,13 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 function ClaimDetailBody({
   claim,
   onOpenClaim,
+  settlementRowState,
+  onOpenSettlement,
 }: {
   claim: AdminClaimDetailView;
   onOpenClaim: (claimId: string) => void;
+  settlementRowState: 'available' | 'not_listed' | 'unknown';
+  onOpenSettlement?: (claimId: string) => void;
 }) {
   const settlement = presentFinancialState(claim.settlement.state);
   const siblingClaims = Array.isArray(claim.sibling_claims) ? claim.sibling_claims : [];
@@ -203,7 +222,7 @@ function ClaimDetailBody({
             </Field>
           </>
         ) : (
-          <p className="text-xs text-brand-muted-text">Not available</p>
+          <p className="text-xs text-[var(--appearance-text-muted)]">Not available</p>
         )}
       </Panel>
 
@@ -216,7 +235,7 @@ function ClaimDetailBody({
             </Field>
           </>
         ) : (
-          <p className="text-xs text-brand-muted-text">
+          <p className="text-xs text-[var(--appearance-text-muted)]">
             {'No agent assigned.'}
           </p>
         )}
@@ -233,15 +252,96 @@ function ClaimDetailBody({
         <Field label={'Settlement release'}>
           {formatTimestamp(claim.settlement.settle_at)}
         </Field>
-        <p className="text-caption text-brand-muted-text pt-1">
+        <p className="text-caption text-[var(--appearance-text-muted)] pt-1">
           {'This system keeps no monetary balance record, so no amount is shown.'}
         </p>
       </Panel>
+
+      <SettlementQueuePanel
+        claim={claim}
+        settlementRowState={settlementRowState}
+        onOpenSettlement={onOpenSettlement}
+      />
 
       <DisputePanels claim={claim} />
 
       <RelatedClaimsPanel claim={claim} onOpenClaim={onOpenClaim} siblings={siblingClaims} />
     </>
+  );
+}
+
+/**
+ * ADM-001 — SETTLEMENT CONTEXT, AND THE ONE WORKING ROUTE TO THE ACTION.
+ *
+ * A pending_settlement claim is the only kind with a settlement decision
+ * outstanding, and that decision lives in exactly one place: the Pending
+ * Settlements list under Money → Ledger. This panel therefore reports the
+ * server's own settlement facts (the persisted settle_at and the lifecycle
+ * bucket already in the DTO) and offers a NAVIGATION action to that row.
+ *
+ * It deliberately renders NO action of its own: no approve, no initiate, no
+ * re-arm. The claim detail drawer stays read-only in the 6F sense, and there is
+ * still exactly one path that can move money.
+ *
+ * Three states are distinguished, because they are different facts:
+ *   available  — the dashboard payload contains this claim's settlement row
+ *   not_listed — the list loaded and this claim is not in it (stale snapshot,
+ *                or the claim left pending_settlement after the list was read)
+ *   unknown    — the list itself has not loaded, so nothing can be said
+ */
+function SettlementQueuePanel({
+  claim,
+  settlementRowState,
+  onOpenSettlement,
+}: {
+  claim: AdminClaimDetailView;
+  settlementRowState: 'available' | 'not_listed' | 'unknown';
+  onOpenSettlement?: (claimId: string) => void;
+}) {
+  if (claim.status !== 'pending_settlement') return null;
+
+  const settleAt = claim.settlement?.settle_at ?? null;
+  const settleAtDate = settleAt ? new Date(settleAt) : null;
+  const settleAtReadable = settleAtDate !== null && !Number.isNaN(settleAtDate.getTime());
+  const due = settleAtReadable && settleAtDate.getTime() <= Date.now();
+
+  return (
+    <Panel title={'Settlement'}>
+      <Field label={'Review window closes'}>{formatTimestamp(settleAt)}</Field>
+      <Field label={'Review window'}>
+        {!settleAtReadable
+          ? 'No review window recorded — the claim cannot become due until one is set.'
+          : due
+            ? 'Elapsed — the settlement is eligible for review.'
+            : 'Still open — the server refuses approval and payout until it closes.'}
+      </Field>
+      <Field label={'Settlement row'}>
+        {settlementRowState === 'available'
+          ? 'Listed under Pending Settlements.'
+          : settlementRowState === 'not_listed'
+            ? 'Not in the loaded Pending Settlements list.'
+            : 'Settlement list not loaded.'}
+      </Field>
+
+      {settlementRowState === 'available' && onOpenSettlement ? (
+        <div className="pt-2">
+          <Button variant="outline" size="sm" onClick={() => onOpenSettlement(claim.id)}>
+            <ExternalLink size={14} aria-hidden="true" />
+            {'Open settlement row'}
+          </Button>
+        </div>
+      ) : (
+        <p className="text-caption text-[var(--appearance-text-muted)] pt-1">
+          {settlementRowState === 'not_listed'
+            ? 'Refresh the dashboard before acting: the settlement list the console holds is older than this claim. If the claim has just settled or been disputed, it is no longer awaiting settlement.'
+            : 'Reload the dashboard to read the settlement list. No settlement action can be taken from this drawer.'}
+        </p>
+      )}
+
+      <p className="text-caption text-[var(--appearance-text-muted)] pt-1">
+        {'Approval and payout happen only in Money → Ledger → Pending Settlements, with the existing password re-authentication. Nothing on this panel can approve, release or re-send a payout.'}
+      </p>
+    </Panel>
   );
 }
 
@@ -266,7 +366,7 @@ function DisputePanels({ claim }: { claim: AdminClaimDetailView;  }) {
   if (!dispute) {
     return (
       <Panel title={'Dispute'}>
-        <p className="text-xs text-brand-muted-text">
+        <p className="text-xs text-[var(--appearance-text-muted)]">
           {'This claim is not part of a dispute.'}
         </p>
       </Panel>
@@ -314,17 +414,17 @@ function DisputePanels({ claim }: { claim: AdminClaimDetailView;  }) {
 
       <Panel title={'Dispute — state when filed'}>
         {thisHistorical.unknown && (
-          <p className="flex items-start gap-1.5 text-caption text-brand-muted-text pb-1">
+          <p className="flex items-start gap-1.5 text-caption text-[var(--appearance-text-muted)] pb-1">
             <AlertCircle size={13} aria-hidden="true" className="mt-0.5 shrink-0" />
             {'This dispute predates the historical snapshot, so the state at filing is genuinely unknown — it does not mean unpaid.'}
           </p>
         )}
-        <p className="text-caption font-bold text-brand-dark-text pt-1">
+        <p className="text-caption font-bold text-[var(--appearance-text-primary)] pt-1">
           {'This claim'}
         </p>
         <Field label={'Status at dispute'}>{thisHistorical.status}</Field>
         <Field label={'Payment at dispute'}>{thisHistorical.payment}</Field>
-        <p className="text-caption font-bold text-brand-dark-text pt-2">
+        <p className="text-caption font-bold text-[var(--appearance-text-primary)] pt-2">
           {'Other claim'}
         </p>
         <Field label={'Status at dispute'}>{otherHistorical.status}</Field>
@@ -357,7 +457,7 @@ function RelatedClaimsPanel({
     <Panel title={'Related claims'}>
       {disputeOther?.claim_id && (
         <div className="pb-2">
-          <p className="text-caption text-brand-muted-text mb-1">
+          <p className="text-caption text-[var(--appearance-text-muted)] mb-1">
             {'Other side of the dispute'}
           </p>
           <SiblingRow id={disputeOther.claim_id} onOpenClaim={onOpenClaim} />
@@ -371,16 +471,16 @@ function RelatedClaimsPanel({
               <span className="flex flex-wrap items-center gap-2 mt-1 pl-0.5">
                 <ClaimStatusBadge status={sib.status} />
                 <ClaimPaymentState hasPaid={sib.has_paid} paidAt={sib.paid_at} showTimestamp={false} />
-                <span className="font-mono text-caption text-brand-muted-text">
+                <span className="font-mono text-caption text-[var(--appearance-text-muted)]">
                   {sib.claimant_phone || 'Not available'}
                 </span>
-                <span className="text-caption text-brand-muted-text">{formatTimestamp(sib.created_at)}</span>
+                <span className="text-caption text-[var(--appearance-text-muted)]">{formatTimestamp(sib.created_at)}</span>
               </span>
             </li>
           ))}
         </ul>
       )}
-      <p className="text-caption text-brand-muted-text pt-1">
+      <p className="text-caption text-[var(--appearance-text-muted)] pt-1">
         {'No claim is assumed to be a winner or fraudulent here — only server state is shown.'}
       </p>
     </Panel>
@@ -394,7 +494,7 @@ function SiblingRow({
   id: string | null;
   onOpenClaim: (claimId: string) => void;
 }) {
-  if (!id) return <span className="text-xs text-brand-muted-text">Not available</span>;
+  if (!id) return <span className="text-xs text-[var(--appearance-text-muted)]">Not available</span>;
   return (
     <button
       type="button"

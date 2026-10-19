@@ -5,6 +5,7 @@ import Textarea from '../../ui/Textarea';
 import SettlementApprovalSummary, {
   type SettlementApprovedLedgerRowProp,
 } from './SettlementApprovalSummary';
+import SettlementRecipientPreview, { type SettlementRecipientLeg } from './SettlementRecipientPreview';
 
 // =============================================================================
 // D-2B-B BATCH 4 — THE COMBINED "APPROVE & PAY" STEP, AS ONE PRESENTATIONAL BLOCK.
@@ -54,6 +55,10 @@ export interface SettlementApproveAndPayConfirmationProps {
   approvedLedgerRows?: readonly SettlementApprovedLedgerRowProp[] | null;
   /** Server diagnostic: do the booked rows still add up to the approved total? */
   approvedRowsAgree?: boolean | null;
+  /** ADM-007 — the persisted payout legs this action would pay, already masked
+   *  by the server. Omitted/null when the payload could not be read, which the
+   *  preview reports as an explicit blocked state rather than omitting. */
+  payoutRecipients?: readonly SettlementRecipientLeg[] | null;
   /** The approval reason. Required by the route; collected here, trimmed there. */
   reason: string;
   onReasonChange: (event: React.ChangeEvent<HTMLTextAreaElement>) => void;
@@ -78,6 +83,7 @@ export default function SettlementApproveAndPayConfirmation({
   approvedTotal,
   approvedLedgerRows,
   approvedRowsAgree,
+  payoutRecipients,
   reason,
   onReasonChange,
   reasonError,
@@ -107,6 +113,7 @@ export default function SettlementApproveAndPayConfirmation({
         approvedRowsAgree={approvedRowsAgree}
         notApprovedNote={'No settlement approval is on file yet. Confirming records it for the payout rows booked at handover; the approved total is what those rows book, and it is then shown on this claim and checked against the payout before anything is sent.'}
       />
+      <SettlementRecipientPreview legs={payoutRecipients} />
       <Textarea
         label={'Reason (recorded in the audit log)'}
         id={'settlement-approve-and-pay-reason-' + claimId}

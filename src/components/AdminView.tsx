@@ -2283,6 +2283,15 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
   // credential that lives in component state ONLY until this request is over (it
   // is cleared on cancel, on success and on failure, so a retry re-types it).
   const [settlementApproveAndPayPrompt, setSettlementApproveAndPayPrompt] = useState<{ claimId: string } | null>(null);
+  // ADM-001 — WHICH SETTLEMENT ROW THE CLAIMS SCREEN ASKED FOR.
+  //
+  // The claim detail drawer can name the settlement for a pending_settlement
+  // claim, but the ONLY supported place to act on it is the Pending Settlements
+  // list under Money → Ledger. This holds the claim id the operator navigated
+  // from (not a second source of truth: it selects an existing row and is
+  // cleared the moment another section is opened), so the row can be highlighted
+  // and scrolled into view without duplicating any payout control.
+  const [settlementFocusClaimId, setSettlementFocusClaimId] = useState<string | null>(null);
   const [settlementApproveAndPayReason, setSettlementApproveAndPayReason] = useState('');
   const [settlementApproveAndPayPassword, setSettlementApproveAndPayPassword] = useState('');
   const [settlementApproveAndPayReasonError, setSettlementApproveAndPayReasonError] = useState('');
@@ -2471,6 +2480,33 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
    * Opens the combined step for ONE claim. Like the other prompts this records
    * the target only: no request, no approval, no payout, and no audit row.
    */
+  /**
+   * ADM-001 — navigate from a claim's detail drawer to its settlement row.
+   *
+   * Selects the section that owns the ONLY settlement actions and records which
+   * claim was asked for. It writes nothing, approves nothing and cannot initiate
+   * a payout: the operator still has to use the existing, password-confirmed
+   * controls on that row, through the existing routes.
+   */
+  const openSettlementRow = (claimId: string) => {
+    setSettlementFocusClaimId(claimId);
+    setActiveTab('ledger');
+  };
+
+  /**
+   * ADM-001 — bring the requested row into view once it has rendered.
+   *
+   * `block: 'center'` only: no `behavior: 'smooth'`, so a reduced-motion
+   * preference is honoured by construction (the stylesheet cannot override an
+   * explicit smooth option). Runs only when the ledger section is the active
+   * one and a claim was actually requested.
+   */
+  useEffect(() => {
+    if (activeTab !== 'ledger' || !settlementFocusClaimId) return;
+    const row = document.getElementById(`settlement-row-${settlementFocusClaimId}`);
+    if (row) row.scrollIntoView({ block: 'center' });
+  }, [activeTab, settlementFocusClaimId, dashboardData]);
+
   const promptSettlementApproveAndPay = (claimId: string) => {
     setSettlementApproveAndPayReason('');
     setSettlementApproveAndPayPassword('');
@@ -2710,6 +2746,16 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
   // and prints no count at all: "0 hub row(s) read" under an absent payload would
   // claim this build had learned that there is nothing to see.
   const payoutIntegrityRows = readPayoutIntegrityHubs(dashboardData?.agents);
+  // ADM-001 — which claims currently HAVE a Pending Settlements row, and whether
+  // that list has actually been loaded. The claim drawer uses both facts so it
+  // never promises a navigation target that is not in the payload: "not listed"
+  // and "list not loaded" are different states and are worded differently.
+  const pendingSettlementClaimIds: string[] = Array.isArray(dashboardData?.pendingSettlements)
+    ? dashboardData.pendingSettlements
+        .map((row: any) => (typeof row?.claimId === 'string' ? row.claimId : null))
+        .filter((id: string | null): id is string => id !== null)
+    : [];
+  const settlementQueueLoaded = Array.isArray(dashboardData?.pendingSettlements);
   const payoutIntegritySource = readPayoutIntegritySourceState(dashboardData?.agents);
   const payoutIntegritySummary = summarizePayoutIntegrity(payoutIntegrityRows);
   // The section's own sentence, chosen from the LIST'S state rather than from the
@@ -4659,7 +4705,12 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
               tab gets from its activeTab effect) and leaving it aborts any
               in-flight request. */}
           {activeTab === 'claims' && (
-            <ClaimsAdministration token={token} />
+            <ClaimsAdministration
+              token={token}
+              pendingSettlementClaimIds={pendingSettlementClaimIds}
+              settlementQueueLoaded={settlementQueueLoaded}
+              onOpenSettlement={openSettlementRow}
+            />
           )}
 
           {/* TAB CONTENT: LOST REPORTS (PHASE 11A) */}
@@ -4907,7 +4958,15 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                       const reasonStepOpen = settlementApprovalPrompt?.claimId === ps.claimId;
                       const approveAndPayStepOpen = settlementApproveAndPayPrompt?.claimId === ps.claimId;
                       return (
-                        <div key={ps.claimId} className="border border-[var(--appearance-border)] rounded-xl p-3 bg-[var(--appearance-surface-muted)]/40 space-y-3">
+                        <div
+                          key={ps.claimId}
+                          id={`settlement-row-${ps.claimId}`}
+                          className={
+                            settlementFocusClaimId === ps.claimId
+                              ? 'border border-[var(--appearance-primary)] ring-2 ring-[var(--appearance-primary)] rounded-xl p-3 bg-[var(--appearance-surface)] space-y-3'
+                              : 'border border-[var(--appearance-border)] rounded-xl p-3 bg-[var(--appearance-surface-muted)]/40 space-y-3'
+                          }
+                        >
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <div className="text-caption">
                               <span className="font-mono font-bold text-[var(--appearance-text-primary)]">{ps.claimId}</span>
@@ -4979,6 +5038,24 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                               )}
                             </div>
                           </div>
+
+                          {/* ADM-002 — WHY THESE CONTROLS ARE UNAVAILABLE.
+                              The disabled expressions above are deliberately
+                              unchanged; this explains the eligibility condition
+                              behind them. Approval and payout share the settle_at
+                              gate because db.approveSettlement() itself refuses an
+                              unelapsed review window ('outside_review_window'), so
+                              an enabled "Approve settlement" button before the
+                              window closes would promise an action the server must
+                              reject. Nothing here is a security control: the
+                              server re-decides every condition on the request. */}
+                          {!isDue && (
+                            <p className="text-caption text-[var(--appearance-text-muted)]">
+                              {settleAtDate
+                                ? `Settlement approval and payout are unavailable until the dispute review window closes at ${settleAtDate.toLocaleString()}. The server refuses an unelapsed settle_at for either action, so this is an eligibility condition rather than a UI preference.`
+                                : 'Settlement approval and payout are unavailable because this claim has no settle_at review window recorded. The server refuses both actions without one.'}
+                            </p>
+                          )}
 
                           {/* The approval fact is read from the persisted column,
                               never inferred from the presence of a control. */}
@@ -5089,6 +5166,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                               approvedTotal={approvedTotal}
                               approvedLedgerRows={approvedLedgerRows}
                               approvedRowsAgree={typeof approvalSnapshot?.bookedRowsAgreeWithApproval === 'boolean' ? approvalSnapshot.bookedRowsAgreeWithApproval : null}
+                              payoutRecipients={Array.isArray(ps.payoutRecipients) ? ps.payoutRecipients : null}
                               password={settlementPayoutPassword}
                               onPasswordChange={(e) => {
                                 setSettlementPayoutPassword(e.target.value);
@@ -5117,6 +5195,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                               approvedTotal={approvedTotal}
                               approvedLedgerRows={approvedLedgerRows}
                               approvedRowsAgree={typeof approvalSnapshot?.bookedRowsAgreeWithApproval === 'boolean' ? approvalSnapshot.bookedRowsAgreeWithApproval : null}
+                              payoutRecipients={Array.isArray(ps.payoutRecipients) ? ps.payoutRecipients : null}
                               reason={settlementApproveAndPayReason}
                               onReasonChange={(e) => {
                                 setSettlementApproveAndPayReason(e.target.value);

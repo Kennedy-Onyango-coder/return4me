@@ -150,6 +150,11 @@ import {
   describePayoutDestinationRefusal,
   PERSONAL_MPESA_PAYOUT_METHOD,
   normalizePersonalMpesaPhoneDestination,
+  // ADM-007 — the ONE destination masker. The pending-settlement projection
+  // below publishes each payout leg's destination only through this function,
+  // so an operator can confirm WHO is about to be paid without a full number
+  // ever entering the dashboard payload, a screenshot or a browser cache.
+  maskPayoutDestinationForLog,
 } from './config/payoutDestinations';
 // BATCH 1 — the payout-batch verification path (authoritative provider lookup +
 // exact transaction-to-leg matching + CAS-guarded confirmation). Imported by
@@ -4201,6 +4206,31 @@ async function createApp() {
             // platform_fee row so it is a persisted fact rather than a subtraction
             // the browser performs. Null when no such row exists.
             platformFee: platformFeeRow ? formatPersistedCurrencyAmount(platformFeeRow.amount) : null,
+            // ADM-007 — WHO THIS PAYOUT WILL PAY, DESCRIBED WITHOUT PII.
+            //
+            // The confirmation step used to name the claim and the item and an
+            // aggregate amount, but not the recipients: an operator could not see
+            // that one leg was addressed to the wrong destination until after the
+            // provider had accepted the batch. These are the SAME persisted payout
+            // rows the approval covers (finder_payout / agent_payout), reported with
+            //
+            //   * the destination MASKED by the platform's single masker,
+            //   * the amount BOOKED on that row (never a recomputed share),
+            //   * the row's own status and payout_outcome, so a leg that is already
+            //     in flight, accepted, unknown, rejected or completed is visible
+            //     as such instead of looking like a fresh leg.
+            //
+            // No full number, no recipient name and no provider reference is
+            // copied here. This is display only: the executor re-reads the rows and
+            // re-checks eligibility and destinations itself immediately before it
+            // submits anything.
+            payoutRecipients: payoutRows.map(row => ({
+              role: row.type === 'agent_payout' ? 'agent' : 'finder',
+              maskedDestination: maskPayoutDestinationForLog(row.phone_or_till),
+              amount: formatPersistedCurrencyAmount(row.amount),
+              status: typeof row.status === 'string' ? row.status : null,
+              payoutOutcome: typeof row.payout_outcome === 'string' ? row.payout_outcome : null,
+            })),
           };
         });
 

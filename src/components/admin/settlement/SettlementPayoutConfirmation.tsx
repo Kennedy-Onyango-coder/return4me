@@ -4,6 +4,7 @@ import Input from '../../ui/Input';
 import SettlementApprovalSummary, {
   type SettlementApprovedLedgerRowProp,
 } from './SettlementApprovalSummary';
+import SettlementRecipientPreview, { type SettlementRecipientLeg } from './SettlementRecipientPreview';
 
 // =============================================================================
 // D-2B-B BATCH 2 — THE PAYOUT CONFIRMATION STEP, AS ONE PRESENTATIONAL BLOCK.
@@ -50,6 +51,10 @@ export interface SettlementPayoutConfirmationProps {
   approvedLedgerRows?: readonly SettlementApprovedLedgerRowProp[] | null;
   /** Server diagnostic: do the booked rows still add up to the approved total? */
   approvedRowsAgree?: boolean | null;
+  /** ADM-007 — the persisted payout legs this action would pay, already masked
+   *  by the server. Omitted/null when the payload could not be read, which the
+   *  preview reports as an explicit blocked state rather than omitting. */
+  payoutRecipients?: readonly SettlementRecipientLeg[] | null;
   /** BATCH 1 (D) — the administrator's own password, re-verified by the server
    *  before the payout request is even considered. Held by the caller only, and
    *  cleared as soon as the attempt resolves. */
@@ -72,6 +77,7 @@ export default function SettlementPayoutConfirmation({
   approvedTotal,
   approvedLedgerRows,
   approvedRowsAgree,
+  payoutRecipients,
   password,
   onPasswordChange,
   passwordError,
@@ -96,6 +102,7 @@ export default function SettlementPayoutConfirmation({
         approvedLedgerRows={approvedLedgerRows}
         approvedRowsAgree={approvedRowsAgree}
       />
+      <SettlementRecipientPreview legs={payoutRecipients} />
       <Input
         label={'Your password'}
         id={'settlement-payout-password-' + claimId}
