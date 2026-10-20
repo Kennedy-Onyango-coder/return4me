@@ -82,6 +82,12 @@ const mockDatabaseState: Record<string, any[]> = {
 //    does in Postgres) — so unlimited grandfathered NULL-email accounts remain
 //    valid while two real addresses can never collide.
 const MOCK_UNIQUE_INDEXES: Record<string, string[][]> = {
+  // Mirrors the Postgres schema: admin_users.username is UNIQUE
+  // (sql/schema.sql, src/db/schema.ts). Without this the in-memory insert
+  // path silently allowed duplicate administrator usernames, which made the
+  // one-time second-administrator provisioning duplicate/race behaviour
+  // untestable.
+  admin_users: [['username']],
   customer_claim_links: [['claim_id'], ['customer_id', 'claim_id']],
   notification_events: [['idempotency_key']],
   customers: [['email']],

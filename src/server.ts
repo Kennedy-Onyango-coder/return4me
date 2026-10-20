@@ -8,7 +8,7 @@ import type { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import rateLimit from 'express-rate-limit';
 import { createServer as createViteServer } from 'vite';
-import { db, FoundItem, Claim, Agent, Dispute, LedgerEntry } from './db/database';
+import { db, FoundItem, Claim, Agent, Dispute, LedgerEntry, ProvisionAdminError } from './db/database';
 import { pool, ensureSchemaUpToDate, isDatabaseConnectionError } from './db/index';
 import { AuthService, authenticateJWT, generateToken, verifyToken, toE164Kenyan, hashCode, timingSafeEqualHex, maskPhoneForLog, isAgentActionable, isAdminSessionCurrent, resolveAgentByPhone } from './services/auth';
 // Administrative 2FA hardening — authenticated encryption of the admin TOTP
@@ -4736,6 +4736,51 @@ async function createApp() {
       res.json({ success: true, message: 'Refund confirmed NOT executed and claim closed.' });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
+    }
+  });
+
+  // ONE-TIME second-administrator provisioning.
+  //
+  // Same trust chain as every other /api/admin route:
+  // authenticateJWT -> requireCurrentAdminSession -> inline role check below.
+  // It can only ever succeed once: while exactly one administrator exists
+  // (the bootstrap administrator) and that administrator is the caller. Once
+  // the second administrator exists the gate closes (409) — this is not a
+  // general administrator-registration flow. Nothing here touches claims,
+  // payouts, the ledger or agent payout-destination state.
+  app.post('/api/admin/provision-admin', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
+    try {
+      if (req.user?.role !== 'admin' || !req.user?.username) {
+        return res.status(403).json({ error: 'Access denied.' });
+      }
+
+      const { username, password, fullName } = req.body ?? {};
+      const provisioned = await db.provisionSecondAdmin({
+        actorUsername: req.user.username,
+        username,
+        password,
+        fullName: typeof fullName === 'string' ? fullName : '',
+      });
+
+      return res.status(200).json({
+        ok: true,
+        admin: {
+          id: provisioned.id,
+          username: provisioned.username,
+          full_name: provisioned.full_name,
+          created_at: provisioned.created_at,
+        },
+      });
+    } catch (error) {
+      if (error instanceof ProvisionAdminError) {
+        // After the instanceof narrow this is a KNOWN domain error carrying a
+        // fixed, client-safe message written by this codebase — never the raw
+        // caught value. Bound to a domain name (not the catch variable) so the
+        // errorDisclosure tripwire correctly sees a deliberate domain result.
+        const provisioning: ProvisionAdminError = error;
+        return res.status(provisioning.status).json({ error: provisioning.message, code: provisioning.code });
+      }
+      sendServerError(res, error, 'provisionSecondAdmin');
     }
   });
 

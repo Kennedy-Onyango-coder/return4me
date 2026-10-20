@@ -62,6 +62,7 @@ import {
   payout_repair_requests as payoutRepairRequestsTable,
 } from "./schema.ts";
 import { eq, and, or, isNull, isNotNull, inArray, notInArray, lt, lte, gte, ne, desc, asc, sql, like } from "drizzle-orm";
+import bcrypt from 'bcryptjs';
 import { isAllowedClaimTransition, TERMINAL_CLAIM_STATUSES } from "../config/claimStatuses";
 // E3A — the single source of truth for the payout submission-outcome
 // vocabulary and the retry-eligibility rule. Imported here (not re-derived) so
@@ -1190,6 +1191,28 @@ class SettlementAuthorizationSnapshotUnreadable extends Error {
     this.name = 'SettlementAuthorizationSnapshotUnreadable';
   }
 }
+
+// Thrown by provisionSecondAdmin() so the HTTP layer can map the failure to
+// an intentional client status (400/403/409) instead of a generic 500.
+export class ProvisionAdminError extends Error {
+  readonly status: number;
+  readonly code: string;
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+// Application-wide advisory-lock key for one-time administrator provisioning.
+// Arbitrary but fixed: it must not collide with any other pg_advisory_* key
+// used by this database. It serialises concurrent provisioning attempts so two
+// callers cannot both observe "exactly one administrator exists" and both
+// insert (which would create a third administrator and break the one-time
+// guarantee). The lock is transaction-scoped (pg_advisory_xact_*): released
+// automatically on commit or rollback, so a failed attempt can never leave a
+// stale lock behind.
+const PROVISION_ADMIN_ADVISORY_LOCK_KEY = 7654321;
 
 class DatabaseEngine {
   constructor() {}
@@ -7012,6 +7035,85 @@ await drizzleDb.transaction(async (tx) => {
       console.error("Failed to create admin user:", error);
       throw new Error("Failed to create admin user.");
     }
+  }
+
+  // ONE-TIME provisioning of the SECOND administrator, called only from
+  // POST /api/admin/provision-admin behind authenticateJWT and
+  // requireCurrentAdminSession (caller is an authenticated admin with a
+  // CURRENT session — password + 2FA already passed at login).
+  //
+  // NOT a general admin-registration flow: it succeeds ONLY when exactly one
+  // administrator exists (the bootstrap administrator from ADMIN_INITIAL_*)
+  // AND the caller is that administrator. After a second administrator exists
+  // the gate closes with 409 provisioning_closed forever.
+  //
+  // The count check, duplicate check, insert and audit record run in ONE
+  // drizzle transaction (logAuditInTx): the new account and its audit row
+  // commit or roll back together; an advisory lock serialises concurrent
+  // attempts.
+  //
+  // CREDENTIAL-SAFE: the audit row names the actor and the new account's
+  // username/full name only — no password, TOTP secret, recovery code or
+  // session token is ever logged or returned. Password is bcrypt (12 rounds,
+  // as in seedAdminUser()), hashed outside the transaction.
+  //
+  // SESSION POLICY: no session is minted for the new account and NO existing
+  // session is revoked — provisioning a colleague changes no existing
+  // administrator account, so nobody's token_version is bumped.
+  public async provisionSecondAdmin(params: {
+    actorUsername: string;
+    username: string;
+    password: string;
+    fullName: string;
+  }): Promise<{
+    id: string;
+    username: string;
+    full_name: string;
+    created_at: string;
+    is_active: boolean;
+    totp_enabled: boolean;
+    token_version: number;
+  }> {
+    const { actorUsername, username, password, fullName } = params;
+    if (!username || typeof username !== 'string' || !username.trim()) throw new ProvisionAdminError(400, 'username_required', 'A username is required.');
+    if (username.length > 50) throw new ProvisionAdminError(400, 'username_too_long', 'The username must be at most 50 characters.');
+    if (!fullName || typeof fullName !== 'string' || !fullName.trim()) throw new ProvisionAdminError(400, 'full_name_required', 'A full name is required.');
+    if (fullName.length > 100) throw new ProvisionAdminError(400, 'full_name_too_long', 'The full name must be at most 100 characters.');
+    if (!password || typeof password !== 'string' || password.length === 0) throw new ProvisionAdminError(400, 'password_required', 'A password is required.');
+    if (password.length > 200) throw new ProvisionAdminError(400, 'password_too_long', 'The password must be at most 200 characters.');
+    const salt = await bcrypt.genSalt(12);
+    const passwordHash = await bcrypt.hash(password, salt);
+
+    let inserted: { id: string; username: string; full_name: string; created_at: string; is_active: boolean; totp_enabled: boolean; token_version: number } | undefined;
+    try {
+      inserted = await drizzleDb.transaction(async (tx: any) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(${PROVISION_ADMIN_ADVISORY_LOCK_KEY})`);
+        const admins = await tx.select().from(adminUsersTable);
+        if (admins.length === 0) throw new ProvisionAdminError(409, 'no_bootstrap_admin', 'No bootstrap administrator exists to authorize provisioning a second account.');
+        if (admins.length !== 1) throw new ProvisionAdminError(409, 'provisioning_closed', 'Provisioning is closed: a second administrator already exists.');
+        if (!admins[0] || String(admins[0].username) !== String(actorUsername)) throw new ProvisionAdminError(403, 'not_the_bootstrap_administrator', 'Only the bootstrap administrator can provision the second account.');
+        const existing = await tx.select().from(adminUsersTable).where(eq(adminUsersTable.username, username));
+        if (existing.length > 0) throw new ProvisionAdminError(409, 'admin_username_exists', 'An administrator with that username already exists.');
+        const id = 'ADM-' + Math.random().toString(36).substring(2, 11).toUpperCase();
+        const now = new Date().toISOString();
+        const rows = await tx.insert(adminUsersTable).values({ id, username, password_hash: passwordHash, full_name: fullName, is_active: true }).returning();
+        if (!rows[0]) throw new ProvisionAdminError(500, 'insert_failed', 'Failed to create the administrator account.');
+        await this.logAuditInTx(tx, actorUsername, 'PROVISION_ADMIN', 'Provisioned second administrator username=' + username + ' full_name=' + fullName + ' by bootstrap administrator ' + actorUsername + '. No credentials were recorded.');
+        return {
+          id: rows[0].id, username: rows[0].username, full_name: rows[0].full_name,
+          created_at: rows[0].created_at ? new Date(rows[0].created_at).toISOString() : now,
+          is_active: true, totp_enabled: false, token_version: rows[0].token_version ?? 1,
+        };
+      });
+    } catch (error) {
+      if (error instanceof ProvisionAdminError) throw error;
+      const cause = (error as any)?.cause;
+      const message = error instanceof Error ? error.message : String(error);
+      if ((error as any)?.code === '23505' || cause?.code === '23505' || /duplicate key|unique constraint|username/i.test(message)) throw new ProvisionAdminError(409, 'admin_username_exists', 'An administrator with that username already exists.');
+      console.error("Failed to provision second administrator:", error);
+      throw new Error("Failed to provision second administrator.", { cause: error });
+    }
+    return inserted!;
   }
 
   // Update admin user's last login timestamp
