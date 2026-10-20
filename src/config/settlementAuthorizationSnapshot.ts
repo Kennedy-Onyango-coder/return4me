@@ -58,6 +58,11 @@ export interface SettlementAuthorizationSnapshot {
     | 'no_payout_legs'
     | 'missing_ledger_id'
     | 'duplicate_ledger_id'
+    // TWO DIFFERENT ROWS FOR THE SAME ROLE. One handover books exactly one
+    // finder leg and one agent leg; a second finder/agent row is not a second
+    // obligation, it is a duplicated booking, and summing it would authorise a
+    // doubled payout. Distinct from duplicate_ledger_id (the SAME row twice).
+    | 'duplicate_role'
     | 'unreadable_amount';
   /** Sum of the legs, in minor units (KES cents). Null when unreadable. */
   totalMinorUnits: number | null;
@@ -126,10 +131,11 @@ function formatMinorUnits(minor: number): string {
 /**
  * Build the canonical snapshot from the payout legs that exist right now.
  *
- * FAIL-CLOSED: a duplicate id, a blank id, no legs at all, or an unreadable
- * amount yields `readable: false` with the specific reason. The caller must then
- * refuse (at approval time) or treat it as unverifiable (at initiation time) —
- * never "assume they match".
+ * FAIL-CLOSED: a duplicate id, a duplicate ROLE (two DISTINCT rows for the same
+ * recipient role — a duplicated booking, not a second obligation), a blank id, no
+ * legs at all, or an unreadable amount yields `readable: false` with the specific
+ * reason. The caller must then refuse (at approval time) or treat it as
+ * unverifiable (at initiation time) — never "assume they match".
  */
 export function buildSettlementAuthorizationSnapshot(
   legs: readonly SettlementAuthorizationLeg[] | null | undefined,
@@ -147,6 +153,7 @@ export function buildSettlementAuthorizationSnapshot(
 
   const entries: Array<{ role: SettlementAuthorizationLegRole; id: string }> = [];
   const seen = new Set<string>();
+  const seenRoles = new Set<SettlementAuthorizationLegRole>();
   let totalMinorUnits = 0;
 
   for (const leg of supplied) {
@@ -154,7 +161,13 @@ export function buildSettlementAuthorizationSnapshot(
     if (id === '') return unreadable('missing_ledger_id');
     const role = normaliseRole(leg?.recipientType);
     if (seen.has(id)) return unreadable('duplicate_ledger_id');
+    // One handover books ONE finder leg and ONE agent leg. A second, distinct
+    // row for a role already described is a duplicated booking: counting it
+    // would let an approval authorise twice what a handover can legitimately
+    // owe.
+    if (seenRoles.has(role)) return unreadable('duplicate_role');
     seen.add(id);
+    seenRoles.add(role);
     const minor = toMinorUnits(leg?.amount);
     if (minor === null) return unreadable('unreadable_amount');
     totalMinorUnits += minor;

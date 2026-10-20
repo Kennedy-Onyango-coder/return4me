@@ -464,14 +464,31 @@ export function registerAgentOperationalRoutes(
         return res.status(400).json({ error: `You cannot release this item. Current status: ${claim.status}` });
       }
 
+      // CUSTODY GATE — a handover can only happen while the item is physically
+      // in THIS hub's custody. `items.status` records that fact ('at_agent' from
+      // drop-off until the handover itself sets 'claimed') and is the single
+      // input to canCreateClaim().
+      //
+      // Without it, a claim that was already handed over and then re-promoted to
+      // 'escrow_held' by resolveDispute() could be handed over a SECOND time and
+      // book a second set of settlement rows for one physical handover.
+      //
+      // Operator-facing half only: a precise 409 before the pickup code is read
+      // or any photo is uploaded. The authoritative, race-proof check is the
+      // custody compare-and-swap inside enterPendingSettlement in database.ts.
+      if (item.status !== 'at_agent') {
+        return res.status(409).json({
+          error: `This item is not in your hub's custody. Current status: ${item.status}`,
+        });
+      }
+
       // Fail-safe: even with money already in escrow, never let the physical
       // item leave custody once it's been flagged stolen/legal-hold, or if
       // a competing claimant has opened an unresolved ownership dispute in
-      // the meantime. If uncertain, do not release the item â€” escalate to
-      // admin instead. (item.status is expected to still be 'at_agent' here
-      // since physical custody hasn't transferred yet â€” canCreateClaim's
-      // 'at_agent' requirement is not the binding condition in this case,
-      // the dispute/hold checks are.)
+      // the meantime. If uncertain, do not release the item — escalate to
+      // admin instead. (item.status is already proven 'at_agent' by the
+      // custody gate above; this call is here for the FLAGS — stolen,
+      // legal-hold, unresolved dispute — not for the 'at_agent' requirement.)
       const claimability = await canCreateClaim(item);
       if (!claimability.allowed && (claimability.reason === 'suspected_stolen' || claimability.reason === 'legal_hold' || claimability.reason === 'unresolved_dispute')) {
         return res.status(423).json({ error: claimabilityErrorMessage(claimability.reason) });

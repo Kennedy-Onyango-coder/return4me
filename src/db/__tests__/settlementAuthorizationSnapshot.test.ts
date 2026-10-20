@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { db } from '../database';
+import { db as drizzle } from '../index';
+import { ledger as ledgerTable } from '../schema';
 import { testRunId } from './ensureTestCategory';
 
 // =============================================================================
@@ -152,5 +154,48 @@ describe('settlement approval records WHAT it authorized', () => {
     expect(after!.settlement_approved_at).toBe(first!.settlement_approved_at);
     expect(after!.settlement_authorized_total).toBe(first!.settlement_authorized_total);
     expect(after!.settlement_authorized_ledger_ids).toBe(first!.settlement_authorized_ledger_ids);
+  });
+
+  // M5 — THE DUPLICATED-BOOKING APPROVAL GAP.
+  //
+  // The audit found that distinct rows for the SAME role were read as two
+  // legitimate obligations, so a claim carrying four payout legs (two finder,
+  // two agent) could be approved for a DOUBLED total. The 409 text already said
+  // duplication was refused; only duplicate IDS were.
+  //
+  // The handover guard now prevents the double booking from being created at
+  // all, so this fixture writes the second row directly — it models HISTORICAL
+  // data (a claim double-booked before the guard existed), which is exactly the
+  // state an approval must still refuse.
+  //
+  // Note on the assertion: the approval CAS is rolled back together with the
+  // snapshot throw in PostgreSQL. The in-memory double strips BEGIN/ROLLBACK, so
+  // it cannot witness that rollback; the refusal itself is what is asserted.
+  it('M5: refuses to approve a claim whose ledger duplicates a payout role', async () => {
+    const { claimId } = await makeClaim('DUP');
+    expect((await db.enterPendingSettlement(claimId, -60_000)).success).toBe(true);
+
+    const finderLeg = (await db.getLedgerEntriesForClaim(claimId)).find(
+      (row) => row.type === 'finder_payout',
+    )!;
+    expect(finderLeg).toBeTruthy();
+    await drizzle.insert(ledgerTable).values({
+      id: `TXN-B3-DUP-${SUFFIX}`,
+      claim_id: claimId,
+      item_id: finderLeg.item_id,
+      type: 'finder_payout',
+      amount: finderLeg.amount,
+      phone_or_till: finderLeg.phone_or_till,
+      status: 'pending',
+      payout_outcome: 'not_submitted',
+    } as any);
+
+    expect(
+      (await db.getLedgerEntriesForClaim(claimId)).filter((row) => row.type === 'finder_payout'),
+    ).toHaveLength(2);
+
+    const approval = await db.approveSettlement(claimId, 'B3 fixture admin', 'duplicate role fixture');
+    expect(approval.ok).toBe(false);
+    expect(approval.code).toBe('payout_ledger_unreadable');
   });
 });
