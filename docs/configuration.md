@@ -140,6 +140,7 @@ a staging operator may choose them deliberately.
 | `INTASEND_WEBHOOK_CHALLENGE` | Authenticates inbound collection webhooks (challenge value) | Yes |
 | `INTASEND_DISBURSEMENT_WALLET_ID` | Working wallet that payout batches debit (required in production) | No |
 | `INTASEND_SETTLEMENT_WALLET_ID` | Optional identity of the wallet that receives collections (identity check only) | No |
+| `INTASEND_COLLECTION_WALLET_ID` | Optional STK `wallet_id` selector for collection settlement (default off, production only) | No |
 | `DISPUTE_WINDOW_HOURS` | Hours between handover and settlement eligibility | No |
 | `ENABLE_DEV_PAYMENT_SIMULATION` | Enables the payment simulation routes | No |
 
@@ -168,12 +169,38 @@ Two IntaSend wallets are involved, and they are **not interchangeable**:
 
 | Wallet | Role | How the application uses it |
 |---|---|---|
-| Settlement wallet | Receives collections | None. The STK request carries **no wallet field**, so the application cannot choose a collection destination. |
+| Settlement wallet | Receives collections by default | No wallet field unless `INTASEND_COLLECTION_WALLET_ID` is explicitly configured. That optional fifth field (`wallet_id`) is sent on the STK request **only in production and only when the value is real**. |
 | Working wallet | Pays disbursements | Named by `INTASEND_DISBURSEMENT_WALLET_ID` and sent as `wallet_id` on `POST /send-money/initiate/` — **production only**. |
 
 `INTASEND_DISBURSEMENT_WALLET_ID` is **required in production**: a missing, empty,
 whitespace-only or placeholder-shaped value refuses the payout before any provider
 request, never falling back to the provider's default settlement-wallet debit.
+
+`INTASEND_COLLECTION_WALLET_ID` is **optional and default-off**. It exists to let a
+deployment ask IntaSend to settle a collection into a specific wallet. The rules
+are deliberately narrow:
+
+- **Unset or blank (the default):** the STK body remains exactly the documented
+  four fields — `public_key`, `phone_number`, `amount`, `api_ref` — and IntaSend
+  uses the account's default settlement wallet.
+- **A real ID in production:** one fifth field, `wallet_id`, is appended to the STK
+  body. This is the only configuration that changes the request.
+- **A non-blank placeholder in production:** the collection is **refused before any
+  provider request** with `INTASEND_COLLECTION_WALLET_ID is placeholder-shaped in
+  production`. It never silently falls back to the default settlement wallet,
+  because that would settle the collection somewhere the operator did not choose.
+- **Outside production:** a declared value is ignored and never sent to a
+  sandbox/test provider. `NODE_ENV` must be exactly `production`; `Production`,
+  `staging` and unset are not production.
+- **Logging:** only the masked last four characters appear in boot diagnostics or
+  audit-safe lines (`***1234`), and the per-request log records the routing verdict,
+  never the ID.
+
+**Provider support is unverified by this repository.** The application cannot
+confirm that IntaSend accepts `wallet_id` on `POST /payment/mpesa-stk-push/` for
+this merchant account. Enable the variable only after the account owner confirms
+that behaviour; otherwise leave it empty. Setting it on an account that ignores or
+rejects the field does not make collections route anywhere.
 
 `INTASEND_SETTLEMENT_WALLET_ID` is **optional and identity-only**. It routes
 nothing, is never sent to the provider, and is written to logs/audit rows only in
@@ -193,6 +220,33 @@ to the same funds.
 **External dependency (unverified):** whether IntaSend can be configured for this
 merchant account to settle collections directly into a working wallet. This
 repository has no evidence either way, so the code makes no claim about it.
+
+### Startup diagnostics
+
+The boot banner states the **observed** `NODE_ENV`, then reports each wallet as
+two separate facts: whether a value is present and whether the rule that uses it
+is actually **enforced** in that environment. Only the last four characters of a
+wallet ID are ever printed (`***1234`); a full ID, a secret or a phone number is
+never written to a log.
+
+Outside production a declared disbursement wallet is reported as
+`[INFO] ... NOT enforced`, never `[OK] Configured`, because no configured wallet
+ID is sent to a sandbox/test provider. In production a missing or
+placeholder-shaped value is reported as a refusal that will stop payouts, and the
+routing guard states whether the payout wallet is distinct from the declared
+settlement wallet.
+
+The optional collection selector has its own line. In production it reports
+`[SET] ... ENFORCED`, `[DEFAULT] ... omit wallet_id`, or `[INVALID]
+Placeholder-shaped ... REFUSE`; outside production a declared value is `[INFO]
+... NOT sent`. The masked tail is the only identifier shown, and the line also
+states that provider support is an account-owner confirmation rather than
+something the banner can verify.
+
+A failed collection request names the environment it actually ran in
+(`PRODUCTION`, `sandbox/test`, or `UNRECOGNISED (NODE_ENV=...)`) and the endpoint
+host. It is never described as a "Sandbox API error" when it ran against the
+production endpoint.
 
 ## Object storage
 

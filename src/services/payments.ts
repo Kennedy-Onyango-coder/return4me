@@ -18,7 +18,8 @@ export { buildPayoutLegIdempotencyKey };
 
 // BATCH 2 — the wallet-routing rule lives in config/ so the payout seam and the
 // settlement executor call ONE implementation.
-import { resolveConfiguredPayoutWalletRouting } from '../config/walletRouting';
+import { resolveConfiguredPayoutWalletRouting, resolveConfiguredCollectionWalletRouting } from '../config/walletRouting';
+import { describeCollectionGatewayFailure } from '../config/startupDiagnostics';
 
 // Local copy of the phone-masking helper (also in services/auth.ts as
 // maskPhoneForLog, and database.ts) — duplicated rather than imported to
@@ -468,11 +469,31 @@ export const PaymentService = {
       return generateMockStkPushSuccess(phone, amount, claimId);
     }
 
+    // PHASE 5 — OPTIONAL COLLECTION-WALLET SELECTOR.
+    //
+    // The default STK body is exactly four fields and stays exactly that when
+    // the selector is unset, blank, or the runtime is not production. A
+    // production deployment that explicitly configures a real selector gets a
+    // fifth field; a production deployment whose value is placeholder-shaped is
+    // REFUSED here rather than silently falling back to the provider default,
+    // because that fallback would settle the collection somewhere the operator
+    // did not choose. Provider support for wallet_id on this endpoint is
+    // verified by the account owner, not by this application.
+    const collectionWalletRouting = resolveConfiguredCollectionWalletRouting();
+    if (!collectionWalletRouting.ok) {
+      throw new Error(`FATAL: ${collectionWalletRouting.message}`);
+    }
+
     const payload = {
       public_key: publishableKey,
       phone_number: formattedPhone,
       amount: amount,
       api_ref: claimId,
+      // Only 'ready' means production + a valid selector. The other states
+      // (not_required, not_configured) must leave the four-field body unchanged.
+      ...(collectionWalletRouting.code === 'ready' && collectionWalletRouting.collectionWalletId !== null
+        ? { wallet_id: collectionWalletRouting.collectionWalletId }
+        : {}),
     };
 
     // Never log the public_key (a credential, even if labeled
@@ -481,6 +502,8 @@ export const PaymentService = {
       phone_number: maskPhoneForLog(formattedPhone),
       amount,
       api_ref: claimId,
+      // Verdict only — never the unmasked wallet ID.
+      collection_wallet_routing: collectionWalletRouting.code,
     });
 
     try {
@@ -495,7 +518,10 @@ export const PaymentService = {
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.warn(`[INTASEND GATEWAY] Sandbox API error (${response.status}): ${errorText.substring(0, 100)}.`);
+        console.warn(
+          describeCollectionGatewayFailure(process.env, response.status, INTASEND_BASE_URL) +
+            ` Provider response excerpt: ${errorText.substring(0, 100)}.`,
+        );
         return {
           success: false,
           checkoutRequestId: '',

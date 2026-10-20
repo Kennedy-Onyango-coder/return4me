@@ -50,6 +50,8 @@ import { PayoutChangeOutcomePanel } from '../components/agent/PayoutSettingsCard
 
 const RUN = Math.floor(100000 + Math.random() * 899999).toString(36).toUpperCase();
 const ADMIN_USER = 'remediation-reviewer-' + RUN;
+/** PHASE 2 — the administrator who records the phone-call attestation. */
+const ATTESTER = 'remediation-attester-' + RUN;
 
 const CURRENT = '254712000111';
 const PROPOSED = '254733000222';
@@ -108,6 +110,16 @@ async function seedChange(params: { id: string; agentId: string; destination?: s
   return created;
 }
 
+/** A complete attestation by a DIFFERENT administrator than ADMIN_USER. */
+async function attestAsDifferentAdmin(changeId: string) {
+  const result = await db.recordAgentPayoutDestinationAttestation({
+    id: changeId,
+    actor: ATTESTER,
+    note: 'Called the proposed number and confirmed the agent controls it.',
+  });
+  expect(result.ok, result.code).toBe(true);
+}
+
 let server: Server;
 let baseUrl = '';
 
@@ -148,6 +160,10 @@ beforeAll(async () => {
       status: 'expired',
       phone_verified_at: null,
       phone_verification_provider_ref: null,
+      attested_at: null,
+      attested_by: null,
+      attestation_method: null,
+      attestation_note: null,
       admin_approved_at: null,
       admin_approved_by: null,
       admin_rejected_at: null,
@@ -201,11 +217,18 @@ afterEach(() => {
 // MEDIUM-1 — the persisted status follows the recorded facts in BOTH orders
 // ---------------------------------------------------------------------------
 describe('MEDIUM-1 status transition after phone verification', () => {
-  it('approve-then-verify no longer leaves the row labelled pending_verification', async () => {
+  it('attest-then-approve records both facts and leaves the row ready to activate', async () => {
     const agentId = 'RM-B2-M1A-' + RUN;
     const changeId = 'RM-B2-M1A-C1-' + RUN;
     await seedAgent(agentId);
     await seedChange({ id: changeId, agentId });
+
+    const attested = await db.recordAgentPayoutDestinationAttestation({
+      id: changeId,
+      actor: ATTESTER,
+      note: 'Called the number and confirmed the agent controls it.',
+    });
+    expect(attested.ok, attested.code).toBe(true);
 
     const approved = await db.recordAgentPayoutDestinationAdminDecision({
       id: changeId,
@@ -215,18 +238,10 @@ describe('MEDIUM-1 status transition after phone verification', () => {
     expect(approved.ok).toBe(true);
     expect(approved.code).toBe('APPROVED');
 
-    const verified = await db.recordAgentPayoutDestinationPhoneVerification({
-      id: changeId,
-      providerRef: 'rm-attestation-' + RUN,
-    });
-    expect(verified.ok).toBe(true);
-    expect(verified.code).toBe('VERIFIED');
-
     const row = await db.getAgentPayoutDestinationChangeById(changeId, agentId);
-    expect(row.phone_verified_at).toBeTruthy();
+    expect(row.attested_at).toBeTruthy();
+    expect(row.phone_verified_at ?? null).toBeNull();
     expect(row.admin_approved_at).toBeTruthy();
-    // The defect: this used to stay 'pending_verification' when approval came
-    // first, contradicting a row that already held both facts.
     expect(row.status).toBe('pending_admin_approval');
     expect(row.status).not.toBe('pending_verification');
 
@@ -235,7 +250,8 @@ describe('MEDIUM-1 status transition after phone verification', () => {
     expect(view.status).toBe('ready_to_activate');
     expect(view.can_activate).toBe(true);
     expect(view.activation_blockers).toEqual([]);
-    expect(view.phone_verification).toBe('verified');
+    expect(view.attestation).toBe('attested');
+    expect(view.phone_verification).toBe('not_verified');
     expect(view.admin_approval).toBe('approved');
     expect(view.masked_proposed_destination).toContain('***');
     expect(view.masked_proposed_destination).not.toBe(PROPOSED);
@@ -270,31 +286,25 @@ describe('MEDIUM-1 status transition after phone verification', () => {
     expect(toAgentPayoutChangeView(row).can_activate).toBe(true);
   });
 
-  it('admin status filtering finds the verified-and-approved request in both orders', async () => {
-    const approveFirstAgent = 'RM-B2-M1C-' + RUN;
-    const approveFirstId = 'RM-B2-M1C-C1-' + RUN;
-    await seedAgent(approveFirstAgent);
-    await seedChange({ id: approveFirstId, agentId: approveFirstAgent });
+  it('admin status filtering finds attested-and-approved requests', async () => {
+    const firstAgent = 'RM-B2-M1C-' + RUN;
+    const firstId = 'RM-B2-M1C-C1-' + RUN;
+    await seedAgent(firstAgent);
+    await seedChange({ id: firstId, agentId: firstAgent });
+    await attestAsDifferentAdmin(firstId);
     await db.recordAgentPayoutDestinationAdminDecision({
-      id: approveFirstId,
+      id: firstId,
       decision: 'approve',
       actor: ADMIN_USER,
     });
-    await db.recordAgentPayoutDestinationPhoneVerification({
-      id: approveFirstId,
-      providerRef: 'rm-attestation-' + RUN,
-    });
 
-    const verifyFirstAgent = 'RM-B2-M1D-' + RUN;
-    const verifyFirstId = 'RM-B2-M1D-C1-' + RUN;
-    await seedAgent(verifyFirstAgent);
-    await seedChange({ id: verifyFirstId, agentId: verifyFirstAgent, destination: PROPOSED_ALT });
-    await db.recordAgentPayoutDestinationPhoneVerification({
-      id: verifyFirstId,
-      providerRef: 'rm-attestation-' + RUN,
-    });
+    const secondAgent = 'RM-B2-M1D-' + RUN;
+    const secondId = 'RM-B2-M1D-C1-' + RUN;
+    await seedAgent(secondAgent);
+    await seedChange({ id: secondId, agentId: secondAgent, destination: PROPOSED_ALT });
+    await attestAsDifferentAdmin(secondId);
     await db.recordAgentPayoutDestinationAdminDecision({
-      id: verifyFirstId,
+      id: secondId,
       decision: 'approve',
       actor: ADMIN_USER,
     });
@@ -305,8 +315,8 @@ describe('MEDIUM-1 status transition after phone verification', () => {
       offset: 0,
     });
     const approvedIds = approvedPage.rows.map((row: any) => row.id);
-    expect(approvedIds).toContain(approveFirstId);
-    expect(approvedIds).toContain(verifyFirstId);
+    expect(approvedIds).toContain(firstId);
+    expect(approvedIds).toContain(secondId);
     for (const row of approvedPage.rows) expect(row.status).toBe('pending_admin_approval');
 
     const unverifiedPage = await db.listAdminAgentPayoutDestinationChanges({
@@ -315,8 +325,8 @@ describe('MEDIUM-1 status transition after phone verification', () => {
       offset: 0,
     });
     const unverifiedIds = unverifiedPage.rows.map((row: any) => row.id);
-    expect(unverifiedIds).not.toContain(approveFirstId);
-    expect(unverifiedIds).not.toContain(verifyFirstId);
+    expect(unverifiedIds).not.toContain(firstId);
+    expect(unverifiedIds).not.toContain(secondId);
   });
 
   it('neither fact alone activates, and each leaves an honest persisted status', async () => {
@@ -342,7 +352,7 @@ describe('MEDIUM-1 status transition after phone verification', () => {
       actor: ADMIN_USER,
     });
     expect(approvalOnlyActivation.activated).toBe(false);
-    expect(approvalOnlyActivation.code).toBe('NOT_VERIFIED');
+    expect(approvalOnlyActivation.code).toBe('NOT_ATTESTED');
     expect((await db.getAgent(approvalOnlyAgent))!.mpesa_till_or_paybill).toBe(CURRENT);
 
     const verificationOnlyAgent = 'RM-B2-M1F-' + RUN;
@@ -370,61 +380,37 @@ describe('MEDIUM-1 status transition after phone verification', () => {
     expect((await db.getAgent(verificationOnlyAgent))!.mpesa_till_or_paybill).toBe(CURRENT);
   });
 
-  it('both orders activate once both facts exist, and only then move the agents row', async () => {
-    const approveFirstAgent = 'RM-B2-M1G-' + RUN;
-    const approveFirstId = 'RM-B2-M1G-C1-' + RUN;
-    const approveFirstDestination = '254733000444';
-    await seedAgent(approveFirstAgent);
-    await seedChange({
-      id: approveFirstId,
-      agentId: approveFirstAgent,
-      destination: approveFirstDestination,
-    });
-    await db.recordAgentPayoutDestinationAdminDecision({
-      id: approveFirstId,
-      decision: 'approve',
-      actor: ADMIN_USER,
-    });
-    await db.recordAgentPayoutDestinationPhoneVerification({
-      id: approveFirstId,
-      providerRef: 'rm-attestation-' + RUN,
-    });
-    const approveFirstActivation = await db.activateAgentPayoutDestinationChange({
-      id: approveFirstId,
-      actor: ADMIN_USER,
-    });
-    expect(approveFirstActivation.activated).toBe(true);
-    expect(approveFirstActivation.code).toBe('ACTIVATED');
-    expect((await db.getAgent(approveFirstAgent))!.mpesa_till_or_paybill).toBe(
-      approveFirstDestination,
-    );
+  it('activates only after an attestation AND a different administrator approval, and only then moves the agents row', async () => {
+    const agentId = 'RM-B2-M1G-' + RUN;
+    const changeId = 'RM-B2-M1G-C1-' + RUN;
+    const destination = '254733000444';
+    await seedAgent(agentId);
+    await seedChange({ id: changeId, agentId, destination });
 
-    const verifyFirstAgent = 'RM-B2-M1H-' + RUN;
-    const verifyFirstId = 'RM-B2-M1H-C1-' + RUN;
-    const verifyFirstDestination = '254733000555';
-    await seedAgent(verifyFirstAgent);
-    await seedChange({
-      id: verifyFirstId,
-      agentId: verifyFirstAgent,
-      destination: verifyFirstDestination,
-    });
-    await db.recordAgentPayoutDestinationPhoneVerification({
-      id: verifyFirstId,
-      providerRef: 'rm-attestation-' + RUN,
-    });
-    await db.recordAgentPayoutDestinationAdminDecision({
-      id: verifyFirstId,
+    // Approval before attestation is refused; the row stays live.
+    const premature = await db.recordAgentPayoutDestinationAdminDecision({
+      id: changeId,
       decision: 'approve',
       actor: ADMIN_USER,
     });
-    const verifyFirstActivation = await db.activateAgentPayoutDestinationChange({
-      id: verifyFirstId,
+    expect(premature.ok).toBe(false);
+    expect(premature.code).toBe('ATTESTATION_REQUIRED');
+
+    await attestAsDifferentAdmin(changeId);
+    const approval = await db.recordAgentPayoutDestinationAdminDecision({
+      id: changeId,
+      decision: 'approve',
       actor: ADMIN_USER,
     });
-    expect(verifyFirstActivation.activated).toBe(true);
-    expect((await db.getAgent(verifyFirstAgent))!.mpesa_till_or_paybill).toBe(
-      verifyFirstDestination,
-    );
+    expect(approval.ok).toBe(true);
+
+    const activation = await db.activateAgentPayoutDestinationChange({
+      id: changeId,
+      actor: ADMIN_USER,
+    });
+    expect(activation.activated).toBe(true);
+    expect(activation.code).toBe('ACTIVATED');
+    expect((await db.getAgent(agentId))!.mpesa_till_or_paybill).toBe(destination);
   });
 });
 
@@ -835,6 +821,10 @@ describe('LOW-6 approval / rejection race response accuracy', () => {
     await seedAgent(agentId);
     await seedChange({ id: changeId, agentId });
 
+    // PHASE 2 — a complete attestation must exist before an approval can be
+    // recorded by a different administrator.
+    await attestAsDifferentAdmin(changeId);
+
     const realRead = db.getAgentPayoutDestinationChangeByIdForAdmin.bind(db);
     let calls = 0;
     vi.spyOn(db, 'getAgentPayoutDestinationChangeByIdForAdmin').mockImplementation(
@@ -879,6 +869,7 @@ describe('LOW-6 approval / rejection race response accuracy', () => {
     const reason = 'Rejected after approval was recorded.';
     await seedAgent(agentId);
     await seedChange({ id: changeId, agentId });
+    await attestAsDifferentAdmin(changeId);
 
     vi.spyOn(db, 'activateAgentPayoutDestinationChange').mockImplementation(
       (async (params: any) => {
@@ -921,6 +912,7 @@ describe('LOW-6 approval / rejection race response accuracy', () => {
     const changeId = 'RM-B2-L6D-C1-' + RUN;
     await seedAgent(agentId);
     await seedChange({ id: changeId, agentId });
+    await attestAsDifferentAdmin(changeId);
 
     vi.spyOn(db, 'activateAgentPayoutDestinationChange').mockImplementation(
       (async () => ({ activated: false, code: 'STATE_CONFLICT' })) as any,
@@ -938,24 +930,35 @@ describe('LOW-6 approval / rejection race response accuracy', () => {
     expect(response.text).not.toContain('"approved":true');
   });
 
-  it('still reports a normal approval, with a masked destination and no activation', async () => {
+  it('records an approval but refuses activation when the SAME administrator attested the call', async () => {
     const agentId = 'RM-B2-L6E-' + RUN;
     const changeId = 'RM-B2-L6E-C1-' + RUN;
     await seedAgent(agentId);
     await seedChange({ id: changeId, agentId });
+
+    // The approver and the attester are the same person: dual control fails.
+    await db.recordAgentPayoutDestinationAttestation({
+      id: changeId,
+      actor: ADMIN_USER,
+      note: 'Called the number myself and confirmed control.',
+    });
 
     const response = await api(
       'POST',
       '/api/admin/agent-payout-destination-changes/' + changeId + '/approve',
       adminToken,
     );
-    expect(response.status).toBe(200);
-    expect(response.body.approved).toBe(true);
+    expect(response.status).toBe(409);
+    expect(response.body.approved).toBe(false);
     expect(response.body.activated).toBe(false);
-    expect(response.body.activation_code).toBe('NOT_VERIFIED');
-    expect(response.body.request.status).toBe('pending_verification');
+    expect(response.body.code).toBe('ATTESTER_APPROVER_CONFLICT');
+    expect(response.body.request.status).toBe('pending_admin_approval');
     expect(response.body.request.masked_proposed_destination).toContain('***');
     expect(response.text).not.toContain(PROPOSED);
+    // The note is administrator-only evidence. This response goes to an
+    // administrator reviewing the refusal, so the evidence is present; the
+    // agent projection never contains it.
+    expect(response.text).toContain('Called the number myself');
 
     const agent = await db.getAgent(agentId);
     expect(agent!.mpesa_till_or_paybill).toBe(CURRENT);

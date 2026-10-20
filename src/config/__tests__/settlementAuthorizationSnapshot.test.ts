@@ -70,6 +70,31 @@ describe('buildSettlementAuthorizationSnapshot — what was covered', () => {
       buildSettlementAuthorizationSnapshot([{ ...FINDER, amount: 'not-a-number' }]).reason,
     ).toBe('unreadable_amount');
   });
+
+  // THE DEFECT: distinct rows for the SAME recipient role used to be read as
+  // two legitimate obligations and summed, so a doubled booking could be
+  // approved for a doubled total. The 409 text already promised duplication was
+  // refused; only duplicate IDS were.
+  it('refuses two DISTINCT rows for the same payout role', () => {
+    const secondFinder = { ledgerEntryId: 'TXN-F2', recipientType: 'finder' as const, amount: 250 };
+    expect(buildSettlementAuthorizationSnapshot([FINDER, secondFinder]).reason).toBe('duplicate_role');
+    expect(buildSettlementAuthorizationSnapshot([secondFinder, FINDER]).reason).toBe('duplicate_role');
+
+    const secondAgent = { ledgerEntryId: 'TXN-A2', recipientType: 'agent' as const, amount: 350 };
+    expect(buildSettlementAuthorizationSnapshot([AGENT, FINDER, secondAgent]).reason).toBe('duplicate_role');
+
+    // The duplicate-role refusal is not a general tightening: one finder leg and
+    // one agent leg remain a readable authorisation with the same total.
+    const valid = buildSettlementAuthorizationSnapshot([FINDER, AGENT]);
+    expect(valid.readable).toBe(true);
+    expect(valid.totalMinorUnits).toBe(60000);
+  });
+
+  it('the same row twice is still reported as duplicate_ledger_id, not duplicate_role', () => {
+    expect(
+      buildSettlementAuthorizationSnapshot([FINDER, { ...FINDER, amount: 999 }]).reason,
+    ).toBe('duplicate_ledger_id');
+  });
 });
 
 describe('parseSettlementAuthorizationLedgerIds — the persisted form', () => {
@@ -169,5 +194,17 @@ describe('compareSettlementAuthorization — the payout may only be what was app
         [{ ...FINDER, amount: 'abc' }, AGENT],
       ) as any).code,
     ).toBe('current_legs_unreadable');
+  });
+
+  // A claim that carries a DUPLICATED payout role cannot be compared with any
+  // approval, and must never fall through to "matches": release is refused.
+  it('refuses a claim whose current legs duplicate a payout role', () => {
+    const verdict = compareSettlementAuthorization(
+      { authorizedTotal: '600.00', authorizedLedgerIds: 'finder:TXN-F1,agent:TXN-A1' },
+      [FINDER, { ...FINDER, ledgerEntryId: 'TXN-F2' }, AGENT],
+    );
+    expect(verdict.ok).toBe(false);
+    expect((verdict as any).code).toBe('current_legs_unreadable');
+    expect((verdict as any).message).toContain('duplicate_role');
   });
 });

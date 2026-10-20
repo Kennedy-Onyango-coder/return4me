@@ -2,12 +2,16 @@ import { describe, it, expect } from 'vitest';
 import {
   DISBURSEMENT_WALLET_ENV_KEY,
   SETTLEMENT_WALLET_ENV_KEY,
+  COLLECTION_WALLET_ENV_KEY,
   readWalletId,
   isConfiguredWalletId,
   maskWalletId,
   resolvePayoutWalletRouting,
   resolveConfiguredPayoutWalletRouting,
   describePayoutWalletRoutingForAudit,
+  resolveCollectionWalletRouting,
+  resolveConfiguredCollectionWalletRouting,
+  describeCollectionWalletRoutingForAudit,
 } from '../walletRouting';
 
 // =============================================================================
@@ -18,11 +22,12 @@ import {
 // produce ok:false (so a caller cannot mistake it for a usable configuration) and
 // a message that names the actual configuration problem.
 //
-// The rule under test is deliberately narrow: it does NOT claim collections can be
-// routed, and it does NOT move money. It answers one question — "may a production
-// payout be debited from this wallet?" — and refuses only two configurations:
-// a wallet that is not configured at all, and a wallet that IS the declared
-// collection wallet.
+// The payout rule under test is deliberately narrow: it does NOT move money. It
+// answers one question — "may a production payout be debited from this wallet?" —
+// and refuses only two configurations: a wallet that is not configured at all,
+// and a wallet that IS the declared collection wallet. The collection selector
+// is a separate, optional decision pinned by the Phase 5 block at the end of this
+// file; it appends a provider field and never moves money either.
 // =============================================================================
 
 const WORKING = 'b1f4c0de-9a72-4f5c-8e11-2a3d5c7e9f01';
@@ -91,6 +96,8 @@ describe('maskWalletId — a wallet ID leaves this module masked', () => {
     expect(maskWalletId(undefined)).toBe('(none)');
     expect(maskWalletId('   ')).toBe('(none)');
   });
+});
+
 describe('resolvePayoutWalletRouting — the decision matrix', () => {
   it('enforces nothing outside production, even when the IDs are equal', () => {
     for (const nodeEnv of ['development', 'test', undefined, '', 'staging', 'Production']) {
@@ -233,4 +240,104 @@ describe('describePayoutWalletRoutingForAudit — audit-safe by construction', (
   });
 });
 
+// =============================================================================
+// PHASE 5 — THE OPTIONAL COLLECTION-WALLET SELECTOR.
+// =============================================================================
+// The selector is default-off and production-only. These tests pin the whole
+// decision matrix: production + a real ID is the ONLY shape that appends
+// wallet_id; every other shape leaves the four-field STK body untouched, and a
+// placeholder in production fails closed instead of silently using the default.
+// =============================================================================
+describe('resolveCollectionWalletRouting — default-off, production-only', () => {
+  it('never enables outside production, even when a real ID is declared', () => {
+    for (const nodeEnv of ['development', 'test', undefined, '', 'staging', 'Production']) {
+      const routing = resolveCollectionWalletRouting({
+        nodeEnv,
+        collectionWalletId: WORKING,
+      });
+      expect(routing.ok, `nodeEnv=${String(nodeEnv)}`).toBe(true);
+      expect(routing.code, `nodeEnv=${String(nodeEnv)}`).toBe('not_required');
+      expect(routing.production).toBe(false);
+      expect(routing.collectionWalletState).toBe('configured');
+      expect(routing.collectionWalletId).toBe(WORKING);
+    }
+  });
+
+  it('omits the selector in production when it is unset or blank', () => {
+    for (const value of [undefined, '', '   ', '\t\n']) {
+      const routing = resolveCollectionWalletRouting({
+        nodeEnv: 'production',
+        collectionWalletId: value,
+      });
+      expect(routing.ok).toBe(true);
+      expect(routing.code).toBe('not_configured');
+      expect(routing.production).toBe(true);
+      expect(routing.collectionWalletId).toBeNull();
+      expect(routing.collectionWalletState).toBe('not_configured');
+    }
+  });
+
+  it.each([
+    ['the .env.example convention', 'REPLACE_WITH_KES_COLLECTION_WALLET_ID'],
+    ['a padded placeholder', '  REPLACE_WITH_KES_COLLECTION_WALLET_ID  '],
+    ['lowercase replace_with', 'replace_with_a_wallet'],
+    ['placeholder', 'placeholder'],
+    ['changeme', 'CHANGEME'],
+    ['todo', 'todo'],
+  ])('REFUSES a production selector that is %s', (_label, value) => {
+    const routing = resolveCollectionWalletRouting({
+      nodeEnv: 'production',
+      collectionWalletId: value,
+    });
+    expect(routing.ok).toBe(false);
+    expect(routing.code).toBe('collection_wallet_placeholder');
+    expect(routing.collectionWalletState).toBe('placeholder');
+    expect(routing.message).toContain('INTASEND_COLLECTION_WALLET_ID is placeholder-shaped in production');
+    // The refusal names the VARIABLE; actual values are never echoed.
+    expect(routing.message).not.toContain(WORKING);
+  });
+
+  it('is ready in production with a real, distinct wallet ID', () => {
+    const routing = resolveCollectionWalletRouting({
+      nodeEnv: 'production',
+      collectionWalletId: `  ${WORKING}  `,
+    });
+    expect(routing.ok).toBe(true);
+    expect(routing.code).toBe('ready');
+    expect(routing.production).toBe(true);
+    expect(routing.collectionWalletState).toBe('configured');
+    expect(routing.collectionWalletId).toBe(WORKING);
+    expect(routing.message).not.toContain(WORKING);
+  });
+
+  it('reads the documented environment variable and exact NODE_ENV', () => {
+    expect(COLLECTION_WALLET_ENV_KEY).toBe('INTASEND_COLLECTION_WALLET_ID');
+    expect(
+      resolveConfiguredCollectionWalletRouting({
+        [COLLECTION_WALLET_ENV_KEY]: WORKING,
+        NODE_ENV: 'production',
+      }).code,
+    ).toBe('ready');
+    expect(
+      resolveConfiguredCollectionWalletRouting({
+        [COLLECTION_WALLET_ENV_KEY]: WORKING,
+        NODE_ENV: 'development',
+      }).code,
+    ).toBe('not_required');
+  });
+
+  it('writes an audit-safe line: verdict plus a masked ID only', () => {
+    const routing = resolveCollectionWalletRouting({
+      nodeEnv: 'production',
+      collectionWalletId: WORKING,
+    });
+    const line = describeCollectionWalletRoutingForAudit(routing);
+    expect(line).toContain('collection_routing=ready');
+    // maskWalletId keeps at most four leading and four trailing characters, so
+    // the shared helper is the single source of truth for the rendered value.
+    expect(line).toContain(`collection_wallet=${maskWalletId(WORKING)}`);
+    expect(line).toContain('collection_wallet=b1f4***9f01');
+    expect(line).not.toContain(WORKING);
+    expect(line).not.toContain(WORKING.slice(4, -4));
+  });
 });

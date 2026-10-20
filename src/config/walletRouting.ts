@@ -7,22 +7,26 @@
 //   fail-closed rule that stops a payout from being debited against the wallet
 //   that receives collections.
 //
-// THE COLLECTION SIDE (A) — WHAT THE INTEGRATION CAN AND CANNOT DO
+// THE COLLECTION SIDE (A) — OPTIONAL, DEFAULT-OFF, PRODUCTION-ONLY
 //   The collection request built in services/payments.ts is
-//   POST {base}/payment/mpesa-stk-push/ with exactly four fields:
-//   public_key, phone_number, amount and api_ref. It carries NO wallet
-//   selector, and this repository has no verified evidence that the merchant
-//   account can be configured, per request or per dashboard setting, to settle
-//   a collection into a working wallet instead of the currency's settlement
-//   wallet. Therefore:
-//     * this module does NOT claim collections can be routed to the working
-//       wallet;
-//     * it provides no knob that pretends to do so;
-//     * whether the provider-side arrangement exists is an EXTERNAL dependency
-//       (IntaSend dashboard/account support), recorded in
-//       docs/configuration.md and docs/operations.md.
-//   Adding a wallet field to the STK request on the strength of a guess would be
-//   exactly the invented-provider-contract mistake this repository refuses.
+//   POST {base}/payment/mpesa-stk-push/. Its default body has exactly four
+//   fields: public_key, phone_number, amount and api_ref. It carries NO wallet
+//   selector unless the operator explicitly configures one.
+//
+//   PHASE 5 adds one optional selector: INTASEND_COLLECTION_WALLET_ID. When it
+//   is a real (non-blank, non-placeholder-shaped) ID AND NODE_ENV is exactly
+//   'production', the request gains a fifth field, wallet_id. In every other
+//   configuration the request is byte-for-byte the original four-field body:
+//     * unset / blank in production      -> provider default settlement wallet;
+//     * set outside production            -> never sent to a sandbox/test provider;
+//     * placeholder-shaped in production  -> REFUSED before any provider call,
+//       so a copied .env.example can never silently fall back to the default.
+//
+//   PROVIDER SUPPORT IS NOT VERIFIED BY THIS REPOSITORY. The wallet_id selector
+//   on the STK endpoint is enabled only for an account whose owner has confirmed
+//   IntaSend accepts it. The code cannot verify that remotely, and these docs do
+//   not claim it. Leaving the variable unset is the safe, backward-compatible
+//   default.
 //
 // THE PAYOUT SIDE (B/F) — THE ONE RULE THIS MODULE ENFORCES
 //   A payout batch debits the wallet named by INTASEND_DISBURSEMENT_WALLET_ID
@@ -93,6 +97,11 @@ function isPlaceholderValue(key: string | null | undefined): boolean {
 export const DISBURSEMENT_WALLET_ENV_KEY = 'INTASEND_DISBURSEMENT_WALLET_ID';
 /** The optional, identity-only declaration of the collection wallet. */
 export const SETTLEMENT_WALLET_ENV_KEY = 'INTASEND_SETTLEMENT_WALLET_ID';
+/**
+ * PHASE 5 — optional selector for the wallet a collection is requested to
+ * settle into. Default-off; used only in production and only when valid.
+ */
+export const COLLECTION_WALLET_ENV_KEY = 'INTASEND_COLLECTION_WALLET_ID';
 
 /**
  * Trimmed wallet ID, or null when absent/blank. Never returns a
@@ -236,8 +245,9 @@ export function resolvePayoutWalletRouting(input: WalletRoutingInput): PayoutWal
     ok: true,
     code: 'ready',
     message:
-      'Payouts debit the configured working wallet. This application does not route collections, and the wallet ' +
-      'identity is checked only as far as INTASEND_SETTLEMENT_WALLET_ID is declared.',
+      'Payouts debit the configured working wallet. Collection routing is a separate, optional selector ' +
+      '(INTASEND_COLLECTION_WALLET_ID), and the wallet identity is checked only as far as ' +
+      'INTASEND_SETTLEMENT_WALLET_ID is declared.',
   };
 }
 
@@ -254,6 +264,138 @@ export function resolveConfiguredPayoutWalletRouting(
     payoutWalletId: env[DISBURSEMENT_WALLET_ENV_KEY],
     settlementWalletId: env[SETTLEMENT_WALLET_ENV_KEY],
   });
+}
+
+/** How the optional collection-wallet selector was supplied. */
+export type CollectionWalletState = 'configured' | 'not_configured' | 'placeholder';
+
+/** Why a collection request will (or will not) carry `wallet_id`. */
+export type CollectionWalletRoutingCode =
+  /** Production, valid selector: append wallet_id to the STK request. */
+  | 'ready'
+  /** Not production: never send the selector to a sandbox/test provider. */
+  | 'not_required'
+  /** Production, unset/blank: omit wallet_id and use the provider default. */
+  | 'not_configured'
+  /** Production, non-blank but placeholder-shaped: refuse before any request. */
+  | 'collection_wallet_placeholder';
+
+export interface CollectionWalletRouting {
+  /** False ONLY in production, and only when the supplied value is unusable. */
+  ok: boolean;
+  code: CollectionWalletRoutingCode;
+  /** True only for NODE_ENV exactly 'production' — the same test payouts use. */
+  production: boolean;
+  /** Trimmed selector as supplied (may be placeholder-shaped). */
+  collectionWalletId: string | null;
+  collectionWalletState: CollectionWalletState;
+  /** Operator-facing explanation. Contains no unmasked wallet ID. */
+  message: string;
+}
+
+export interface CollectionWalletRoutingInput {
+  nodeEnv?: string | null;
+  collectionWalletId?: string | null;
+}
+
+const COLLECTION_WALLET_PLACEHOLDER_MESSAGE =
+  'INTASEND_COLLECTION_WALLET_ID is placeholder-shaped in production. ' +
+  'Remove it (or leave it blank) to use the provider default settlement wallet, or set a real wallet ID. ' +
+  'Refusing to send an STK request with an unusable selector: falling back silently could settle the collection ' +
+  'in a wallet the operator did not choose.';
+
+/**
+ * Resolve the optional collection-wallet selector for ONE observable
+ * configuration.
+ *
+ * Pure: every input is a parameter, nothing is read from process.env here (use
+ * resolveConfiguredCollectionWalletRouting for the live environment).
+ *
+ * ORDER MATTERS:
+ *   1. not production                       -> 'not_required' (never sent)
+ *   2. no value supplied                    -> 'not_configured' (provider default)
+ *   3. supplied but placeholder-shaped      -> refusal (ok:false)
+ *   4. otherwise                            -> 'ready' (wallet_id is appended)
+ */
+export function resolveCollectionWalletRouting(
+  input: CollectionWalletRoutingInput,
+): CollectionWalletRouting {
+  const production = input?.nodeEnv === 'production';
+  const supplied = readWalletId(input?.collectionWalletId);
+  const configured = isConfiguredWalletId(supplied);
+  const collectionWalletState: CollectionWalletState =
+    configured ? 'configured' : supplied === null ? 'not_configured' : 'placeholder';
+
+  const base = {
+    production,
+    collectionWalletId: supplied,
+    collectionWalletState,
+  };
+
+  if (!production) {
+    return {
+      ...base,
+      ok: true,
+      code: 'not_required',
+      message:
+        'Collection wallet selection is not enforced outside NODE_ENV=production: a configured wallet ID is never ' +
+        'sent to the sandbox/test provider.',
+    };
+  }
+
+  if (supplied === null) {
+    return {
+      ...base,
+      ok: true,
+      code: 'not_configured',
+      message:
+        'No collection wallet is configured. The STK request omits wallet_id and IntaSend uses the account default ' +
+        'settlement wallet.',
+    };
+  }
+
+  if (!configured) {
+    return {
+      ...base,
+      ok: false,
+      code: 'collection_wallet_placeholder',
+      message: COLLECTION_WALLET_PLACEHOLDER_MESSAGE,
+    };
+  }
+
+  return {
+    ...base,
+    ok: true,
+    code: 'ready',
+    message:
+      'The STK request will carry wallet_id, requesting settlement into the configured collection wallet. ' +
+      'Provider support for this field is verified by the account owner, not by this application.',
+  };
+}
+
+/**
+ * Resolve the selector from the live process environment (or an explicit env
+ * object, for tests).
+ */
+export function resolveConfiguredCollectionWalletRouting(
+  env: Record<string, string | undefined> = process.env,
+): CollectionWalletRouting {
+  return resolveCollectionWalletRouting({
+    nodeEnv: env.NODE_ENV,
+    collectionWalletId: env[COLLECTION_WALLET_ENV_KEY],
+  });
+}
+
+/**
+ * ONE audit-safe line: masked selector plus the routing verdict. Safe for
+ * `audit_log.details`, an operator response and a log aggregator.
+ */
+export function describeCollectionWalletRoutingForAudit(routing: CollectionWalletRouting): string {
+  const wallet =
+    routing.collectionWalletState === 'configured'
+      ? maskWalletId(routing.collectionWalletId)
+      : routing.collectionWalletState;
+  return `collection_routing=${routing.code} collection_wallet=${wallet}`;
 }
 
 /**

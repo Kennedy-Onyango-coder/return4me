@@ -919,6 +919,10 @@ CREATE TABLE agent_payout_destination_changes (
     status VARCHAR(30) NOT NULL DEFAULT 'pending_verification',
     phone_verified_at TIMESTAMP WITH TIME ZONE,
     phone_verification_provider_ref VARCHAR(100),
+    attested_at TIMESTAMP WITH TIME ZONE,
+    attested_by VARCHAR(100),
+    attestation_method VARCHAR(30),
+    attestation_note VARCHAR(500),
     admin_approved_at TIMESTAMP WITH TIME ZONE,
     admin_approved_by VARCHAR(100),
     admin_rejected_at TIMESTAMP WITH TIME ZONE,
@@ -929,7 +933,22 @@ CREATE TABLE agent_payout_destination_changes (
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT agent_payout_changes_status_check
-        CHECK (status IN ('pending_verification', 'pending_admin_approval', 'activated', 'rejected', 'expired'))
+        CHECK (status IN ('pending_verification', 'pending_admin_approval', 'activated', 'rejected', 'expired')),
+    -- PHASE 2 — an attestation is COMPLETE or ABSENT, never partial.
+    CONSTRAINT agent_payout_changes_attestation_check
+        CHECK (
+            (attested_at IS NULL AND attested_by IS NULL AND attestation_method IS NULL AND attestation_note IS NULL)
+            OR (
+                attested_at IS NOT NULL
+                AND attested_by IS NOT NULL
+                AND attestation_method = 'admin_phone_call'
+                AND attestation_note IS NOT NULL
+                AND length(attestation_note) BETWEEN 1 AND 500
+            )
+        ),
+    -- DUAL CONTROL — the approver may not be the attester.
+    CONSTRAINT agent_payout_changes_dual_control_check
+        CHECK (admin_approved_at IS NULL OR attested_at IS NULL OR lower(admin_approved_by) <> lower(attested_by))
 );
 CREATE INDEX idx_agent_payout_changes_agent ON agent_payout_destination_changes(agent_id, status);
 CREATE INDEX idx_agent_payout_changes_expiry ON agent_payout_destination_changes(expires_at);

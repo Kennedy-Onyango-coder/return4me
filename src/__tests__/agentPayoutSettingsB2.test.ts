@@ -45,6 +45,9 @@ const RUN = Math.floor(100000 + Math.random() * 899999).toString(36).toUpperCase
 const AGENT_A = 'TEST-B2-APDC-A-' + RUN;
 const AGENT_B = 'TEST-B2-APDC-B-' + RUN;
 const ADMIN_USER = 'reviewer-' + RUN;
+const SECOND_ADMIN = 'approver-' + RUN;
+/** The stub password the route-level re-authentication seam accepts in tests. */
+const ADMIN_PASSWORD = 'test-password';
 
 const CURRENT_A = '254712345678';
 const CURRENT_B = '254798765432';
@@ -97,6 +100,13 @@ const adminToken = generateToken({
   username: ADMIN_USER,
   tokenVersion: 1,
 });
+const secondAdminToken = generateToken({
+  userId: 'ADM2-' + RUN,
+  phone: randomPhone(5),
+  role: 'admin',
+  username: SECOND_ADMIN,
+  tokenVersion: 1,
+});
 
 async function api(method: string, route: string, token?: string, body?: any) {
   const response = await fetch(baseUrl + route, {
@@ -139,6 +149,16 @@ beforeAll(async () => {
       return next();
     }) as any,
     requireCurrentAdminSession: ((req: any, _res: any, next: any) => next()) as any,
+    // PHASE 2 — the real server passes its bcrypt re-authentication helper here.
+    // The stub accepts one known test password and refuses everything else, so
+    // the routes' password requirement is exercised rather than bypassed.
+    reauthenticateAdmin: (async (_req: any, password: unknown) => {
+      if (password === ADMIN_PASSWORD) return null;
+      if (typeof password !== 'string' || password.length === 0) {
+        return { status: 400, body: { error: 'Your password is required.', code: 'password_required' } };
+      }
+      return { status: 401, body: { error: 'Incorrect password.', code: 'password_incorrect' } };
+    }) as any,
     sendServerError: (res: any, error: any, context: string) => {
       console.error('[' + context + ']', error);
       return res.status(500).json({ error: 'A server error occurred.' });
@@ -257,22 +277,36 @@ describe('B2 payout destination change state machine', () => {
     expect(resolveAgentPayoutChangeState(base)).toBe('pending_verification');
   });
 
-  it('verification alone moves to pending admin approval, never to active', () => {
-    const change = { ...base, phone_verified_at: new Date() };
+  it('an administrator phone-call attestation alone moves to pending approval, never active', () => {
+    const change = {
+      ...base,
+      attested_at: new Date(),
+      attested_by: ADMIN_USER,
+      attestation_method: 'admin_phone_call',
+      attestation_note: 'Called the number; the agent answered and confirmed control.',
+    };
     expect(resolveAgentPayoutChangeState(change)).toBe('pending_admin_approval');
     expect(evaluateAgentPayoutActivation(change).allowed).toBe(false);
     expect(evaluateAgentPayoutActivation(change).reason).toBe('admin_approval_required');
   });
 
   it('admin approval alone stays pending verification, never active', () => {
-    const change = { ...base, admin_approved_at: new Date() };
+    const change = { ...base, admin_approved_at: new Date(), admin_approved_by: ADMIN_USER };
     expect(resolveAgentPayoutChangeState(change)).toBe('pending_verification');
     expect(evaluateAgentPayoutActivation(change).allowed).toBe(false);
-    expect(evaluateAgentPayoutActivation(change).reason).toBe('phone_verification_required');
+    expect(evaluateAgentPayoutActivation(change).reason).toBe('attestation_required');
   });
 
-  it('verification AND approval is the only combination that may activate', () => {
-    const change = { ...base, phone_verified_at: new Date(), admin_approved_at: new Date() };
+  it('a complete attestation AND a DIFFERENT administrator approval is the only combination that may activate', () => {
+    const change = {
+      ...base,
+      attested_at: new Date(),
+      attested_by: ADMIN_USER,
+      attestation_method: 'admin_phone_call',
+      attestation_note: 'Called the number; the agent answered and confirmed control.',
+      admin_approved_at: new Date(),
+      admin_approved_by: SECOND_ADMIN,
+    };
     expect(resolveAgentPayoutChangeState(change)).toBe('ready_to_activate');
     expect(evaluateAgentPayoutActivation(change)).toEqual({
       allowed: true,
@@ -281,12 +315,53 @@ describe('B2 payout destination change state machine', () => {
     });
   });
 
+  it('the SAME administrator attesting and approving can never activate', () => {
+    const change = {
+      ...base,
+      attested_at: new Date(),
+      attested_by: ADMIN_USER,
+      attestation_method: 'admin_phone_call',
+      attestation_note: 'Called the number and confirmed control.',
+      admin_approved_at: new Date(),
+      admin_approved_by: ADMIN_USER.toUpperCase(),
+    };
+    expect(resolveAgentPayoutChangeState(change)).toBe('attester_approver_conflict');
+    expect(evaluateAgentPayoutActivation(change).allowed).toBe(false);
+    expect(evaluateAgentPayoutActivation(change).blockers).toContain('attester_approver_conflict');
+  });
+
+  it('an incomplete attestation is not evidence', () => {
+    for (const incomplete of [
+      { attested_at: new Date() },
+      { attested_at: new Date(), attested_by: ADMIN_USER, attestation_method: 'admin_phone_call' },
+      {
+        attested_at: new Date(),
+        attested_by: ADMIN_USER,
+        attestation_method: 'sms_otp',
+        attestation_note: 'Claimed an OTP.',
+      },
+      {
+        attested_at: new Date(),
+        attested_by: ADMIN_USER,
+        attestation_method: 'admin_phone_call',
+        attestation_note: '   ',
+      },
+    ]) {
+      expect(evaluateAgentPayoutActivation({ ...base, admin_approved_at: new Date(), admin_approved_by: SECOND_ADMIN, ...incomplete }).allowed).toBe(false);
+      expect(evaluateAgentPayoutActivation({ ...base, admin_approved_at: new Date(), admin_approved_by: SECOND_ADMIN, ...incomplete }).blockers).toContain('attestation_required');
+    }
+  });
+
   it('expiry blocks activation and is derived from the clock', () => {
     const change = {
       ...base,
       expires_at: new Date(Date.now() - 1000),
-      phone_verified_at: new Date(),
+      attested_at: new Date(),
+      attested_by: ADMIN_USER,
+      attestation_method: 'admin_phone_call',
+      attestation_note: 'Called the number and confirmed control.',
       admin_approved_at: new Date(),
+      admin_approved_by: SECOND_ADMIN,
     };
     expect(resolveAgentPayoutChangeState(change)).toBe('expired');
     const decision = evaluateAgentPayoutActivation(change);
@@ -304,12 +379,16 @@ describe('B2 payout destination change state machine', () => {
     expect(evaluateAgentPayoutActivation(change).reason).toBe('rejected');
   });
 
-  it('a format-ineligible row can never activate, even with both proofs', () => {
+  it('a format-ineligible row can never activate, even with both decisions', () => {
     const change = {
       ...base,
       destination_format_eligible: false,
-      phone_verified_at: new Date(),
+      attested_at: new Date(),
+      attested_by: ADMIN_USER,
+      attestation_method: 'admin_phone_call',
+      attestation_note: 'Called the number and confirmed control.',
       admin_approved_at: new Date(),
+      admin_approved_by: SECOND_ADMIN,
     };
     expect(evaluateAgentPayoutActivation(change).blockers).toContain('destination_not_eligible');
   });
@@ -320,14 +399,18 @@ describe('B2 payout destination change state machine', () => {
       id: 'APDC-VIEW',
       phone_verified_at: null,
       admin_approved_at: new Date(),
+      admin_approved_by: ADMIN_USER,
     });
     expect(view.masked_proposed_destination).not.toBe(PROPOSED_A);
     expect(view.masked_proposed_destination).toContain('***');
     expect(view.destination_format_eligible).toBe(true);
     expect(view.phone_verification).toBe('not_verified');
+    expect(view.attestation).toBe('not_attested');
     expect(view.admin_approval).toBe('approved');
     expect(view.can_activate).toBe(false);
-    expect(view.activation_blockers).toContain('phone_verification_required');
+    expect(view.activation_blockers).toContain('attestation_required');
+    // The administrator's note is NOT part of the agent projection.
+    expect(Object.keys(view)).not.toContain('attestation_note');
     // No raw destination field exists at all.
     expect(Object.keys(view)).not.toContain('proposed_destination');
     expect(JSON.stringify(view)).not.toContain(PROPOSED_A);
@@ -408,7 +491,7 @@ describe('B2 payout destination change persistence and activation', () => {
     expect(agent!.payout_method_type).toBe('Personal M-Pesa');
   });
 
-  it('cannot activate on admin approval alone', async () => {
+  it('refuses an approval that has no complete phone-call attestation', async () => {
     const agentId = 'TEST-B2-APDC-H-' + RUN;
     await seedAgent(agentId);
     await seedPendingChange({ id: 'APDC-H1-' + RUN, agentId });
@@ -418,20 +501,21 @@ describe('B2 payout destination change persistence and activation', () => {
       decision: 'approve',
       actor: ADMIN_USER,
     });
-    expect(approval.ok).toBe(true);
+    expect(approval.ok).toBe(false);
+    expect(approval.code).toBe('ATTESTATION_REQUIRED');
 
     const activation = await db.activateAgentPayoutDestinationChange({
       id: 'APDC-H1-' + RUN,
       actor: ADMIN_USER,
     });
     expect(activation.activated).toBe(false);
-    expect(activation.code).toBe('NOT_VERIFIED');
+    expect(activation.code).toBe('NOT_ATTESTED');
 
     const agent = await db.getAgent(agentId);
     expect(agent!.mpesa_till_or_paybill).toBe(CURRENT_A);
   });
 
-  it('cannot activate on phone verification alone', async () => {
+  it('cannot activate on real phone verification alone (the attestation axis is separate)', async () => {
     const agentId = 'TEST-B2-APDC-I-' + RUN;
     await seedAgent(agentId);
     await seedPendingChange({ id: 'APDC-I1-' + RUN, agentId });
@@ -453,6 +537,24 @@ describe('B2 payout destination change persistence and activation', () => {
     expect(agent!.mpesa_till_or_paybill).toBe(CURRENT_A);
   });
 
+  it('refuses an attestation whose actor is also the existing approver', async () => {
+    const agentId = 'TEST-B2-APDC-I2-' + RUN;
+    await seedAgent(agentId);
+    await seedPendingChange({ id: 'APDC-I2-' + RUN, agentId });
+    await db.recordAgentPayoutDestinationAttestation({
+      id: 'APDC-I2-' + RUN,
+      actor: SECOND_ADMIN,
+      note: 'Called and confirmed control.',
+    });
+    const approval = await db.recordAgentPayoutDestinationAdminDecision({
+      id: 'APDC-I2-' + RUN,
+      decision: 'approve',
+      actor: SECOND_ADMIN,
+    });
+    expect(approval.ok).toBe(false);
+    expect(approval.code).toBe('ATTESTER_APPROVER_CONFLICT');
+  });
+
   it('requires a provider reference for a phone attestation', async () => {
     const agentId = 'TEST-B2-APDC-J-' + RUN;
     await seedAgent(agentId);
@@ -469,29 +571,31 @@ describe('B2 payout destination change persistence and activation', () => {
     expect(row.phone_verified_at).toBeNull();
   });
 
-  it('activates ONLY with real verification AND approval, and audits a masked destination', async () => {
+  it('activates ONLY with a complete phone-call attestation AND a different administrator approval, and audits a masked destination', async () => {
     const agentId = 'TEST-B2-APDC-K-' + RUN;
     const proposed = '254733444555';
     const changeId = 'APDC-K1-' + RUN;
     await seedAgent(agentId);
     await seedPendingChange({ id: changeId, agentId, destination: proposed });
 
-    const verified = await db.recordAgentPayoutDestinationPhoneVerification({
+    const attested = await db.recordAgentPayoutDestinationAttestation({
       id: changeId,
-      providerRef: 'provider-attestation-' + RUN,
+      actor: ADMIN_USER,
+      note: 'Called the proposed number; the agent answered and confirmed control.',
     });
-    expect(verified.ok).toBe(true);
+    expect(attested.ok).toBe(true);
+    expect(attested.code).toBe('ATTESTED');
 
     const approval = await db.recordAgentPayoutDestinationAdminDecision({
       id: changeId,
       decision: 'approve',
-      actor: ADMIN_USER,
+      actor: SECOND_ADMIN,
     });
     expect(approval.ok).toBe(true);
 
     const activation = await db.activateAgentPayoutDestinationChange({
       id: changeId,
-      actor: ADMIN_USER,
+      actor: SECOND_ADMIN,
     });
     expect(activation.activated).toBe(true);
     expect(activation.code).toBe('ACTIVATED');
@@ -503,9 +607,11 @@ describe('B2 payout destination change persistence and activation', () => {
 
     // Evidence for the CURRENT destination is the activated change.
     const evidence = await db.getActivatedAgentPayoutDestinationChangeFor(agentId, proposed);
-    expect(evidence?.phone_verified_at).toBeTruthy();
+    expect(evidence?.attested_at).toBeTruthy();
+    expect(evidence?.attested_by).toBe(ADMIN_USER);
+    expect(evidence?.phone_verified_at ?? null).toBeNull();
 
-    // The audit row exists and contains NO raw destination.
+    // The audit row exists, contains NO raw destination, and names both actors.
     const auditRows = await drizzleDb.select().from(auditLogTable);
     const activationRows = auditRows.filter(
       (row: any) =>
@@ -515,6 +621,10 @@ describe('B2 payout destination change persistence and activation', () => {
     expect(activationRows).toHaveLength(1);
     expect(String(activationRows[0].details)).not.toContain(proposed);
     expect(String(activationRows[0].details)).toContain('***');
+    expect(String(activationRows[0].details)).toContain(ADMIN_USER);
+    expect(String(activationRows[0].details)).toContain(SECOND_ADMIN);
+    // The attestation note is operator evidence and is NOT written to the audit line.
+    expect(String(activationRows[0].details)).not.toContain('called the proposed');
   });
 
   it('an EXPIRED request can never be verified or activated', async () => {
@@ -718,29 +828,73 @@ describe('B2 payout settings verification and admin review', () => {
     expect(response.text).not.toContain(CURRENT_A);
   });
 
-  it('admin approval alone does NOT activate and does not change the destination', async () => {
+  it('requires the phone-call attestation, the operator password, and a DIFFERENT administrator before activation', async () => {
     const view = await api('GET', '/api/agents/payout-settings', tokenA);
     const changeId = view.body.pending_request.id;
+
+    // Approval before attestation is refused.
+    const premature = await api(
+      'POST',
+      '/api/admin/agent-payout-destination-changes/' + changeId + '/approve',
+      adminToken,
+      { password: ADMIN_PASSWORD },
+    );
+    expect(premature.status).toBe(409);
+    expect(premature.body.code).toBe('ATTESTATION_REQUIRED');
+
+    // Attestation itself requires a password.
+    const noPassword = await api(
+      'POST',
+      '/api/admin/agent-payout-destination-changes/' + changeId + '/attest',
+      adminToken,
+      { note: 'Called the number and confirmed the agent controls it.' },
+    );
+    expect(noPassword.status).toBe(400);
+    expect(noPassword.body.code).toBe('password_required');
+
+    const attested = await api(
+      'POST',
+      '/api/admin/agent-payout-destination-changes/' + changeId + '/attest',
+      adminToken,
+      { password: ADMIN_PASSWORD, note: 'Called the number and confirmed the agent controls it.' },
+    );
+    expect(attested.status).toBe(200);
+    expect(attested.body.attested).toBe(true);
+    expect(attested.body.request.status).toBe('pending_admin_approval');
+    expect(attested.body.request.attested_by).toBe(ADMIN_USER);
+
+    // The attester cannot approve their own attestation.
+    const selfApproval = await api(
+      'POST',
+      '/api/admin/agent-payout-destination-changes/' + changeId + '/approve',
+      adminToken,
+      { password: ADMIN_PASSWORD },
+    );
+    expect(selfApproval.status).toBe(409);
+    expect(selfApproval.body.code).toBe('ATTESTER_APPROVER_CONFLICT');
 
     const response = await api(
       'POST',
       '/api/admin/agent-payout-destination-changes/' + changeId + '/approve',
-      adminToken,
+      secondAdminToken,
+      { password: ADMIN_PASSWORD },
     );
     expect(response.status).toBe(200);
     expect(response.body.approved).toBe(true);
-    expect(response.body.activated).toBe(false);
-    expect(response.body.activation_code).toBe('NOT_VERIFIED');
+    expect(response.body.activated).toBe(true);
+    expect(response.body.activation_code).toBe('ACTIVATED');
     expect(response.body.request.admin_approval).toBe('approved');
-    expect(response.body.request.phone_verification).toBe('not_verified');
 
     const agent = await db.getAgent(AGENT_A);
-    expect(agent!.mpesa_till_or_paybill).toBe(CURRENT_A);
+    expect(agent!.mpesa_till_or_paybill).toBe(PROPOSED_A);
   });
 
   it('requires a reason to reject, then rejects and frees the live slot', async () => {
-    const view = await api('GET', '/api/agents/payout-settings', tokenA);
-    const changeId = view.body.pending_request.id;
+    const created = await api('POST', '/api/agents/payout-settings/change-request', tokenA, {
+      destination: PROPOSED_A_ALT,
+    });
+    expect(created.status).toBe(201);
+    const changeId = created.body.request.id;
 
     const missingReason = await api(
       'POST',
@@ -764,11 +918,11 @@ describe('B2 payout settings verification and admin review', () => {
     const after = await api('GET', '/api/agents/payout-settings', tokenA);
     expect(after.body.pending_request).toBeNull();
     const agent = await db.getAgent(AGENT_A);
-    expect(agent!.mpesa_till_or_paybill).toBe(CURRENT_A);
+    expect(agent!.mpesa_till_or_paybill).toBe(PROPOSED_A);
 
     // A later, different request is now allowed.
     const next = await api('POST', '/api/agents/payout-settings/change-request', tokenA, {
-      destination: PROPOSED_A_ALT,
+      destination: '254733777888',
     });
     expect(next.status).toBe(201);
   });
@@ -853,14 +1007,14 @@ describe('B2 static integrity', () => {
     expect(count(serverTs, 'registerAgentPayoutSettingsRoutes(app, {')).toBe(1);
   });
 
-  it('the route module holds four agent and three admin registrations', () => {
-    expect(routeTs.match(/app\.(get|post|put|delete)\(/g) || []).toHaveLength(7);
+  it('the route module holds four agent and five admin registrations (including attestation and admin read)', () => {
+    expect(routeTs.match(/app\.(get|post|put|delete)\(/g) || []).toHaveLength(9);
     expect(count(routeTs, "'/api/agents/payout-settings'")).toBe(1);
     // Four agent route mounts plus the one deps destructuring.
     expect(count(routeTs, 'requireActiveAgent,')).toBe(5);
     expect(count(routeTs, 'authenticateJWT, requireActiveAgent,')).toBe(1);
-    // Three admin route mounts plus the one deps destructuring.
-    expect(count(routeTs, 'requireCurrentAdminSession,')).toBe(4);
+    // Five admin route mounts plus the one deps destructuring.
+    expect(count(routeTs, 'requireCurrentAdminSession,')).toBe(6);
   });
 
   it('the route module never boots or imports the server and never writes agents directly', () => {

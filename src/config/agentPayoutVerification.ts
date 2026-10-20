@@ -73,6 +73,144 @@ export const AGENT_PAYOUT_CHANGE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 /** A rejection reason is operator text, not a free-text dumping ground. */
 export const AGENT_PAYOUT_CHANGE_MAX_REJECTION_REASON_LENGTH = 500;
 
+// ---------------------------------------------------------------------------
+// PHASE 2 — THE ADMIN PHONE-CALL ATTESTATION AXIS
+// ---------------------------------------------------------------------------
+// A legacy agent has no way to obtain a phone-ownership OTP in this build (the
+// adapter boundary below stays false), and an email OTP proves nothing about a
+// mobile number. The supported route to a NEW Personal M-Pesa destination is
+// therefore an ADMIN-ATTESTED phone call:
+//
+//   1. an administrator calls the proposed number, speaks to the agent and
+//      records a bounded note describing that call;
+//   2. a DIFFERENT administrator approves the change;
+//   3. only then may the destination be written to `agents`.
+//
+// The attestation is its own fact, with its own columns. It is deliberately NOT
+// written to `phone_verified_at`: that column has exactly one meaning ("a
+// delivery channel proved control of this number") and a phone call is not that
+// proof. Nothing here may describe an attestation as "phone verified".
+// ---------------------------------------------------------------------------
+
+/** The ONLY attestation method this build accepts. */
+export const AGENT_PAYOUT_ATTESTATION_METHOD = 'admin_phone_call';
+
+export const AGENT_PAYOUT_ATTESTATION_METHODS = [AGENT_PAYOUT_ATTESTATION_METHOD] as const;
+
+export type AgentPayoutAttestationMethod = (typeof AGENT_PAYOUT_ATTESTATION_METHODS)[number];
+
+/**
+ * A note is operator evidence, so it is required and bounded. It is stored and
+ * shown to administrators only — never in an agent projection and never in an
+ * audit line (it may quote what the agent said).
+ */
+export const AGENT_PAYOUT_ATTESTATION_NOTE_MAX_LENGTH = 500;
+
+export type AgentPayoutAttestationFailure =
+  | 'attestation_missing'
+  | 'attestation_method_unsupported'
+  | 'attestation_note_missing'
+  | 'attestation_note_too_long'
+  | 'attestation_actor_missing'
+  | 'attestation_time_missing';
+
+export interface AgentPayoutAttestationDecision {
+  complete: boolean;
+  reason: AgentPayoutAttestationFailure | null;
+}
+
+function nonEmptyString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+/**
+ * Whether a change carries a COMPLETE administrator phone-call attestation.
+ *
+ * Pure. It answers only "are all four facts present and well-formed?" — it does
+ * not decide whether the request is live, approved or activatable.
+ */
+export function evaluateAgentPayoutAttestation(change: any): AgentPayoutAttestationDecision {
+  const attestedAt = toMillis(change?.attested_at);
+  const attestedBy = nonEmptyString(change?.attested_by);
+  const method = nonEmptyString(change?.attestation_method);
+  const note = nonEmptyString(change?.attestation_note);
+
+  if (attestedAt === null) return { complete: false, reason: 'attestation_time_missing' };
+  if (!attestedBy) return { complete: false, reason: 'attestation_actor_missing' };
+  if (method === null) return { complete: false, reason: 'attestation_missing' };
+  if (!(AGENT_PAYOUT_ATTESTATION_METHODS as readonly string[]).includes(method)) {
+    return { complete: false, reason: 'attestation_method_unsupported' };
+  }
+  if (!note) return { complete: false, reason: 'attestation_note_missing' };
+  if (note.length > AGENT_PAYOUT_ATTESTATION_NOTE_MAX_LENGTH) {
+    return { complete: false, reason: 'attestation_note_too_long' };
+  }
+  return { complete: true, reason: null };
+}
+
+/** Normalised actor identity used for the "two different administrators" rule. */
+export function normalizeAgentPayoutActor(value: unknown): string | null {
+  const actor = nonEmptyString(value);
+  return actor === null ? null : actor.toLowerCase();
+}
+
+/**
+ * TRUE when the administrator who attested the call also approved the change.
+ *
+ * Such a change can never activate: dual control is the whole point of the
+ * second decision. Compared case-insensitively after trimming, because the audit
+ * identity is a username, not an opaque credential.
+ */
+export function agentPayoutAttesterApproverConflict(change: any): boolean {
+  const attester = normalizeAgentPayoutActor(change?.attested_by);
+  const approver = normalizeAgentPayoutActor(change?.admin_approved_by);
+  return attester !== null && approver !== null && attester === approver;
+}
+
+// ---------------------------------------------------------------------------
+// DISABLED FUTURE DELIVERY ADAPTER
+// ---------------------------------------------------------------------------
+// The interface exists so a future SMS/WhatsApp adapter has ONE shape to
+// implement and ONE place to be wired. It is never instantiated here, no
+// implementation ships, and `AGENT_PAYOUT_PHONE_VERIFICATION_ADAPTER_IMPLEMENTED`
+// remains false. A challenge returned by this interface is the ONLY thing that
+// could ever set `phone_verified_at`.
+// ---------------------------------------------------------------------------
+
+export type AgentPayoutPhoneVerificationChannel = 'sms' | 'whatsapp';
+
+export interface AgentPayoutPhoneVerificationChallenge {
+  changeId: string;
+  channel: AgentPayoutPhoneVerificationChannel;
+  destination: string;
+}
+
+export interface AgentPayoutPhoneVerificationDelivery {
+  delivered: boolean;
+  providerRef: string | null;
+  /** Never the code itself: a code is never stored or returned. */
+  failureReason?: string | null;
+}
+
+export interface AgentPayoutPhoneVerificationAdapter {
+  readonly channel: AgentPayoutPhoneVerificationChannel;
+  sendChallenge(challenge: AgentPayoutPhoneVerificationChallenge): Promise<AgentPayoutPhoneVerificationDelivery>;
+  verifyChallenge(
+    challenge: AgentPayoutPhoneVerificationChallenge,
+    code: string,
+  ): Promise<{ verified: boolean; providerRef: string | null }>;
+}
+
+/**
+ * Always NULL in this build. A future adapter must be returned here only after
+ * it is implemented, audited and the boolean above is set to true.
+ */
+export function getAgentPayoutPhoneVerificationAdapter(): AgentPayoutPhoneVerificationAdapter | null {
+  return null;
+}
+
 /**
  * The complete persisted lifecycle vocabulary.
  *
@@ -106,6 +244,7 @@ export type AgentPayoutChangeState =
   | 'pending_verification'
   | 'pending_admin_approval'
   | 'ready_to_activate'
+  | 'attester_approver_conflict'
   | 'activated'
   | 'rejected'
   | 'expired';
@@ -273,10 +412,21 @@ export function resolveAgentPayoutChangeState(change: any, now: Date = new Date(
   if (change?.activated_at || change?.status === 'activated') return 'activated';
   if (change?.admin_rejected_at || change?.status === 'rejected') return 'rejected';
   if (isExpired(change, now)) return 'expired';
-  const verified = Boolean(change?.phone_verified_at);
+  const attested = evaluateAgentPayoutAttestation(change).complete;
+  const phoneVerified = Boolean(change?.phone_verified_at);
+  const proof = attested || phoneVerified;
   const approved = Boolean(change?.admin_approved_at);
-  if (verified && approved) return 'ready_to_activate';
-  if (verified) return 'pending_admin_approval';
+  if (proof && approved) {
+    // Two recorded decisions by the SAME administrator cannot activate. The
+    // persisted row remains live and retryable by a different administrator, so
+    // this is a derived state rather than a terminal one. A REAL phone
+    // verification has no attester, so it has no dual-control conflict.
+    return agentPayoutAttesterApproverConflict(change) ? 'attester_approver_conflict' : 'ready_to_activate';
+  }
+  if (proof) return 'pending_admin_approval';
+  // `pending_verification` is the persisted waiting state. In this build the
+  // only proof available is the administrator's phone call, so the truthful
+  // reading is "awaiting attestation", never "code sent" and never "verified".
   return 'pending_verification';
 }
 
@@ -349,8 +499,9 @@ export type AgentPayoutActivationBlocker =
   | 'rejected'
   | 'expired'
   | 'destination_not_eligible'
-  | 'phone_verification_required'
-  | 'admin_approval_required';
+  | 'attestation_required'
+  | 'admin_approval_required'
+  | 'attester_approver_conflict';
 
 export interface AgentPayoutActivationDecision {
   allowed: boolean;
@@ -362,9 +513,16 @@ export interface AgentPayoutActivationDecision {
 /**
  * Whether this change may now be written into the authoritative `agents` row.
  *
- * BOTH proofs are required. Admin approval alone can never activate an
- * unverified destination, and verification alone can never activate one an
- * administrator has not approved.
+ * REQUIRED: a format-eligible Personal M-Pesa destination, proof of control — a
+ * COMPLETE administrator phone-call attestation, OR a REAL delivery-channel
+ * phone verification — and an approval recorded by a DIFFERENT administrator when
+ * the proof is an attestation. Nothing about an email OTP, the submission form or
+ * the format check satisfies any of these.
+ *
+ * The attestation path is the one this build can actually offer. A real
+ * `phone_verified_at` can only exist if a delivery adapter is implemented; it is
+ * stronger evidence, carries no attester, and therefore has no dual-control
+ * conflict to resolve.
  */
 export function evaluateAgentPayoutActivation(
   change: any,
@@ -379,8 +537,16 @@ export function evaluateAgentPayoutActivation(
   if (canonicalAgentPayoutDestination(change?.proposed_destination) === null) {
     if (!blockers.includes('destination_not_eligible')) blockers.push('destination_not_eligible');
   }
-  if (!change?.phone_verified_at) blockers.push('phone_verification_required');
+  const attestation = evaluateAgentPayoutAttestation(change);
+  if (!attestation.complete && !change?.phone_verified_at) blockers.push('attestation_required');
   if (!change?.admin_approved_at) blockers.push('admin_approval_required');
+  if (
+    attestation.complete &&
+    Boolean(change?.admin_approved_at) &&
+    agentPayoutAttesterApproverConflict(change)
+  ) {
+    blockers.push('attester_approver_conflict');
+  }
 
   return {
     allowed: blockers.length === 0,
@@ -401,8 +567,13 @@ export interface AgentPayoutChangeView {
   masked_proposed_destination: string;
   proposed_payout_method: string;
   destination_format_eligible: boolean;
+  /** REAL delivery-channel verification only. An attestation never sets this. */
   phone_verification: 'verified' | 'not_verified';
   phone_verified_at: string | null;
+  /** PHASE 2 — an administrator's completed phone-call attestation. */
+  attestation: 'attested' | 'not_attested';
+  attested_at: string | null;
+  attestation_method: string | null;
   admin_approval: 'approved' | 'rejected' | 'not_requested';
   admin_approved_at: string | null;
   admin_rejected_at: string | null;
@@ -429,6 +600,7 @@ function toIsoOrNull(value: unknown): string | null {
  */
 export function toAgentPayoutChangeView(change: any, now: Date = new Date()): AgentPayoutChangeView {
   const activation = evaluateAgentPayoutActivation(change, now);
+  const attestation = evaluateAgentPayoutAttestation(change);
   return {
     id: String(change?.id ?? ''),
     agent_id: String(change?.agent_id ?? ''),
@@ -438,6 +610,9 @@ export function toAgentPayoutChangeView(change: any, now: Date = new Date()): Ag
     destination_format_eligible: change?.destination_format_eligible === true,
     phone_verification: change?.phone_verified_at ? 'verified' : 'not_verified',
     phone_verified_at: toIsoOrNull(change?.phone_verified_at),
+    attestation: attestation.complete ? 'attested' : 'not_attested',
+    attested_at: toIsoOrNull(change?.attested_at),
+    attestation_method: change?.attestation_method ? String(change.attestation_method) : null,
     admin_approval: change?.admin_rejected_at
       ? 'rejected'
       : change?.admin_approved_at
@@ -454,6 +629,130 @@ export function toAgentPayoutChangeView(change: any, now: Date = new Date()): Ag
   };
 }
 
+// ---------------------------------------------------------------------------
+// ADMIN PROJECTION — the truthful timeline (never returned to an agent)
+// ---------------------------------------------------------------------------
+
+export type AgentPayoutTimelineState = 'done' | 'current' | 'pending' | 'blocked';
+
+export interface AgentPayoutAdminTimelineEvent {
+  key: 'requested' | 'attested' | 'approved' | 'activated';
+  state: AgentPayoutTimelineState;
+  label: string;
+  at: string | null;
+  actor: string | null;
+  /** Administrator-only evidence. Never part of the agent projection. */
+  note: string | null;
+  next_action: string | null;
+}
+
+export interface AgentPayoutAdminView extends AgentPayoutChangeView {
+  attested_by: string | null;
+  attestation_note: string | null;
+  attestation_failure: AgentPayoutAttestationFailure | null;
+  admin_approved_by: string | null;
+  admin_rejected_by: string | null;
+  attester_approver_conflict: boolean;
+  timeline: AgentPayoutAdminTimelineEvent[];
+}
+
+/**
+ * The administrator's view: the safe agent fields plus the attestation
+ * evidence and a step-by-step timeline whose states are derived from the SAME
+ * policy functions the activation gate uses. No destination is unmasked.
+ */
+export function toAgentPayoutAdminView(change: any, now: Date = new Date()): AgentPayoutAdminView {
+  const view = toAgentPayoutChangeView(change, now);
+  const attestation = evaluateAgentPayoutAttestation(change);
+  const conflict = agentPayoutAttesterApproverConflict(change);
+  const terminal = view.status === 'rejected' || view.status === 'expired' || view.status === 'activated';
+
+  const attestationState: AgentPayoutTimelineState = attestation.complete
+    ? 'done'
+    : terminal
+      ? 'blocked'
+      : 'current';
+  const approvalState: AgentPayoutTimelineState = view.admin_approval === 'approved'
+    ? conflict
+      ? 'blocked'
+      : 'done'
+    : view.admin_approval === 'rejected' || view.status === 'expired'
+      ? 'blocked'
+      : attestation.complete
+        ? 'current'
+        : 'pending';
+  const activationState: AgentPayoutTimelineState =
+    view.status === 'activated'
+      ? 'done'
+      : view.status === 'rejected' || view.status === 'expired' || conflict
+        ? 'blocked'
+        : view.can_activate
+          ? 'current'
+          : 'pending';
+
+  const timeline: AgentPayoutAdminTimelineEvent[] = [
+    {
+      key: 'requested',
+      state: 'done',
+      label: 'Change requested by the agent (format check only)',
+      at: view.created_at,
+      actor: null,
+      note: null,
+      next_action: null,
+    },
+    {
+      key: 'attested',
+      state: attestationState,
+      label: conflict
+        ? 'Phone-call attestation recorded, but by the same administrator who approved'
+        : 'Administrator phone call to the proposed number',
+      at: view.attested_at,
+      actor: change?.attested_by ? String(change.attested_by) : null,
+      note: change?.attestation_note ? String(change.attestation_note) : null,
+      next_action:
+        attestationState === 'current'
+          ? 'Call the proposed number, confirm the agent controls it, and record what was confirmed (a bounded note is required).'
+          : null,
+    },
+    {
+      key: 'approved',
+      state: approvalState,
+      label: conflict
+        ? 'Approval must be recorded by a DIFFERENT administrator'
+        : 'Second administrator approval',
+      at: view.admin_approved_at,
+      actor: change?.admin_approved_by ? String(change.admin_approved_by) : null,
+      note: null,
+      next_action:
+        approvalState === 'blocked' && conflict
+          ? 'A different administrator must approve this change. The current approval cannot be reused.'
+          : approvalState === 'current'
+            ? 'A different administrator must approve the attested change.'
+            : null,
+    },
+    {
+      key: 'activated',
+      state: activationState,
+      label: 'Destination written to the agent record',
+      at: view.activated_at,
+      actor: null,
+      note: null,
+      next_action: view.can_activate ? 'Activation is permitted by policy; the guarded write runs when approval completes.' : null,
+    },
+  ];
+
+  return {
+    ...view,
+    attested_by: change?.attested_by ? String(change.attested_by) : null,
+    attestation_note: change?.attestation_note ? String(change.attestation_note) : null,
+    attestation_failure: attestation.complete ? null : attestation.reason,
+    admin_approved_by: change?.admin_approved_by ? String(change.admin_approved_by) : null,
+    admin_rejected_by: change?.admin_rejected_by ? String(change.admin_rejected_by) : null,
+    attester_approver_conflict: conflict,
+    timeline,
+  };
+}
+
 /** A PII-free sentence for an audit row. Masked destination only. */
 export function describeAgentPayoutChangeForAudit(change: any, now: Date = new Date()): string {
   const state = resolveAgentPayoutChangeState(change, now);
@@ -462,6 +761,10 @@ export function describeAgentPayoutChangeForAudit(change: any, now: Date = new D
   return (
     `Payout destination change ${String(change?.id ?? '(unknown)')} for agent ${String(change?.agent_id ?? '(unknown)')} ` +
     `is '${state}' (proposed ${method} ${masked}; format eligible: ${change?.destination_format_eligible === true ? 'yes' : 'no'}; ` +
-    `phone verified: ${change?.phone_verified_at ? 'yes' : 'no'}; admin approved: ${change?.admin_approved_at ? 'yes' : 'no'})`
+    `phone verified: ${change?.phone_verified_at ? 'yes' : 'no'}; ` +
+    `admin phone-call attested: ${evaluateAgentPayoutAttestation(change).complete ? 'yes' : 'no'}` +
+    `${change?.attested_by ? ` by ${String(change.attested_by)}` : ''}; ` +
+    `admin approved: ${change?.admin_approved_at ? 'yes' : 'no'}` +
+    `${change?.admin_approved_by ? ` by ${String(change.admin_approved_by)}` : ''})`
   );
 }

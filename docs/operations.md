@@ -324,17 +324,32 @@ by the platform does not appear where it is spent. When that working wallet runs
 low, payouts fail at the provider while the account as a whole still holds the
 funds.
 
-**What the application checks (Batch 2) — and what it still does not do.** The
-collection request carries no wallet selector, so the application cannot route a
-collection; the payout request does name a wallet, and two rules now protect it.
-A production payout refuses to start when `INTASEND_DISBURSEMENT_WALLET_ID` is
-missing, blank or placeholder-shaped (the original gate), and also when that ID is
-the wallet declared in the optional `INTASEND_SETTLEMENT_WALLET_ID` (the Batch 2
-gate). The second refusal is audited as `PAYOUT_WALLET_ROUTING_REFUSED` with
-masked wallet IDs, happens before any payout row is marked as submitted, and
-returns the claim to `pending_settlement`. Declaring the settlement wallet is
-optional: when it is absent the identity check is reported as "undeclared" and
-payouts behave exactly as before — an unknown identity is never guessed.
+**What the application checks (Batch 2) — and what it still does not do.** By
+default the collection request carries no wallet selector, so the application
+cannot route a collection; the payout request does name a wallet, and two rules
+now protect it. A production payout refuses to start when
+`INTASEND_DISBURSEMENT_WALLET_ID` is missing, blank or placeholder-shaped (the
+original gate), and also when that ID is the wallet declared in the optional
+`INTASEND_SETTLEMENT_WALLET_ID` (the Batch 2 gate). The second refusal is audited
+as `PAYOUT_WALLET_ROUTING_REFUSED` with masked wallet IDs, happens before any
+payout row is marked as submitted, and returns the claim to
+`pending_settlement`. Declaring the settlement wallet is optional: when it is
+absent the identity check is reported as "undeclared" and payouts behave exactly
+as before — an unknown identity is never guessed.
+
+**The optional collection selector is default-off.** `INTASEND_COLLECTION_WALLET_ID`
+is not set by this build and nothing enables it automatically. When it is empty
+the STK body is unchanged. When it holds a real value **and** `NODE_ENV` is
+exactly `production`, one `wallet_id` field is appended to the STK request; a
+non-blank placeholder refuses the collection before any provider call. Outside
+production the value is ignored. The boot banner prints only the masked tail and
+the routing verdict, never the ID. Provider support for `wallet_id` on the STK
+request is **unverified by this repository**, so enabling it is an account-owner
+decision, not a code change: confirm the behaviour with IntaSend first, then set
+the variable and restart. Live verification moves real money and requires a real
+M-Pesa prompt — use the account owner's own number and amount, never a customer's
+payment. If the provider ignores or rejects the field, unset it; the four-field
+default still settles to the account's settlement wallet.
 
 None of that moves money. The application still performs no wallet balance read,
 no wallet list call and no intra-wallet transfer; the procedure below remains the

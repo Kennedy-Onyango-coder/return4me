@@ -38,12 +38,22 @@ import type { AgentPayoutChangeView, AgentPayoutSettingsResponse } from '../../t
  */
 
 const STATUS_LABELS: Record<string, string> = {
-  pending_verification: 'Awaiting phone verification',
-  pending_admin_approval: 'Awaiting administrator approval',
+  pending_verification: 'Awaiting a phone-call confirmation',
+  pending_admin_approval: 'Awaiting a second administrator',
   ready_to_activate: 'Ready to activate',
+  attester_approver_conflict: 'Needs a different administrator',
   activated: 'Active',
   rejected: 'Rejected',
   expired: 'Expired',
+};
+
+const BLOCKER_NEXT_STEPS: Record<string, string> = {
+  destination_not_eligible: 'Ask an administrator to review the proposed number: it does not pass the Personal M-Pesa format check.',
+  attestation_required: 'An administrator must call the proposed number, confirm you control it, and record what was confirmed.',
+  admin_approval_required: 'A DIFFERENT administrator must approve the change after that call.',
+  attester_approver_conflict: 'The administrator who confirmed the call cannot also approve it. A different administrator must approve.',
+  expired: 'This request expired. Submit a new change request if you still need the new number.',
+  rejected: 'Review the administrator’s reason and submit a new request if appropriate.',
 };
 
 const OUTCOME_STYLES: Record<string, { border: string; text: string }> = {
@@ -179,8 +189,8 @@ export default function PayoutSettingsCard({ token }: { token: string }) {
         </h2>
         <p className="max-w-2xl text-small text-[var(--appearance-text-muted)]">
           Your payout destination is where Return4me sends your commission. Changing it is a reviewed process:
-          a new number is never used until its ownership has been verified by phone and an administrator has
-          approved the change.
+          a new number is never used until an administrator has called it and confirmed you control it, and a
+          second, different administrator has approved the change. No verification code is sent in this deployment.
         </p>
       </div>
 
@@ -205,6 +215,22 @@ export default function PayoutSettingsCard({ token }: { token: string }) {
         </div>
       )}
 
+      {current && !current.eligible && (
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-standard border border-[var(--appearance-danger)] bg-[var(--appearance-surface-muted)] px-4 py-3 text-small font-semibold text-[var(--appearance-danger)]"
+        >
+          <AlertCircle size={18} className="mt-0.5 shrink-0" aria-hidden={true} />
+          <div className="space-y-1">
+            <p className="font-extrabold">{'Your current payout method is not supported'}</p>
+            <p>
+              {`The method on file is "${current.method || 'unknown'}". Only Personal M-Pesa phone numbers can be paid, so a payout to the current destination would be refused. Request a Personal M-Pesa number below; Till Number, Paybill Number and Pochi la Biashara are not supported.`}
+            </p>
+            <p>{'Your current destination stays in use and unchanged until a replacement request is fully confirmed.'}</p>
+          </div>
+        </div>
+      )}
+
       {current && (
         <div className="rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] p-4">
           <p className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">
@@ -220,8 +246,10 @@ export default function PayoutSettingsCard({ token }: { token: string }) {
           </p>
           <p className="mt-1 text-caption font-semibold text-[var(--appearance-text-muted)]">
             {current.phone_ownership_verified
-              ? 'Phone ownership was verified when this destination was activated.'
-              : 'There is no verified phone-ownership record for this destination.'}
+              ? 'Phone ownership was verified by a real delivery-channel challenge when this destination was activated.'
+              : current.admin_call_attested
+                ? 'An administrator confirmed by phone call, when this destination was activated, that you control this number. That is an administrative confirmation, not an SMS/WhatsApp code check.'
+                : 'There is no verified phone-ownership record and no administrator phone-call confirmation for this destination.'}
           </p>
         </div>
       )}
@@ -262,11 +290,17 @@ export default function PayoutSettingsCard({ token }: { token: string }) {
               <dd>{pending.destination_format_eligible ? 'Passed (format only)' : 'Failed'}</dd>
             </div>
             <div>
-              <dt className="text-[var(--appearance-text-muted)]">{'Phone ownership'}</dt>
-              <dd>{pending.phone_verification === 'verified' ? 'Verified' : 'Not verified'}</dd>
+              <dt className="text-[var(--appearance-text-muted)]">{'Phone-call confirmation'}</dt>
+              <dd>
+                {pending.attestation === 'attested'
+                  ? 'Confirmed by an administrator'
+                  : pending.phone_verification === 'verified'
+                    ? 'Verified by code'
+                    : 'Not yet confirmed'}
+              </dd>
             </div>
             <div>
-              <dt className="text-[var(--appearance-text-muted)]">{'Administrator approval'}</dt>
+              <dt className="text-[var(--appearance-text-muted)]">{'Second administrator approval'}</dt>
               <dd>
                 {pending.admin_approval === 'approved'
                   ? 'Approved'
@@ -277,6 +311,21 @@ export default function PayoutSettingsCard({ token }: { token: string }) {
             </div>
           </dl>
 
+          {pending.activation_blockers.length > 0 && (
+            <div className="space-y-1 rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface)] p-3">
+              <p className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">
+                {'Next steps'}
+              </p>
+              <ul className="list-disc space-y-1 pl-5 text-caption font-semibold text-[var(--appearance-text-primary)]">
+                {pending.activation_blockers
+                  .filter((blocker) => BLOCKER_NEXT_STEPS[blocker])
+                  .map((blocker) => (
+                    <li key={blocker}>{BLOCKER_NEXT_STEPS[blocker]}</li>
+                  ))}
+              </ul>
+            </div>
+          )}
+
           {pending.rejection_reason && (
             <p className="text-caption font-semibold text-[var(--appearance-danger)]">
               {'Reason: '}
@@ -285,12 +334,12 @@ export default function PayoutSettingsCard({ token }: { token: string }) {
           )}
 
           <p className="text-caption font-semibold text-[var(--appearance-text-muted)]">
-            {'This request cannot become active until its ownership has been verified by phone AND an administrator has approved it. Your current destination stays in use until then.'}
+            {'This request cannot become active until an administrator has confirmed the number by phone call AND a different administrator has approved it. Your current destination stays in use until then. No verification code is sent.'}
           </p>
 
           {pending.can_activate && (
             <p className="text-caption font-bold text-[var(--appearance-success)]">
-              {'Both requirements are recorded. This change is ready to activate.'}
+              {'Both administrative decisions are recorded. This change is ready to activate.'}
             </p>
           )}
         </div>

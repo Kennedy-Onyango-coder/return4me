@@ -154,8 +154,10 @@ describe('phone verification boundary — the single writer', () => {
     const other = await readChange(otherId);
     const decision = evaluateAgentPayoutActivation(other);
     expect(decision.allowed).toBe(false);
-    // The exact blocker the UI reports — the OTHER row has no proof of its own.
-    expect(decision.blockers).toContain('phone_verification_required');
+    // The exact blocker the UI reports — the OTHER row has no attestation of
+    // its own. A phone verification recorded on a different request is not
+    // evidence for this one, and in this build it is not even the required axis.
+    expect(decision.blockers).toContain('attestation_required');
   });
 });
 

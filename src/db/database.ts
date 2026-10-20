@@ -100,8 +100,13 @@ import {
 // the route, the console projection and the persistence guard cannot disagree
 // about when a proposed destination may become active.
 import {
+  AGENT_PAYOUT_ATTESTATION_METHOD,
+  AGENT_PAYOUT_ATTESTATION_NOTE_MAX_LENGTH,
   LIVE_AGENT_PAYOUT_CHANGE_STATUSES,
+  agentPayoutAttesterApproverConflict,
   evaluateAgentPayoutActivation,
+  evaluateAgentPayoutAttestation,
+  normalizeAgentPayoutActor,
 } from "../config/agentPayoutVerification";
 // A1 (Batch 0A) — the single definition of the 5-day strike window, plus the
 // repository's EXISTING canonical phone normalization (re-exported, never
@@ -4030,8 +4035,55 @@ class DatabaseEngine {
           const prior = String(snap(claimId)?.status ?? 'pending_verification');
           this.assertClaimTransitionAllowed(prior, 'disputed');
         }
-        await tx.update(claimsTable).set({ status: "disputed" }).where(eq(claimsTable.id, dispute.claimant_1_claim_id));
-        await tx.update(claimsTable).set({ status: "disputed" }).where(eq(claimsTable.id, dispute.claimant_2_claim_id));
+
+        // BATCH 4 — A DURABLE SETTLEMENT APPROVAL DOES NOT SURVIVE A DISPUTE.
+        //
+        // An approval authorises a SPECIFIC payout at a SPECIFIC handover: it
+        // records who signed off, when, the total they saw and the exact payout
+        // rows they saw it against. A participant that is in
+        // 'pending_settlement' has therefore already been approved, and moving
+        // it to 'disputed' ends that occupancy.
+        //
+        // Carrying the approval forward is unsafe in two independent ways:
+        //   1. attemptSettlementRelease() only checks that an approval EXISTS,
+        //      so a claim that later re-entered 'pending_settlement' could be
+        //      released without a fresh human sign-off (the snapshot
+        //      comparison is the only thing that would then refuse, and for a
+        //      pre-snapshot approval it would not);
+        //   2. the approval CAS in approveSettlement() requires
+        //      `settlement_approved_at IS NULL`, so a stale approval can never
+        //      be CORRECTED — the claim would be stuck holding an approval
+        //      nobody re-issued.
+        //
+        // Clearing the four columns here, in the SAME transaction as the status
+        // write, is the invalidation point: after this commit the claim has no
+        // authorisation and any future release needs a new one. Nothing is
+        // hidden — the approval itself remains in audit_log as
+        // CLAIM_SETTLEMENT_APPROVED, with its reason and its author.
+        //
+        // Only 'pending_settlement' is invalidated. A 'releasing' claim is
+        // deliberately left alone: its approval covers the same, unchanged
+        // ledger rows (revertSettlementRelease() touches no ledger row and
+        // reuses them), so it is not stale — and clearing it would add a
+        // needless re-approval step to the legitimate failed-release retry.
+        for (const claimId of [dispute.claimant_1_claim_id, dispute.claimant_2_claim_id]) {
+          const priorStatus = String(snap(claimId)?.status ?? '');
+          await tx
+            .update(claimsTable)
+            .set(
+              priorStatus === 'pending_settlement'
+                ? {
+                    status: "disputed",
+                    settlement_approved_at: null,
+                    settlement_approved_by: null,
+                    settlement_authorized_total: null,
+                    settlement_authorized_ledger_ids: null,
+                    updated_at: new Date(),
+                  }
+                : { status: "disputed" },
+            )
+            .where(eq(claimsTable.id, claimId));
+        }
 
         const auditId = "AUD-" + Math.random().toString(36).substr(2, 9).toUpperCase();
         await tx.insert(auditLogTable).values({
@@ -5174,30 +5226,121 @@ class DatabaseEngine {
    * sweep (or an admin override) calls attemptSettlementRelease once that
    * window has passed and no dispute has frozen the claim in the meantime.
    */
-  public async enterPendingSettlement(claimId: string, disputeWindowMs: number): Promise<{ success: boolean; message: string; settleAt?: Date }> {
+  public async enterPendingSettlement(
+    claimId: string,
+    disputeWindowMs: number
+  ): Promise<{
+    success: boolean;
+    message: string;
+    settleAt?: Date;
+    /**
+     * Machine-readable refusal reason, present on every non-success return.
+     * Additive only: `message` remains the human-facing text the HTTP layer
+     * forwards, so no existing caller or assertion changes shape.
+     */
+    code?:
+      | 'claim_not_found'
+      | 'claim_not_escrow_held'
+      | 'item_not_found'
+      | 'item_not_in_custody'
+      | 'claim_already_handed_over'
+      | 'category_not_found'
+      | 'agent_not_found'
+      | 'settlement_race_lost'
+      | 'error';
+  }> {
     this.assertClaimTransitionAllowed('escrow_held', 'pending_settlement');
     try {
       return await drizzleDb.transaction(async (tx) => {
         const claimRows = await tx.select().from(claimsTable).where(eq(claimsTable.id, claimId));
-        if (claimRows.length === 0) return { success: false, message: "Claim not found." };
+        if (claimRows.length === 0) return { success: false, code: "claim_not_found" as const, message: "Claim not found." };
         const claim = claimRows[0];
         if (claim.status !== "escrow_held") {
-          return { success: false, message: `Cannot enter settlement. Claim is in status: ${claim.status}` };
+          return {
+            success: false,
+            code: "claim_not_escrow_held" as const,
+            message: `Cannot enter settlement. Claim is in status: ${claim.status}`,
+          };
         }
 
         const itemRows = await tx.select().from(itemsTable).where(eq(itemsTable.id, claim.item_id || ""));
-        if (itemRows.length === 0) return { success: false, message: "Item not found." };
+        if (itemRows.length === 0) return { success: false, code: "item_not_found" as const, message: "Item not found." };
         const item = itemRows[0];
 
+        // =================================================================
+        // HUB CUSTODY AT THE MOMENT OF HANDOVER (read fail-fast)
+        // =================================================================
+        // A handover is only meaningful while the item is PHYSICALLY in this
+        // hub's custody, and `items.status` is the one column that records
+        // that fact. Without this requirement a claim that was already handed
+        // over, and then re-promoted to 'escrow_held' by resolveDispute()
+        // (which decides on paid_at / the SC-3 snapshot only), could be handed
+        // over a SECOND time — booking a second set of finder/agent payout
+        // rows against one physical handover.
+        //
+        // This read is a fail-fast with an operator-readable message, NOT the
+        // guard: the authoritative check is the conditional UPDATE further
+        // down, which cannot be bypassed by two concurrent callers (see the
+        // SEC-2B-01 comment). A legitimate first handover always finds
+        // 'at_agent': drop-off sets it, payment confirmation re-asserts it, and
+        // only this function moves it to 'claimed'.
+        if (item.status !== "at_agent") {
+          return {
+            success: false,
+            code: "item_not_in_custody" as const,
+            message: `Cannot confirm handover. The item is not in the hub's custody. Current item status: ${item.status}.`,
+          };
+        }
+
         const categoryRows = await tx.select().from(categoriesTable).where(eq(categoriesTable.id, item.category_id || ""));
-        if (categoryRows.length === 0) return { success: false, message: "Category not found." };
+        if (categoryRows.length === 0) return { success: false, code: "category_not_found" as const, message: "Category not found." };
         const category = categoryRows[0];
 
         const agentRows = await tx.select().from(agentsTable).where(eq(agentsTable.id, item.assigned_agent_id || ""));
-        if (agentRows.length === 0) return { success: false, message: "Agent not found." };
+        if (agentRows.length === 0) return { success: false, code: "agent_not_found" as const, message: "Agent not found." };
         const agent = agentRows[0];
 
         const settleAt = new Date(Date.now() + disputeWindowMs);
+
+        // =================================================================
+        // ONE HANDOVER PER CLAIM — the settlement legs are booked ONCE, EVER
+        // =================================================================
+        // The claim-status CAS below guards ONE occupancy of 'escrow_held'. It
+        // cannot see that this claim already completed a handover earlier: a
+        // claim may legitimately leave and re-enter 'escrow_held' (a resolved
+        // dispute, an admin hold/clear-hold pair), and the CAS then happily
+        // authorizes a second occupancy. That is what let one physical
+        // handover book six ledger rows instead of three.
+        //
+        // These three types are written exactly once, in this transaction, for
+        // any claim that is ever handed over. Their presence therefore means
+        // "this claim has already booked its settlement" and a second booking
+        // is refused here — before the CAS and before any ledger insert.
+        //
+        // A READ is sufficient for this particular guard: the rows it looks for
+        // can only exist in a PREVIOUS, committed occupancy, because every
+        // path that creates them runs after winning the claim CAS below (so no
+        // concurrent caller of this function can be mid-booking while another
+        // is reading). The CAS remains the concurrency guard.
+        //
+        // Deliberately NOT a database uniqueness constraint: adding one needs a
+        // data audit of existing rows and a migration, which is out of scope
+        // for this remediation (see the audit's Fix D).
+        const existingSettlementLegs = await tx
+          .select()
+          .from(ledgerTable)
+          .where(and(
+            eq(ledgerTable.claim_id, claimId),
+            inArray(ledgerTable.type, ["finder_payout", "agent_payout", "platform_fee"]),
+          ));
+        if (existingSettlementLegs.length > 0) {
+          return {
+            success: false,
+            code: "claim_already_handed_over" as const,
+            message:
+              "This claim has already been through a handover. Its settlement has been booked and cannot be booked a second time.",
+          };
+        }
 
         // -----------------------------------------------------------------
         // SEC-2B-01 — THE WRITE-TIME COMPARE-AND-SWAP (the real guard)
@@ -5236,14 +5379,50 @@ class DatabaseEngine {
           // distinguishable in tests and in logs.
           return {
             success: false,
+            code: "settlement_race_lost" as const,
             message: "Cannot enter settlement. Claim is no longer in status: escrow_held.",
           };
         }
 
-        // The item is physically back with its owner now — this is a
-        // physical-custody fact, independent of whether the money behind it
-        // has actually settled yet.
-        await tx.update(itemsTable).set({ status: "claimed" }).where(eq(itemsTable.id, item.id));
+        // -----------------------------------------------------------------
+        // CUSTODY COMPARE-AND-SWAP — the authoritative handover guard
+        // -----------------------------------------------------------------
+        // The read at the top of this function is fail-fast only. This
+        // conditional UPDATE is the guard: the item only becomes 'claimed' if
+        // it is STILL 'at_agent' at write time, and only the caller that
+        // actually moved the row (non-empty .returning()) may book anything.
+        //
+        // It sits AFTER the claim CAS on purpose — the established lock order
+        // in this file is claims → items (finalizeClaimRefund does the same),
+        // and reversing it here would introduce a deadlock window between a
+        // handover and a refund finalisation on the same claim.
+        //
+        // Because that order means the claim has already been moved when this
+        // runs, a zero-row result must UNDO it: nothing may be booked for an
+        // item the hub does not physically hold. The undo is written explicitly
+        // rather than left to a thrown rollback because (a) it restores the
+        // exact prior row state — 'escrow_held' with its previous settle_at and
+        // updated_at — and (b) the in-memory test double does not implement
+        // BEGIN/ROLLBACK, so a rollback-only design would leave the claim
+        // moved in tests while behaving correctly in PostgreSQL.
+        const claimedCustody = await tx
+          .update(itemsTable)
+          .set({ status: "claimed" })
+          .where(and(eq(itemsTable.id, item.id), eq(itemsTable.status, "at_agent")))
+          .returning({ id: itemsTable.id });
+
+        if (claimedCustody.length === 0) {
+          await tx
+            .update(claimsTable)
+            .set({ status: "escrow_held", settle_at: claim.settle_at, updated_at: claim.updated_at })
+            .where(eq(claimsTable.id, claimId));
+          return {
+            success: false,
+            code: "item_not_in_custody" as const,
+            message:
+              "Cannot confirm handover. The item is no longer in the hub's custody, so the handover was not completed.",
+          };
+        }
 
         const { finderShare, agentShare, platformShare } = this.resolvePayoutSplit(item, category);
 
@@ -5295,6 +5474,7 @@ class DatabaseEngine {
       console.error("Enter pending settlement failed:", error);
       return {
         success: false,
+        code: "error" as const,
         message: `Failed to enter pending settlement: ${error instanceof Error ? error.message : String(error)}`,
       };
     }
@@ -9620,6 +9800,10 @@ await drizzleDb.transaction(async (tx) => {
           status: "pending_verification",
           phone_verified_at: null,
           phone_verification_provider_ref: null,
+          attested_at: null,
+          attested_by: null,
+          attestation_method: null,
+          attestation_note: null,
           admin_approved_at: null,
           admin_approved_by: null,
           admin_rejected_at: null,
@@ -9773,6 +9957,26 @@ await drizzleDb.transaction(async (tx) => {
     try {
       if (params.decision === "approve") {
         if (existing.admin_approved_at) return { ok: true, code: "ALREADY_APPROVED", row: existing };
+
+        // PHASE 2 — TWO INDEPENDENT ADMINISTRATORS, IN ORDER.
+        //
+        // 1. There must be a COMPLETE phone-call attestation. An approval on its
+        //    own proves nothing about who controls the number.
+        // 2. The approver must NOT be the administrator who attested the call.
+        //    The database has the same rule in
+        //    agent_payout_changes_dual_control_check, so this is defence in
+        //    depth rather than the only guard.
+        const attestation = evaluateAgentPayoutAttestation(existing);
+        if (!attestation.complete && !existing.phone_verified_at) {
+          return { ok: false, code: "ATTESTATION_REQUIRED", row: existing };
+        }
+        if (
+          attestation.complete &&
+          normalizeAgentPayoutActor(existing.attested_by) === normalizeAgentPayoutActor(params.actor)
+        ) {
+          return { ok: false, code: "ATTESTER_APPROVER_CONFLICT", row: existing };
+        }
+
         const rows = await drizzleDb
           .update(agentPayoutDestinationChangesTable)
           .set({ admin_approved_at: now, admin_approved_by: params.actor, updated_at: now } as any)
@@ -9781,6 +9985,10 @@ await drizzleDb.transaction(async (tx) => {
               eq(agentPayoutDestinationChangesTable.id, params.id),
               inArray(agentPayoutDestinationChangesTable.status, [...LIVE_AGENT_PAYOUT_CHANGE_STATUSES]),
               isNull(agentPayoutDestinationChangesTable.admin_approved_at),
+              or(
+                isNotNull(agentPayoutDestinationChangesTable.attested_at),
+                isNotNull(agentPayoutDestinationChangesTable.phone_verified_at),
+              ),
             ),
           )
           .returning();
@@ -9811,6 +10019,116 @@ await drizzleDb.transaction(async (tx) => {
       return { ok: true, code: "REJECTED", row: rows[0] };
     } catch (error) {
       console.error("Failed to record agent payout destination admin decision:", error);
+      return { ok: false, code: "WRITE_FAILED" };
+    }
+  }
+
+  /**
+   * PHASE 2 — RECORD AN ADMINISTRATOR'S PHONE-CALL ATTESTATION.
+   *
+   * This is NOT phone verification and MUST NOT write `phone_verified_at`.
+   * It records that an administrator called the proposed number and confirmed
+   * control of it, together with a required, bounded note describing the call.
+   * A second, DIFFERENT administrator must approve before activation.
+   *
+   * Every failure is a refusal with a stable code; a partial attestation is
+   * never written (the table's CHECK constraint also enforces completeness).
+   */
+  public async recordAgentPayoutDestinationAttestation(params: {
+    id: string;
+    actor: string;
+    note: string;
+    method?: string;
+    now?: Date;
+  }): Promise<{ ok: boolean; code: string; row?: any }> {
+    const actorRaw = typeof params.actor === "string" ? params.actor.trim() : "";
+    const actor = normalizeAgentPayoutActor(actorRaw);
+    const note = typeof params.note === "string" ? params.note.trim() : "";
+    const method = params.method ?? AGENT_PAYOUT_ATTESTATION_METHOD;
+
+    if (!actor) return { ok: false, code: "INVALID_ACTOR" };
+    if (method !== AGENT_PAYOUT_ATTESTATION_METHOD) {
+      return { ok: false, code: "ATTESTATION_METHOD_UNSUPPORTED" };
+    }
+    if (!note) return { ok: false, code: "ATTESTATION_NOTE_REQUIRED" };
+    if (note.length > AGENT_PAYOUT_ATTESTATION_NOTE_MAX_LENGTH) {
+      return { ok: false, code: "ATTESTATION_NOTE_TOO_LONG" };
+    }
+
+    const now = params.now ?? new Date();
+    const existing = await this.getAgentPayoutDestinationChangeByIdForAdmin(params.id);
+    if (!existing) return { ok: false, code: "NOT_FOUND" };
+    if (
+      existing.activated_at ||
+      existing.admin_rejected_at ||
+      existing.status === "activated" ||
+      existing.status === "rejected"
+    ) {
+      return { ok: false, code: "TERMINAL", row: existing };
+    }
+    if (existing.attested_at) return { ok: true, code: "ALREADY_ATTESTED", row: existing };
+    if (
+      existing.admin_approved_by &&
+      normalizeAgentPayoutActor(existing.admin_approved_by) === actor
+    ) {
+      // The same person cannot both approve and attest. Refusing here keeps the
+      // stored row consistent with the dual-control CHECK constraint.
+      return { ok: false, code: "ATTESTER_APPROVER_CONFLICT", row: existing };
+    }
+
+    const expiresAt = existing.expires_at ? new Date(existing.expires_at).getTime() : NaN;
+    if (Number.isFinite(expiresAt) && expiresAt <= now.getTime()) {
+      await drizzleDb
+        .update(agentPayoutDestinationChangesTable)
+        .set({ status: "expired", live_key: null, updated_at: now } as any)
+        .where(
+          and(
+            eq(agentPayoutDestinationChangesTable.id, params.id),
+            inArray(agentPayoutDestinationChangesTable.status, [...LIVE_AGENT_PAYOUT_CHANGE_STATUSES]),
+          ),
+        );
+      return { ok: false, code: "EXPIRED" };
+    }
+
+    try {
+      const rows = await drizzleDb
+        .update(agentPayoutDestinationChangesTable)
+        .set({
+          attested_at: now,
+          attested_by: actorRaw,
+          attestation_method: method,
+          attestation_note: note,
+          // The attestation is the agent-side proof this build can obtain, so the
+          // persisted status moves out of `pending_verification` while remaining
+          // LIVE (it still occupies the agent's single request slot).
+          status: "pending_admin_approval",
+          updated_at: now,
+        } as any)
+        .where(
+          and(
+            eq(agentPayoutDestinationChangesTable.id, params.id),
+            inArray(agentPayoutDestinationChangesTable.status, [...LIVE_AGENT_PAYOUT_CHANGE_STATUSES]),
+            isNull(agentPayoutDestinationChangesTable.attested_at),
+          ),
+        )
+        .returning();
+      if (!rows[0]) return { ok: false, code: "STATE_CONFLICT" };
+
+      try {
+        await this.logAudit(
+          actorRaw,
+          "AGENT_PAYOUT_DESTINATION_ATTESTED",
+          `Administrator ${actorRaw} recorded a phone-call attestation for payout destination change ${rows[0].id} ` +
+            `(proposed Personal M-Pesa ${maskPayoutDestinationForLog(rows[0].proposed_destination)}; ` +
+            `note length ${note.length}). A DIFFERENT administrator must approve before activation. ` +
+            `No phone verification was performed and no verification code was sent.`,
+        );
+      } catch (auditError) {
+        console.error("Failed to audit a payout destination attestation:", auditError);
+      }
+      return { ok: true, code: "ATTESTED", row: rows[0] };
+    } catch (error) {
+      console.error("Failed to record agent payout destination attestation:", error);
       return { ok: false, code: "WRITE_FAILED" };
     }
   }
@@ -9920,8 +10238,11 @@ await drizzleDb.transaction(async (tx) => {
    * THE ONLY WRITER OF `agents.mpesa_till_or_paybill` in this feature.
    *
    * Runs in ONE transaction and asks evaluateAgentPayoutActivation() FIRST. A
-   * change activates only when it is format-eligible, has REAL phone
-   * verification, has an admin approval, has not expired and is not rejected.
+   * change activates only when it is format-eligible, has a COMPLETE
+   * administrator phone-call attestation, and was approved by a DIFFERENT
+   * administrator. Real phone verification (`phone_verified_at`) is an
+   * additional, stronger fact when an adapter exists; it is not required and is
+   * never fabricated by an attestation.
    * The guarded UPDATE is also a compare-and-swap on those same facts, so two
    * concurrent attempts cannot both apply the destination.
    */
@@ -9957,15 +10278,17 @@ await drizzleDb.transaction(async (tx) => {
               );
           }
           const code =
-            decision.reason === "phone_verification_required"
-              ? "NOT_VERIFIED"
+            decision.reason === "attestation_required"
+              ? "NOT_ATTESTED"
               : decision.reason === "admin_approval_required"
                 ? "NOT_APPROVED"
-                : decision.reason === "expired"
-                  ? "EXPIRED"
-                  : decision.reason === "rejected"
-                    ? "REJECTED"
-                    : "NOT_ELIGIBLE";
+                : decision.reason === "attester_approver_conflict"
+                  ? "ATTESTER_APPROVER_CONFLICT"
+                  : decision.reason === "expired"
+                    ? "EXPIRED"
+                    : decision.reason === "rejected"
+                      ? "REJECTED"
+                      : "NOT_ELIGIBLE";
           return { activated: false, code, row: change };
         }
 
@@ -9976,8 +10299,11 @@ await drizzleDb.transaction(async (tx) => {
             and(
               eq(agentPayoutDestinationChangesTable.id, params.id),
               inArray(agentPayoutDestinationChangesTable.status, [...LIVE_AGENT_PAYOUT_CHANGE_STATUSES]),
-              isNotNull(agentPayoutDestinationChangesTable.phone_verified_at),
               isNotNull(agentPayoutDestinationChangesTable.admin_approved_at),
+              or(
+                isNotNull(agentPayoutDestinationChangesTable.attested_at),
+                isNotNull(agentPayoutDestinationChangesTable.phone_verified_at),
+              ),
             ),
           )
           .returning();
@@ -9986,10 +10312,10 @@ await drizzleDb.transaction(async (tx) => {
         const applied = await tx
           .update(agentsTable)
           .set({
-            mpesa_till_or_paybill: claimed[0].proposed_destination,
-            payout_method_type: claimed[0].proposed_payout_method,
+            mpesa_till_or_paybill: change.proposed_destination,
+            payout_method_type: change.proposed_payout_method,
           } as any)
-          .where(eq(agentsTable.id, claimed[0].agent_id))
+          .where(eq(agentsTable.id, change.agent_id))
           .returning({ id: agentsTable.id });
         if (!applied[0]) {
           // Roll back the status change: a change can never be "activated"
@@ -10003,9 +10329,13 @@ await drizzleDb.transaction(async (tx) => {
           action: "AGENT_PAYOUT_DESTINATION_ACTIVATED",
           // MASKED destination only — never the number in the clear.
           details:
-            `Agent ${claimed[0].agent_id}: payout destination change ${claimed[0].id} activated after real phone verification ` +
-            `and administrator approval (destination ${maskPayoutDestinationForLog(claimed[0].proposed_destination)}, ` +
-            `method ${claimed[0].proposed_payout_method}).`,
+            `Agent ${change.agent_id}: payout destination change ${change.id} activated after ` +
+            (change.attested_at
+              ? `an administrator phone-call attestation (by ${String(change.attested_by)})`
+              : 'a real delivery-channel phone verification') +
+            ` and a separate administrator approval (by ${String(change.admin_approved_by)}) ` +
+            `(destination ${maskPayoutDestinationForLog(change.proposed_destination)}, method ${change.proposed_payout_method}). ` +
+            `No verification code was fabricated and no unattested claim is recorded.`,
         });
 
         return { activated: true, code: "ACTIVATED", row: claimed[0] };

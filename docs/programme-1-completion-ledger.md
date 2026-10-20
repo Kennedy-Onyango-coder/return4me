@@ -117,8 +117,8 @@ not (yet) support.
 
 | Fact | Where it is proven |
 | --- | --- |
-| A collection request carries **no wallet selector**. It is `POST /payment/mpesa-stk-push/` with exactly `public_key`, `phone_number`, `amount`, `api_ref`. | `src/services/payments.ts`, `triggerMpesaStkPush()` |
-| Collections therefore settle into IntaSend's KES **settlement** wallet, and the application cannot route them elsewhere. | Provider contract as recorded in `docs/operations.md`; **not** re-verified against the merchant account |
+| A collection request carries **no wallet selector by default**. It is `POST /payment/mpesa-stk-push/` with exactly `public_key`, `phone_number`, `amount`, `api_ref`. An optional, default-off, production-only `INTASEND_COLLECTION_WALLET_ID` can append `wallet_id`; provider support for that field is unverified. | `src/services/payments.ts`, `triggerMpesaStkPush()`; `src/config/walletRouting.ts`, `resolveCollectionWalletRouting` |
+| Collections therefore settle into IntaSend's KES **settlement** wallet by default, and the application cannot route them elsewhere unless the optional selector is enabled **and** the provider honours it. | Provider contract as recorded in `docs/operations.md`; **not** re-verified against the merchant account |
 | Payouts debit `INTASEND_DISBURSEMENT_WALLET_ID` via the documented `wallet_id` field, **production only**, and fail closed when it is missing/blank/placeholder. | `triggerIntasendPayout()` + the settlement executor gate in `src/server.ts` |
 | No wallet balance read, wallet list call or intra-wallet transfer exists anywhere in `src/`. | Pinned by `src/__tests__/walletRoutingEnforcement.test.ts` |
 | Moving collected float into the working wallet is an operator-run provider procedure. | `docs/operations.md`, "The working wallet has no float" |
@@ -151,9 +151,13 @@ not (yet) support.
 
 ### Deliberately NOT implemented, with the reason
 
-- **Collection routing to the working wallet.** The request has no wallet field
-  and the provider-side capability is unverified. External dependency:
-  IntaSend account/dashboard configuration; no code-side change is supportable.
+- **Automatic collection routing to the working wallet.** As originally
+  completed, the request had no wallet field and the provider-side capability was
+  unverified. A later optional, default-off, production-only
+  `INTASEND_COLLECTION_WALLET_ID` can request a specific settlement wallet, but it
+  moves no float and provider acceptance remains unverified. External dependency:
+  IntaSend account/dashboard confirmation; enabling the selector is an
+  account-owner decision.
 - **Settlement → working wallet transfer.** The endpoint is documented but has
   never been executed against this account, has no documented idempotency key,
   and the existing runbook explicitly forbids adding a second money path. A

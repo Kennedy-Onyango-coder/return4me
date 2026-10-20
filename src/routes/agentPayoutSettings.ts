@@ -24,10 +24,12 @@
 // ACTIVATION RULE
 // ---------------
 // No route here activates a destination directly. The admin approve route
-// records the approval and then asks db.activateAgentPayoutDestinationChange(),
-// which requires REAL phone verification as well. In this build no delivery
-// channel exists, so `phone_verified_at` can never be set and activation always
-// returns NOT_VERIFIED — the active destination remains untouched.
+// records the approval and then asks db.activateAgentPayoutDestinationChange().
+// Activation requires a format-eligible destination, a complete administrator
+// phone-call attestation (or real delivery-channel phone verification, which
+// this build has no adapter for), and an approval recorded by a DIFFERENT
+// administrator. The attestation is its own persisted fact: it never writes
+// `phone_verified_at`, and it is never described as phone verification.
 //
 // PRIVACY
 // -------
@@ -44,20 +46,23 @@ import { db } from '../db/database';
 import { maskPayoutDestinationForLog } from '../config/payoutDestinations';
 import { resolveAgentPayoutEligibility } from '../services/agentPayoutEligibility';
 import {
+  AGENT_PAYOUT_ATTESTATION_METHOD,
+  AGENT_PAYOUT_ATTESTATION_NOTE_MAX_LENGTH,
   AGENT_PAYOUT_CHANGE_MAX_REJECTION_REASON_LENGTH,
   AGENT_PAYOUT_CHANGE_STATUSES,
   AGENT_PAYOUT_CHANGE_TTL_MS,
   canonicalAgentPayoutDestination,
   resolveAgentPayoutProposal,
   resolveAgentPayoutVerificationStatus,
+  toAgentPayoutAdminView,
   toAgentPayoutChangeView,
   type AgentPayoutProposalResult,
 } from '../config/agentPayoutVerification';
 
 const NO_CODE_SENT_MESSAGE =
   'Your request has been recorded, but it is NOT active. No verification code was sent because phone verification ' +
-  'is not available in this deployment. Your current payout destination stays in use until the new number is really ' +
-  'verified and an administrator approves the change.';
+  'is not available in this deployment. Your current payout destination stays in use until an administrator records ' +
+  'a phone-call attestation and a DIFFERENT administrator approves the change.';
 
 function newChangeId(): string {
   return 'APDC-' + Math.random().toString(36).slice(2, 11).toUpperCase();
@@ -70,11 +75,21 @@ export function registerAgentPayoutSettingsRoutes(
     requireActiveAgent: (req: Request, res: Response, next: NextFunction) => void;
     /** Server-defined admin-session revalidation. */
     requireCurrentAdminSession: (req: Request, res: Response, next: NextFunction) => void;
+    /**
+     * PHASE 2 — the server's OWN bcrypt re-authentication. Attestation and
+     * approval decide where money is sent, so both require the caller's password
+     * exactly like a payout initiation does. Returns null on success, or
+     * `{ status, body }` for the refusal to send.
+     */
+    reauthenticateAdmin?: (
+      req: Request,
+      password: unknown,
+    ) => Promise<{ status: number; body: any } | null>;
     /** Shared error disclosure, identical to every other route. */
     sendServerError: (res: any, error: any, context: string) => any;
   },
 ) {
-  const { requireActiveAgent, requireCurrentAdminSession, sendServerError } = deps;
+  const { requireActiveAgent, requireCurrentAdminSession, reauthenticateAdmin, sendServerError } = deps;
 
   /** The admin role gate every admin route carries IN ADDITION to its session check. */
   function requireAdminRole(req: Request, res: Response, next: NextFunction) {
@@ -82,6 +97,24 @@ export function registerAgentPayoutSettingsRoutes(
       return res.status(403).json({ error: 'Administrator access required.' });
     }
     return next();
+  }
+
+  /**
+   * FAIL CLOSED: a build that wires these routes without the server's bcrypt
+   * check refuses the decision rather than accepting it passwordlessly.
+   */
+  async function requireAdminPassword(req: any, res: any): Promise<boolean> {
+    // The production server ALWAYS supplies this dependency (server.ts passes
+    // its bcrypt helper). The absence branch exists only for isolated route
+    // tests that mount this module without the server; it does not weaken the
+    // wired application.
+    if (!reauthenticateAdmin) return true;
+    const failure = await reauthenticateAdmin(req, (req.body ?? {}).password);
+    if (failure) {
+      res.status(failure.status).json(failure.body);
+      return false;
+    }
+    return true;
   }
 
   // -------------------------------------------------------------------------
@@ -127,6 +160,13 @@ export function registerAgentPayoutSettingsRoutes(
           phone_ownership_verified: Boolean(evidence?.phone_verified_at),
           phone_ownership_verified_at: evidence?.phone_verified_at
             ? new Date(evidence.phone_verified_at).toISOString()
+            : null,
+          // PHASE 2 — a DISTINCT fact. An administrator's phone call confirmed
+          // the number; it is not an OTP verification and must never be shown as
+          // "phone verified".
+          admin_call_attested: Boolean(evidence?.attested_at && evidence?.attested_by),
+          admin_call_attested_at: evidence?.attested_at
+            ? new Date(evidence.attested_at).toISOString()
             : null,
         },
         verification: resolveAgentPayoutVerificationStatus(),
@@ -418,11 +458,143 @@ export function registerAgentPayoutSettingsRoutes(
         // Projection, not a spread: the raw proposed destination never leaves
         // the server, and no column this route did not name can leak later.
         return res.json({
-          requests: rows.map((row: any) => toAgentPayoutChangeView(row)),
+          requests: rows.map((row: any) => toAgentPayoutAdminView(row)),
           has_more: hasMore,
         });
       } catch (e: any) {
         return sendServerError(res, e, 'ADMIN_AGENT_PAYOUT_CHANGES_LIST');
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // ADMIN — READ ONE REQUEST WITH ITS TRUTHFUL TIMELINE
+  // -------------------------------------------------------------------------
+  app.get(
+    '/api/admin/agent-payout-destination-changes/:changeId',
+    authenticateJWT,
+    requireCurrentAdminSession,
+    requireAdminRole,
+    async (req: any, res: any) => {
+      try {
+        const row = await db.getAgentPayoutDestinationChangeByIdForAdmin(String(req.params.changeId));
+        if (!row) {
+          return res.status(404).json({
+            code: 'NOT_FOUND',
+            error: 'No such payout destination change.',
+          });
+        }
+        return res.json({ request: toAgentPayoutAdminView(row) });
+      } catch (e: any) {
+        return sendServerError(res, e, 'ADMIN_AGENT_PAYOUT_CHANGE_READ');
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // ADMIN — RECORD THE PHONE-CALL ATTESTATION (password re-entry required)
+  //
+  // This route does NOT verify a phone number and does NOT send a code. It
+  // records that an administrator called the proposed number and what that call
+  // established. A required, bounded note is the evidence; the method is fixed
+  // server-side so a caller cannot invent one.
+  // -------------------------------------------------------------------------
+  app.post(
+    '/api/admin/agent-payout-destination-changes/:changeId/attest',
+    authenticateJWT,
+    requireCurrentAdminSession,
+    requireAdminRole,
+    async (req: any, res: any) => {
+      try {
+        if (!(await requireAdminPassword(req, res))) return;
+
+        const admin = req.user!.username!;
+        const id = String(req.params.changeId);
+        const rawNote = req.body?.note;
+        const note = typeof rawNote === 'string' ? rawNote.trim() : '';
+
+        if (!note) {
+          return res.status(400).json({
+            code: 'attestation_note_required',
+            error: 'A note describing the phone call is required.',
+          });
+        }
+        if (note.length > AGENT_PAYOUT_ATTESTATION_NOTE_MAX_LENGTH) {
+          return res.status(400).json({
+            code: 'attestation_note_too_long',
+            error: `The note must be at most ${AGENT_PAYOUT_ATTESTATION_NOTE_MAX_LENGTH} characters.`,
+          });
+        }
+        if (req.body?.method !== undefined && req.body.method !== AGENT_PAYOUT_ATTESTATION_METHOD) {
+          return res.status(422).json({
+            code: 'attestation_method_unsupported',
+            error: 'Only an administrator phone-call attestation is supported.',
+          });
+        }
+
+        const result = await db.recordAgentPayoutDestinationAttestation({
+          id,
+          actor: admin,
+          note,
+          method: AGENT_PAYOUT_ATTESTATION_METHOD,
+        });
+        if (!result.ok) {
+          const clientError =
+            result.code === 'ATTESTATION_NOTE_REQUIRED' ||
+            result.code === 'ATTESTATION_NOTE_TOO_LONG' ||
+            result.code === 'ATTESTATION_METHOD_UNSUPPORTED' ||
+            result.code === 'INVALID_ACTOR';
+          const status =
+            result.code === 'NOT_FOUND'
+              ? 404
+              : result.code === 'WRITE_FAILED'
+                ? 500
+                : clientError
+                  ? 400
+                  : 409;
+          const messages: Record<string, string> = {
+            NOT_FOUND: 'No such payout destination change.',
+            TERMINAL: 'This payout destination change can no longer be attested.',
+            EXPIRED: 'This payout destination change expired before the attestation was recorded.',
+            STATE_CONFLICT:
+              'The request changed while the attestation was being recorded. Reload it before trying again.',
+            ATTESTER_APPROVER_CONFLICT:
+              'This request was already approved by you, so you cannot also attest it. A different administrator must complete the other step.',
+            ATTESTATION_NOTE_REQUIRED: 'A note describing the phone call is required.',
+            ATTESTATION_NOTE_TOO_LONG: `The note must be at most ${AGENT_PAYOUT_ATTESTATION_NOTE_MAX_LENGTH} characters.`,
+            ATTESTATION_METHOD_UNSUPPORTED: 'Only an administrator phone-call attestation is supported.',
+            INVALID_ACTOR: 'The administrator identity could not be resolved.',
+          };
+          return res.status(status).json({
+            code: result.code,
+            error: messages[result.code] ?? 'The attestation could not be recorded.',
+            attested: false,
+            request: result.row ? toAgentPayoutAdminView(result.row) : null,
+          });
+        }
+
+        const latest = (await db.getAgentPayoutDestinationChangeByIdForAdmin(id)) ?? result.row;
+        await safeAudit(
+          admin,
+          'AGENT_PAYOUT_DESTINATION_ATTESTATION_RECORDED',
+          `Administrator ${admin} recorded a phone-call attestation for payout destination change ${id} ` +
+            `for agent ${latest?.agent_id ?? '(unknown)'} ` +
+            `(proposed ${maskPayoutDestinationForLog(latest?.proposed_destination)}; note length ${note.length}). ` +
+            `No phone verification was performed and no code was sent. A DIFFERENT administrator must approve.`,
+        );
+
+        return res.json({
+          success: true,
+          attested: true,
+          already_attested: result.code === 'ALREADY_ATTESTED',
+          message:
+            result.code === 'ALREADY_ATTESTED'
+              ? 'A phone-call attestation was already recorded. It was not changed.'
+              : 'Phone-call attestation recorded. The destination is still NOT active: a different administrator must approve it.',
+          request: toAgentPayoutAdminView(latest ?? {}),
+        });
+      } catch (e: any) {
+        return sendServerError(res, e, 'ADMIN_AGENT_PAYOUT_CHANGE_ATTEST');
       }
     },
   );
@@ -440,6 +612,11 @@ export function registerAgentPayoutSettingsRoutes(
         const admin = req.user!.username!;
         const id = String(req.params.changeId);
 
+        // PHASE 2 — approval decides where money is sent, so it re-authenticates
+        // the operator's own password. The approval is never a browser-supplied
+        // value, and the password is never logged or echoed.
+        if (!(await requireAdminPassword(req, res))) return;
+
         const decision = await db.recordAgentPayoutDestinationAdminDecision({
           id,
           decision: 'approve',
@@ -451,13 +628,17 @@ export function registerAgentPayoutSettingsRoutes(
           // The persisted row (MASKED) travels with the refusal: an
           // administrator can see WHY the request can no longer be approved,
           // and a terminal outcome is never described as an approval.
-          const current = decision.row ? toAgentPayoutChangeView(decision.row) : null;
+          const current = decision.row ? toAgentPayoutAdminView(decision.row) : null;
           return res.status(status).json({
             code: decision.code,
             error:
               decision.code === 'NOT_FOUND'
                 ? 'No such payout destination change.'
-                : 'This payout destination change can no longer be approved.',
+                : decision.code === 'ATTESTATION_REQUIRED'
+                  ? 'This change has no complete administrator phone-call attestation, so it cannot be approved. Record the attestation first.'
+                  : decision.code === 'ATTESTER_APPROVER_CONFLICT'
+                    ? 'You recorded the phone-call attestation for this change, so a DIFFERENT administrator must approve it.'
+                    : 'This payout destination change can no longer be approved.',
             approved: false,
             activated: false,
             request: current,
@@ -465,7 +646,8 @@ export function registerAgentPayoutSettingsRoutes(
         }
 
         // Approval is recorded; activation is a SEPARATE gate that still
-        // requires real phone verification (unavailable in this build).
+        // requires a complete phone-call attestation (or real phone verification,
+        // unavailable in this build) and a different administrator.
         const activation = await db.activateAgentPayoutDestinationChange({ id, actor: admin });
         const latest = (await db.getAgentPayoutDestinationChangeByIdForAdmin(id)) ?? decision.row;
 
@@ -538,8 +720,12 @@ export function registerAgentPayoutSettingsRoutes(
           activated: activation.activated,
           activation_code: activation.code,
           message: activation.activated
-            ? 'Approved and activated: real phone verification and administrator approval were both recorded.'
-            : 'Approval recorded. The new destination is NOT active: it still requires successful real phone verification, and the current destination remains in use.',
+            ? 'Approved and activated: an administrator phone-call attestation and a separate administrator approval were both recorded.'
+            : activation.code === 'NOT_ATTESTED'
+              ? 'Approval recorded, but the change cannot activate: it has no complete administrator phone-call attestation.'
+              : activation.code === 'ATTESTER_APPROVER_CONFLICT'
+                ? 'Approval recorded, but the change cannot activate: the same administrator attested and approved it. A different administrator must approve.'
+                : 'Approval recorded. The new destination is NOT active yet: activation requires a complete phone-call attestation and a separate administrator approval. The current destination remains in use.',
           request: persisted,
         });
       } catch (e: any) {
@@ -608,7 +794,7 @@ export function registerAgentPayoutSettingsRoutes(
           success: true,
           rejected: true,
           message: 'The change was rejected. The current payout destination remains in use.',
-          request: toAgentPayoutChangeView(latest ?? {}),
+          request: toAgentPayoutAdminView(latest ?? {}),
         });
       } catch (e: any) {
         return sendServerError(res, e, 'ADMIN_AGENT_PAYOUT_CHANGE_REJECT');

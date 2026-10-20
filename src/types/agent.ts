@@ -128,6 +128,12 @@ export interface AgentPayoutSettingsCurrent {
   /** True only when an activated change recorded a real phone attestation. */
   phone_ownership_verified: boolean;
   phone_ownership_verified_at: string | null;
+  /**
+   * PHASE 2 — TRUE only when the activated change recorded a COMPLETE
+   * administrator phone-call attestation. Distinct from OTP verification.
+   */
+  admin_call_attested: boolean;
+  admin_call_attested_at: string | null;
 }
 
 export interface AgentPayoutSettingsResponse {

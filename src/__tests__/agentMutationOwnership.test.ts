@@ -34,9 +34,14 @@ function agentRouteBody(route: string): string {
   const src = agentOpsTs.indexOf(marker) > -1 ? agentOpsTs : serverTs;
   const start = src.indexOf(marker);
   expect(start, `route POST ${route} with agent middleware not found in server.ts or routes/agentOps.ts`).toBeGreaterThan(-1);
-  // One handler: from its opening marker to the next route registration.
+  // One handler: from its opening marker to the next route registration. The
+  // LAST route in the module has no successor, so it runs to the end of the
+  // file. (The previous fixed +6000 fallback silently truncated the handler
+  // once it grew, which made every "must appear in this handler" assertion
+  // unsatisfiable for a reason that had nothing to do with the rule being
+  // tested.)
   const nextRouteIdx = src.indexOf('\n  app.', start + marker.length);
-  return src.slice(start, nextRouteIdx > start ? nextRouteIdx : start + 6000);
+  return src.slice(start, nextRouteIdx > start ? nextRouteIdx : src.length);
 }
 
 const ASSIGNED_OWNERSHIP = "item.assigned_agent_id !== req.user.agentId";
@@ -194,5 +199,23 @@ describe('P1-4/P2-2: confirm-handover re-checks eligibility and uses a compare-a
     // If the compare-and-swap loses the race the route must stop before any
     // further financial effect.
     expect(body).toMatch(/if \(!settlement\.success\)/);
+  });
+
+  it('M3/M4 (route half): refuses a handover for an item that is not at_agent, before the pickup code and the settlement CAS', () => {
+    // The authoritative guard lives inside enterPendingSettlement (a conditional
+    // UPDATE on items.status, proven by db/__tests__/handoverCustodyGuard.test.ts).
+    // This pins the operator-facing half: a precise 409 that fires before the
+    // pickup code is read, before any photo is uploaded and before the CAS.
+    const custodyGate = body.indexOf("if (item.status !== 'at_agent')");
+    const pickupRead = body.indexOf('db.getPickupCode(claimId)');
+    const settlementCas = body.indexOf('enterPendingSettlement(claimId');
+    expect(custodyGate, 'custody gate present').toBeGreaterThan(-1);
+    expect(pickupRead, 'pickup code read present').toBeGreaterThan(-1);
+    expect(settlementCas, 'settlement CAS present').toBeGreaterThan(-1);
+    expect(custodyGate, 'gate must precede the pickup code').toBeLessThan(pickupRead);
+    expect(custodyGate, 'gate must precede the settlement CAS').toBeLessThan(settlementCas);
+    // It is a refusal (409), not a silent skip and not a second financial path.
+    expect(body.slice(custodyGate, pickupRead)).toMatch(/res\.status\(409\)/);
+    expect(body.slice(custodyGate, pickupRead)).toMatch(/return res\.status\(409\)/);
   });
 });

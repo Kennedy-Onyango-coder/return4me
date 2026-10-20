@@ -230,6 +230,14 @@ export const agent_payout_destination_changes = pgTable(
     phone_verified_at: timestamp("phone_verified_at", { withTimezone: true }),
     // The provider's attestation reference, for reconciliation. Never a code.
     phone_verification_provider_ref: varchar("phone_verification_provider_ref", { length: 100 }),
+    // PHASE 2 — THE ADMIN PHONE-CALL ATTESTATION (its own fact, never OTP).
+    // All four columns are required together for the attestation to count; a
+    // partial write is not evidence. `attestation_note` is bounded operator
+    // evidence and is never exposed to the agent.
+    attested_at: timestamp("attested_at", { withTimezone: true }),
+    attested_by: varchar("attested_by", { length: 100 }),
+    attestation_method: varchar("attestation_method", { length: 30 }),
+    attestation_note: varchar("attestation_note", { length: 500 }),
     // FACT 3 — the administrative decision.
     admin_approved_at: timestamp("admin_approved_at", { withTimezone: true }),
     admin_approved_by: varchar("admin_approved_by", { length: 100 }),
@@ -256,6 +264,25 @@ export const agent_payout_destination_changes = pgTable(
       agent_payout_changes_status_check: check(
         "agent_payout_changes_status_check",
         sql`${table.status} IN ('pending_verification', 'pending_admin_approval', 'activated', 'rejected', 'expired')`
+      ),
+      // An attestation is COMPLETE or ABSENT — never a partial claim.
+      agent_payout_changes_attestation_check: check(
+        "agent_payout_changes_attestation_check",
+        sql`(
+          (${table.attested_at} IS NULL AND ${table.attested_by} IS NULL AND ${table.attestation_method} IS NULL AND ${table.attestation_note} IS NULL)
+          OR (
+            ${table.attested_at} IS NOT NULL
+            AND ${table.attested_by} IS NOT NULL
+            AND ${table.attestation_method} = 'admin_phone_call'
+            AND ${table.attestation_note} IS NOT NULL
+            AND length(${table.attestation_note}) BETWEEN 1 AND 500
+          )
+        )`
+      ),
+      // Dual control at the storage layer: the approver may not be the attester.
+      agent_payout_changes_dual_control_check: check(
+        "agent_payout_changes_dual_control_check",
+        sql`(${table.admin_approved_at} IS NULL OR ${table.attested_at} IS NULL OR lower(${table.admin_approved_by}) <> lower(${table.attested_by}))`
       ),
     };
   }

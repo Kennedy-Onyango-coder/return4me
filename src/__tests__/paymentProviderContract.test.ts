@@ -156,7 +156,15 @@ describe('IntaSend payout initiation contract (Batch 1B-C1)', () => {
     // "Unique key per transaction. A repeat request with the same key is
     // rejected, so you can retry safely."
     expect(PAYMENTS).toContain('idempotency_key: leg.idempotencyKey');
-    expect(PAYMENTS).toMatch(/PAYOUT_LEG_\$\{recipientType\.toUpperCase\(\)\}/);
+    // The key FORMAT lives in the shared pure module (config/payoutIdempotency.ts)
+    // so the provider submission path and the payout-repair policy agree on it.
+    // Asserting the literal format against payments.ts pinned the pre-extraction
+    // inline template and drifted when the builder moved; assert the call site
+    // AND the one implementation instead.
+    expect(PAYMENTS).toContain('idempotencyKey: buildPayoutLegIdempotencyKey(claimId, p.recipientType)');
+    expect(read('src/config/payoutIdempotency.ts')).toContain(
+      '`PAYOUT_LEG_${recipientType.toUpperCase()}:${String(claimId ?? \'\').trim()}`',
+    );
   });
 
   it('never correlates provider transactions by an account suffix again', () => {
@@ -301,7 +309,10 @@ describe('production wallet gate abandons the settlement release instead of stra
   });
 
   it('the abandonment path really returns the claim to pending_settlement (source contract, not integration-tested)', () => {
-    const abandonStart = SERVER.indexOf('const abandonRelease = async (reason: string) => {');
+    // The helper's signature is multi-line (it gained an optional refusal code),
+    // so anchor on the declaration only — the audit line below is the structural
+    // end and the body between them is asserted exactly.
+    const abandonStart = SERVER.indexOf('const abandonRelease = async (');
     expect(abandonStart, 'abandonRelease was not found').toBeGreaterThan(-1);
     // Structural end of the helper: its own audit line, inside the same helper.
     const abandonEnd = SERVER.indexOf("'SETTLEMENT_RELEASE_ABANDONED'", abandonStart);
