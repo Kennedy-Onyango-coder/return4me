@@ -120,6 +120,13 @@ import { describeAdminSectionCopy } from './admin/shell/adminNavRegistry';
 //   * Audit Log (WS4) reads GET /api/admin/audit-logs — a bounded, newest-first
 //     window. Nothing on either surface can write, retry or delete anything.
 import PayoutIntegrityHubsTable from './admin/payouts/PayoutIntegrityHubsTable';
+// ONE-TIME SECOND-ADMIN PROVISIONING (Administrator Management) — a
+// self-contained card over POST /api/admin/provision-admin (the backend from
+// 6af77c2). It takes the console's session token as a prop, mints no session
+// for the account it creates, and removes itself once the server says the
+// one-time gate is closed. See components/admin/security/AdministratorManagementPanel.tsx
+// and services/adminProvisionAdminApi.ts.
+import AdministratorManagementPanel from './admin/security/AdministratorManagementPanel';
 import {
   describePayoutIntegritySourceSentence,
   readPayoutIntegrityHubRow,
@@ -4054,6 +4061,16 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                   </form>
                 )}
               </div>
+
+              {/* Administrator Management — the ONE-TIME second-admin
+                  provisioning form (POST /api/admin/provision-admin). A
+                  self-contained card in the console's Security area, beside
+                  2FA: it reads the session token as a prop, posts the exact
+                  backend contract through services/adminProvisionAdminApi.ts,
+                  and disables itself when the server authoritatively closes
+                  the gate. It cannot mint a session for the account it
+                  creates — that colleague signs in with their own credentials. */}
+              <AdministratorManagementPanel token={token} />
 
               {/* Audit logs timeline */}
               <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-6 shadow-sm space-y-4">
