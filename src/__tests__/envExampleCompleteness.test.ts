@@ -151,6 +151,24 @@ describe('the newly documented operational flags are explained, not just listed'
     expect(doc).toContain('production');
   });
 
+  it('documents the optional collection selector as default-off and production-only', () => {
+    const line = lines.find((candidate) =>
+      candidate.startsWith('INTASEND_COLLECTION_WALLET_ID='),
+    );
+    expect(line, 'INTASEND_COLLECTION_WALLET_ID must be documented').toBe(
+      'INTASEND_COLLECTION_WALLET_ID=""',
+    );
+
+    const doc = documentationBlockFor('INTASEND_COLLECTION_WALLET_ID');
+    expect(doc.length).toBeGreaterThan(0);
+    expect(doc).toContain('DEFAULT OFF');
+    expect(doc).toContain('production');
+    expect(doc).toContain('wallet_id');
+    expect(doc).toContain('four fields');
+    expect(doc.toLowerCase()).toContain('placeholder');
+    expect(doc).toContain('NOT VERIFIED');
+  });
+
   it('ships both dev and payment gates disabled by default', () => {
     // A template that enables a money-simulating flag by default would be a
     // hazard; all three dev gates must default to false.

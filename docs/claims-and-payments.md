@@ -306,6 +306,27 @@ third money path.
   - a wrong password, a missing reason, or a caller lacking either permission
     writes nothing at all.
 
+  **Refusals are specific, stable and actionable.** A settlement failure carries
+  `reason_code` from one closed catalog (for example `submission_history_unknown`,
+  `provider_refused`, `provider_accepted_unconfirmed`,
+  `provider_outcome_ambiguous`, `payout_already_sent`,
+  `approval_snapshot_mismatch`, `ledger_amount_mismatch`,
+  `ledger_destination_mismatch`, `destination_not_eligible`,
+  `simulation_not_permitted`, `disbursement_wallet_missing`,
+  `wallet_routing_refused`, `item_on_hold`, `payout_paused`) plus
+  `operator_message`, `next_action` and `automatic_retry: false`. A legacy row
+  with no submission history is never described as "failed" and never
+  "resubmitted automatically": it is a reconciliation item until positive
+  evidence of non-execution is obtained through the audited repair process.
+
+  The console also reads
+  `GET /api/admin/claims/:id/settlement-readiness` before initiation. That
+  endpoint is strictly local: claim state, ledger rows, approval snapshot,
+  destination policy, payout pause and wallet configuration only. It performs no
+  provider call and reads no wallet balance. Its checklist disables the
+  initiation control while a condition fails, and the initiation route re-checks
+  every condition independently.
+
 The legacy `POST /api/admin/claims/:id/release-settlement` route is retained for
 compatibility and delegates to exactly the same rule. It cannot force anything:
 there is no `force`/override parameter left in the data layer, so a claim with
@@ -326,14 +347,16 @@ agent_payout / platform_fee row types, see [claims-and-payments.md](claims-and-p
 
 Two provider wallets are involved and they are **not interchangeable**.
 
-- **Collections.** The STK request the platform sends
+- **Collections.** By default the STK request the platform sends
   (`POST /payment/mpesa-stk-push/`) carries exactly four fields — `public_key`,
-  `phone_number`, `amount`, `api_ref`. It has **no wallet selector**, so the
-  application cannot choose where a collection settles: IntaSend credits the
-  KES **settlement** wallet for the merchant account. Whether the provider can be
-  configured (per request or in the dashboard) to settle collections directly into
-  a working wallet has **not been verified for this merchant account**, and the
-  code makes no claim that it can.
+  `phone_number`, `amount`, `api_ref` — and IntaSend credits the KES
+  **settlement** wallet for the merchant account. The optional, default-off
+  `INTASEND_COLLECTION_WALLET_ID` can append one fifth field, `wallet_id`, but
+  **only in production and only when the value is real**; unset or blank leaves
+  the four-field request unchanged, and a placeholder refuses the collection
+  before any provider call. Outside production the value is never sent. Whether
+  IntaSend honours `wallet_id` on this endpoint for this merchant account has
+  **not been verified**, and the code makes no claim that it does.
 - **Payouts.** A settlement payout debits the wallet named by
   `INTASEND_DISBURSEMENT_WALLET_ID` via the documented `wallet_id` field of
   `POST /send-money/initiate/`. That variable is required in production (a

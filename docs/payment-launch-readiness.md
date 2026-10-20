@@ -136,7 +136,7 @@ against a stubbed `fetch` (mocked tests), not against the provider.
 | Item | Why it is unverified | What would verify it |
 | --- | --- | --- |
 | `POST /send-money/initiate/` against this merchant account | The path is documented, but no request has ever been made with real credentials | A sandbox payout to a controlled number, then a production observation |
-| Whether collections can settle into the working wallet | The STK request has no wallet field; provider-side configurability is unknown | An answer from IntaSend support / dashboard confirmation, then a test collection |
+| Whether collections can settle into a chosen wallet | The default STK request has no wallet field. The optional, default-off `INTASEND_COLLECTION_WALLET_ID` appends `wallet_id` in production only, but provider support on this endpoint is unconfirmed | IntaSend's written confirmation, then a controlled collection directed to the chosen wallet |
 | Settlement→working-wallet transfer | Documented but never executed against this account; no documented idempotency key | A sandbox `intra_transfer` with balance checks before and after |
 | Wallet balances and statements | The application never reads them | An authenticated wallet list/statement read |
 | Webhook delivery semantics under provider retry | Modelled and tested locally; provider retry behaviour is not observed | A sandbox webhook replay |
@@ -158,9 +158,13 @@ against a stubbed `fetch` (mocked tests), not against the provider.
    `can_disburse: true`.
 3. Optionally declare `INTASEND_SETTLEMENT_WALLET_ID` so the payout/settlement
    identity check is active; leave it empty if the ID is unknown.
-4. Keep the working wallet funded through the documented operator procedure; no
+4. Leave `INTASEND_COLLECTION_WALLET_ID` empty (the default) unless IntaSend has
+   confirmed that `wallet_id` is accepted on the STK endpoint for this merchant
+   account. If it is later enabled, use a real KES wallet ID and a production
+   `NODE_ENV` of exactly `production`; a placeholder refuses collections.
+5. Keep the working wallet funded through the documented operator procedure; no
    code path moves collected float.
-5. Complete the provider checklist in
+6. Complete the provider checklist in
    [`intasend-provider-verification.md`](intasend-provider-verification.md) —
    merchant/wallet identity, collection routing, settlement→working transfer
    mechanics, fees and limits, payout idempotency and finality, webhook delivery

@@ -101,6 +101,55 @@ const MOCK_UNIQUE_INDEXES: Record<string, string[][]> = {
   agent_payout_destination_changes: [['live_key']],
 };
 
+/**
+ * Split a boolean expression on a top-level `and` / `or` only.
+ *
+ * SQL groups with parentheses, and `and` binds tighter than `or`. A naive
+ * `expr.split(/\s+or\s+/)` ignores both facts: given
+ *
+ *   id = $1 and approved_at is not null and (attested_at is not null or phone_verified_at is not null)
+ *
+ * it splits at the NESTED `or`, producing a trailing fragment
+ * `phone_verified_at is not null)` that no predicate branch recognises — and
+ * this function's caller treats an unrecognised fragment as TRUE. The result
+ * was a guard that matched EVERY row, so one activation activated the whole
+ * table in the double. Scanning with a paren/quote depth counter keeps nested
+ * groups intact, letting the recursive caller evaluate each group properly.
+ */
+function splitOnTopLevel(expr: string, keyword: 'and' | 'or'): string[] {
+  const separator = ' ' + keyword + ' ';
+  const lower = expr.toLowerCase();
+  const parts: string[] = [];
+  let depth = 0;
+  let inString = false;
+  let start = 0;
+
+  for (let i = 0; i < expr.length; i += 1) {
+    const ch = expr[i];
+    if (ch === "'") {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === '(') {
+      depth += 1;
+      continue;
+    }
+    if (ch === ')') {
+      depth -= 1;
+      continue;
+    }
+    if (depth === 0 && lower.startsWith(separator, i)) {
+      parts.push(expr.slice(start, i).trim());
+      i += separator.length - 1;
+      start = i + 1;
+    }
+  }
+
+  parts.push(expr.slice(start).trim());
+  return parts.filter(Boolean);
+}
+
 // Evaluate logical WHERE conditions recursively
 function evaluateWhere(row: any, whereClause: string, params: any[]): boolean {
   if (!whereClause) return true;
@@ -133,13 +182,13 @@ function evaluateWhere(row: any, whereClause: string, params: any[]): boolean {
   }
 
   if (expr.includes(' or ') || expr.includes(' OR ')) {
-    const parts = expr.split(/\s+or\s+/i).map(p => p.trim());
-    return parts.some(part => evaluateWhere(row, part, params));
+    const parts = splitOnTopLevel(expr, 'or');
+    if (parts.length > 1) return parts.some(part => evaluateWhere(row, part, params));
   }
 
   if (expr.includes(' and ') || expr.includes(' AND ')) {
-    const parts = expr.split(/\s+and\s+/i).map(p => p.trim());
-    return parts.every(part => evaluateWhere(row, part, params));
+    const parts = splitOnTopLevel(expr, 'and');
+    if (parts.length > 1) return parts.every(part => evaluateWhere(row, part, params));
   }
   
   const cleanExpr = expr.trim();
@@ -1786,6 +1835,10 @@ created_at TIMESTAMP WITH TIME ZONE NOT NULL
       status VARCHAR(30) NOT NULL DEFAULT 'pending_verification',
       phone_verified_at TIMESTAMP WITH TIME ZONE,
       phone_verification_provider_ref VARCHAR(100),
+      attested_at TIMESTAMP WITH TIME ZONE,
+      attested_by VARCHAR(100),
+      attestation_method VARCHAR(30),
+      attestation_note VARCHAR(500),
       admin_approved_at TIMESTAMP WITH TIME ZONE,
       admin_approved_by VARCHAR(100),
       admin_rejected_at TIMESTAMP WITH TIME ZONE,
@@ -1801,6 +1854,30 @@ created_at TIMESTAMP WITH TIME ZONE NOT NULL
     `CREATE UNIQUE INDEX IF NOT EXISTS uq_agent_payout_changes_live ON agent_payout_destination_changes(live_key)`,
     `ALTER TABLE agent_payout_destination_changes DROP CONSTRAINT IF EXISTS agent_payout_changes_status_check`,
     `ALTER TABLE agent_payout_destination_changes ADD CONSTRAINT agent_payout_changes_status_check CHECK (status IN ('pending_verification', 'pending_admin_approval', 'activated', 'rejected', 'expired'))`,
+    // PHASE 2 — the admin phone-call attestation columns. ADD COLUMN IF NOT
+    // EXISTS is what makes this idempotent on a database created before this
+    // batch; the CREATE TABLE above only covers a fresh database.
+    `ALTER TABLE agent_payout_destination_changes ADD COLUMN IF NOT EXISTS attested_at TIMESTAMP WITH TIME ZONE`,
+    `ALTER TABLE agent_payout_destination_changes ADD COLUMN IF NOT EXISTS attested_by VARCHAR(100)`,
+    `ALTER TABLE agent_payout_destination_changes ADD COLUMN IF NOT EXISTS attestation_method VARCHAR(30)`,
+    `ALTER TABLE agent_payout_destination_changes ADD COLUMN IF NOT EXISTS attestation_note VARCHAR(500)`,
+    // COMPLETE-OR-ABSENT. A partial attestation can never be read as evidence,
+    // and the note is bounded so operator text cannot become a dumping ground.
+    `ALTER TABLE agent_payout_destination_changes DROP CONSTRAINT IF EXISTS agent_payout_changes_attestation_check`,
+    `ALTER TABLE agent_payout_destination_changes ADD CONSTRAINT agent_payout_changes_attestation_check CHECK (
+      (attested_at IS NULL AND attested_by IS NULL AND attestation_method IS NULL AND attestation_note IS NULL)
+      OR (
+        attested_at IS NOT NULL
+        AND attested_by IS NOT NULL
+        AND attestation_method = 'admin_phone_call'
+        AND attestation_note IS NOT NULL
+        AND length(attestation_note) BETWEEN 1 AND 500
+      )
+    )`,
+    // DUAL CONTROL AT THE STORAGE LAYER: the approving administrator may not be
+    // the administrator who attested the phone call.
+    `ALTER TABLE agent_payout_destination_changes DROP CONSTRAINT IF EXISTS agent_payout_changes_dual_control_check`,
+    `ALTER TABLE agent_payout_destination_changes ADD CONSTRAINT agent_payout_changes_dual_control_check CHECK (admin_approved_at IS NULL OR attested_at IS NULL OR lower(admin_approved_by) <> lower(attested_by))`,
     // PHASE 1 (payout readiness) — the dual-control repair request table.
     // Additive and idempotent: CREATE TABLE IF NOT EXISTS + IF NOT EXISTS
     // indexes, and DROP-then-ADD for every CHECK, so re-running this list on a

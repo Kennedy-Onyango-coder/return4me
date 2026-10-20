@@ -33,7 +33,7 @@ here. Wallet IDs appear only as masked forms, as in the application's own logs.
 | # | Checklist item | Status | Evidence | Next action |
 | --- | --- | --- | --- | --- |
 | 1 | Merchant account and production wallet identity | **Blocked / operator action** | No account read was performed. The code never verifies a wallet's existence, currency or capability; it only refuses a missing/placeholder/duplicate ID (`src/config/walletRouting.ts`, `walletRoutingEnforcement.test.ts`). | Account owner confirms the merchant entity and the KES settlement + working wallets in the IntaSend dashboard. |
-| 2 | Can collections select the working wallet? | **Unverified** | The STK request body is exactly `public_key`, `phone_number`, `amount`, `api_ref` (`src/services/payments.ts`, `triggerMpesaStkPush`) — no wallet selector, so the application cannot choose. Whether the provider can be configured to settle into a working wallet is unknown. | Support question Q2/Q3. |
+| 2 | Can collections select the working wallet? | **Unverified (selector coded, provider acceptance unconfirmed)** | By default the STK request body is exactly `public_key`, `phone_number`, `amount`, `api_ref` (`src/services/payments.ts`, `triggerMpesaStkPush`). The optional, default-off `INTASEND_COLLECTION_WALLET_ID` appends a fifth `wallet_id` field only when `NODE_ENV` is exactly `production` and the value is real; a placeholder refuses the collection before any provider call (`src/config/walletRouting.ts`, `resolveCollectionWalletRouting`). Whether IntaSend honours `wallet_id` on this endpoint for this merchant account is unknown. | Support question Q2/Q3, then a controlled collection before enabling the variable. |
 | 3 | Settlement / working-wallet capabilities and balance visibility | **Documented (capabilities) + unverified (account)** | `wallets/?currency=KES&wallet_type=…` returns `WalletSer` with `wallet_type`, `can_disburse`, `current_balance`, `available_balance` (`docs/operations.md`). The application performs **no** balance or wallet-list read anywhere in `src/` (pinned by `walletRoutingEnforcement.test.ts`). | Operator reads balances during the sandbox rehearsal; record masked IDs only. |
 | 4 | Settlement→working-wallet transfer mechanism | **Documented + unverified** | `POST {base}/wallets/{id}/intra_transfer/`, `{id}` = **source (debited)**, body `wallet_id` = **destination (credited)**, body also needs `amount`, `narrative` (`docs/operations.md`). Never executed against this account; the field names read backwards and a reversed pair still returns 200. | Sandbox rehearsal with a deliberately small amount and before/after balance reads. |
 | 5 | Transfer fees, limits, processing times, transaction references | **Blocked** | Not documented in this repository and not retrievable during this review (web fetch returned empty). | Support questions Q7–Q9. **Do not assume zero fees or instant settlement.** |
@@ -217,6 +217,9 @@ Mask wallet IDs and phone numbers in anything retained.
 - [ ] Production `INTASEND_DISBURSEMENT_WALLET_ID` confirmed to match the working
       wallet (record only "matched", never the value).
 - [ ] Whether `INTASEND_SETTLEMENT_WALLET_ID` is declared, and that it differs.
+- [ ] Whether `INTASEND_COLLECTION_WALLET_ID` is deliberately left empty (the
+      default), or set only after IntaSend confirms in writing that `wallet_id` is
+      honoured on `POST /payment/mpesa-stk-push/` for this merchant account.
 - [ ] IntaSend support's written answers to Q1–Q15.
 - [ ] Sandbox collection: request reference and the resulting state.
 - [ ] Sandbox payout: batch `tracking_id`, per-transaction `transaction_id`,

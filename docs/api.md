@@ -126,6 +126,25 @@ All require the `agent` role and an agent who is currently active.
 Confirmation routes additionally require the agent to be assigned to the claim's
 item. See [agent-workflows.md](agent-workflows.md).
 
+### Agent payout settings
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| GET | `/api/agents/payout-settings` | Agent | Current (masked) destination, verification availability, live/latest request |
+| POST | `/api/agents/payout-settings/change-request` | Agent | Propose a Personal M-Pesa phone destination (format check only) |
+| POST | `/api/agents/payout-settings/change-request/:changeId/verify-phone` | Agent | Always refuses with `503` while no delivery adapter exists; never claims a code was sent |
+| GET | `/api/admin/agent-payout-destination-changes` | Admin | List requests with the masked destination and the admin timeline |
+| GET | `/api/admin/agent-payout-destination-changes/:changeId` | Admin | One request with its timeline and attestation evidence |
+| POST | `/api/admin/agent-payout-destination-changes/:changeId/attest` | Admin + password | Record a **phone-call attestation**: `note` required (max 500); `method` is fixed to `admin_phone_call` |
+| POST | `/api/admin/agent-payout-destination-changes/:changeId/approve` | Admin + password | Record approval. Requires a complete attestation and a DIFFERENT administrator |
+| POST | `/api/admin/agent-payout-destination-changes/:changeId/reject` | Admin | Reject with a required reason |
+
+An attestation is **not** phone verification: it never writes `phone_verified_at`
+and is never shown as "verified". Activation requires format eligibility, a
+complete phone-call attestation and an approval by a different administrator.
+`AGENT_PAYOUT_PHONE_VERIFICATION_ADAPTER_IMPLEMENTED` remains `false`; the
+SMS/WhatsApp adapter interface is a disabled boundary only.
+
 ## Disputes
 
 | Method | Path | Auth | Purpose |
@@ -159,6 +178,7 @@ applicable a named permission.
 |---|---|---|
 | GET | `/api/admin/claims` | List claims (`claims.read`) |
 | GET | `/api/admin/claims/:claimId` | Claim detail (`claims.detail`) |
+| GET | `/api/admin/claims/:id/settlement-readiness` | **Read-only** Pending Settlement checklist (`claims.detail`). Uses existing claim/ledger/approval/wallet-configuration state and pure policy functions only: **no provider call and no wallet-balance read**. Returns `ready`, `blockers[]`, and one `conditions[]` entry per check with `code`, `label`, `ok`, `detail` and `next_action`. The initiation route re-decides everything |
 | POST | `/api/admin/claims/:id/settlement/approve` | Record durable settlement approval (`claims.settlement_approve`) |
 | POST | `/api/admin/claims/:id/settlement/initiate` | Initiate the payout (`claims.settlement_initiate`). **Requires the caller's own password** in `password` (bcrypt-reauthenticated before the release lock is attempted; never logged or echoed). Answers `400 password_required` / `400 password_too_long` / `401 password_incorrect`, `409 { error, code: 'payout_not_eligible', reasons }` when the durable approval or the settle_at window is missing, and `500 { error, code: 'payout_not_confirmed', recoverable: true, next: { initiate } }` when the provider outcome is not confirmed. Success reports `payout: 'submitted'`, never "paid" |
 | POST | `/api/admin/claims/:id/settlement/approve-and-pay` | Combined approve **and** initiate for one due settlement. Requires **both** `claims.settlement_approve` and `claims.settlement_initiate`, and the caller's own password in `password` (bcrypt-reauthenticated, never logged or echoed). It runs the same approval CAS and the same release CAS + executor as the two routes above — no second money path — so it reports `payout: 'submitted'`, never "paid"; an approval that is already on file is treated as met and the payout proceeds; a refusal *after* the approval committed answers `recoverable: true` with `next: { initiate }` and the server's own `reasons[]`. A successful body also carries `destination_changed` (true when a stored payout destination changed between the approval this action recorded and the attempt) |
@@ -188,8 +208,8 @@ and is what the console branches on; `error` is human-readable and may change.
 | 404 | `admin_not_found` | The token names an account that no longer exists. Defence in depth only: `requireCurrentAdminSession` refuses such a token with 401 before the handler runs, so this body is not reachable over HTTP | No |
 | 409 | `not_pending_settlement` / `outside_review_window` / `no_review_window` | The approval CAS refused (`approve-and-pay` only) | No until the claim state changes |
 | 409 | `payout_ledger_unreadable` | The claim's payout rows could not be described unambiguously (none, duplicated ids, unreadable amounts), so no approval was recorded at all (the approval transaction is rolled back) and no payout was attempted | No — a data review of the claim's ledger rows is required first |
-| 409 | `payout_not_eligible` | The **release CAS** refused: the claim is no longer `pending_settlement`, is already `releasing`, has no durable approval, or its `settle_at` window has not elapsed. Carries `reasons[]`, `approval`, `approved_by`, `approved_at`, `recoverable: true` and `next: { initiate }` | Yes — the approval (if `approval: 'recorded'`) is durable; retry only the payout step once the condition clears |
-| 500 | `payout_not_confirmed` | The release lock was won (the payout was authorized) but the attempt did not complete. This covers BOTH an executor refusal before submission (payouts paused, item legal hold, destination policy, a payout amount or destination that does not match the booked ledger row, missing simulation configuration) AND a provider outcome that is not confirmed (rejected, accepted-but-unconfirmed, ambiguous). Carries `recoverable: true` and `next: { initiate }` | Yes, but **verify with the provider first** — the leg is never resubmitted automatically. 500 is the established status for this on all three money routes, including the legacy one |
+| 409 | `payout_not_eligible` | The **release CAS** refused: the claim is no longer `pending_settlement`, is already `releasing`, has no durable approval, or its `settle_at` window has not elapsed. Carries `code`/`reason_code`, `operator_message`, `next_action`, `automatic_retry: false`, `reasons[]`, `reason_details[]`, `approval`, `approved_by`, `approved_at`, `recoverable: true` and `next: { initiate }` | Yes — the approval (if `approval: 'recorded'`) is durable; retry only the payout step once the condition clears. No automatic retry |
+| 500 | `payout_not_confirmed` | The release lock was won (the payout was authorized) but the attempt did not complete. This covers BOTH an executor refusal before submission (payouts paused, item legal hold, destination policy, a payout amount or destination that does not match the booked ledger row, missing simulation configuration, wallet configuration/routing) AND a provider outcome that is not confirmed (rejected, accepted-but-unconfirmed, ambiguous, or a legacy row with no submission history). Carries `reason_code` (specific and stable), `operator_message`, `next_action`, `automatic_retry: false`, `recoverable: true` and `next: { initiate }` | Yes, but **verify with the provider first** — the leg is never resubmitted automatically. 500 is the established status for this on all three money routes, including the legacy one |
 | 200 | — | `payout: 'submitted'`, never "paid" | — |
 
 `reasons[]` on a 409 is the *server's own* vocabulary for the durable condition
@@ -197,6 +217,23 @@ that failed: `claim_not_found`, `settlement_already_in_flight`,
 `not_in_pending_settlement:<status>`, `no_durable_approval`,
 `settle_at_not_elapsed`, `release_lock_lost`. The console renders these verbatim
 and never invents a translation.
+
+`reason_code` is the stable PHASE 3 catalog entry for the refusal, and
+`operator_message` / `next_action` are its actionable text. The catalog includes
+(at least): `claim_not_found`, `claim_data_unreadable`, `item_missing`,
+`agent_missing`, `category_missing`, `payout_paused`,
+`claim_not_pending_settlement`, `settlement_already_in_flight`,
+`durable_approval_missing`, `settlement_window_open`, `release_lock_lost`,
+`release_state_changed`, `approval_snapshot_mismatch`,
+`approval_snapshot_unreadable`, `payout_rows_missing`,
+`payout_rows_unreadable`, `ledger_amount_mismatch`,
+`ledger_destination_mismatch`, `destination_not_eligible`,
+`payout_outcome_unresolved`, `submission_history_unknown`, `provider_refused`,
+`provider_accepted_unconfirmed`, `provider_outcome_ambiguous`,
+`payout_already_sent`, `no_submittable_payout`, `simulation_not_permitted`,
+`disbursement_wallet_missing`, `wallet_routing_refused`, `item_on_hold`,
+`payout_recording_failed`, `internal_error`. `automatic_retry` is always
+`false`: nothing in this system retries a payout on a timer.
 
 
 ### Notifications and social

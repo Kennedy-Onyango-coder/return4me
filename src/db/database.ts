@@ -100,8 +100,13 @@ import {
 // the route, the console projection and the persistence guard cannot disagree
 // about when a proposed destination may become active.
 import {
+  AGENT_PAYOUT_ATTESTATION_METHOD,
+  AGENT_PAYOUT_ATTESTATION_NOTE_MAX_LENGTH,
   LIVE_AGENT_PAYOUT_CHANGE_STATUSES,
+  agentPayoutAttesterApproverConflict,
   evaluateAgentPayoutActivation,
+  evaluateAgentPayoutAttestation,
+  normalizeAgentPayoutActor,
 } from "../config/agentPayoutVerification";
 // A1 (Batch 0A) — the single definition of the 5-day strike window, plus the
 // repository's EXISTING canonical phone normalization (re-exported, never
@@ -9620,6 +9625,10 @@ await drizzleDb.transaction(async (tx) => {
           status: "pending_verification",
           phone_verified_at: null,
           phone_verification_provider_ref: null,
+          attested_at: null,
+          attested_by: null,
+          attestation_method: null,
+          attestation_note: null,
           admin_approved_at: null,
           admin_approved_by: null,
           admin_rejected_at: null,
@@ -9773,6 +9782,26 @@ await drizzleDb.transaction(async (tx) => {
     try {
       if (params.decision === "approve") {
         if (existing.admin_approved_at) return { ok: true, code: "ALREADY_APPROVED", row: existing };
+
+        // PHASE 2 — TWO INDEPENDENT ADMINISTRATORS, IN ORDER.
+        //
+        // 1. There must be a COMPLETE phone-call attestation. An approval on its
+        //    own proves nothing about who controls the number.
+        // 2. The approver must NOT be the administrator who attested the call.
+        //    The database has the same rule in
+        //    agent_payout_changes_dual_control_check, so this is defence in
+        //    depth rather than the only guard.
+        const attestation = evaluateAgentPayoutAttestation(existing);
+        if (!attestation.complete && !existing.phone_verified_at) {
+          return { ok: false, code: "ATTESTATION_REQUIRED", row: existing };
+        }
+        if (
+          attestation.complete &&
+          normalizeAgentPayoutActor(existing.attested_by) === normalizeAgentPayoutActor(params.actor)
+        ) {
+          return { ok: false, code: "ATTESTER_APPROVER_CONFLICT", row: existing };
+        }
+
         const rows = await drizzleDb
           .update(agentPayoutDestinationChangesTable)
           .set({ admin_approved_at: now, admin_approved_by: params.actor, updated_at: now } as any)
@@ -9781,6 +9810,10 @@ await drizzleDb.transaction(async (tx) => {
               eq(agentPayoutDestinationChangesTable.id, params.id),
               inArray(agentPayoutDestinationChangesTable.status, [...LIVE_AGENT_PAYOUT_CHANGE_STATUSES]),
               isNull(agentPayoutDestinationChangesTable.admin_approved_at),
+              or(
+                isNotNull(agentPayoutDestinationChangesTable.attested_at),
+                isNotNull(agentPayoutDestinationChangesTable.phone_verified_at),
+              ),
             ),
           )
           .returning();
@@ -9811,6 +9844,116 @@ await drizzleDb.transaction(async (tx) => {
       return { ok: true, code: "REJECTED", row: rows[0] };
     } catch (error) {
       console.error("Failed to record agent payout destination admin decision:", error);
+      return { ok: false, code: "WRITE_FAILED" };
+    }
+  }
+
+  /**
+   * PHASE 2 — RECORD AN ADMINISTRATOR'S PHONE-CALL ATTESTATION.
+   *
+   * This is NOT phone verification and MUST NOT write `phone_verified_at`.
+   * It records that an administrator called the proposed number and confirmed
+   * control of it, together with a required, bounded note describing the call.
+   * A second, DIFFERENT administrator must approve before activation.
+   *
+   * Every failure is a refusal with a stable code; a partial attestation is
+   * never written (the table's CHECK constraint also enforces completeness).
+   */
+  public async recordAgentPayoutDestinationAttestation(params: {
+    id: string;
+    actor: string;
+    note: string;
+    method?: string;
+    now?: Date;
+  }): Promise<{ ok: boolean; code: string; row?: any }> {
+    const actorRaw = typeof params.actor === "string" ? params.actor.trim() : "";
+    const actor = normalizeAgentPayoutActor(actorRaw);
+    const note = typeof params.note === "string" ? params.note.trim() : "";
+    const method = params.method ?? AGENT_PAYOUT_ATTESTATION_METHOD;
+
+    if (!actor) return { ok: false, code: "INVALID_ACTOR" };
+    if (method !== AGENT_PAYOUT_ATTESTATION_METHOD) {
+      return { ok: false, code: "ATTESTATION_METHOD_UNSUPPORTED" };
+    }
+    if (!note) return { ok: false, code: "ATTESTATION_NOTE_REQUIRED" };
+    if (note.length > AGENT_PAYOUT_ATTESTATION_NOTE_MAX_LENGTH) {
+      return { ok: false, code: "ATTESTATION_NOTE_TOO_LONG" };
+    }
+
+    const now = params.now ?? new Date();
+    const existing = await this.getAgentPayoutDestinationChangeByIdForAdmin(params.id);
+    if (!existing) return { ok: false, code: "NOT_FOUND" };
+    if (
+      existing.activated_at ||
+      existing.admin_rejected_at ||
+      existing.status === "activated" ||
+      existing.status === "rejected"
+    ) {
+      return { ok: false, code: "TERMINAL", row: existing };
+    }
+    if (existing.attested_at) return { ok: true, code: "ALREADY_ATTESTED", row: existing };
+    if (
+      existing.admin_approved_by &&
+      normalizeAgentPayoutActor(existing.admin_approved_by) === actor
+    ) {
+      // The same person cannot both approve and attest. Refusing here keeps the
+      // stored row consistent with the dual-control CHECK constraint.
+      return { ok: false, code: "ATTESTER_APPROVER_CONFLICT", row: existing };
+    }
+
+    const expiresAt = existing.expires_at ? new Date(existing.expires_at).getTime() : NaN;
+    if (Number.isFinite(expiresAt) && expiresAt <= now.getTime()) {
+      await drizzleDb
+        .update(agentPayoutDestinationChangesTable)
+        .set({ status: "expired", live_key: null, updated_at: now } as any)
+        .where(
+          and(
+            eq(agentPayoutDestinationChangesTable.id, params.id),
+            inArray(agentPayoutDestinationChangesTable.status, [...LIVE_AGENT_PAYOUT_CHANGE_STATUSES]),
+          ),
+        );
+      return { ok: false, code: "EXPIRED" };
+    }
+
+    try {
+      const rows = await drizzleDb
+        .update(agentPayoutDestinationChangesTable)
+        .set({
+          attested_at: now,
+          attested_by: actorRaw,
+          attestation_method: method,
+          attestation_note: note,
+          // The attestation is the agent-side proof this build can obtain, so the
+          // persisted status moves out of `pending_verification` while remaining
+          // LIVE (it still occupies the agent's single request slot).
+          status: "pending_admin_approval",
+          updated_at: now,
+        } as any)
+        .where(
+          and(
+            eq(agentPayoutDestinationChangesTable.id, params.id),
+            inArray(agentPayoutDestinationChangesTable.status, [...LIVE_AGENT_PAYOUT_CHANGE_STATUSES]),
+            isNull(agentPayoutDestinationChangesTable.attested_at),
+          ),
+        )
+        .returning();
+      if (!rows[0]) return { ok: false, code: "STATE_CONFLICT" };
+
+      try {
+        await this.logAudit(
+          actorRaw,
+          "AGENT_PAYOUT_DESTINATION_ATTESTED",
+          `Administrator ${actorRaw} recorded a phone-call attestation for payout destination change ${rows[0].id} ` +
+            `(proposed Personal M-Pesa ${maskPayoutDestinationForLog(rows[0].proposed_destination)}; ` +
+            `note length ${note.length}). A DIFFERENT administrator must approve before activation. ` +
+            `No phone verification was performed and no verification code was sent.`,
+        );
+      } catch (auditError) {
+        console.error("Failed to audit a payout destination attestation:", auditError);
+      }
+      return { ok: true, code: "ATTESTED", row: rows[0] };
+    } catch (error) {
+      console.error("Failed to record agent payout destination attestation:", error);
       return { ok: false, code: "WRITE_FAILED" };
     }
   }
@@ -9920,8 +10063,11 @@ await drizzleDb.transaction(async (tx) => {
    * THE ONLY WRITER OF `agents.mpesa_till_or_paybill` in this feature.
    *
    * Runs in ONE transaction and asks evaluateAgentPayoutActivation() FIRST. A
-   * change activates only when it is format-eligible, has REAL phone
-   * verification, has an admin approval, has not expired and is not rejected.
+   * change activates only when it is format-eligible, has a COMPLETE
+   * administrator phone-call attestation, and was approved by a DIFFERENT
+   * administrator. Real phone verification (`phone_verified_at`) is an
+   * additional, stronger fact when an adapter exists; it is not required and is
+   * never fabricated by an attestation.
    * The guarded UPDATE is also a compare-and-swap on those same facts, so two
    * concurrent attempts cannot both apply the destination.
    */
@@ -9957,15 +10103,17 @@ await drizzleDb.transaction(async (tx) => {
               );
           }
           const code =
-            decision.reason === "phone_verification_required"
-              ? "NOT_VERIFIED"
+            decision.reason === "attestation_required"
+              ? "NOT_ATTESTED"
               : decision.reason === "admin_approval_required"
                 ? "NOT_APPROVED"
-                : decision.reason === "expired"
-                  ? "EXPIRED"
-                  : decision.reason === "rejected"
-                    ? "REJECTED"
-                    : "NOT_ELIGIBLE";
+                : decision.reason === "attester_approver_conflict"
+                  ? "ATTESTER_APPROVER_CONFLICT"
+                  : decision.reason === "expired"
+                    ? "EXPIRED"
+                    : decision.reason === "rejected"
+                      ? "REJECTED"
+                      : "NOT_ELIGIBLE";
           return { activated: false, code, row: change };
         }
 
@@ -9976,8 +10124,11 @@ await drizzleDb.transaction(async (tx) => {
             and(
               eq(agentPayoutDestinationChangesTable.id, params.id),
               inArray(agentPayoutDestinationChangesTable.status, [...LIVE_AGENT_PAYOUT_CHANGE_STATUSES]),
-              isNotNull(agentPayoutDestinationChangesTable.phone_verified_at),
               isNotNull(agentPayoutDestinationChangesTable.admin_approved_at),
+              or(
+                isNotNull(agentPayoutDestinationChangesTable.attested_at),
+                isNotNull(agentPayoutDestinationChangesTable.phone_verified_at),
+              ),
             ),
           )
           .returning();
@@ -9986,10 +10137,10 @@ await drizzleDb.transaction(async (tx) => {
         const applied = await tx
           .update(agentsTable)
           .set({
-            mpesa_till_or_paybill: claimed[0].proposed_destination,
-            payout_method_type: claimed[0].proposed_payout_method,
+            mpesa_till_or_paybill: change.proposed_destination,
+            payout_method_type: change.proposed_payout_method,
           } as any)
-          .where(eq(agentsTable.id, claimed[0].agent_id))
+          .where(eq(agentsTable.id, change.agent_id))
           .returning({ id: agentsTable.id });
         if (!applied[0]) {
           // Roll back the status change: a change can never be "activated"
@@ -10003,9 +10154,13 @@ await drizzleDb.transaction(async (tx) => {
           action: "AGENT_PAYOUT_DESTINATION_ACTIVATED",
           // MASKED destination only — never the number in the clear.
           details:
-            `Agent ${claimed[0].agent_id}: payout destination change ${claimed[0].id} activated after real phone verification ` +
-            `and administrator approval (destination ${maskPayoutDestinationForLog(claimed[0].proposed_destination)}, ` +
-            `method ${claimed[0].proposed_payout_method}).`,
+            `Agent ${change.agent_id}: payout destination change ${change.id} activated after ` +
+            (change.attested_at
+              ? `an administrator phone-call attestation (by ${String(change.attested_by)})`
+              : 'a real delivery-channel phone verification') +
+            ` and a separate administrator approval (by ${String(change.admin_approved_by)}) ` +
+            `(destination ${maskPayoutDestinationForLog(change.proposed_destination)}, method ${change.proposed_payout_method}). ` +
+            `No verification code was fabricated and no unattested claim is recorded.`,
         });
 
         return { activated: true, code: "ACTIVATED", row: claimed[0] };

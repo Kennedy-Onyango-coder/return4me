@@ -1,4 +1,4 @@
-﻿import dotenv from 'dotenv';
+import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 import https from 'https';
@@ -48,6 +48,22 @@ import { PaymentService, isDisbursementWalletConfigured, isPlaceholderKey, isPay
 // the declared collection wallet is refused BEFORE any durable marker is
 // written, exactly like a missing wallet ID.
 import { resolveConfiguredPayoutWalletRouting, describePayoutWalletRoutingForAudit } from './config/walletRouting';
+import {
+  describeNodeEnvForStartup,
+  describeDisbursementWalletForStartup,
+  describeSettlementWalletForStartup,
+  describeCollectionWalletForStartup,
+  describeWalletRoutingGuardForStartup,
+} from './config/startupDiagnostics';
+// PHASE 3 — one stable reason code and one actionable operator message for every
+// settlement refusal, plus the read-only readiness policy the console reuses.
+import {
+  classifyUnresolvedPayoutRow,
+  describeSettlementRefusal,
+  settlementRefusalBody,
+  type SettlementRefusalCode,
+} from './config/settlementRefusal';
+import { evaluateSettlementReadiness } from './config/settlementReadiness';
 // BATCH 3 — the pure rule that compares WHAT was approved with WHAT is about to
 // be paid (total + payout ledger rows).
 import {
@@ -524,31 +540,31 @@ console.log('================================================================');
 console.log('                   RETURN4ME ENVIRONMENT CHECK                  ');
 console.log('================================================================');
 console.log(`.env File Detected:      ${realEnvExists ? '[OK] Yes' : '[MISSING] No (Using default fallback process envs/example)'}`);
-console.log(`DATABASE_URL:            ${process.env.DATABASE_URL ? '[OK] Configured' : '[MISSING] Missing'}`);
-console.log(`JWT_SECRET:              ${process.env.JWT_SECRET ? '[OK] Configured' : '[MISSING] Missing'}`);
-console.log(`DOC_HASH_SALT:           ${process.env.DOC_HASH_SALT ? '[OK] Configured' : '[MISSING] Missing'}`);
-console.log(`ADMIN_PASSCODE:          ${process.env.ADMIN_PASSCODE ? '[OK] Configured' : '[MISSING] Missing'}`);
-console.log(`INTASEND_PUBLISHABLE:    ${process.env.INTASEND_PUBLISHABLE_KEY ? '[OK] Configured' : '[MISSING] Missing'}`);
-console.log(`INTASEND_SECRET:         ${process.env.INTASEND_SECRET_KEY ? '[OK] Configured' : '[MISSING] Missing'}`);
-// BATCH 1B — name-only startup signal for the disbursement wallet. The VALUE is
-// never printed (it is operator configuration, not customer data, but it still
-// belongs in a .env, not in a log aggregator). This mirrors the production rule
-// the payout gates enforce: outside production the variable is optional, and in
-// production a missing, blank or placeholder-shaped value makes payouts fail
-// closed, so it is reported as a warning here at boot rather than surfacing
-// only at the first payout attempt.
-console.log(`INTASEND_WALLET_ID:      ${process.env.NODE_ENV !== 'production' || isDisbursementWalletConfigured() ? '[OK] Configured' : '[WARNING] Missing or placeholder (production payouts refuse to start)'}`);
-// BATCH 2 — the OPTIONAL settlement-wallet identity, reported by NAME only. It
-// routes nothing (the collection request has no wallet field); it exists so the
-// payout gate can prove the wallet it debits is not the wallet that receives
-// collections. 'Not declared' is informational, not a failure: payouts still run,
-// they are simply not checked against a known settlement wallet. A pair of EQUAL
-// IDs is the one state that makes production payouts refuse to start, so it is
-// surfaced here as a warning rather than only at the first attempt.
+// PHASE 4 — the OBSERVED environment, not an assumption. Every enforcement
+// statement below is conditional on this exact value.
+console.log(`NODE_ENV:                ${describeNodeEnvForStartup(process.env)}`);
+console.log(`DATABASE_URL:            ${process.env.DATABASE_URL ? '[SET] Present' : '[MISSING] Missing'}`);
+console.log(`JWT_SECRET:              ${process.env.JWT_SECRET ? '[SET] Present' : '[MISSING] Missing'}`);
+console.log(`DOC_HASH_SALT:           ${process.env.DOC_HASH_SALT ? '[SET] Present' : '[MISSING] Missing'}`);
+console.log(`ADMIN_PASSCODE:          ${process.env.ADMIN_PASSCODE ? '[SET] Present' : '[MISSING] Missing'}`);
+console.log(`INTASEND_PUBLISHABLE:    ${process.env.INTASEND_PUBLISHABLE_KEY ? '[SET] Present' : '[MISSING] Missing'}`);
+console.log(`INTASEND_SECRET:         ${process.env.INTASEND_SECRET_KEY ? '[SET] Present' : '[MISSING] Missing'}`);
+// PHASE 4 — the disbursement wallet is reported by CONFIGURATION and by
+// ENFORCEMENT separately, and only its last four characters are shown. Outside
+// production a value is declared but never enforced or sent to a sandbox
+// provider, so it is NOT reported as "OK".
+console.log(`INTASEND_WALLET_ID:      ${describeDisbursementWalletForStartup(process.env)}`);
+// The optional settlement-wallet identity (declaration only; routes nothing).
 const bootWalletRouting = resolveConfiguredPayoutWalletRouting();
-console.log(`INTASEND_SETTLEMENT_WALLET: ${bootWalletRouting.settlementWalletState === 'declared' ? '[OK] Declared (payout/settlement identity check active)' : '[INFO] Not declared (payout wallet cannot be checked against the collection wallet)'}`);
+console.log(`INTASEND_SETTLEMENT_WALLET: ${describeSettlementWalletForStartup(process.env)}`);
+// PHASE 5 — OPTIONAL COLLECTION-WALLET SELECTOR (default off, production only).
+// Configuration and effect are reported separately, and only the masked tail is
+// ever printed. Provider support for wallet_id on the STK endpoint is an
+// account-owner confirmation, not something this banner can verify.
+console.log(`INTASEND_COLLECTION_WALLET: ${describeCollectionWalletForStartup(process.env)}`);
+console.log(`WALLET ROUTING GUARD:    ${describeWalletRoutingGuardForStartup(bootWalletRouting, process.env)}`);
 if (bootWalletRouting.code === 'payout_wallet_is_settlement_wallet') {
-  console.warn('WALLET ROUTING: [WARNING] INTASEND_DISBURSEMENT_WALLET_ID equals INTASEND_SETTLEMENT_WALLET_ID. Production payouts will refuse to start until the two wallet IDs differ.');
+  console.warn('WALLET ROUTING: [ENFORCED REFUSAL] INTASEND_DISBURSEMENT_WALLET_ID equals INTASEND_SETTLEMENT_WALLET_ID. In production every payout initiation will refuse until the two wallet IDs differ.');
 }
 console.log(`ALLOW_MOCK_OTP_BYPASS:   ${process.env.ALLOW_MOCK_OTP_BYPASS === 'true' ? '[WARNING] ENABLED (Insecure)' : '[OK] Disabled'}`);
 console.log(`GEMINI_API_KEY:          ${process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY' ? '[OK] Configured (Real OCR Active)' : '[WARNING] Missing or placeholder'}`);
@@ -909,6 +925,21 @@ async function checkAdminPayoutReauthentication(
     return { status: 401, body: { error: 'Incorrect password.', code: 'password_incorrect' } };
   }
   return null;
+}
+
+/**
+ * PHASE 3 — map the route's existing reason strings to the one stable catalog.
+ * The strings stay in the response for compatibility; the catalog adds the
+ * actionable message and next action.
+ */
+function settlementRouteReasonCode(reason: string): SettlementRefusalCode {
+  if (reason === 'claim_not_found') return 'claim_not_found';
+  if (reason === 'settlement_already_in_flight') return 'settlement_already_in_flight';
+  if (reason.startsWith('not_in_pending_settlement:')) return 'claim_not_pending_settlement';
+  if (reason === 'no_durable_approval') return 'durable_approval_missing';
+  if (reason === 'settle_at_not_elapsed') return 'settlement_window_open';
+  if (reason === 'release_lock_lost') return 'release_lock_lost';
+  return 'internal_error';
 }
 
 const otpIpLimiter = rateLimit({
@@ -3934,6 +3965,10 @@ async function createApp() {
   registerAgentPayoutSettingsRoutes(app, {
     requireActiveAgent,
     requireCurrentAdminSession,
+    // PHASE 2 — attestation and approval require the operator's own password,
+    // checked against their stored bcrypt hash by the same helper every payout
+    // route uses.
+    reauthenticateAdmin: checkAdminPayoutReauthentication,
     sendServerError,
   });
 
@@ -5114,6 +5149,7 @@ async function createApp() {
       if (!won) {
         return res.status(409).json({
           error: 'This claim cannot be released: settlement requires a durable administrator approval and an elapsed settle_at review window. Record the approval first, then initiate the payout.',
+          ...settlementRefusalBody('release_lock_lost'),
           next: {
             approve: `/api/admin/claims/${claimId}/settlement/approve`,
             initiate: `/api/admin/claims/${claimId}/settlement/initiate`,
@@ -5126,6 +5162,7 @@ async function createApp() {
         return res.status(500).json({
           error: result.message,
           code: 'payout_not_confirmed',
+            ...settlementRefusalBody(result.reason_code ?? 'internal_error'),
           recoverable: true,
           next: { initiate: `/api/admin/claims/${claimId}/settlement/initiate` },
         });
@@ -5238,6 +5275,76 @@ async function createApp() {
   // provider. On success the claim moves to 'released' and the ledger rows are
   // completed; on failure the lock is reverted and the claim returns to
   // 'pending_settlement'.
+  // -------------------------------------------------------------------------
+  // PHASE 3 — READ-ONLY SETTLEMENT READINESS
+  //
+  // The Pending Settlement checklist. It uses ONLY existing database state plus
+  // pure policy functions: no provider request, no wallet balance, no write.
+  // The initiation route remains the authority and re-decides every condition.
+  // -------------------------------------------------------------------------
+  app.get(
+    '/api/admin/claims/:id/settlement-readiness',
+    authenticateJWT,
+    requireCurrentAdminSession,
+    requireAdminPermission(ADMIN_PERMISSIONS.CLAIMS_DETAIL),
+    async (req, res) => {
+      // The audit invariant every /api/admin route carries IN ADDITION to the
+      // named permission: authenticateJWT proves signature/expiry, not role, and
+      // a pending-2FA token must never reach this read either.
+      if (req.user?.role !== 'admin') {
+        return res.status(403).json({ error: 'Access denied.' });
+      }
+      const claimId = req.params.id;
+      try {
+        const claim = await db.getClaim(claimId);
+        if (!claim) {
+          return res.status(404).json({
+            error: 'No such claim.',
+            ...settlementRefusalBody('claim_not_found'),
+          });
+        }
+        const item = await db.getItem(claim.item_id);
+        const agent = item?.assigned_agent_id ? await db.getAgent(item.assigned_agent_id) : null;
+        const category = item?.category_id ? await db.getCategory(item.category_id) : null;
+        const ledgerRows = await db.getLedgerEntriesForClaim(claimId);
+        const payoutsPaused = await isPlatformOperationPaused(pauseSettingKey('payouts'));
+        const routing = resolveConfiguredPayoutWalletRouting();
+        const readiness = evaluateSettlementReadiness({
+          claim,
+          item: item ?? null,
+          agent: agent ?? null,
+          category: category ?? null,
+          ledgerRows,
+          payoutsPaused,
+          simulation: {
+            required: isPayoutSimulationRequired(),
+            permitted: isPaymentSimulationEnvironment(process.env.NODE_ENV),
+          },
+          wallet: {
+            disbursementConfigured:
+              process.env.NODE_ENV !== 'production' || isDisbursementWalletConfigured(),
+            routingOk: routing.ok,
+            routingCode: routing.code,
+          },
+          now: new Date(),
+        });
+
+        return res.json({
+          claim_id: claimId,
+          ready: readiness.ready,
+          blockers: readiness.blockers,
+          conditions: readiness.conditions,
+          checked_at: new Date().toISOString(),
+          read_only: true,
+          provider_calls: 0,
+          wallet_balance_reads: 0,
+        });
+      } catch (e: any) {
+        return sendServerError(res, e, 'ADMIN_CLAIM_SETTLEMENT_READINESS');
+      }
+    },
+  );
+
   app.post('/api/admin/claims/:id/settlement/initiate', authenticateJWT, requireCurrentAdminSession, requireAdminPermission(ADMIN_PERMISSIONS.CLAIMS_SETTLEMENT_INITIATE), adminSettlementPayoutLimiter, async (req, res) => {
       const claimId = req.params.id;
       try {
@@ -5285,9 +5392,25 @@ async function createApp() {
             }
             if (reasons.length === 0) reasons.push('release_lock_lost');
           }
+          const primaryCode = settlementRouteReasonCode(reasons[0] ?? 'release_lock_lost');
+          const primary = describeSettlementRefusal(primaryCode);
           return res.status(409).json({
             error: 'This claim is not eligible for payout initiation.',
+            code: primaryCode,
+            reason_code: primaryCode,
+            operator_message: primary.operator_message,
+            next_action: primary.next_action,
+            automatic_retry: false,
             reasons,
+            reason_details: reasons.map((reason) => {
+              const detail = describeSettlementRefusal(settlementRouteReasonCode(reason));
+              return {
+                code: reason,
+                reason_code: detail.code,
+                operator_message: detail.operator_message,
+                next_action: detail.next_action,
+              };
+            }),
           });
         }
         // BATCH 1 (E) — "AUTHORIZED", NOT "INITIATED".
@@ -5314,6 +5437,7 @@ async function createApp() {
           return res.status(500).json({
             error: result.message,
             code: 'payout_not_confirmed',
+            ...settlementRefusalBody(result.reason_code ?? 'internal_error'),
             recoverable: true,
             next: { initiate: `/api/admin/claims/${claimId}/settlement/initiate` },
           });
@@ -5567,6 +5691,7 @@ async function createApp() {
           return res.status(500).json({
             error: result.message,
             code: 'payout_not_confirmed',
+            ...settlementRefusalBody(result.reason_code ?? 'internal_error'),
             approval: approvalState,
             approved_by: approvedBy,
             approved_at: approvedAt,
@@ -6636,7 +6761,28 @@ async function expireStaleClaims() {
  * It re-checks the claim's approval and lock state, and the item's hold state,
  * from the database immediately before the provider call.
  */
-async function executeClaimSettlement(claimId: string, initiatedBy: string = 'SYSTEM'): Promise<{ success: boolean; message: string }> {
+async function executeClaimSettlement(
+  claimId: string,
+  initiatedBy: string = 'SYSTEM',
+): Promise<{
+  success: boolean;
+  message: string;
+  reason_code?: SettlementRefusalCode;
+  next_action?: string;
+  automatic_retry?: false;
+}> {
+  /** One truthful refusal, with a stable code and an operator action. */
+  const refuse = (code: SettlementRefusalCode, detail?: string | null) => {
+    const body = settlementRefusalBody(code, detail);
+    return {
+      success: false as const,
+      message: body.operator_message,
+      reason_code: body.reason_code,
+      next_action: body.next_action,
+      automatic_retry: false as const,
+    };
+  };
+
   if (await isPlatformOperationPaused(pauseSettingKey('payouts'))) {
     // The claim has already won the attemptSettlementRelease() lock
     // (status='releasing') by the time this function is called - reverting
@@ -6649,7 +6795,7 @@ async function executeClaimSettlement(claimId: string, initiatedBy: string = 'SY
     // timer - resuming payouts and initiating again is an operator action.
     await db.revertSettlementRelease(claimId);
     await db.logAudit('SYSTEM', 'SETTLEMENT_SKIPPED_PAYOUTS_PAUSED', `Claim ${claimId}: settlement release skipped â€” payouts are paused platform-wide. Reverted to pending_settlement; it is NOT retried automatically, so the approved payout must be initiated again once payouts resume.`);
-    return { success: false, message: 'Payouts are currently paused platform-wide by an administrator. This claim remains in pending_settlement; nothing is retried automatically, so initiate the approved payout again once payouts resume.' };
+    return refuse('payout_paused');
   }
 
   // E3A - A LOCAL FAILURE MUST NOT STRAND THE CLAIM.
@@ -6666,20 +6812,24 @@ async function executeClaimSettlement(claimId: string, initiatedBy: string = 'SY
   // only submit ones that positively record 'not_submitted', and each of those
   // must first win its own pre-submission compare-and-swap. Reverting a claim
   // therefore cannot re-send a row that may already have moved money.
-  const abandonRelease = async (reason: string) => {
+  const abandonRelease = async (
+    reason: string,
+    code: SettlementRefusalCode = 'claim_data_unreadable',
+  ) => {
     await db.revertSettlementRelease(claimId);
-    await db.logAudit('SYSTEM', 'SETTLEMENT_RELEASE_ABANDONED', `Claim ${claimId}: settlement could not proceed (${reason}). Release lock returned to pending_settlement; no payout was submitted by this attempt and eligibility is re-decided per row.`);
-    return { success: false, message: `Settlement could not proceed: ${reason} The claim was returned to pending_settlement.` };
+    await db.logAudit('SYSTEM', 'SETTLEMENT_RELEASE_ABANDONED', `Claim ${claimId}: settlement could not proceed (${code}: ${reason}). Release lock returned to pending_settlement; no payout was submitted by this attempt and eligibility is re-decided per row.`);
+    const refusal = refuse(code, reason);
+    return { ...refusal, message: `Settlement could not proceed: ${reason} ${refusal.next_action}` };
   };
 
   const claim = await db.getClaim(claimId);
-  if (!claim) return await abandonRelease('claim not found.');
+  if (!claim) return await abandonRelease('claim not found.', 'claim_not_found');
   const item = await db.getItem(claim.item_id);
-  if (!item) return await abandonRelease('the item for this claim no longer exists.');
+  if (!item) return await abandonRelease('the item for this claim no longer exists.', 'item_missing');
   const agent = item.assigned_agent_id ? await db.getAgent(item.assigned_agent_id) : null;
-  if (!agent) return await abandonRelease('the agent assigned to this item could not be resolved.');
+  if (!agent) return await abandonRelease('the agent assigned to this item could not be resolved.', 'agent_missing');
   const category = item.category_id ? await db.getCategory(item.category_id) : null;
-  if (!category) return await abandonRelease('the category for this item could not be resolved.');
+  if (!category) return await abandonRelease('the category for this item could not be resolved.', 'category_missing');
 
   let finderShare = parseFloat(String(category.finder_share));
   let agentShare = parseFloat(String(category.agent_share));
@@ -6782,20 +6932,26 @@ async function executeClaimSettlement(claimId: string, initiatedBy: string = 'SY
     // payout_outcome, never claim state).
     const preSubmitClaim = await db.getClaim(claimId);
     if (!preSubmitClaim) {
-      return await abandonRelease('the claim could not be re-read before payout submission.');
+      return await abandonRelease('the claim could not be re-read before payout submission.', 'claim_data_unreadable');
     }
     if (preSubmitClaim.status !== 'releasing') {
-      return await abandonRelease(`the claim is no longer in the 'releasing' state (it is '${preSubmitClaim.status}').`);
+      return await abandonRelease(
+        `the claim is no longer in the 'releasing' state (it is '${preSubmitClaim.status}').`,
+        'release_state_changed',
+      );
     }
     if (preSubmitClaim.settlement_approved_at == null) {
-      return await abandonRelease('the durable administrator approval required to submit a payout is missing.');
+      return await abandonRelease(
+        'the durable administrator approval required to submit a payout is missing.',
+        'durable_approval_missing',
+      );
     }
     const preSubmitItem = await db.getItem(preSubmitClaim.item_id);
     if (!preSubmitItem) {
-      return await abandonRelease('the item for this claim could not be re-read before payout submission.');
+      return await abandonRelease('the item for this claim could not be re-read before payout submission.', 'item_missing');
     }
     if (preSubmitItem.status === 'suspected_stolen' || preSubmitItem.status === 'legal_hold') {
-      return await abandonRelease(`the item is under '${preSubmitItem.status}' review.`);
+      return await abandonRelease(`the item is under '${preSubmitItem.status}' review.`, 'item_on_hold');
     }
 
     // BATCH 1 - PHONE-ONLY PAYOUT DESTINATION ELIGIBILITY (LAUNCH POLICY).
@@ -6848,7 +7004,8 @@ async function executeClaimSettlement(claimId: string, initiatedBy: string = 'SY
         `Claim ${claimId}: payout NOT submitted - ${refusal}. The launch policy pays Kenyan personal M-Pesa phone destinations only (254 followed by nine digits) and requires the "Personal M-Pesa" method on both legs. No batch was submitted and no payout row was marked as submitted; correct the recipient's payout destination and initiate the payout again.`
       );
       return await abandonRelease(
-        `a payout destination is not eligible under the phone-only payout policy (${refusal}).`
+        `a payout destination is not eligible under the phone-only payout policy (${refusal}).`,
+        'destination_not_eligible',
       );
     }
     // BATCH 1.1 — PAY WHAT THE LEDGER BOOKED, TO THE DESTINATION IT BOOKED.
@@ -6928,7 +7085,10 @@ async function executeClaimSettlement(claimId: string, initiatedBy: string = 'SY
         `the payout about to be submitted does not match what the ledger booked (${[
           ...ledgerIntegrity.amountMismatches,
           ...ledgerIntegrity.destinationMismatches,
-        ].join('; ')}). No leg of this claim was sent.`
+        ].join('; ')}). No leg of this claim was sent.`,
+        ledgerIntegrity.amountMismatches.length > 0
+          ? 'ledger_amount_mismatch'
+          : 'ledger_destination_mismatch',
       );
     }
 
@@ -6973,7 +7133,13 @@ async function executeClaimSettlement(claimId: string, initiatedBy: string = 'SY
         `The approved payout and the payout about to be submitted must be the same amount, to the same ledger rows; an administrator must review the claim and the approval on file.`
       );
       return await abandonRelease(
-        `the payout does not match the settlement approval (${refusal.code}). No leg of this claim was sent.`
+        `the payout does not match the settlement approval (${refusal.code}). No leg of this claim was sent.`,
+        refusal.code === 'incomplete_snapshot' ||
+          refusal.code === 'unparseable_snapshot' ||
+          refusal.code === 'unreadable_authorized_total' ||
+          refusal.code === 'current_legs_unreadable'
+          ? 'approval_snapshot_unreadable'
+          : 'approval_snapshot_mismatch',
       );
     }
     if (authorizationVerdict.code === 'legacy_approval') {
@@ -7029,7 +7195,8 @@ async function executeClaimSettlement(claimId: string, initiatedBy: string = 'SY
         `Claim ${claimId}: payout NOT submitted - the IntaSend secret key is missing or still a placeholder value and NODE_ENV is ${observedEnv}, which is not a payout-simulation environment (only "development" and "test" may simulate). Refused BEFORE any payout row was marked as submitted: no provider request was made, nothing was paid, and the claim was returned to pending_settlement. Configure a real INTASEND_SECRET_KEY, or run with NODE_ENV="development"/"test" for local simulation.`
       );
       return await abandonRelease(
-        `this deployment would have to SIMULATE the payout (it holds no usable IntaSend credentials) and NODE_ENV is ${observedEnv}, which is not a payout-simulation environment. A production-like environment must never report a transfer as paid when nothing was sent.`
+        `this deployment would have to SIMULATE the payout (it holds no usable IntaSend credentials) and NODE_ENV is ${observedEnv}, which is not a payout-simulation environment. A production-like environment must never report a transfer as paid when nothing was sent.`,
+        'simulation_not_permitted',
       );
     }
     // PRODUCTION DISBURSEMENT-WALLET CONFIGURATION GUARD
@@ -7051,7 +7218,8 @@ async function executeClaimSettlement(claimId: string, initiatedBy: string = 'SY
     if (!disbursementWalletConfigured) {
       return await abandonRelease(
         'INTASEND_DISBURSEMENT_WALLET_ID is not configured in production. ' +
-        'Production payouts require a configured, non-blank, non-placeholder working-wallet ID before initiation.'
+        'Production payouts require a configured, non-blank, non-placeholder working-wallet ID before initiation.',
+        'disbursement_wallet_missing',
       );
     }
 
@@ -7083,7 +7251,8 @@ async function executeClaimSettlement(claimId: string, initiatedBy: string = 'SY
       );
       return await abandonRelease(
         `the payout wallet routing is unsafe (${walletRouting.code}). ` +
-        'The working wallet that pays disbursements must be a different wallet from the one that receives collections.'
+        'The working wallet that pays disbursements must be a different wallet from the one that receives collections.',
+        'wallet_routing_refused',
       );
     }
 
@@ -7175,14 +7344,19 @@ async function executeClaimSettlement(claimId: string, initiatedBy: string = 'SY
     // The RELEASE LOCK is given back so the claim is not parked in the
     // transient 'releasing' state - but the payout is NOT re-queued: a later,
     // explicitly-approved initiation re-reads eligibility from the ledger row
-    // and finds it ineligible. Reverting the CLAIM can never resubmit a PAYOUT,
-    // because retry eligibility is decided by payout_outcome, never by claim
-    // state.
+    // and finds it ineligible. This payout will NOT be resubmitted automatically.
+    // Reverting the CLAIM can never resubmit a PAYOUT, because retry eligibility
+    // is decided by payout_outcome, never by claim state.
     await db.revertSettlementRelease(claimId);
     // Named explicitly so an operator does not have to guess whether money
     // moved: 'no submission history recorded' is the fail-closed reading of a
     // legacy row whose outcome column is NULL.
     const outcomeLabel = unresolvedPayout.payout_outcome ?? 'no submission history recorded';
+    const unresolvedRefusalCode = classifyUnresolvedPayoutRow(unresolvedPayout);
+    const unresolvedRefusal = settlementRefusalBody(
+      unresolvedRefusalCode,
+      `${unresolvedPayout.type} row ${unresolvedPayout.id}; outcome: ${outcomeLabel}`,
+    );
     await db.logAudit('SYSTEM', 'PAYOUT_RECONCILIATION_REQUIRED', `Claim ${claimId}: ${unresolvedPayout.type} payout row ${unresolvedPayout.id} is unresolved (outcome: ${outcomeLabel}). Claim returned to pending_settlement. No automatic resubmission - verify with IntaSend before reissuing.`);
     // BATCH 1 (E) — the operator-facing outcome of this attempt, distinct from the
     // internal reconciliation flag above. Attributed to the administrator who
@@ -7194,7 +7368,10 @@ async function executeClaimSettlement(claimId: string, initiatedBy: string = 'SY
     );
     return {
       success: false,
-      message: `Settlement not completed - ${unresolvedPayout.type} is unresolved (${outcomeLabel}). The claim was returned to pending_settlement and this payout will NOT be resubmitted automatically; it needs provider reconciliation.`,
+      message: `Settlement not completed — ${unresolvedPayout.type} payout row ${unresolvedPayout.id}. ${unresolvedRefusal.operator_message}`,
+      reason_code: unresolvedRefusal.reason_code,
+      next_action: unresolvedRefusal.next_action,
+      automatic_retry: false,
     };
   }
 
@@ -7214,7 +7391,7 @@ async function executeClaimSettlement(claimId: string, initiatedBy: string = 'SY
       `Claim ${claimId}: every required payout leg is recorded completed, but the settlement could not be finalized (${finalized.message}). The claim is left in 'releasing' for manual review; nothing is retried automatically.`
     );
 
-    return { success: false, message: 'Payouts confirmed but recording the final settlement failed. Flagged for manual admin review.' };
+    return refuse('payout_recording_failed', finalized.message);
   }
   // BATCH 3 / P7 - customer notification for the completed claim.
   //

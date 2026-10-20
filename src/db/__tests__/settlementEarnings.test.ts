@@ -500,7 +500,10 @@ describe('the settlement sweep and its executor keep their safety guarantees (E3
     // The lock is given back on every one of them (this function runs only
     // after the lock was already won, so a bare early return would park the
     // claim in 'releasing' with nothing able to reach it).
-    expect(head).toContain('const abandonRelease = async (reason: string) => {');
+    // The helper gained an optional stable refusal code in Phase 3; anchor on
+    // the declaration, not on the old single-argument signature.
+    expect(head).toContain('const abandonRelease = async (');
+    expect(head).toContain("code: SettlementRefusalCode = 'claim_data_unreadable'");
     expect(head).toContain('await db.revertSettlementRelease(claimId);');
     expect(head).toContain("'SETTLEMENT_RELEASE_ABANDONED'");
     // No un-reverted early return may come back.

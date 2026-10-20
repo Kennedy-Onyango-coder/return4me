@@ -116,7 +116,12 @@ describe('D-2B-B: approve and initiate are two separate admin actions', () => {
     expect(INITIATE_HANDLER).toContain('body: JSON.stringify({ password })');
     expect(INITIATE_HANDLER).not.toContain('approval:');
     expect(INITIATE_HANDLER).not.toContain('force');
-    expect(INITIATE_HANDLER).not.toContain('reason');
+    // PHASE 3 added `data?.reason_code` to the REFUSAL banner, so banning the
+    // substring `reason` would now fail on shipped, correct code. What matters is
+    // the REQUEST BODY: it carries the password and nothing else.
+    const initiateBody = INITIATE_HANDLER.match(/body: JSON\.stringify\([^)]*\)/)?.[0] ?? '';
+    expect(initiateBody).toBe('body: JSON.stringify({ password })');
+    expect(initiateBody).not.toContain('reason');
   });
 
   it('never leaves the initiate password in state after any outcome', () => {
@@ -188,10 +193,17 @@ describe('D-2B-B: both preconditions fail closed in the console', () => {
     expect(LEDGER_JSX).toContain('const hasApproval = ps.hasSettlementApproval === true;');
   });
 
-  it('gates the money on both, and blocks a second in-flight action', () => {
-    expect(LEDGER_JSX).toContain('disabled={!hasApproval || !isDue || isApproving || isReleasing || approveAndPayStepOpen}');
+  it('gates the money on both, blocks a second in-flight action, and requires a passing readiness recheck', () => {
+    expect(LEDGER_JSX).toContain('disabled={!canInitiateSettlementPayout({');
+    expect(LEDGER_JSX).toContain('hasApproval,');
+    expect(LEDGER_JSX).toContain('isDue,');
+    expect(LEDGER_JSX).toContain('readinessLoading,');
+    expect(LEDGER_JSX).toContain('readinessError,');
     expect(LEDGER_JSX).toContain('loading={isInitiating}');
     expect(LEDGER_JSX).toContain('loading={isApproving}');
+    // The gate is fail-closed: only a server `ready: true` enables the control.
+    const gate = read('src/components/admin/settlement/settlementReadiness.ts');
+    expect(gate).toContain('return input.readiness?.ready === true;');
   });
 
   it('states the approval fact from the payload rather than assuming it', () => {
@@ -201,9 +213,15 @@ describe('D-2B-B: both preconditions fail closed in the console', () => {
 });
 
 describe("D-2B-B: a refusal is reported in the server's own words", () => {
-  it('forwards the server message and its reasons[] verbatim', () => {
+  it('forwards the server message, its stable code, its reasons[] and its next action verbatim', () => {
     expect(REFUSAL_HELPER).toContain('Array.isArray(data?.reasons)');
-    expect(REFUSAL_HELPER).toContain('reasons.join');
+    // PHASE 3 changed the assembly from `reasons.join` to a parts array that also
+    // carries the server's reason_code and next_action. The forwarding intent is
+    // unchanged; only the separator and the extra server fields are new.
+    expect(REFUSAL_HELPER).toContain('...reasons');
+    expect(REFUSAL_HELPER).toContain("reasonCode ? `code: ${reasonCode}` : ''");
+    expect(REFUSAL_HELPER).toContain("nextAction ? `next: ${nextAction}` : ''");
+    expect(REFUSAL_HELPER).toContain("parts.join('; ')");
     expect(INITIATE_HANDLER).toContain("settlementRefusalMessage(data, 'Failed to initiate payout.')");
   });
 

@@ -13,7 +13,7 @@ import {
 // boundary is real: the grant table, not the route, decides, and a principal
 // that lacks a permission is stopped with 403 before any handler runs.
 describe('adminPermissions', () => {
-  it('the single admin role holds every defined claims permission (documented flat model)', () => {
+  it('the single admin role holds the four claim read/settlement permissions (documented flat model)', () => {
     const perms = permissionsForAdminUser({ role: 'admin', username: 'a' });
     expect(perms).toContain(ADMIN_PERMISSIONS.CLAIMS_READ);
     expect(perms).toContain(ADMIN_PERMISSIONS.CLAIMS_DETAIL);
@@ -33,10 +33,27 @@ describe('adminPermissions', () => {
     expect(Object.values(ADMIN_PERMISSIONS)).not.toContain('claims.manage');
     expect(Object.keys(ADMIN_PERMISSIONS).sort()).toEqual([
       'CLAIMS_DETAIL',
+      'CLAIMS_PAYOUT_REPAIR_CONFIRM',
+      'CLAIMS_PAYOUT_REPAIR_PROPOSE',
       'CLAIMS_READ',
       'CLAIMS_SETTLEMENT_APPROVE',
       'CLAIMS_SETTLEMENT_INITIATE',
     ]);
+  });
+
+  it('the two payout-repair permissions are defined but granted to NO role', () => {
+    // Phase 1 adds the endpoints and the permissions, deliberately without a
+    // grant. A future grant must be a reviewed code change; until then every
+    // administrator (including the seeded one) is refused by the route guard.
+    const admin = { role: 'admin', username: 'a' };
+    expect(permissionsForAdminUser(admin)).not.toContain(
+      ADMIN_PERMISSIONS.CLAIMS_PAYOUT_REPAIR_PROPOSE,
+    );
+    expect(permissionsForAdminUser(admin)).not.toContain(
+      ADMIN_PERMISSIONS.CLAIMS_PAYOUT_REPAIR_CONFIRM,
+    );
+    expect(adminHasPermission(admin, ADMIN_PERMISSIONS.CLAIMS_PAYOUT_REPAIR_PROPOSE)).toBe(false);
+    expect(adminHasPermission(admin, ADMIN_PERMISSIONS.CLAIMS_PAYOUT_REPAIR_CONFIRM)).toBe(false);
   });
 
   it('every non-admin role holds nothing', () => {

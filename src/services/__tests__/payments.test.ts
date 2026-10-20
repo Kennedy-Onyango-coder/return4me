@@ -165,9 +165,11 @@ describe('payment simulation production fail-closed guarantee', () => {
 // supportable for a status that proves the request was refused BEFORE
 // execution:
 //
-//   4xx (except 408) — the provider rejected the request itself.
-//   5xx / 408        — the provider failed while handling a request it may
-//                      already have executed, so the outcome is UNKNOWN.
+//   4xx (except 408/409/429/499) — the provider rejected the request itself.
+//   5xx / 408 / 409 / 429 / 499   — the provider failed (or refused a duplicate)
+//                                   while handling a request it may already have
+//                                   executed, so the outcome is UNKNOWN. See
+//                                   config/payoutOutcomes.ts for the single matrix.
 //
 // Reporting the second as the first is precisely how a possibly-executed
 // transfer becomes eligible for a resubmission that moves the same money twice.
@@ -199,7 +201,7 @@ describe('E3A — payout provider failure classification (stubbed fetch, no netw
   it('reports a 4xx refusal as a definitive failure (no transfer executed)', async () => {
     process.env.NODE_ENV = 'development';
     process.env.INTASEND_SECRET_KEY = 'MY_TEST_ONLY_E3A_KEY_4xx';
-    for (const status of [400, 401, 403, 404, 409, 422, 429]) {
+    for (const status of [400, 401, 403, 404, 422]) {
       withProviderStatus(status);
       const result = await oneFinderPayout();
       expect(result.results.every(r => r.status === 'failed'), `HTTP ${status}`).toBe(true);
@@ -207,10 +209,12 @@ describe('E3A — payout provider failure classification (stubbed fetch, no netw
     }
   });
 
-  it('reports a 5xx or 408 as UNKNOWN — the request may already have executed', async () => {
+  it('reports 5xx/408/409/429/499 as UNKNOWN — the request may already have executed', async () => {
     process.env.NODE_ENV = 'development';
     process.env.INTASEND_SECRET_KEY = 'MY_TEST_ONLY_E3A_KEY_5xx';
-    for (const status of [500, 502, 503, 504, 408]) {
+    // 409 is the canonical ambiguous case: the provider may be rejecting a
+    // repeat of a request it already executed.
+    for (const status of [500, 502, 503, 504, 408, 409, 429, 499]) {
       withProviderStatus(status);
       const result = await oneFinderPayout();
       expect(result.results.every(r => r.status === 'unknown'), `HTTP ${status}`).toBe(true);
@@ -232,5 +236,116 @@ describe('E3A — payout provider failure classification (stubbed fetch, no netw
     const result = await oneFinderPayout();
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(result.results.every(r => r.status === 'success')).toBe(true);
+  });
+});
+
+// ===========================================================================
+// PHASE 5 — OPTIONAL COLLECTION-WALLET SELECTOR (REAL STK BODY).
+// ===========================================================================
+// These tests drive the real HTTP branch of triggerMpesaStkPush with a stubbed
+// global fetch, then inspect the exact JSON body that would be sent. The default
+// body must remain the documented four fields; wallet_id is appended only for
+// production + a real, non-placeholder selector. A production placeholder must
+// refuse BEFORE any provider call.
+// ===========================================================================
+describe('PHASE 5 — STK body: wallet_id only in production and only when valid', () => {
+  const ORIGINAL_ENV = { ...process.env };
+  const COLLECTION_WALLET = 'cf5b1a22-7e48-4c19-9d3a-6b2f8e0c4a11';
+  const CLAIM_ID = 'TEST-CLAIM-PHASE5-STK';
+
+  const realCredentials = () => {
+    process.env.INTASEND_PUBLISHABLE_KEY = 'ISPubKey_test_phase5_1234567890';
+    process.env.INTASEND_SECRET_KEY = 'ISSecretKey_test_phase5_1234567890';
+  };
+
+  const successFetch = () => {
+    const fetchSpy = vi.fn(async (_url: any, _init: any) => ({
+      ok: true,
+      status: 200,
+      text: async () => '',
+      json: async () => ({ invoice: { invoice_id: 'INV-PHASE5' } }),
+    }));
+    vi.stubGlobal('fetch', fetchSpy);
+    return fetchSpy;
+  };
+
+  const sentBody = (fetchSpy: ReturnType<typeof successFetch>) => {
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const init = (fetchSpy.mock.calls[0] as any)[1];
+    expect(init.method).toBe('POST');
+    return JSON.parse(init.body);
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    process.env = { ...ORIGINAL_ENV };
+  });
+
+  it.each([
+    ['production + unset', 'production', undefined],
+    ['production + blank', 'production', '   '],
+    ['development + a real selector', 'development', COLLECTION_WALLET],
+    ['test + a real selector', 'test', COLLECTION_WALLET],
+  ])('%s leaves the documented four-field body untouched', async (_label, nodeEnv, selector) => {
+    process.env.NODE_ENV = nodeEnv;
+    realCredentials();
+    if (selector === undefined) delete process.env.INTASEND_COLLECTION_WALLET_ID;
+    else process.env.INTASEND_COLLECTION_WALLET_ID = selector;
+    const fetchSpy = successFetch();
+    vi.spyOn(db, 'logTransaction').mockResolvedValue(undefined as any);
+
+    const result = await PaymentService.triggerMpesaStkPush('+254712345678', 500, CLAIM_ID);
+    expect(result.success).toBe(true);
+
+    const body = sentBody(fetchSpy);
+    expect(Object.keys(body)).toEqual(['public_key', 'phone_number', 'amount', 'api_ref']);
+    expect(body).not.toHaveProperty('wallet_id');
+    expect(body.api_ref).toBe(CLAIM_ID);
+  });
+
+  it('production + a real selector appends exactly one wallet_id field', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.INTASEND_COLLECTION_WALLET_ID = COLLECTION_WALLET;
+    realCredentials();
+    const fetchSpy = successFetch();
+    vi.spyOn(db, 'logTransaction').mockResolvedValue(undefined as any);
+
+    const result = await PaymentService.triggerMpesaStkPush('+254712345678', 500, CLAIM_ID);
+    expect(result.success).toBe(true);
+
+    const body = sentBody(fetchSpy);
+    expect(Object.keys(body)).toEqual(['public_key', 'phone_number', 'amount', 'api_ref', 'wallet_id']);
+    expect(body.wallet_id).toBe(COLLECTION_WALLET);
+  });
+
+  it('production + a placeholder REFUSES before any provider request', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.INTASEND_COLLECTION_WALLET_ID = 'REPLACE_WITH_KES_COLLECTION_WALLET_ID';
+    realCredentials();
+    const fetchSpy = successFetch();
+
+    await expect(
+      PaymentService.triggerMpesaStkPush('+254712345678', 500, CLAIM_ID),
+    ).rejects.toThrow(/INTASEND_COLLECTION_WALLET_ID is placeholder-shaped in production/);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('never writes the collection wallet ID to the STK log line', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.INTASEND_COLLECTION_WALLET_ID = COLLECTION_WALLET;
+    realCredentials();
+    successFetch();
+    vi.spyOn(db, 'logTransaction').mockResolvedValue(undefined as any);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await PaymentService.triggerMpesaStkPush('+254712345678', 500, CLAIM_ID);
+
+    const logged = logSpy.mock.calls
+      .map((call) => call.map((part) => (typeof part === 'string' ? part : JSON.stringify(part))).join(' '))
+      .join('\n');
+    expect(logged).toContain('"collection_wallet_routing":"ready"');
+    expect(logged).not.toContain(COLLECTION_WALLET);
+    expect(logged).not.toContain(COLLECTION_WALLET.slice(4, -4));
   });
 });

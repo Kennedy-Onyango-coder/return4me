@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { translations } from '../types';
 // PART C — the category form previews the finder/agent/platform split with the
 // SAME authoritative engine the server uses, so the numbers an admin sees in
@@ -7,7 +7,7 @@ import { computeRecoveryFee } from '../services/feeEngine';
 // PROGRAMME 1 — `Banknote` and `ScrollText` are the two icons the nav registry
 // already uses for the two sections this batch adds (Payout Integrity, Audit
 // Log). They are imported here because the sidebar renders its own buttons.
-import { ShieldCheck, BarChart2, Users, FileCheck, Coins, HelpCircle, Loader2, ArrowRight, AlertTriangle, RefreshCw, CheckCircle, ShieldAlert, Copy, Package, ClipboardList, FileSearch, X, Banknote, ScrollText } from 'lucide-react';
+import { ShieldCheck, BarChart2, Users, FileCheck, Coins, HelpCircle, Loader2, ArrowRight, AlertTriangle, RefreshCw, CheckCircle, ShieldAlert, Copy, Package, ClipboardList, FileSearch, X, Banknote, ScrollText, ArrowDownLeft, ArrowUpRight, Landmark } from 'lucide-react';
 // BATCH 1 (shared admin visual language) — the console reuses the SAME design
 // system every other surface uses. These are presentation primitives only:
 // they hold no data, make no requests and change no behaviour.
@@ -91,6 +91,17 @@ import {
 import type { ConsoleActions, ConsoleActionEvent } from './admin/consoleActionState';
 import SettlementPayoutConfirmation from './admin/settlement/SettlementPayoutConfirmation';
 import SettlementApproveAndPayConfirmation from './admin/settlement/SettlementApproveAndPayConfirmation';
+// PHASE 3 — the read-only readiness checklist and the ledger presentation
+// helpers (icons + truthful status labels; no ledger semantics change).
+import SettlementReadinessChecklist, {
+  type SettlementReadinessView,
+} from './admin/settlement/SettlementReadinessChecklist';
+import {
+  ledgerEntryIconKind,
+  ledgerStatusLabel,
+  ledgerStatusVariant,
+  ledgerTypeLabel,
+} from './admin/settlement/ledgerPresentation';
 // BATCH B0 — modern shell chrome (sidebar groups + contextual top bar). These
 // are presentation components only: they hold no data, make no requests and
 // change no behaviour. The nav registry mirrors the ten existing sections so
@@ -117,6 +128,12 @@ import {
   summarizePayoutIntegrity,
 } from './admin/payouts/payoutIntegrityPresentation';
 import AuditLogPanel from './admin/audit/AuditLogPanel';
+import AgentPayoutDestinationChangesPanel from './admin/payouts/AgentPayoutDestinationChangesPanel';
+import {
+  canInitiateSettlementPayout,
+  fetchSettlementReadiness,
+  settlementReadinessDependencyKey,
+} from './admin/settlement/settlementReadiness';
 
 // P14A (P14-05) — human-readable labels for the canonical masking styles. Keyed
 // by the values in PUBLIC_CLUE_STYLES (the single source); an unmapped value
@@ -332,11 +349,25 @@ function OverviewQueueCard({ label, count, description, actionLabel, onOpen }: O
 // (400 / 403 / 404 / 500) falls back to the server's own message, unchanged.
 // ---------------------------------------------------------------------------
 function settlementRefusalMessage(data: any, fallback: string): string {
-  const message = typeof data?.error === 'string' && data.error ? data.error : fallback;
+  // PHASE 3 — prefer the server's actionable operator message and stable code;
+  // fall back to its error text only when the richer fields are absent.
+  const message =
+    typeof data?.operator_message === 'string' && data.operator_message
+      ? data.operator_message
+      : typeof data?.error === 'string' && data.error
+        ? data.error
+        : fallback;
   const reasons: string[] = Array.isArray(data?.reasons)
     ? data.reasons.filter((reason: any) => typeof reason === 'string' && reason.length > 0)
     : [];
-  return reasons.length > 0 ? `${message} (${reasons.join('; ')})` : message;
+  const reasonCode = typeof data?.reason_code === 'string' && data.reason_code ? data.reason_code : '';
+  const nextAction = typeof data?.next_action === 'string' && data.next_action ? data.next_action : '';
+  const parts = [
+    reasonCode ? `code: ${reasonCode}` : '',
+    ...reasons,
+    nextAction ? `next: ${nextAction}` : '',
+  ].filter((part) => part.length > 0);
+  return parts.length > 0 ? `${message} (${parts.join('; ')})` : message;
 }
 
 // ---------------------------------------------------------------------------
@@ -2217,6 +2248,8 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
         throw new Error(data.error || 'Failed to release settlement');
       }
       setActionSuccess(data.message || 'Settlement released.');
+      // A release changes the claim's state; the readiness checklist is stale.
+      void refreshSettlementReadiness(claimId);
       fetchDashboardData();
     } catch (e: any) {
       setDataError(e.message);
@@ -2274,6 +2307,60 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
   //   (docs/api.md) while the console offers exactly ONE money PATH — approve
   //   then initiate, or both confirmed together as "Approve & pay".
   // ---------------------------------------------------------------------------
+  // PHASE 3 — read-only readiness per pending settlement. A missing entry means
+  // "not checked yet"; the server still decides on initiation.
+  const [settlementReadinessById, setSettlementReadinessById] = useState<
+    Record<string, SettlementReadinessView | null>
+  >({});
+  const [settlementReadinessLoadingById, setSettlementReadinessLoadingById] = useState<
+    Record<string, boolean>
+  >({});
+  const [settlementReadinessErrorById, setSettlementReadinessErrorById] = useState<
+    Record<string, string>
+  >({});
+  // PHASE 3 FIX — ONE per-claim read path with a per-claim sequence guard. A slow
+  // response for a superseded read can never overwrite a newer one, and a failure
+  // CLEARS the cached result instead of leaving a stale `ready: true` behind.
+  // Updates are keyed by claim id, so one claim's refresh cannot touch another's.
+  const settlementReadinessRequestIdRef = useRef<Record<string, number>>({});
+
+  const refreshSettlementReadiness = useCallback(
+    async (claimId: string): Promise<void> => {
+      if (!token || !claimId) return;
+      const requestId = (settlementReadinessRequestIdRef.current[claimId] ?? 0) + 1;
+      settlementReadinessRequestIdRef.current[claimId] = requestId;
+      // A recheck is in flight: the initiate control is disabled by the gate until
+      // the server answers, so an old `ready: true` cannot enable a payout.
+      setSettlementReadinessLoadingById((current) => ({ ...current, [claimId]: true }));
+      setSettlementReadinessErrorById((current) => ({ ...current, [claimId]: '' }));
+      try {
+        const readiness = await fetchSettlementReadiness(token, claimId);
+        if (settlementReadinessRequestIdRef.current[claimId] !== requestId) return;
+        setSettlementReadinessById((current) => ({ ...current, [claimId]: readiness }));
+      } catch (error: any) {
+        if (settlementReadinessRequestIdRef.current[claimId] !== requestId) return;
+        // FAIL CLOSED: never keep a previously-ready result after a failed recheck.
+        setSettlementReadinessById((current) => ({ ...current, [claimId]: null }));
+        setSettlementReadinessErrorById((current) => ({
+          ...current,
+          [claimId]: error?.message || 'Readiness could not be checked.',
+        }));
+      } finally {
+        if (settlementReadinessRequestIdRef.current[claimId] === requestId) {
+          setSettlementReadinessLoadingById((current) => ({ ...current, [claimId]: false }));
+        }
+      }
+    },
+    [token],
+  );
+  // Persistent for this browser session until dismissed. It names the exact
+  // claim and the server's refusal reason, and is never cleared by a refresh.
+  const [settlementRefusalBanner, setSettlementRefusalBanner] = useState<{
+    claimId: string;
+    code: string;
+    message: string;
+  } | null>(null);
+
   const [settlementApprovalPrompt, setSettlementApprovalPrompt] = useState<{ claimId: string } | null>(null);
   const [settlementApprovalReason, setSettlementApprovalReason] = useState('');
   const [settlementApprovalReasonError, setSettlementApprovalReasonError] = useState('');
@@ -2344,6 +2431,10 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
         throw new Error(data.error || 'Failed to record the settlement approval.');
       }
       setActionSuccess(data.message || 'Settlement approval recorded.');
+      // PHASE 3 FIX — the approval is durable now, so re-read THE SERVER's
+      // readiness immediately. The button stays disabled until this recheck says
+      // `ready: true`; the dashboard reload below is not the trigger.
+      void refreshSettlementReadiness(claimId);
       fetchDashboardData();
     } catch (e: any) {
       setDataError(e.message);
@@ -2407,12 +2498,20 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
         if (data?.code === 'password_incorrect') {
           setSettlementPayoutPasswordError('Incorrect password.');
         }
+        // PHASE 3 — a refusal is persistent and names the exact claim + reason.
+        setSettlementRefusalBanner({
+          claimId,
+          code: String(data?.reason_code || data?.code || 'payout_not_confirmed'),
+          message: settlementRefusalMessage(data, 'Failed to initiate payout.'),
+        });
         throw new Error(settlementRefusalMessage(data, 'Failed to initiate payout.'));
       }
       // The banner states what was SUBMITTED, never that money has arrived: the
       // provider's outcome is unresolved until reconciliation reports it, so a
       // submitted request is not reported as a completed payout.
       setActionSuccess(data.message || 'Payout initiation submitted — the provider result is not yet confirmed.');
+      // The initiation may have finalized the claim or changed a payout row.
+      void refreshSettlementReadiness(claimId);
       fetchDashboardData();
     } catch (e: any) {
       setSettlementPayoutPassword('');
@@ -2561,7 +2660,15 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
         // which, and this banner repeats that — never "paid", never "nothing
         // happened". The dashboard is refreshed so the row shows the approval.
         if (data?.code === 'payout_not_eligible' || data?.code === 'payout_not_confirmed') {
+          setSettlementRefusalBanner({
+            claimId,
+            code: String(data?.reason_code || data?.code || 'payout_not_confirmed'),
+            message: settlementRefusalMessage(data, 'The payout was not confirmed.'),
+          });
           setActionWarning(settlementRefusalMessage(data, 'The payout was not confirmed.'));
+          // The approval WAS recorded even though the payout failed. Re-read the
+          // server's checklist so the remaining blocker is shown, not the old one.
+          void refreshSettlementReadiness(claimId);
           fetchDashboardData();
           return;
         }
@@ -2571,6 +2678,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
       // reconciliation reports.
       setActionSuccess(data?.message || 'Approval recorded and payout initiation submitted — the provider result is not yet confirmed.');
       closeSettlementApproveAndPayPrompt();
+      void refreshSettlementReadiness(claimId);
       fetchDashboardData();
     } catch (e: any) {
       setSettlementApproveAndPayPassword('');
@@ -2756,6 +2864,34 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
         .filter((id: string | null): id is string => id !== null)
     : [];
   const settlementQueueLoaded = Array.isArray(dashboardData?.pendingSettlements);
+
+  // PHASE 3 FIX — the key includes the fields that can change a readiness
+  // condition. Recording an approval flips `hasSettlementApproval`, which changes
+  // this key and re-runs the effect even if the dashboard re-read is still in
+  // flight. `refreshSettlementReadiness` also runs directly after every settlement
+  // mutation, because the server can change state this payload does not expose.
+  const settlementReadinessKey = settlementReadinessDependencyKey(
+    dashboardData?.pendingSettlements,
+  );
+
+  useEffect(() => {
+    const ids = settlementReadinessKey ? settlementReadinessKey.split('|') : [];
+    const claimIds = ids
+      .map((part) => part.split(':')[0] ?? '')
+      .filter((claimId) => claimId !== '');
+    if (!token || claimIds.length === 0) return;
+    for (const claimId of claimIds) {
+      void refreshSettlementReadiness(claimId);
+    }
+    return () => {
+      // Invalidate every read started for this key: a response that arrives after
+      // the queue changed must not write state for the old generation.
+      for (const claimId of claimIds) {
+        settlementReadinessRequestIdRef.current[claimId] =
+          (settlementReadinessRequestIdRef.current[claimId] ?? 0) + 1;
+      }
+    };
+  }, [token, settlementReadinessKey, dashboardLoadedAt, refreshSettlementReadiness]);
   const payoutIntegritySource = readPayoutIntegritySourceState(dashboardData?.agents);
   const payoutIntegritySummary = summarizePayoutIntegrity(payoutIntegrityRows);
   // The section's own sentence, chosen from the LIST'S state rather than from the
@@ -4916,6 +5052,37 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                     Handover confirmed, payout booked, dispute window still open. Settlement is two separate steps: record the approval (a reason is required and audit-logged), then initiate the payout, which the server accepts only once the review window has elapsed and the approval is on file. Neither step triggers the other, no payout is automatic, and both payout actions ask you to confirm the exact settlement and re-enter your own password first — a submitted request is not reported as a completed payout.
                   </p>
                 </div>
+
+                {settlementRefusalBanner && (
+                  <div
+                    role="alert"
+                    aria-live="assertive"
+                    className="flex items-start gap-2 rounded-standard border-2 border-[var(--appearance-danger)] bg-[var(--appearance-surface-muted)] px-4 py-3 text-small font-semibold text-[var(--appearance-danger)]"
+                  >
+                    <AlertTriangle size={ICON_SIZE.emphasis} className="mt-0.5 shrink-0" aria-hidden={true} />
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <p className="font-extrabold">
+                        {`Payout refused for claim ${settlementRefusalBanner.claimId}`}
+                      </p>
+                      <p className="font-mono text-caption">{settlementRefusalBanner.code}</p>
+                      <p>{settlementRefusalBanner.message}</p>
+                      <a
+                        href={`#settlement-row-${settlementRefusalBanner.claimId}`}
+                        className="underline font-bold"
+                      >
+                        {`Go to claim ${settlementRefusalBanner.claimId} in Pending Settlements`}
+                      </a>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setSettlementRefusalBanner(null)}
+                      aria-label={'Dismiss payout refusal for this session'}
+                      className="shrink-0 px-1 font-bold leading-none hover:opacity-80"
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
                 {(!dashboardData.pendingSettlements || dashboardData.pendingSettlements.length === 0) ? (
                   <p className="text-center text-[var(--appearance-text-muted)] text-caption py-4">No claims currently in the dispute window.</p>
                 ) : (
@@ -4957,6 +5124,12 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                       const payoutConfirmOpen = isPayoutConfirmationOpenFor(consoleActions, ps.claimId);
                       const reasonStepOpen = settlementApprovalPrompt?.claimId === ps.claimId;
                       const approveAndPayStepOpen = settlementApproveAndPayPrompt?.claimId === ps.claimId;
+                      // PHASE 3 — the server's read-only checklist for THIS row.
+                      // A missing/erroring checklist does not invent readiness;
+                      // the server still decides every condition on initiation.
+                      const readiness = settlementReadinessById[ps.claimId] ?? null;
+                      const readinessLoading = settlementReadinessLoadingById[ps.claimId] === true;
+                      const readinessError = settlementReadinessErrorById[ps.claimId] || null;
                       return (
                         <div
                           key={ps.claimId}
@@ -5003,14 +5176,29 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                                   the first click: it OPENS the confirmation step
                                   rendered below this row's reason step, and only
                                   an explicit confirmation there reaches the route.
-                                  The disabled expression is deliberately unchanged:
-                                  the two preconditions and the sibling in-flight
-                                  actions still gate it exactly as before. */}
+                                  The gate is now ONE pure helper: both persisted
+                                  preconditions, every sibling in-flight action and a
+                                  SERVER readiness result of exactly `ready: true`.
+                                  A missing, loading or failed readiness check keeps
+                                  this control disabled. */}
                               <Button
                                 variant="accent"
                                 size="sm"
                                 loading={isInitiating}
-                                disabled={!hasApproval || !isDue || isApproving || isReleasing || approveAndPayStepOpen}
+                                disabled={!canInitiateSettlementPayout({
+                                  hasApproval,
+                                  isDue,
+                                  busy:
+                                    isApproving ||
+                                    isReleasing ||
+                                    isApprovingAndPaying ||
+                                    approveAndPayStepOpen ||
+                                    isInitiating ||
+                                    reasonStepOpen,
+                                  readiness,
+                                  readinessLoading,
+                                  readinessError,
+                                })}
                                 onClick={() => promptSettlementPayoutConfirmation(ps.claimId)}
                               >
                                 {'Initiate payout'}
@@ -5056,6 +5244,12 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                                 : 'Settlement approval and payout are unavailable because this claim has no settle_at review window recorded. The server refuses both actions without one.'}
                             </p>
                           )}
+
+                          <SettlementReadinessChecklist
+                            readiness={readiness}
+                            loading={readinessLoading}
+                            error={readinessError}
+                          />
 
                           {/* The approval fact is read from the persisted column,
                               never inferred from the presence of a control. */}
@@ -5261,26 +5455,31 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                                 lifecycle status — so each type keeps its own
                                 distinct design-system variant instead of raw
                                 palette classes. Values are unchanged. */}
-                            <Badge
-                              variant={
-                                entry.type === 'payment_received' ? 'info' :
-                                  entry.type === 'finder_payout' ? 'success' :
-                                    entry.type === 'agent_payout' ? 'warning' : 'neutral'
-                              }
-                            >
-                              {entry.type.replace('_', ' ')}
-                            </Badge>
+                            {/* PHASE 3 — the TYPE icon states the direction of the
+                                row (money in / money out / internal share), and
+                                the label is a classification, never a lifecycle
+                                status. No ledger value is changed here. */}
+                            <span className="inline-flex items-center gap-1.5">
+                              {ledgerEntryIconKind(entry) === 'inbound' ? (
+                                <ArrowDownLeft size={ICON_SIZE.metadata} aria-hidden={true} className="shrink-0" />
+                              ) : ledgerEntryIconKind(entry) === 'outbound' ? (
+                                <ArrowUpRight size={ICON_SIZE.metadata} aria-hidden={true} className="shrink-0" />
+                              ) : ledgerEntryIconKind(entry) === 'fee' ? (
+                                <Landmark size={ICON_SIZE.metadata} aria-hidden={true} className="shrink-0" />
+                              ) : (
+                                <Coins size={ICON_SIZE.metadata} aria-hidden={true} className="shrink-0" />
+                              )}
+                              <span>{ledgerTypeLabel(entry.type)}</span>
+                            </span>
                           </td>
                           <td className="px-5 py-3.5 font-bold text-[var(--appearance-text-primary)]">KES {entry.amount}</td>
                           <td className="px-5 py-3.5">{entry.claim_id || '—'}</td>
                           <td className="px-5 py-3.5">
-                            <Badge
-                              variant={
-                                entry.status === 'completed' ? 'success'
-                                  : entry.status === 'failed' ? 'danger' : 'warning'
-                              }
-                            >
-                              {entry.status.toUpperCase()}
+                            {/* PHASE 3 — a payment-received row awaiting provider
+                                confirmation and an internal platform share are
+                                NOT payouts and must never read "PENDING". */}
+                            <Badge variant={ledgerStatusVariant(entry)}>
+                              {ledgerStatusLabel(entry)}
                             </Badge>
                           </td>
                           <td className="px-5 py-3.5 text-[var(--appearance-text-muted)] text-caption whitespace-nowrap">
@@ -6564,6 +6763,15 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
           <p className="text-caption text-[var(--appearance-text-muted)]">
             {payoutIntegritySentence}
           </p>
+
+          {/* PHASE 2 — the admin workflow for agent payout destination changes.
+              It sits in Payout Integrity because it changes where an agent is paid.
+              Every mutation is server-authorized and password-re-authenticated
+              where the route requires it; this panel only renders and calls. */}
+          <AgentPayoutDestinationChangesPanel
+            token={token}
+            currentAdministrator={adminIdentity.username}
+          />
 
           <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-panel shadow-raised p-4 sm:p-6 space-y-3">
             <h3 className="font-extrabold text-caption text-[var(--appearance-text-muted)] uppercase tracking-widest">

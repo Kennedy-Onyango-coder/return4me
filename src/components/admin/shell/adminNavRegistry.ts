@@ -124,7 +124,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         label: 'Payout Integrity',
         icon: Banknote,
         title: 'Payout Integrity',
-        description: 'Reconcile unresolved payouts and review every hub that cannot be paid.',
+        description: 'Reconcile unresolved payouts, review hubs that cannot be paid, and review agent payout destination changes.',
       },
     ],
   },
