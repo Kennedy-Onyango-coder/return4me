@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { translations } from '../types';
 // REQUEST 09 — the canonical Kenyan county list (all 47, ISO 3166-2:KE
 // spellings) lives in one place: src/config/kenyaCounties.ts.
@@ -181,6 +181,9 @@ export default function FinderView({ categories, categoriesLoading = false, cate
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const ocrRequestRef = useRef(0);
+  const isMountedRef = useRef(true);
+  const categoryManuallySetRef = useRef(false);
 
   /**
    * CAT-11 (Phase 16.1 Batch 1) — is the SELECTED category a sensitive document?
@@ -211,6 +214,18 @@ export default function FinderView({ categories, categoriesLoading = false, cate
     };
   }, []);
 
+  useEffect(() => {
+    categoryManuallySetRef.current = categoryManuallySet;
+  }, [categoryManuallySet]);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      ocrRequestRef.current += 1;
+    };
+  }, []);
+
   // The error banner renders once, right below the page title — but this
   // is a long single-screen form (camera/upload, category, GPS, phone,
   // email, terms, then Submit at the very bottom). On a phone, a
@@ -235,22 +250,9 @@ export default function FinderView({ categories, categoriesLoading = false, cate
   }, [errorMsg]);
 
   // Open the dedicated capture surface. The surface acquires and owns the live
-  // stream; this handler only pre-flights the permission, so a device with no
-  // camera — or a refused permission — is explained on the form itself instead
-  // of inside a full-view modal. The probe track is stopped again immediately:
-  // the form must never hold a second live camera next to the capture surface's
-  // own stream.
-  const startCamera = async () => {
+  // stream and handles permission errors itself.
+  const startCamera = () => {
     setErrorMsg('');
-    setPhotoBase64(null);
-    try {
-      const probe = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-      probe.getTracks().forEach((track) => track.stop());
-    } catch (e) {
-      console.error('Camera access denied:', e);
-      setErrorMsg('Could not access camera. Please use file upload instead.');
-      return;
-    }
     setUseCamera(true);
   };
 
@@ -274,16 +276,8 @@ export default function FinderView({ categories, categoriesLoading = false, cate
         canvas.height = video.videoHeight;
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         const dataUrl = canvas.toDataURL('image/jpeg');
-        setPhotoBase64(dataUrl);
         stopCamera();
-        setCategoryManuallySet(false);
-        
-        // Auto trigger analysis when the selected category is a sensitive
-        // document — CAT-11: the "is it generic?" question is answered by the
-        // live category's own `is_sensitive_document`, never by an id literal.
-        if (isSelectedCategorySensitive()) {
-          analyzePhoto(dataUrl);
-        }
+        handleImageSelected(dataUrl);
       }
     }
   };
@@ -295,14 +289,7 @@ export default function FinderView({ categories, categoriesLoading = false, cate
       const reader = new FileReader();
       reader.onloadend = () => {
         const result = reader.result as string;
-        setPhotoBase64(result);
-        setCategoryManuallySet(false);
-        
-        // Auto trigger analysis when the selected category is a sensitive
-        // document — CAT-11: same single rule as the camera path above.
-        if (isSelectedCategorySensitive()) {
-          analyzePhoto(result);
-        }
+        handleImageSelected(result);
       };
       reader.readAsDataURL(file);
     }
@@ -721,7 +708,7 @@ export default function FinderView({ categories, categoriesLoading = false, cate
                     to assistive tech. */}
                 <p className="block text-sm font-extrabold text-primary-green">{t.capturePhoto} *</p>
             
-                {useCamera ? (<FoundItemCamera open={useCamera} onCapture={setPhotoBase64} onClose={stopCamera} persistedCaptureKey="foundItemPhoto" previewLabel={t.takeSnap} ariaLabel={t.takeSnap} />) : photoBase64 ? (
+                {useCamera ? (<FoundItemCamera open={useCamera} onCapture={handleImageSelected} onClose={stopCamera} persistedCaptureKey="foundItemPhoto" previewLabel={t.takeSnap} ariaLabel={t.takeSnap} />) : photoBase64 ? (
                   <div className="relative rounded-2xl overflow-hidden border border-line-subtle bg-brand-beige aspect-video">
                     <img
                       src={photoBase64}
@@ -753,7 +740,12 @@ export default function FinderView({ categories, categoriesLoading = false, cate
                       </label>
                       <button
                         type="button"
-                        onClick={() => { setPhotoBase64(null); setExtractedName(''); setExtractedNumber(''); }}
+                        onClick={() => {
+                          cancelPendingOcr();
+                          setPhotoBase64(null);
+                          setExtractedNumber('');
+                          setExtractedName('');
+                        }}
                         className="bg-red-50 text-red-600 p-2.5 rounded-full hover:bg-red-100 shadow-md transition"
                         title={'Remove photo'}
                         aria-label={'Remove photo'}

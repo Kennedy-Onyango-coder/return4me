@@ -21,31 +21,21 @@ export const OcrService = {
       return unavailableOcrResult('API key missing or placeholder');
     }
 
-    // Save ambient GCP / ADC environment variables to prevent the Google Auth Library
-    // from fetching metadata server tokens and attaching an unsupported OAuth Bearer header.
-    const savedEnv: Record<string, string | undefined> = {};
-    const envsToClear = [
-      'GOOGLE_APPLICATION_CREDENTIALS',
-      'GOOGLE_GCLOUD_PROJECT',
-      'GOOGLE_CLOUD_PROJECT',
-      'GCP_PROJECT',
-      'GCLOUD_PROJECT',
-      'GCE_METADATA_HOST',
-      'GCP_METADATA_HOST'
-    ];
-
-    for (const key of envsToClear) {
-      savedEnv[key] = process.env[key];
-      delete process.env[key];
+    const imageMimeType = detectSupportedImageMimeType(base64Image);
+    if (!imageMimeType) {
+      console.warn('[OCR SERVICE] Unsupported or unreadable image format. Manual entry required.');
+      return unavailableOcrResult('Unsupported or unreadable image format');
     }
 
-    process.env.GCE_METADATA_HOST = 'none';
-    process.env.GCP_METADATA_HOST = 'none';
+    // No shared process.env mutation: provider clients are configured explicitly
+    // from their API keys. Mutating global environment variables during async
+    // work is not concurrency-safe and can leak state between requests.
 
     try {
       console.log('[OCR SERVICE] Attempting primary OCR provider: Gemini...');
       const ai = new GoogleGenAI({
         apiKey,
+        googleAuthOptions: { apiKey },
         httpOptions: {
           headers: {
             'User-Agent': 'return4me-ocr-service/1.0',
@@ -55,11 +45,12 @@ export const OcrService = {
 
       // Format image part for Gemini API
       // Trim mime-type prefix from base64 if present
-      const cleanBase64 = base64Image.replace(/^data:image\/\w+;base64,/, '');
+      const cleanBase64 = base64Image.replace(/^data:[^,]*;base64,/i, '').replace(/\s/g, '');
+
 
       const imagePart = {
         inlineData: {
-          mimeType: 'image/jpeg',
+          mimeType: imageMimeType,
           data: cleanBase64,
         },
       };
@@ -113,7 +104,7 @@ export const OcrService = {
 
       const data = JSON.parse(responseText.trim());
       
-      console.log('[OCR SERVICE] Gemini extraction successful:', data);
+      console.log('[OCR SERVICE] Gemini extraction completed successfully.');
 
       const isNotPlausibleOrUncertain = data.isPlausibleGenuineItem === 'false' || data.isPlausibleGenuineItem === 'uncertain';
 
@@ -131,8 +122,7 @@ export const OcrService = {
       const hasRealLookingKey = /^(AQ\.[A-Za-z0-9_-]+|AIzaSy[A-Za-z0-9_-]+)$/.test(process.env.GEMINI_API_KEY || '');
 
       console.warn('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
-      console.warn('[OCR SERVICE] NOTE: Gemini API request completed or returned an error.');
-      console.warn(`Details: ${originalMsg}`);
+      console.warn('[OCR SERVICE] Gemini OCR request failed; trying fallback provider.');
 
       if (isPermissionDenied && hasRealLookingKey) {
         // A real-looking key (correct format) still got PERMISSION_DENIED — this is
@@ -176,7 +166,7 @@ export const OcrService = {
 
           let formattedBase64 = base64Image;
           if (!formattedBase64.startsWith('data:')) {
-            formattedBase64 = `data:image/jpeg;base64,${formattedBase64}`;
+            formattedBase64 = `data:${imageMimeType};base64,${formattedBase64}`;
           }
 
           const groqPrompt = `You are an expert OCR vision agent for the Return4me platform in Kenya. Analyze this photo of a lost and found Kenyan document or item. Extract the document type, the unique identification/serial number, the full name of the owner shown, and check the plausibility of the item.
@@ -206,8 +196,7 @@ Respond with ONLY a raw JSON object (no markdown fences, no prose) with exactly 
           });
 
           if (!groqRes.ok) {
-            const errBody = await groqRes.text().catch(() => '');
-            throw new Error(`Groq Vision API HTTP error! Status: ${groqRes.status}. ${errBody}`);
+            throw new Error(`Groq Vision API HTTP error! Status: ${groqRes.status}.`);
           }
 
           const groqData = await groqRes.json() as any;
@@ -217,7 +206,7 @@ Respond with ONLY a raw JSON object (no markdown fences, no prose) with exactly 
           }
 
           const parsed = JSON.parse(groqContent.trim());
-          console.log('[OCR SERVICE] Groq Vision extraction successful:', parsed);
+          console.log('[OCR SERVICE] Groq Vision extraction completed successfully.');
 
           const isNotPlausibleOrUncertainGroq = parsed.isPlausibleGenuineItem === 'false' || parsed.isPlausibleGenuineItem === 'uncertain';
 
@@ -229,25 +218,16 @@ Respond with ONLY a raw JSON object (no markdown fences, no prose) with exactly 
             flaggedForReview: (typeof parsed.confidence === 'number' ? parsed.confidence : 0) < 0.7 || !parsed.documentNumber || !parsed.fullName || isNotPlausibleOrUncertainGroq,
           };
 
-        } catch (groqErr: any) {
-          console.error('[OCR SERVICE] Groq Vision API call failed!');
-          console.error(`Error Details: ${groqErr?.message || groqErr}`);
+        } catch {
+          console.error('[OCR SERVICE] Groq Vision API call failed.');
+
         }
       } else {
         console.log('[OCR SERVICE] Groq Vision secondary provider not configured (GROQ_API_KEY is missing).');
       }
 
       console.warn('[OCR SERVICE] All configured OCR providers failed or were unavailable. Falling back to local heuristic mock OCR.');
-      return unavailableOcrResult(e?.message || String(e));
-    } finally {
-      // Restore original environment variables to preserve the state of other subsystems
-      for (const key of envsToClear) {
-        if (savedEnv[key] !== undefined) {
-          process.env[key] = savedEnv[key];
-        } else {
-          delete process.env[key];
-        }
-      }
+      return unavailableOcrResult();
     }
   },
 };
@@ -260,7 +240,7 @@ function unavailableOcrResult(errorMsg?: string): OcrResult {
   // it were genuinely read from their photo. A finder who doesn't scrutinize
   // every field before submitting could otherwise attach a fictional
   // stranger's identity to a real found-item report.
-  console.log('[OCR SERVICE] No OCR provider available. Returning empty fields for manual entry.', errorMsg ? `(${errorMsg})` : '');
+  console.log('[OCR SERVICE] No OCR provider available. Returning empty fields for manual entry.');
 
   return {
     documentType: 'national-id',
@@ -270,3 +250,78 @@ function unavailableOcrResult(errorMsg?: string): OcrResult {
     flaggedForReview: true, // Prompts manual edit in frontend
   };
 }
+export const SUPPORTED_OCR_IMAGE_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
+
+export function detectSupportedImageMimeType(base64Image: unknown): string | null {
+  if (typeof base64Image !== 'string' || !base64Image.trim()) return null;
+  const value = base64Image.trim();
+
+  // Data URIs must declare a supported MIME type and the payload must actually
+  // carry the matching image signature. A declared MIME that disagrees with the
+  // bytes is rejected instead of being forwarded to an OCR provider.
+  const dataUriMatch = value.match(/^data:(image\/[a-zA-Z0-9.+-]+);[^,]*base64,([\s\S]*)$/i);
+  if (dataUriMatch) {
+    const declaredMime = dataUriMatch[1].toLowerCase();
+    if (!(SUPPORTED_OCR_IMAGE_MIME_TYPES as readonly string[]).includes(declaredMime)) {
+      return null;
+    }
+
+    const payload = dataUriMatch[2].replace(/\s/g, '');
+    const bytes = decodeBase64Prefix(payload);
+    if (!bytes || bytes.length < 4) return null;
+
+    const detectedMime = detectImageSignature(bytes);
+    return detectedMime === declaredMime ? declaredMime : null;
+  }
+
+  // Raw base64 has no declared MIME, so only the file signature can establish it.
+  const payload = value.replace(/\s/g, '');
+  if (!payload || !/^[A-Za-z0-9+\/]+=*$/.test(payload) || payload.length % 4 !== 0) {
+    return null;
+  }
+
+  let bytes: Buffer;
+  try {
+    bytes = Buffer.from(payload.slice(0, 44), 'base64');
+  } catch {
+    return null;
+  }
+  if (bytes.length < 4) return null;
+
+  return detectImageSignature(bytes);
+}
+
+function detectImageSignature(bytes: Buffer): string | null {
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 &&
+    bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a
+  ) {
+    return 'image/png';
+  }
+  if (
+    bytes.length >= 12 &&
+    bytes.toString('ascii', 0, 4) === 'RIFF' &&
+    bytes.toString('ascii', 8, 12) === 'WEBP'
+  ) {
+    return 'image/webp';
+  }
+  return null;
+}
+
+function decodeBase64Prefix(payload: string): Buffer | null {
+  if (!payload || !/^[A-Za-z0-9+\/]+=*$/.test(payload) || payload.length % 4 !== 0) {
+    return null;
+  }
+  try {
+    return Buffer.from(payload.slice(0, 44), 'base64');
+  } catch {
+    return null;
+  }
+}
+
+export const parseImageMimeType = detectSupportedImageMimeType;
+export const getImageMimeType = detectSupportedImageMimeType;
