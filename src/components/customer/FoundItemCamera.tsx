@@ -275,6 +275,15 @@ export default function FoundItemCamera({
     setFacingMode((mode) => (mode === 'environment' ? 'user' : 'environment'));
   };
 
+  useEffect(() => {
+    if (!open || typeof document === 'undefined') return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [open]);
+
   if (!open) return null;
 
   return (

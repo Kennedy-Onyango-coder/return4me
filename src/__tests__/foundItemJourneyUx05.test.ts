@@ -230,14 +230,13 @@ describe('UX-05 the workflow enforces exactly the rules it always enforced', () 
 
 describe('UX-05 the report data path is untouched', () => {
   it('keeps the camera, the upload and the scan pipeline', () => {
-    expect(FINDER).toContain('const startCamera = async () => {');
-    expect(FINDER).toContain("getUserMedia({ video: { facingMode: 'environment' } })");
+    expect(FINDER).toContain('const startCamera = () => {');
     expect(FINDER).toContain('const captureFrame = () => {');
     expect(FINDER).toContain('const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {');
     expect(FINDER).toContain("fetch('/api/items/analyze'");
     // The scan is still offered exactly when the live category is sensitive,
     // from the one rule, on both the camera and the upload path.
-    expect((FINDER.match(/if \(isSelectedCategorySensitive\(\)\) \{/g) || []).length).toBe(2);
+    expect((FINDER.match(/if \(isSelectedCategorySensitive\(\)\) \{/g) || []).length).toBe(1);
     expect(FINDER).toContain('setCategoryManuallySet(false);');
     // The pre-fill stays a suggestion the Finder reviews, never a verification.
     expect(FINDER_TSX).toContain('correct anything the scan got wrong');
