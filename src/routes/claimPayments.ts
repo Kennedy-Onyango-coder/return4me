@@ -374,13 +374,26 @@ export function registerClaimPaymentRoutes(
       }
     });
 
-    app.get('/api/claims/:id/payment-session/:sessionId/status', paymentSessionStatusLimiter, async (req, res) => {
+    app.get('/api/claims/:id/payment-session/:sessionId/status', requireCustomerAuth, paymentSessionStatusLimiter, async (req, res) => {
       const claimId = req.params.id;
       const sessionId = req.params.sessionId;
       try {
+        // Resolve claim from the authenticated customer, not from the client-supplied claim ID.
+        // The claim is looked up by ID, but ownership is verified via the customer's phone
+        // matching the claim's owner_phone. This ensures only the rightful claim owner,
+        // linked customer, or admin can read the session status.
         let claim = await db.getClaim(claimId);
         if (!claim) {
           return res.status(404).json({ error: 'Claim haikupatikana.' });
+        }
+        // Ownership guard: the authenticated customer must be the claim owner (phone match),
+        // a linked customer (phone match), or an admin. This check occurs before any status
+        // access or reconciliation to prevent unauthorized read access.
+        const customerPhone = toE164Kenyan(String(req.customer.phone || '').replace(/\\s+/g, ''));
+        const claimOwnerPhone = toE164Kenyan(String(claim.owner_phone || '').replace(/\\s+/g, ''));
+        const isAdmin = req.customer.role === 'admin';
+        if (!isAdmin && customerPhone !== claimOwnerPhone) {
+          return res.status(403).json({ error: 'You are not authorized to view the status of this payment session.' });
         }
         claim = await checkClaimExpiry(claim);
 
@@ -720,12 +733,21 @@ export function registerClaimPaymentRoutes(
       }
     });
 
-    app.get('/api/claims/:id/status', claimStatusPollLimiter, async (req, res) => {
+    app.get('/api/claims/:id/status', requireCustomerAuth, claimStatusPollLimiter, async (req, res) => {
       const claimId = req.params.id;
       try {
         let claim = await db.getClaim(claimId);
         if (!claim) {
           return res.status(404).json({ error: 'Claim haikupatikana.' });
+        }
+        // Ownership guard: the authenticated customer must be the claim owner (phone match),
+        // or an admin. This check occurs before any claim status return to prevent unauthorized
+        // read access to another customer's claim.
+        const customerPhone = toE164Kenyan(String(req.customer.phone || '').replace(/\\s+/g, ''));
+        const claimOwnerPhone = toE164Kenyan(String(claim.owner_phone || '').replace(/\\s+/g, ''));
+        const isAdmin = req.customer.role === 'admin';
+        if (!isAdmin && customerPhone !== claimOwnerPhone) {
+          return res.status(403).json({ error: 'You are not authorized to view the status of this claim.' });
         }
         claim = await checkClaimExpiry(claim);
         if (!claim) {
