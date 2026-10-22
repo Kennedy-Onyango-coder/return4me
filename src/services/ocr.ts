@@ -266,7 +266,7 @@ export function detectSupportedImageMimeType(base64Image: unknown): string | nul
       return null;
     }
 
-    const payload = dataUriMatch[2].replace(/\s/g, '');
+    const payload = dataUriMatch[2].replace(/[\s]+/g, '');
     const bytes = decodeBase64Prefix(payload);
     if (!bytes || bytes.length < 4) return null;
 
