@@ -2,7 +2,7 @@ import React from 'react';
 import { AlertCircle, CheckCircle2, Clock, Info, AlertTriangle, LucideIcon } from 'lucide-react';
 import { ICON_SIZE } from './iconSize';
 
-export type BadgeVariant = 'success' | 'warning' | 'pending' | 'danger' | 'info' | 'neutral' | 'code';
+export type BadgeVariant = 'success' | 'warning' | 'pending' | 'danger' | 'info' | 'neutral' | 'code' | 'status';
 
 interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
   variant?: BadgeVariant;
