@@ -34,7 +34,7 @@ export const Tabs = ({
   defaultIndex = 0,
 }: {
   children: React.ReactNode;
-  className?: number | string;
+  className?: string;
   defaultIndex?: number;
 }) => {
   // children structure: [TabHeader, ...TabPanels] or nested Tabs.Tab/TabPanel
@@ -61,7 +61,7 @@ export const Tabs = ({
                 onClick={() => setActiveIndex(i)}
                 role="tab"
                 aria-controls={`tab-panel-${i}`}
-                aria-selected="${isActive}"
+                aria-selected={isActive}
                 tabIndex={isActive ? 0 : -1}
                 onFocus={() => setActiveIndex(i)}
               >

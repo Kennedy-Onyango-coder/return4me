@@ -2922,7 +2922,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
   // to open the section holding the rows behind it. Cards are only rendered when
   // the dashboard data is available and the count indicates something the operator
   // should look at.
-  const overviewCards: JSX.Element[] = [];
+  const overviewCards: React.Element[] = [];
 
   if (dashboardData) {
     // Pending settlements — if there are claims waiting for approval, they need attention.
@@ -2931,7 +2931,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
         <OverviewQueueCard
           key={`pending-settlements-${dashboardData.pendingSettlements.length}`}
           label={"Pending Settlements"}
-          count={formatMetricCount(dashboardData.pendingSettlements.length)}
+          count={formatMetricCount(dashboardData.pendingSettlements.length).text}
           description={
           dashboardData.pendingSettlements.length === 1
             ? '1 claim awaiting settlement approval'
@@ -2949,7 +2949,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
         <OverviewQueueCard
           key={`open-disputes-${dashboardData.disputes.length}`}
           label={"Open Disputes"}
-          count={formatMetricCount(dashboardData.disputes.length)}
+          count={formatMetricCount(dashboardData.disputes.length).text}
           description={
           dashboardData.disputes.length === 1
             ? '1 dispute requiring review'
@@ -2967,7 +2967,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
         <OverviewQueueCard
           key={`payment-strikes-${dashboardData.paymentStrikes.length}`}
           label={"Payment Strikes"}
-          count={formatMetricCount(dashboardData.paymentStrikes.length)}
+          count={formatMetricCount(dashboardData.paymentStrikes.length).text}
           description={
           dashboardData.paymentStrikes.length === 1
             ? '1 payment strike requiring resolution'
@@ -2992,7 +2992,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
         <OverviewQueueCard
           key={`unresolved-payouts-${unresolvedCount}`}
           label={"Unresolved Payouts"}
-          count={formatMetricCount(unresolvedCount)}
+          count={formatMetricCount(unresolvedCount).text}
           description={
           unresolvedCount === 1
             ? '1 unresolved payout'
