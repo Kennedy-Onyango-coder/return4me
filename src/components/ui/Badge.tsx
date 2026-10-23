@@ -2,7 +2,7 @@ import React from 'react';
 import { AlertCircle, CheckCircle2, Clock, Info, AlertTriangle, LucideIcon } from 'lucide-react';
 import { ICON_SIZE } from './iconSize';
 
-export type BadgeVariant = 'success' | 'warning' | 'pending' | 'danger' | 'info' | 'neutral' | 'code';
+export type BadgeVariant = 'success' | 'warning' | 'pending' | 'danger' | 'info' | 'neutral' | 'code' | 'status';
 
 interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
   variant?: BadgeVariant;
@@ -26,6 +26,7 @@ const variantClasses: Record<BadgeVariant, string> = {
   info: 'bg-[var(--appearance-surface-muted)] text-[var(--appearance-text-secondary)] border-[var(--appearance-border-strong)]',
   neutral: 'bg-[var(--appearance-surface-muted)] text-[var(--appearance-text-primary)] border-[var(--appearance-border)]',
   code: 'bg-[var(--appearance-surface-muted)] text-[var(--appearance-text-primary)] border-[var(--appearance-border)] font-mono tracking-wide',
+  status: 'bg-[var(--appearance-surface-muted)] text-[var(--appearance-text-primary)] border-[var(--appearance-border)]',
 };
 
 // Status variants always include their semantic icon so meaning is never

@@ -263,6 +263,13 @@ export default function App() {
         // AdminView still renders its own passcode + 2FA gate when there is no
         // token, and every /api/admin route still enforces its own explicit
         // role check server-side (see adminRouteAudit.test.ts).
+        //
+        // ROLE GUARD: if /console is accessed without an admin token, redirect
+        // to sign-in so the protected dashboard cannot become publicly accessible.
+        if (!adminToken) {
+          navigate('/sign-in', 'signin');
+          return;
+        }
         setView('admin');
         setCustomerMode(false);
         return;

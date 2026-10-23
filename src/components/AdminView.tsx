@@ -2916,6 +2916,95 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
   // already existed and remain the only thing that gates the two network calls.
   const isAuthBusy = pendingTwoFactorToken ? twoFactorLoading : authLoading;
 
+  // B4 — "NEEDS ATTENTION" OVERVIEW QUEUE CARDS
+  //
+  // Each card shows an actionable metric with a count, description, and button
+  // to open the section holding the rows behind it. Cards are only rendered when
+  // the dashboard data is available and the count indicates something the operator
+  // should look at.
+  const overviewCards: React.Element[] = [];
+
+  if (dashboardData) {
+    // Pending settlements — if there are claims waiting for approval, they need attention.
+    if (dashboardData.pendingSettlements && dashboardData.pendingSettlements.length > 0) {
+      overviewCards.push(
+        <OverviewQueueCard
+          key={`pending-settlements-${dashboardData.pendingSettlements.length}`}
+          label={"Pending Settlements"}
+          count={formatMetricCount(dashboardData.pendingSettlements.length).text}
+          description={
+          dashboardData.pendingSettlements.length === 1
+            ? '1 claim awaiting settlement approval'
+            : `${dashboardData.pendingSettlements.length} claims awaiting settlement approval`
+        }
+          actionLabel={"View Settlements"}
+          onOpen={() => setActiveTab('ledger')}
+        />
+      );
+    }
+
+    // Open disputes — if there are unresolved disputes, the operator should review them.
+    if (dashboardData.disputes && dashboardData.disputes.length > 0) {
+      overviewCards.push(
+        <OverviewQueueCard
+          key={`open-disputes-${dashboardData.disputes.length}`}
+          label={"Open Disputes"}
+          count={formatMetricCount(dashboardData.disputes.length).text}
+          description={
+          dashboardData.disputes.length === 1
+            ? '1 dispute requiring review'
+            : `${dashboardData.disputes.length} disputes requiring review`
+        }
+          actionLabel={"View Disputes"}
+          onOpen={() => setActiveTab('review')}
+        />
+      );
+    }
+
+    // Payment strikes — if there are payment strikes, they need operator attention.
+    if (dashboardData.paymentStrikes && dashboardData.paymentStrikes.length > 0) {
+      overviewCards.push(
+        <OverviewQueueCard
+          key={`payment-strikes-${dashboardData.paymentStrikes.length}`}
+          label={"Payment Strikes"}
+          count={formatMetricCount(dashboardData.paymentStrikes.length).text}
+          description={
+          dashboardData.paymentStrikes.length === 1
+            ? '1 payment strike requiring resolution'
+            : `${dashboardData.paymentStrikes.length} payment strikes requiring resolution`
+        }
+          actionLabel={"View Strikes"}
+          onOpen={() => setActiveTab('strikes')}
+        />
+      );
+    }
+
+    // Unresolved payouts — if there are payouts needing reconciliation.
+    if (
+      dashboardData.agents &&
+      dashboardData.agents.length > 0 &&
+      dashboardData.agents.some((a: any) => a.payoutStatus === 'unresolved')
+    ) {
+      const unresolvedCount = dashboardData.agents.filter(
+        (a: any) => a.payoutStatus === 'unresolved'
+      ).length;
+      overviewCards.push(
+        <OverviewQueueCard
+          key={`unresolved-payouts-${unresolvedCount}`}
+          label={"Unresolved Payouts"}
+          count={formatMetricCount(unresolvedCount).text}
+          description={
+          unresolvedCount === 1
+            ? '1 unresolved payout'
+            : `${unresolvedCount} unresolved payouts`
+        }
+          actionLabel={"View Payouts"}
+          onOpen={() => setActiveTab('payouts')}
+        />
+      );
+    }
+  }
+
   return (
     <div className="w-full fade-in">
       
@@ -3540,6 +3629,9 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                     {'Work waiting on an administrator right now. Each figure opens the section that holds the rows behind it.'}
                   </p>
                 </div>
+
+                {/* B4 -- "NEEDS ATTENTION" OVERVIEW QUEUE CARDS */}
+                {overviewCards}
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
                   <OverviewQueueCard

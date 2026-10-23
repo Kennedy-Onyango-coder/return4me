@@ -70,6 +70,32 @@
   --color-status-info-surface: #F0F9FF;
   --color-status-info-border: #E0F2FE;
 
+/* STATUS PILL BACKGROUNDS — used by Badge variant 'status-*' and status-aware UI
+     These preserve the hue from the contrast-audited accent steps so buttons/
+     badges using these as backgrounds remain readable per AA 4.8:1 rules. */
+  --color-status-pill-success: #D1F2EB;      /* green-100 tint: AA on green-700 text */
+  --color-status-pill-warning: #FFF3CD;      /* amber-50 tint: AA on amber-700 text */
+  --color-status-pill-danger: #FEE2E2;       /* red-50 tint: AA on red-700 text */
+  --color-status-pill-info: #E0F7FA;       /* sky-100 tint: AA on sky-700 text */
+
+/* Status pill border + text utilities */
+  .r4m-status-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.25em 0.5em;
+    font-size: var(--r4m-text-caption);
+    font-weight: var(--r4m-font-body);
+    border-radius: var(--r4m-rounded-standard);
+  }
+  .r4m-status-pill .r4m-text-body,
+  .r4m-status-pill .r4m-text-muted {
+    color: var(--color-brand-dark-text);
+  }
+  .r4m-status-pill.success { background: var(--color-status-pill-success); color: var(--color-status-success); }
+  .r4m-status-pill.warning { background: var(--color-status-pill-warning); color: var(--color-status-warning); }
+  .r4m-status-pill.danger { background: var(--color-status-pill-danger); color: var(--color-status-danger); }
+  .r4m-status-pill.info { background: var(--color-status-pill-info); color: var(--color-status-info); }
+
   /* RETURN4ME TYPOGRAPHY SCALE (UX-01 — the authoritative, locked ladder).
      The UI audit measured 216 arbitrary `text-[Npx]` declarations across the
      views (7px–13px) with no shared scale, so type hierarchy was improvised per
