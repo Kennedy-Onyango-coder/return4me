@@ -2922,7 +2922,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
   // to open the section holding the rows behind it. Cards are only rendered when
   // the dashboard data is available and the count indicates something the operator
   // should look at.
-  const overviewCards: React.Element[] = [];
+  const overviewCards: React.JSX.Element[] = [];
 
   if (dashboardData) {
     // Pending settlements — if there are claims waiting for approval, they need attention.

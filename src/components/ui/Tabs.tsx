@@ -1,115 +1,178 @@
+
 import React from 'react';
+
+interface TabHeaderProps {
+  label: string;
+  className?: string;
+}
 
 interface TabPanelProps {
   children: React.ReactNode;
   className?: string;
 }
 
-interface TabHeaderProps {
+interface TabsProps {
   children: React.ReactNode;
   className?: string;
   defaultIndex?: number;
+  onChange?: (index: number) => void;
 }
 
 /**
- * Shared Return4me tab navigation — horizontal tab bar with associated
- * tab panels. Panels are shown/hidden based on the active tab index.
- * Accessible: keyboard-navitable (arrow keys), focus-visible outline,
- * role="tablist" with role="tab" on each button.
- *
- * Usage:
- *   const [activeTab, setActiveTab] = useState(0);
- *   return (
- *     <Tabs defaultIndex={0} onChange={setActiveTab}>
- *       <Tabs.Tab label="Overview" />
- *       <Tabs.Tab label="Details" />
- *       <Tabs.Panel>...</Tabs.Panel>
- *       <Tabs.Panel>...</Tabs.Panel>
- *     </Tabs>
- *   );
+ * Marker components: Tabs consumes these elements and renders the
+ * corresponding tab buttons and panels itself.
  */
-export const Tabs = ({
+const Tab = (_props: TabHeaderProps): null => null;
+Tab.displayName = 'Tabs.Tab';
+
+const Panel = (_props: TabPanelProps): null => null;
+Panel.displayName = 'Tabs.Panel';
+
+const TabsRoot = ({
   children,
   className = '',
   defaultIndex = 0,
-}: {
-  children: React.ReactNode;
-  className?: string;
-  defaultIndex?: number;
-}) => {
-  // children structure: [TabHeader, ...TabPanels] or nested Tabs.Tab/TabPanel
-  // Simplified: expect <Tabs><Tabs.Tab label="..." />…<Tabs.Panel>…</Tabs.Panel></Tabs>
-  const [activeIndex, setActiveIndex] = React.useState(defaultIndex);
+  onChange,
+}: TabsProps) => {
+  const childArray = React.Children.toArray(children);
+
+  const tabs = childArray.filter(
+    (child): child is React.ReactElement<TabHeaderProps> =>
+      React.isValidElement<TabHeaderProps>(child) && child.type === Tab,
+  );
+
+  const panels = childArray.filter(
+    (child): child is React.ReactElement<TabPanelProps> =>
+      React.isValidElement<TabPanelProps>(child) && child.type === Panel,
+  );
+
+  const initialIndex =
+    tabs.length > 0
+      ? Math.min(Math.max(0, defaultIndex), tabs.length - 1)
+      : 0;
+
+  const [activeIndex, setActiveIndex] = React.useState(initialIndex);
+  const tabRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
+
+  const activateTab = (index: number) => {
+    if (index < 0 || index >= tabs.length) {
+      return;
+    }
+
+    if (activeIndex !== index) {
+      setActiveIndex(index);
+      onChange?.(index);
+    }
+  };
+
+  const handleKeyDown = (
+    event: React.KeyboardEvent<HTMLButtonElement>,
+    index: number,
+  ) => {
+    if (tabs.length === 0) {
+      return;
+    }
+
+    let nextIndex: number;
+
+    switch (event.key) {
+      case 'ArrowRight':
+        nextIndex = (index + 1) % tabs.length;
+        break;
+      case 'ArrowLeft':
+        nextIndex = (index - 1 + tabs.length) % tabs.length;
+        break;
+      case 'Home':
+        nextIndex = 0;
+        break;
+      case 'End':
+        nextIndex = tabs.length - 1;
+        break;
+      default:
+        return;
+    }
+
+    event.preventDefault();
+    tabRefs.current[nextIndex]?.focus();
+  };
 
   return (
     <div className={className}>
-      {/* Tab header bar */}
-      <div className="inline-flex border-b border-[var(--appearance-border)] select-none">
-        {React.Children.toArray(React.Children.filter(children, (c) => c.type && c.type.displayName === 'Tab')).map(
-          (tab, i) => {
-            const isActive = activeIndex === i;
-            return (
-              <button
-                key={i}
-                className={`
-                  inline-flex items-center rounded-none rounded-small pr-1
-                  text-[var(--appearance-text-muted)] transition-colors focus-visible:outline-none
-                  focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)] focus-visible:ring-offset-2
-                  ${isActive ? 'text-[var(--appearance-text-primary)] border-primary-green/40' : 'text-[var(--appearance-text-muted)]'}
-                  data-state="${isActive ? 'active' : 'inactive'}"
-                `}
-                onClick={() => setActiveIndex(i)}
-                role="tab"
-                aria-controls={`tab-panel-${i}`}
-                aria-selected={isActive}
-                tabIndex={isActive ? 0 : -1}
-                onFocus={() => setActiveIndex(i)}
-              >
-                {tab.props.label}
-              </button>
-            );
-          }
-        )}
+      <div
+        className="inline-flex border-b border-[var(--appearance-border)] select-none"
+        role="tablist"
+        aria-label="Tabs"
+      >
+        {tabs.map((tab: React.ReactElement<TabHeaderProps>, index: number) => {
+          const isActive = activeIndex === index;
+
+          return (
+            <button
+              key={index}
+              ref={(element) => {
+                tabRefs.current[index] = element;
+              }}
+              id={`tab-header-${index}`}
+              type="button"
+              className={`
+                inline-flex items-center rounded-none rounded-small pr-1
+                transition-colors focus-visible:outline-none
+                focus-visible:ring-2 focus-visible:ring-[var(--appearance-focus)]
+                focus-visible:ring-offset-2
+                ${
+                  isActive
+                    ? 'text-[var(--appearance-text-primary)] border-primary-green/40'
+                    : 'text-[var(--appearance-text-muted)]'
+                }
+                ${tab.props.className ?? ''}
+              `}
+              data-state={isActive ? 'active' : 'inactive'}
+              role="tab"
+              aria-controls={`tab-panel-${index}`}
+              aria-selected={isActive}
+              tabIndex={isActive ? 0 : -1}
+              onClick={() => activateTab(index)}
+              onFocus={() => activateTab(index)}
+              onKeyDown={(event) => handleKeyDown(event, index)}
+            >
+              {tab.props.label}
+            </button>
+          );
+        })}
       </div>
 
-      {/* Tab panels */}
       <div className="mt-4 space-y-2">
-        {React.Children.toArray(React.Children.filter(children, (c) => c.type && c.type.displayName === 'Panel')).map(
-          (panel, i) => {
-            const isActive = activeIndex === i;
-            return (
-              <div
-                key={i}
-                className={`
-                  hidden ${isActive ? 'block' : 'hidden'}
-                  r4m-scroll-x
-                  bg-[var(--appearance-surface-muted)] border border-[var(--appearance-border)]
-                  rounded-panel p-4
-                `}
-                aria-labelledby={`tab-header-${i}`}
-                role="tabpanel"
-                aria-label={isActive ? '' : 'hidden'}
-              >
-                {panel.props.children}
-              </div>
-            );
-          }
-        )}
+        {panels.map((panel: React.ReactElement<TabPanelProps>, index: number) => {
+          const isActive = activeIndex === index;
+
+          return (
+            <div
+              key={index}
+              id={`tab-panel-${index}`}
+              className={`
+                ${isActive ? 'block' : 'hidden'}
+                r4m-scroll-x
+                bg-[var(--appearance-surface-muted)]
+                border border-[var(--appearance-border)]
+                rounded-panel p-4
+                ${panel.props.className ?? ''}
+              `}
+              role="tabpanel"
+              aria-labelledby={`tab-header-${index}`}
+              hidden={!isActive}
+            >
+              {panel.props.children}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 };
 
-Tabs.Tab = ({ label }: { label: string }) => ({
-  type: 'Tab' as const,
-  props: { label },
-  displayName: 'Tabs.Tab',
-});
-
-Tabs.Panel = ({ children }: { children: React.ReactNode }) => ({
-  type: 'Panel' as const,
-  props: { children },
-  displayName: 'Tabs.Panel',
+export const Tabs = Object.assign(TabsRoot, {
+  Tab,
+  Panel,
 });
 
 export default Tabs;

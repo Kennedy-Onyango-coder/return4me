@@ -162,6 +162,28 @@ export default function FinderView({ categories, categoriesLoading = false, cate
   const [gpsMessage, setGpsMessage] = useState('');
   const [finderPhone, setFinderPhone] = useState('');
   const [finderEmail, setFinderEmail] = useState('');
+
+// Handle image selected from camera or upload: sets the photo preview and
+// resets OCR extraction state so a new capture triggers a fresh analysis.
+  const handleImageSelected = (dataUrl: string) => {
+    setPhotoBase64(dataUrl);
+    setExtractedNumber('');
+    setExtractedName('');
+    setIsAnalyzing(false);
+    setAnalysisStatus('');
+    setErrorMsg('');
+  };
+
+// Cancel any pending OCR request and reset the photo preview and extracted data.
+  const cancelPendingOcr = () => {
+    ocrRequestRef.current += 1; // increment cancel token
+    setPhotoBase64(null);
+    setExtractedNumber('');
+    setExtractedName('');
+    setIsAnalyzing(false);
+    setAnalysisStatus('');
+    setErrorMsg('');
+  };;
   // REQUEST 10 — the "Estimated Replacement Value, KES (Optional)" field was
   // REMOVED from this form. It fed declared_value, which the fee engine used
   // only as an optional CEILING on the recovery fee. With it gone the server
@@ -303,6 +325,9 @@ export default function FinderView({ categories, categoriesLoading = false, cate
     setAnalysisStatus('Return4me is preparing to scan your item...');
     setErrorMsg('');
 
+    // Increment cancel token so a cancelled/pending OCR request won't overwrite our results
+    const currentToken = ocrRequestRef.current + 1;
+
     try {
       // Simulate real-time progress steps for a gorgeous UX
       setTimeout(() => setAnalysisStatus('Reading document layout...'), 800);
@@ -319,12 +344,15 @@ export default function FinderView({ categories, categoriesLoading = false, cate
         throw new Error(data.error || 'Item analysis failed');
       }
 
-      // Pre-fill form
-      if (!categoryManuallySet) {
-        setCategoryId(data.documentType || 'national-id');
+      // Only update state if this request is still the latest (not cancelled)
+      if (ocrRequestRef.current === currentToken) {
+        // Pre-fill form
+        if (!categoryManuallySet) {
+          setCategoryId(data.documentType || 'national-id');
+        }
+        setExtractedNumber(data.documentNumber || '');
+        setExtractedName(data.fullName || '');
       }
-      setExtractedNumber(data.documentNumber || '');
-      setExtractedName(data.fullName || '');
     } catch (e: any) {
       console.error(e);
       setErrorMsg('We couldn\'t scan that automatically. Please enter the details manually below.');
