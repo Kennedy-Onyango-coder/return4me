@@ -1128,6 +1128,9 @@ export const payment_sessions = pgTable("payment_sessions", {
 }, (table) => {
   return {
     idx_payment_sessions_claim: index("idx_payment_sessions_claim").on(table.claim_id),
+    uq_payment_sessions_one_active_claim: uniqueIndex("uq_payment_sessions_one_active_claim")
+      .on(table.claim_id)
+      .where(sql`status IN ('pending', 'processing', 'payment_initiated')`),
     uq_payment_sessions_provider_invoice: uniqueIndex("uq_payment_sessions_provider_invoice")
       .on(table.provider_invoice_id)
       .where(sql`provider_invoice_id IS NOT NULL`),

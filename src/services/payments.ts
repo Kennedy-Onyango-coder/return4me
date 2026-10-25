@@ -390,7 +390,7 @@ export const PaymentService = {
     phone: string,
     amount: number,
     claimId: string
-  ): Promise<{ success: boolean; checkoutRequestId: string; mpesaReceiptCode: string; message: string }> {
+  ): Promise<{ success: boolean; checkoutRequestId: string | null; mpesaReceiptCode: string; message: string; ambiguous?: boolean; unresolved?: boolean; outcome?: string }> {
     const formattedPhone = formatMpesaPhone(phone);
     const publishableKey = process.env.INTASEND_PUBLISHABLE_KEY;
     const secretKey = process.env.INTASEND_SECRET_KEY;
@@ -522,6 +522,24 @@ export const PaymentService = {
           describeCollectionGatewayFailure(process.env, response.status, INTASEND_BASE_URL) +
             ` Provider response excerpt: ${errorText.substring(0, 100)}.`,
         );
+        // BATCH 1 (E) — a non-2xx is NOT automatically a definite rejection.
+        // Only an HTTP status that reliably establishes the provider refused the
+        // request (a 4xx that is not one of the ambiguous statuses) may be treated
+        // as a definite rejection. 5xx, redirects, timeouts-as-status-codes and
+        // rate-limit/lock statuses leave the provider's acceptance unknown, so
+        // the outcome is ambiguous and the session stays unresolved.
+        const failureClass = classifyPayoutSubmissionHttpFailure(response.status);
+        if (failureClass === 'ambiguous') {
+          return {
+            success: false,
+            checkoutRequestId: null,
+            mpesaReceiptCode: '',
+            message: `The M-Pesa service response was ambiguous (${response.status}); the payment request may or may not have been sent. Please check the payment status before retrying.`,
+            ambiguous: true,
+            unresolved: true,
+            outcome: 'ambiguous' as const,
+          };
+        }
         return {
           success: false,
           checkoutRequestId: '',
@@ -536,7 +554,12 @@ export const PaymentService = {
       // without live credentials; log only what's actually used.
       console.log('[INTASEND GATEWAY] Response received. Top-level keys:', Object.keys(data || {}), 'invoice_id:', data?.invoice?.invoice_id || '(none)');
 
-      const invoiceId = data.invoice?.invoice_id || 'INV-' + Math.random().toString(36).substring(2, 10).toUpperCase();
+      // B — DO NOT fabricate a provider invoice ID. If the provider response omits
+      // invoice_id, we have no reliable evidence that the STK request was sent or
+      // accepted. Preserve the unresolved outcome and block automatic resubmission.
+      // The caller must handle the missing-invoice-ID case conservatively: treat it
+      // as an unresolved attempt, NOT as a sent prompt.
+      let invoiceId = data.invoice?.invoice_id || null;
 
       // D-2A — THE RECEIPT ROW CARRIES ITS OWN ATTEMPT'S PROVIDER REFERENCE.
       //
@@ -562,16 +585,26 @@ export const PaymentService = {
       return {
         success: true,
         checkoutRequestId: invoiceId,
-        mpesaReceiptCode: invoiceId,
+        mpesaReceiptCode: invoiceId || '',
         message: `A payment request for KES ${amount} was sent to your phone (${phone}). Enter your M-Pesa PIN when prompted to complete the payment.`,
+        ...(invoiceId ? {} : { ambiguous: true, unresolved: true, outcome: 'ambiguous' as const }),
       };
     } catch (error: any) {
-      console.warn('[INTASEND GATEWAY] STK Push failed with exception:', error.message);
+      // Transport failure (timeout, DNS, connection reset, TLS, unreadable
+      // body): we genuinely do not know whether IntaSend received and
+      // accepted the STK request. Treating this as a definite failure would
+      // mark the session failed while a prompt may already be on the
+      // claimant's phone, and a later retry could double-charge. Leave the
+      // session unresolved (pending, no invoice id) for reconciliation/expiry.
+      console.warn('[INTASEND GATEWAY] STK Push failed with exception:', error?.message);
       return {
         success: false,
-        checkoutRequestId: '',
+        checkoutRequestId: null,
         mpesaReceiptCode: '',
-        message: `A network error occurred while sending the payment request: ${error.message}. Please try again.`,
+        message: `A network error occurred while sending the payment request; the outcome could not be verified. Please check the payment status before retrying.`,
+        ambiguous: true,
+        unresolved: true,
+        outcome: 'ambiguous' as const,
       };
     }
   },

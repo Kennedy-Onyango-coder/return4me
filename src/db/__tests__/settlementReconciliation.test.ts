@@ -737,7 +737,7 @@ describe('D-2A — receipt-ledger integrity', () => {
     const { claimId, itemId } = await makePayableClaim('DUP-FAIL');
     const row = await bookAttempt(claimId, itemId, 'INV-DUP-FAIL');
     const sessionId = await makeSession(claimId, 'DUPFAIL');
-    expect(await db.reservePaymentSession(sessionId)).toBe(true);
+    expect(await db.reservePaymentSession(sessionId, claimId)).toBe(true);
     expect(await db.finalizePaymentSessionInitiated(sessionId, 'INV-DUP-FAIL', 'REF-DUP-FAIL')).toBe(true);
 
     // The provider reports a failure — twice (a redelivery).
@@ -834,7 +834,7 @@ describe('D-2A — receipt-ledger integrity', () => {
     // short window elapsed. Simulating a LATER attempt must never resolve it.
     const superseded = await bookAttempt(claimId, itemId, 'INV-SIM-OLDSESSION');
     const oldSession = await makeSession(claimId, 'A-OLDSESSION');
-    expect(await db.reservePaymentSession(oldSession)).toBe(true);
+    expect(await db.reservePaymentSession(oldSession, claimId)).toBe(true);
     expect(await db.finalizePaymentSessionInitiated(oldSession, 'INV-SIM-OLDSESSION', 'MPX-OLD')).toBe(true);
     expect(await db.expirePaymentSession(oldSession)).toBe(true);
 
@@ -844,7 +844,7 @@ describe('D-2A — receipt-ledger integrity', () => {
     // both rows were created inside the same millisecond.
     const current = await bookAttempt(claimId, itemId, 'INV-SIM-NEWSESSION');
     const newSession = await makeSession(claimId, 'B-NEWSESSION');
-    expect(await db.reservePaymentSession(newSession)).toBe(true);
+    expect(await db.reservePaymentSession(newSession, claimId)).toBe(true);
     expect(await db.finalizePaymentSessionInitiated(newSession, 'INV-SIM-NEWSESSION', 'MPX-NEW')).toBe(true);
 
     /** Exactly what the simulator resolves before it confirms anything. */

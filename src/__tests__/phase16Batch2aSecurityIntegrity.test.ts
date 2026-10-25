@@ -253,7 +253,7 @@ describe('POST /api/claims/:id/payment-session/:sessionId/initiate authorizes be
   it('keeps its session-isolation, expiry and CAS guarantees', () => {
     expect(initiate).toMatch(/session\.claim_id !== claimId/);
     expect(initiate).toMatch(/session\.expires_at/);
-    expect(initiate).toMatch(/reservePaymentSession\(sessionId\)/);
+    expect(initiate).toMatch(/reservePaymentSession\(sessionId/);
   });
 });
 

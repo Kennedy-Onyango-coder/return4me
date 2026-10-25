@@ -277,6 +277,13 @@ import { registerClaimPaymentRoutes } from './routes/claimPayments';
 // sendServerError are INJECTED, not moved or duplicated: the payment-confirmation
 // logic is shared with the dev-only simulator below and must stay a single
 // implementation.
+// COLLECTION FAILURE RECONCILIATION. The webhook route delegates every
+// non-COMPLETE collection event here; THIS file supplies the real payment
+// session store, the authoritative provider lookup, the ONE canonical
+// confirmation function and the audit sink. The route therefore keeps no
+// financial logic of its own, and the decision table is unit-testable without a
+// database or a network (see services/collectionFailureReconciliation.ts).
+import { reconcileCollectionFailureEvent as reconcileCollectionFailure } from './services/collectionFailureReconciliation';
 import { registerWebhookRoutes } from './routes/webhooks';
 // P2-A3.4A: the four Agent physical item-handling routes were extracted verbatim
 // into routes/agentOps.ts so they can be mounted for real HTTP integration
@@ -3840,6 +3847,39 @@ async function createApp() {
     // the provider authoritatively reports as done AND that matches exactly one
     // local ledger row. It never finalises a settlement and never resubmits.
     reconcilePayoutBatchStatus,
+    // NON-COMPLETE COLLECTION EVENTS (see services/collectionFailureReconciliation.ts).
+    //
+    // A FAILED/CANCELLED callback is a TERMINAL provider verdict, and it used to
+    // be dropped on the floor: the session stayed `pending` with no reason while
+    // the customer waited for a prompt that would never be answered. This
+    // composition is the ONLY place those events become local truth, and it does
+    // so in this order:
+    //   1. resolve the attempt by provider invoice (no session -> nothing owned),
+    //   2. refuse an invoice belonging to another claim,
+    //   3. never re-interpret a confirmed/failed session,
+    //   4. RE-VERIFY with the provider before any write — a callback claiming
+    //      FAILED about a collection the provider reports COMPLETE is recovered
+    //      through processClaimPaymentConfirmed, so a bad delivery can never
+    //      strand real money on an unconfirmable session,
+    //   5. only a corroborated terminal failure marks the session failed (a CAS
+    //      that a concurrent confirmation always wins), with a stable reason code
+    //      and an audit row either way.
+    reconcileCollectionFailureEvent: (event: any) =>
+      reconcileCollectionFailure(event, {
+        getSessionByProviderInvoice: (invoiceId: string) => db.getPaymentSessionByProviderInvoice(invoiceId),
+        // The same authoritative lookup the confirmation path escalates to, with
+        // the claim id as api_ref so the provider-side cross-claim isolation
+        // applies here too.
+        fetchAuthoritativeStatus: (invoiceId: string, expectedAmount: any, expectedApiRef: any) =>
+          PaymentService.fetchAuthoritativeCollectionStatus(invoiceId, expectedAmount, expectedApiRef),
+        // Recovery goes through the ONE canonical confirmation path: claim CAS,
+        // session CAS, pickup-code issuance, amount reconciliation and every
+        // audit/email it already owns stay single-implementation.
+        confirmPayment: (claimId: string, invoiceId: string, confirmedAmount: any) =>
+          processClaimPaymentConfirmed(claimId, invoiceId, confirmedAmount),
+        markSessionFailed: (sessionId: string, reasonCode: string) => db.markPaymentSessionFailed(sessionId, reasonCode),
+        audit: (action: string, message: string) => db.logAudit('SYSTEM', action, message),
+      }),
   });
 
   // DEV/TEST-ONLY: lets a local tester complete a payment without a real

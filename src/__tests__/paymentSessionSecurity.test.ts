@@ -73,7 +73,7 @@ describe('payment session: initiation endpoint', () => {
 
   it('is idempotent via a CAS reservation: a lost race must not push a second STK', () => {
     const b = routeBody("app.post('/api/claims/:id/payment-session/:sessionId/initiate'");
-    expect(b).toMatch(/reservePaymentSession\(sessionId\)/);
+    expect(b).toMatch(/reservePaymentSession\(sessionId/);
     expect(b).toMatch(/alreadyInitiated: true/);
   });
 

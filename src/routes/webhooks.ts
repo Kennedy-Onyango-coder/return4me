@@ -79,9 +79,18 @@ export function registerWebhookRoutes(
      * outside this module. This route only decides WHETHER to ask.
      */
     reconcilePayoutBatchStatus: (trackingId: string) => Promise<unknown>;
+    /**
+     * NON-COMPLETE COLLECTION EVENTS. Delegated here (injected) so this
+     * module keeps no financial logic of its own.
+     */
+    reconcileCollectionFailureEvent: (event: {
+      claimId: string;
+      invoiceId: string;
+      reportedState: unknown;
+    }) => Promise<{ outcome: string }>;
   }
 ) {
-  const { processClaimPaymentConfirmed, sendServerError, reconcilePayoutBatchStatus } = deps;
+  const { processClaimPaymentConfirmed, sendServerError, reconcilePayoutBatchStatus, reconcileCollectionFailureEvent } = deps;
 
   /**
    * BATCH 1 — the `send_money_event` (payout / disbursement) TRIGGER.
@@ -221,8 +230,17 @@ export function registerWebhookRoutes(
     // 4. SUCCESS STATE ONLY. Non-COMPLETE events are safe no-ops.
     // ---------------------------------------------------------------------
     if (state !== 'COMPLETE') {
-      console.log(`[INTASEND WEBHOOK] Non-complete state "${state}"; no action.`);
-      return res.json({ status: 'ignored' });
+      try {
+        const outcome: any = await reconcileCollectionFailureEvent({ claimId, invoiceId: invoice_id, reportedState: state });
+        if (outcome === 'not_a_failure_state' || outcome?.outcome === 'not_a_failure_state') {
+          console.log(`[INTASEND WEBHOOK] Non-complete state "${state}"; no action.`);
+          return res.json({ status: 'ignored' });
+        }
+        return res.json({ status: 'ok' });
+      } catch (err: any) {
+        console.error('[INTASEND WEBHOOK] COLLECTION_FAILURE_ERROR:', err);
+        return sendServerError(res, err, 'INTASEND_WEBHOOK_COLLECTION_FAILURE_ERROR');
+      }
     }
 
     try {

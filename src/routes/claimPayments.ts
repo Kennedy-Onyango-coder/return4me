@@ -342,13 +342,23 @@ export function registerClaimPaymentRoutes(
         // Concurrency-safe: only the caller that wins the created -> payment_initiated
         // CAS may issue the provider STK push. A repeated/double request loses and
         // is told so (it does NOT trigger a second push).
-        const reserved = await db.reservePaymentSession(sessionId);
+        const reserved = await db.reservePaymentSession(sessionId, claimId);
         if (!reserved) {
           const current = await db.getPaymentSessionById(sessionId);
           const stillActive = current && ['created', 'payment_initiated', 'pending'].includes(current.status)
             && new Date(current.expires_at).getTime() >= Date.now();
           if (stillActive) {
-            return res.json({ success: true, paymentSession: toSafePaymentSession(current), alreadyInitiated: true });
+            // A — Return descriptive status context so the frontend can inform the
+            // user instead of silently returning alreadyInitiated: true. The session
+            // status is already included in the paymentSession object via
+            // toSafePaymentSession; we also expose a retryable flag.
+            return res.json({
+              success: true,
+              paymentSession: toSafePaymentSession(current),
+              alreadyInitiated: true,
+              status: current.status,
+              retryable: current.status === 'failed'
+            });
           }
           return res.status(409).json({ error: 'The payment session could not be initiated.' });
         }
@@ -359,16 +369,53 @@ export function registerClaimPaymentRoutes(
           session.amount,
           session.claim_id
         );
+
+        // Ambiguous/unresolved provider outcome: the provider may or may not have
+        // accepted the STK request. Do NOT mark the session failed, do NOT release
+        // the claim-level duplicate-payment protection, and do NOT tell the
+        // claimant to blindly retry. Finalize as an unresolved pending session
+        // with no invoice id and return an explicit ambiguous response.
+        if (paymentResult.ambiguous === true || paymentResult.unresolved === true) {
+          await db.finalizePaymentSessionInitiated(sessionId, null, paymentResult.mpesaReceiptCode || '');
+          await db.logAudit('CLAIMANT', 'PAYMENT_SESSION_AMBIGUOUS', `M-Pesa STK push outcome could not be verified for session ${sessionId} (claim ${claimId}, KES ${session.amount}). Session left unresolved; no automatic retry issued.`);
+          const ambiguousUpdated = await db.getPaymentSessionById(sessionId);
+          return res.json({
+            success: true,
+            paymentSession: toSafePaymentSession(ambiguousUpdated),
+            alreadyInitiated: false,
+            ambiguous: true,
+            unresolved: true,
+            awaiting: false,
+          });
+        }
+
         if (!paymentResult.success) {
           await db.markPaymentSessionFailed(sessionId, paymentResult.message || 'STK initiation failed');
           return res.status(400).json({ error: paymentResult.message || 'The payment did not go through. Please try again.' });
         }
 
-        await db.finalizePaymentSessionInitiated(sessionId, paymentResult.checkoutRequestId, paymentResult.mpesaReceiptCode);
+        // paymentResult.success is true.
+        // If checkoutRequestId is present, the provider returned a valid invoice ID
+        // and we can finalize the session as pending with that reference.
+        if (paymentResult.checkoutRequestId) {
+          await db.finalizePaymentSessionInitiated(sessionId, paymentResult.checkoutRequestId, paymentResult.mpesaReceiptCode);
+        } else {
+          // 2xx response but no invoice ID from the provider.
+          // Per the safety audit, we cannot reliably confirm the STK prompt was
+          // accepted. Keep the session in pending (unresolved) state without an
+          // invoice_id so that retries are blocked until reliable evidence
+          // (e.g. a COMPLETE webhook) establishes the original outcome.
+          await db.finalizePaymentSessionInitiated(sessionId, null, paymentResult.mpesaReceiptCode || '');
+        }
         await db.logAudit('CLAIMANT', 'PAYMENT_SESSION_INITIATED', `M-Pesa STK push requested for session ${sessionId} (claim ${claimId}, KES ${session.amount}).`);
 
         const updated = await db.getPaymentSessionById(sessionId);
-        res.json({ success: true, paymentSession: toSafePaymentSession(updated), alreadyInitiated: false });
+        res.json({
+          success: true,
+          paymentSession: toSafePaymentSession(updated),
+          alreadyInitiated: false,
+          ...(paymentResult.checkoutRequestId ? {} : { ambiguous: true, unresolved: true, awaiting: false }),
+        });
       } catch (e: any) {
         sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
       }
