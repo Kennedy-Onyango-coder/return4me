@@ -89,7 +89,7 @@ async function makeInvoicedSession(claimId: string, amount: number) {
     id: sessionId, claimId, amount, payerPhone: '+254700000001',
     expiresAt: new Date(Date.now() + 15 * 60 * 1000),
   });
-  expect(await db.reservePaymentSession(sessionId)).toBe(true);
+  expect(await db.reservePaymentSession(sessionId, claimId)).toBe(true);
   expect(await db.finalizePaymentSessionInitiated(sessionId, invoiceId, 'MPESA-REF')).toBe(true);
   return { sessionId, invoiceId };
 }

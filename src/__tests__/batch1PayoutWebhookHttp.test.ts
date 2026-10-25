@@ -33,6 +33,7 @@ let baseUrl = '';
 
 const processClaimPaymentConfirmed = vi.fn(async () => 'PICK-B1');
 const reconcilePayoutBatchStatus = vi.fn();
+const reconcileCollectionFailureEvent = vi.fn(async () => ({ outcome: 'not_a_failure_state' }));
 const sendServerError = vi.fn((res: any, _error: any, context: string) =>
   res.status(500).json({ error: 'server error', context }),
 );
@@ -62,6 +63,7 @@ beforeAll(async () => {
     processClaimPaymentConfirmed: processClaimPaymentConfirmed as any,
     sendServerError: sendServerError as any,
     reconcilePayoutBatchStatus: reconcilePayoutBatchStatus as any,
+    reconcileCollectionFailureEvent: reconcileCollectionFailureEvent as any,
   });
   await new Promise<void>((resolve) => {
     server = app.listen(0, () => resolve());
@@ -80,8 +82,10 @@ afterAll(async () => {
 beforeEach(() => {
   processClaimPaymentConfirmed.mockClear();
   reconcilePayoutBatchStatus.mockClear();
+  reconcileCollectionFailureEvent.mockClear();
   sendServerError.mockClear();
   reconcilePayoutBatchStatus.mockResolvedValue(VERIFIED_REPORT);
+  reconcileCollectionFailureEvent.mockResolvedValue({ outcome: 'not_a_failure_state' });
 });
 
 const COLLECTION_OK = {

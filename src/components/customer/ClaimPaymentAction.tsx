@@ -251,6 +251,30 @@ export default function ClaimPaymentAction({
         throw new Error(initiateData?.error || 'We could not send the M-Pesa prompt. Please try again.');
       }
 
+      // A — Handle the three possible outcomes from the initiate API:
+      // 1) alreadyInitiated: true — a prompt is already active on the user's phone;
+      //    do NOT claim a new STK was sent, do NOT start the polling loop.
+      // 2) alreadyInitiated: false — a new STK push was sent; enter awaiting phase
+      //    and start the bounded poll so the customer can complete or time out.
+      // 3) success: false with an error — display the error and stay idle.
+      if (initiateData?.alreadyInitiated === true) {
+        // A prompt is already active; inform the user without sending a second push.
+        setPhase('idle');
+        setNote('A payment prompt is already active on your phone. You can complete the payment there, or tap "Check payment status" to see the latest update.');
+        return;
+      }
+
+      if (initiateData?.ambiguous === true || initiateData?.unresolved === true || initiateData?.awaiting === false) {
+        setPhase('idle');
+        setNote('The payment request could not be verified as sent. Please check the payment status or try again.');
+        return;
+      }
+
+      if (initiateData?.success === false) {
+        throw new Error(initiateData?.message || 'We could not send the M-Pesa prompt. Please try again.');
+      }
+
+      // Normal path: new STK push was sent
       setPhase('awaiting');
       setPolling(true);
     } catch (e: any) {

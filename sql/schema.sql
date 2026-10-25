@@ -706,6 +706,13 @@ CREATE INDEX idx_notification_events_created ON notification_events(created_at);
 -- =============================================================================
 -- BATCH 1 - CUSTOMER NOTIFICATION USER LAYER.
 --
+-- Payment session claim-level coordination index (Phase 9E):
+-- Ensures at most one active session per claim (status: pending, processing, payment_initiated).
+-- =============================================================================
+CREATE UNIQUE INDEX uq_payment_sessions_one_active_claim ON payment_sessions (claim_id) WHERE status IN ('pending', 'processing', 'payment_initiated');
+-- =============================================================================
+-- BATCH 1 - CUSTOMER NOTIFICATION USER LAYER.
+--
 -- WHY THIS IS NOT notification_events
 --   notification_events (above) is a DELIVERY LEDGER: it has no customer id
 --   (only a masked recipient_reference), its channel CHECK admits only

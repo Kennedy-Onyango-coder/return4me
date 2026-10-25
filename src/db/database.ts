@@ -6757,12 +6757,67 @@ await drizzleDb.transaction(async (tx) => {
   // from 'created' -> 'payment_initiated' once; the winner of this CAS is the
   // only caller that may issue the provider STK push. A concurrent or repeated
   // request loses the CAS and must NOT call the provider again.
-  public async reservePaymentSession(id: string): Promise<boolean> {
+  public async reservePaymentSession(id: string, claimId?: string): Promise<boolean> {
     try {
+      // Determine the claim ID to use for coordination:
+      // - If claimId is provided, use it directly
+      // - Otherwise, fall back to the session's own claim_id from the database
+      //   This ensures claim-level coordination works even when claimId is not passed explicitly
+      let checkClaimId = claimId;
+      if (!checkClaimId) {
+        // row is an array from drizzle select(); grab the first result's claim_id
+        const row = await drizzleDb
+          .select({ claimId: paymentSessionsTable.claim_id })
+          .from(paymentSessionsTable)
+          .where(eq(paymentSessionsTable.id, id))
+          .limit(1);
+        checkClaimId = row[0]?.claimId;
+      }
+
+      // Fail closed: if we cannot determine a claim ID, block the reservation
+      // so that claim-level coordination is never silently skipped.
+      if (!checkClaimId) {
+        return false;
+      }
+
+      // Claim-level coordination: check if there's already a DIFFERENT session for this claim
+      // in a non-created, non-expired state BEFORE attempting reservation. This works alongside
+      // the database partial unique index uq_payment_sessions_one_active_claim, which only
+      // enforces the invariant for 'payment_initiated' and 'pending' statuses (expired sessions
+      // are terminal and don't block new reservations). We exclude the session being reserved
+      // (by id) to allow the CAS logic to work for concurrent reservations on the same session.
+      if (checkClaimId) {
+        const existingSession = await drizzleDb
+          .select({
+            id: paymentSessionsTable.id,
+            status: paymentSessionsTable.status,
+          })
+          .from(paymentSessionsTable)
+          .where(
+            and(
+              eq(paymentSessionsTable.claim_id, checkClaimId),
+              sql`${paymentSessionsTable.status} IN ('payment_initiated', 'pending', 'processing')`,
+              ne(paymentSessionsTable.id, id),
+            ),
+          )
+          .limit(1);
+        // If there's a different existing session in a non-created, non-expired state, block this reservation
+        // (this is the in-memory sandbox equivalent of the PostgreSQL partial unique index)
+        if (existingSession.length > 0) {
+          return false;
+        }
+      }
+
       const rows = await drizzleDb
         .update(paymentSessionsTable)
         .set({ status: 'payment_initiated' })
-        .where(and(eq(paymentSessionsTable.id, id), eq(paymentSessionsTable.status, 'created')))
+        .where(
+          and(
+            eq(paymentSessionsTable.id, id),
+            claimId ? eq(paymentSessionsTable.claim_id, claimId) : undefined,
+            eq(paymentSessionsTable.status, 'created'),
+          ),
+        )
         .returning();
       return rows.length > 0;
     } catch (error) {
@@ -6776,7 +6831,7 @@ await drizzleDb.transaction(async (tx) => {
   // reservation winner can be in the 'payment_initiated' state at this point.
   public async finalizePaymentSessionInitiated(
     id: string,
-    providerInvoiceId: string,
+    providerInvoiceId: string | null,
     providerReference: string
   ): Promise<boolean> {
     try {
