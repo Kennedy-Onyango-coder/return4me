@@ -326,6 +326,7 @@ import { redactRequestUrlForLog } from './utils/safeRequestLog';
 // that writes its plan into the document. Both are dependency-free, so the
 // production HTML path gains no database read, no network call and no state.
 import { planPageRequest } from './utils/publicRoutes';
+import { metadataForPath } from './utils/seoMetadata';
 import {
   applySeoHead,
   notFoundDocument,
@@ -1439,7 +1440,12 @@ function sendPlannedPage(res: Response, plan: SeoHeadPlan, distPath: string): vo
     return;
   }
 
-  const { html, headMarkersRecognised } = applySeoHead(template, plan);
+  // Route-specific title/description/OG tags. Kept out of the planner because
+  // the planner only decides indexability; this is presentation metadata and
+  // falls back to the template's defaults when a path has no entry.
+  const metadata = metadataForPath(plan.canonicalPath);
+  const planWithMetadata = metadata ? { ...plan, ...metadata } : plan;
+  const { html, headMarkersRecognised } = applySeoHead(template, planWithMetadata);
   if (!headMarkersRecognised) {
     if (!seoHeadMarkersFailureLogged) {
       seoHeadMarkersFailureLogged = true;

@@ -53,11 +53,23 @@ const CANONICAL_LINK_TAG = /<link\b[^>]*\brel\s*=\s*["']canonical["'][^>]*>/i;
 const ANY_CANONICAL_LINK_TAG = /<link\b[^>]*\brel\s*=\s*["']?canonical["']?[^>]*>/gi;
 
 /** Matches the content/href attribute inside a tag already matched above. */
-const CONTENT_ATTRIBUTE = /\bcontent\s*=\s*["'][^"']*["']/i;
-const HREF_ATTRIBUTE = /\bhref\s*=\s*["'][^"']*["']/i;
+const CONTENT_ATTRIBUTE = /\bcontent\s*=\s*(["'])(?:(?!\1)[\s\S])*\1/i;
+const HREF_ATTRIBUTE = /\bhref\s*=\s*(["'])(?:(?!\1)[\s\S])*\1/i;
 
 /** Matches the opening `<head>` tag, used to insert a directive when absent. */
 const HEAD_OPEN_TAG = /<head\b[^>]*>/i;
+
+/** Matches the document title element. */
+const TITLE_TAG = /<title\b[^>]*>[\s\S]*?<\/title>/i;
+/** Matches the meta description tag (any attribute order). */
+const META_DESCRIPTION_TAG = /<meta\b[^>]*\bname\s*=\s*["']description["'][^>]*>/i;
+const OG_TITLE_TAG = /<meta\b[^>]*\bproperty\s*=\s*["']og:title["'][^>]*>/i;
+const OG_DESCRIPTION_TAG = /<meta\b[^>]*\bproperty\s*=\s*["']og:description["'][^>]*>/i;
+const OG_URL_TAG = /<meta\b[^>]*\bproperty\s*=\s*["']og:url["'][^>]*>/i;
+const OG_IMAGE_TAG = /<meta\b[^>]*\bproperty\s*=\s*["']og:image["'][^>]*>/i;
+const TWITTER_TITLE_TAG = /<meta\b[^>]*\bname\s*=\s*["']twitter:title["'][^>]*>/i;
+const TWITTER_DESCRIPTION_TAG = /<meta\b[^>]*\bname\s*=\s*["']twitter:description["'][^>]*>/i;
+const TWITTER_IMAGE_TAG = /<meta\b[^>]*\bname\s*=\s*["']twitter:image["'][^>]*>/i;
 
 /**
  * A canonical path the server is willing to publish, or `null`.
@@ -108,6 +120,12 @@ export interface SeoHeadPlan {
   canonicalPath: string;
   /** True when the page must be served noindex. */
   noindex: boolean;
+  /** Optional route-specific document title. */
+  title?: string;
+  /** Optional route-specific meta description. */
+  description?: string;
+  /** Optional route-specific Open Graph / Twitter image URL. */
+  ogImage?: string;
 }
 
 /** The document to serve, plus whether the markers it needed were found. */
@@ -134,6 +152,31 @@ function replaceCanonicalHref(html: string, canonicalUrl: string): string | null
   const found = CANONICAL_LINK_TAG.exec(html);
   if (!found || !HREF_ATTRIBUTE.test(found[0])) return null;
   const tag = found[0].replace(HREF_ATTRIBUTE, `href="${canonicalUrl}"`);
+  return html.slice(0, found.index) + tag + html.slice(found.index + found[0].length);
+}
+
+/** Escape a value for use inside an HTML attribute or text node. */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/** Replace a matched meta tag's content attribute, or return html unchanged. */
+function replaceMetaContent(html: string, tagPattern: RegExp, value: string): string {
+  const found = tagPattern.exec(html);
+  if (!found || !CONTENT_ATTRIBUTE.test(found[0])) return html;
+  const tag = found[0].replace(CONTENT_ATTRIBUTE, `content="${escapeHtml(value)}"`);
+  return html.slice(0, found.index) + tag + html.slice(found.index + found[0].length);
+}
+
+/** Replace the document title, or return html unchanged when it has none. */
+function replaceTitle(html: string, title: string): string {
+  const found = TITLE_TAG.exec(html);
+  if (!found) return html;
+  const tag = `<title>${escapeHtml(title)}</title>`;
   return html.slice(0, found.index) + tag + html.slice(found.index + found[0].length);
 }
 
@@ -179,7 +222,25 @@ export function applySeoHead(html: string, plan: SeoHeadPlan): SeoHeadResult {
     return { html: failClosedDocument(html), headMarkersRecognised: false };
   }
 
-  return { html: withCanonical, headMarkersRecognised: true };
+  let result = withCanonical;
+  if (plan.title) {
+    result = replaceTitle(result, plan.title);
+    result = replaceMetaContent(result, OG_TITLE_TAG, plan.title);
+    result = replaceMetaContent(result, TWITTER_TITLE_TAG, plan.title);
+  }
+  if (plan.description) {
+    result = replaceMetaContent(result, META_DESCRIPTION_TAG, plan.description);
+    result = replaceMetaContent(result, OG_DESCRIPTION_TAG, plan.description);
+    result = replaceMetaContent(result, TWITTER_DESCRIPTION_TAG, plan.description);
+  }
+  if (plan.ogImage) {
+    result = replaceMetaContent(result, OG_IMAGE_TAG, plan.ogImage);
+    result = replaceMetaContent(result, TWITTER_IMAGE_TAG, plan.ogImage);
+  }
+  // og:url always mirrors the canonical that this module just verified/wrote.
+  result = replaceMetaContent(result, OG_URL_TAG, canonicalUrl);
+
+  return { html: result, headMarkersRecognised: true };
 }
 
 /**

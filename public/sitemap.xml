@@ -2,8 +2,23 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
     <loc>https://return4me.co.ke/</loc>
-    <lastmod>2026-07-20</lastmod>
-    <changefreq>daily</changefreq>
-    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://return4me.co.ke/report-lost</loc>
+  </url>
+  <url>
+    <loc>https://return4me.co.ke/lost</loc>
+  </url>
+  <url>
+    <loc>https://return4me.co.ke/found</loc>
+  </url>
+  <url>
+    <loc>https://return4me.co.ke/become-an-agent</loc>
+  </url>
+  <url>
+    <loc>https://return4me.co.ke/sign-in</loc>
+  </url>
+  <url>
+    <loc>https://return4me.co.ke/help</loc>
   </url>
 </urlset>
