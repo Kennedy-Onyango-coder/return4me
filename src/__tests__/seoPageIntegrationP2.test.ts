@@ -256,6 +256,15 @@ describe('P2 integration: the /api terminator and the static boundary', () => {
     // express.static serves these before the planner is ever consulted.
     expect(robots.headers.get('x-robots-tag')).toBeNull();
 
+    // The sitemap is a real static file too: it must never be answered by the
+    // SPA planner (which would return the HTML shell with an XML URL).
+    const sitemap = await probe('/sitemap.xml');
+    expect(sitemap.status).toBe(200);
+    expect(String(sitemap.headers.get('content-type'))).toContain('xml');
+    expect(sitemap.headers.get('x-robots-tag')).toBeNull();
+    expect(sitemap.body).toContain(`<loc>${SITE_ORIGIN}/</loc>`);
+    expect(sitemap.body).toContain(`<loc>${SITE_ORIGIN}/help</loc>`);
+
     const manifest = await probe('/manifest.json');
     expect(manifest.status).toBe(200);
     expect(JSON.parse(manifest.body)).toBeTruthy();
