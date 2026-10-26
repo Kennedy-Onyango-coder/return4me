@@ -1,4 +1,7 @@
-import { Loader2 } from 'lucide-react';
+import Button from '../ui/Button';
+// MOBILE-FIRST BATCH B — the ONE field language shared with the rejection panel.
+// Imported rather than re-typed so the two inline panels cannot drift apart.
+import { FIELD_CLASS, FIELD_LABEL_CLASS, FINDER_NOTE_CLASS } from './agentPanelFieldStyles';
 import { panelFocusRef } from './panelFocus';
 
 /**
@@ -81,8 +84,15 @@ export default function AgentVerificationPanel({
 // tab order (tabIndex -1) so no visible focus stop is added to normal
 // keyboard flow, and `panelFocusRef` moves focus here on open and returns it
 // to this item's originating action on close.
-<div ref={panelFocusRef(item.id, 'verify')} tabIndex={-1} className="bg-brand-beige/60 p-4 rounded-xl border border-stone-200 space-y-3">
-  <h4 className="text-xs font-extrabold text-primary-green uppercase tracking-wide">
+//
+// MOBILE-FIRST BATCH B: the container is a THEMED, single-column surface that
+// stacks under the queue card it belongs to. `rounded-panel` / `space-y-4` are
+// the UX-01 radius and spacing ladders, and the muted surface plus the
+// appearance border keep the panel correct in the dark theme - the previous
+// `bg-brand-beige/60` + `border-stone-200` pair was light-only. Every field
+// inside reads the ONE field language in agentPanelFieldStyles.ts.
+<div ref={panelFocusRef(item.id, 'verify')} tabIndex={-1} className="space-y-4 rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] p-4 shadow-raised sm:p-5">
+  <h4 className="text-heading font-extrabold text-[var(--appearance-primary)]">
     {'Item Verification'}
   </h4>
 
@@ -94,64 +104,64 @@ export default function AgentVerificationPanel({
       (verifyingItemId === item.id), the same reasoning
       the P14C-5B fix below already relies on. */}
   <div className="space-y-1">
-    <label htmlFor="agent-verify-category" className="text-xs font-bold text-stone-500 uppercase block">Category</label>
+    <label htmlFor="agent-verify-category" className={FIELD_LABEL_CLASS}>{'Category'}</label>
     <select
       id="agent-verify-category"
       value={verifyCategoryId}
       onChange={(e) => setVerifyCategoryId(e.target.value)}
-      className="w-full border border-stone-200 rounded-lg p-2 text-xs bg-white"
+      className={FIELD_CLASS}
     >
       {categories.map((c: any) => (
         <option key={c.id} value={c.id}>{c.name_en}</option>
       ))}
     </select>
     {verifyCategoryId !== (item.category_id || '') && (
-      <p className="text-xs text-stone-400">Finder: {item.category_id}</p>
+      <p className={FINDER_NOTE_CLASS}>Finder: {item.category_id}</p>
     )}
   </div>
 
   {item.is_sensitive_document && (
     <>
       <div className="space-y-1">
-        <label htmlFor="agent-verify-doc-name" className="text-xs font-bold text-stone-500 uppercase block">Name on document</label>
+        <label htmlFor="agent-verify-doc-name" className={FIELD_LABEL_CLASS}>{'Name on document'}</label>
         <input
           id="agent-verify-doc-name"
           type="text"
           value={verifyName}
           onChange={(e) => setVerifyName(e.target.value)}
-          className="w-full border border-stone-200 rounded-lg p-2 text-xs"
+          className={FIELD_CLASS}
         />
         {verifyName !== (item.ocr_extracted_name || '') && (
-          <p className="text-xs text-stone-400">Finder: {item.ocr_extracted_name || '(none)'}</p>
+          <p className={FINDER_NOTE_CLASS}>Finder: {item.ocr_extracted_name || '(none)'}</p>
         )}
       </div>
       <div className="space-y-1">
-        <label htmlFor="agent-verify-doc-number" className="text-xs font-bold text-stone-500 uppercase block">Document number</label>
+        <label htmlFor="agent-verify-doc-number" className={FIELD_LABEL_CLASS}>{'Document number'}</label>
         <input
           id="agent-verify-doc-number"
           type="text"
           value={verifyDocNumber}
           onChange={(e) => setVerifyDocNumber(e.target.value)}
-          className="w-full border border-stone-200 rounded-lg p-2 text-xs font-mono"
+          className={`${FIELD_CLASS} font-mono`}
         />
         {verifyDocNumber !== (item.ocr_extracted_number || '') && (
-          <p className="text-xs text-stone-400">Finder: {item.ocr_extracted_number || '(none)'}</p>
+          <p className={FINDER_NOTE_CLASS}>Finder: {item.ocr_extracted_number || '(none)'}</p>
         )}
       </div>
     </>
   )}
 
   <div className="space-y-1">
-    <label htmlFor="agent-verify-description" className="text-xs font-bold text-stone-500 uppercase block">Description</label>
+    <label htmlFor="agent-verify-description" className={FIELD_LABEL_CLASS}>{'Description'}</label>
     <input
       id="agent-verify-description"
       type="text"
       value={verifyDescription}
       onChange={(e) => setVerifyDescription(e.target.value)}
-      className="w-full border border-stone-200 rounded-lg p-2 text-xs"
+      className={FIELD_CLASS}
     />
     {verifyDescription !== (item.description || '') && (
-      <p className="text-xs text-stone-400">Finder: {item.description || '(none)'}</p>
+      <p className={FINDER_NOTE_CLASS}>Finder: {item.description || '(none)'}</p>
     )}
   </div>
 
@@ -166,13 +176,13 @@ export default function AgentVerificationPanel({
       the state, the `foundArea` payload and the
       `verified_found_area` column are unchanged. */}
   <div className="space-y-1">
-    <label htmlFor="agent-verify-exact-place" className="text-xs font-bold text-stone-500 uppercase block">Exact place</label>
+    <label htmlFor="agent-verify-exact-place" className={FIELD_LABEL_CLASS}>{'Exact place'}</label>
     <input
       id="agent-verify-exact-place"
       type="text"
       value={verifyFoundArea}
       onChange={(e) => setVerifyFoundArea(e.target.value)}
-      className="w-full border border-stone-200 rounded-lg p-2 text-xs"
+      className={FIELD_CLASS}
       aria-describedby={
         verifyFoundArea !== (item.location_description || '')
           ? 'agent-verify-exact-place-finder-note'
@@ -180,7 +190,7 @@ export default function AgentVerificationPanel({
       }
     />
     {verifyFoundArea !== (item.location_description || '') && (
-      <p id="agent-verify-exact-place-finder-note" className="text-xs text-stone-400">Finder: {item.location_description}</p>
+      <p id="agent-verify-exact-place-finder-note" className={FINDER_NOTE_CLASS}>Finder: {item.location_description}</p>
     )}
   </div>
 
@@ -191,12 +201,12 @@ export default function AgentVerificationPanel({
           NO LABEL AT ALL (only a placeholder, which is
           not an accessible name). Both are now properly
           associated. */}
-      <label htmlFor="agent-verify-reason" className="text-xs font-bold text-stone-500 uppercase block">Reason for correction</label>
+      <label htmlFor="agent-verify-reason" className={FIELD_LABEL_CLASS}>{'Reason for correction'}</label>
       <select
         id="agent-verify-reason"
         value={verifyReason}
         onChange={(e) => setVerifyReason(e.target.value)}
-        className="w-full border border-stone-200 rounded-lg p-2 text-xs bg-white"
+        className={FIELD_CLASS}
       >
         <option value="Finder entered wrong information">Finder entered wrong information</option>
         <option value="Finder information incomplete">Finder information incomplete</option>
@@ -206,55 +216,80 @@ export default function AgentVerificationPanel({
         <option value="Wrong location">Wrong location</option>
         <option value="Other">Other</option>
       </select>
-      <label htmlFor="agent-verify-reason-detail" className="text-xs font-bold text-stone-500 uppercase block">Correction reason detail</label>
+      <label htmlFor="agent-verify-reason-detail" className={FIELD_LABEL_CLASS}>{'Correction reason detail'}</label>
       <input
         id="agent-verify-reason-detail"
         type="text"
         value={verifyReasonDetail}
         onChange={(e) => setVerifyReasonDetail(e.target.value)}
         placeholder="Optional explanation..."
-        className="w-full border border-stone-200 rounded-lg p-2 text-xs"
+        className={FIELD_CLASS}
       />
     </div>
   )}
 
-  <label className="flex items-center space-x-2 text-xs text-stone-700 font-semibold">
+  {/* MOBILE-FIRST BATCH B — the physical-inspection control is a 44px row and
+      the whole row is the target (the <label> wraps the box), because this is
+      the one control an agent must hit one-handed before approving a drop-off.
+
+      Both paragraphs below were previously written as RAW `//` LINES INSIDE
+      THE JSX BODY. JSX renders bare text, so the agent was shown a paragraph
+      that literally began "// BATCH 1 (UX-01): ..." above the action row. They
+      are real JSX comments now: the rationale stays in the source and never
+      reaches the screen.
+
+      The error keeps the ONLY `role="alert"` in this panel; `role="alert"`
+      already implies aria-live="assertive", so the two are not stacked, and its
+      text, condition and server source are unchanged. */}
+  <label className="flex min-h-11 items-center gap-3 text-body font-semibold text-[var(--appearance-text-primary)]">
     <input
       type="checkbox"
       checked={verifyPhysicallyChecked}
       onChange={(e) => setVerifyPhysicallyChecked(e.target.checked)}
+      className="h-5 w-5 shrink-0 accent-[var(--appearance-primary)]"
     />
     <span>{'I have physically inspected this item'}</span>
   </label>
   {item.is_sensitive_document && (verifyName !== (item.ocr_extracted_name || '') || verifyDocNumber !== (item.ocr_extracted_number || '')) && !verifyPhysicallyChecked && (
-    <p className="text-xs text-red-600 font-semibold">
+    <p className="break-words text-caption font-semibold text-[var(--appearance-danger)]">
       {'Correcting name/ID number on a sensitive document requires physical inspection — check the box above.'}
     </p>
   )}
 
-  // BATCH 1 (UX-01): the verification failure is a dynamic, actionable
-  // failure, so it is announced immediately. `role="alert"` implies
-  // aria-live="assertive", so the two are not stacked redundantly. The text,
-  // its condition, and the server as its source are all unchanged.
   {verifyError && (
-    <p role="alert" className="text-xs text-red-600 font-semibold">{verifyError}</p>
+    <p role="alert" className="break-words text-caption font-semibold text-[var(--appearance-danger)]">{verifyError}</p>
   )}
 
+  {/* The action row keeps its established wrapper (the Batch-1 focus suite reads
+      up to it as a boundary) but each action is now full-width on phones: the
+      primary action gets its own thumb-height row instead of being squeezed
+      beside Cancel at 320px, and returns to an inline right-aligned row at
+      `sm` and up. Cancel stays enabled while a submit is in flight, exactly as
+      before; the submit keeps its per-item `disabled`/`aria-busy` pair and the
+      shared Button renders the loading spinner (16px, UX-01 ladder) beside the
+      unchanged label. */}
   <div className="flex flex-wrap gap-2 justify-end pt-1">
-    <button type="button" onClick={() => setVerifyingItemId(null)}
-      className="text-stone-500 hover:text-stone-700 text-xs px-3 py-1.5 rounded-lg"
+    <Button
+      type="button"
+      variant="ghost"
+      size="md"
+      onClick={() => setVerifyingItemId(null)}
+      className="w-full sm:w-auto"
     >
-      Cancel
-    </button>
-    <button
+      {'Cancel'}
+    </Button>
+    <Button
+      type="button"
+      variant="primary"
+      size="md"
       disabled={isItemBusy(item.id)}
       aria-busy={isItemBusy(item.id)}
+      loading={isItemBusy(item.id)}
       onClick={() => handleSubmitVerification(item, hasCorrections(item) ? 'corrected' : 'confirmed')}
-      className="bg-primary-green hover:bg-primary-hover text-white text-xs font-bold px-4 py-1.5 rounded-xl transition disabled:opacity-50 flex items-center gap-1.5"
+      className="w-full sm:w-auto"
     >
-      {isItemBusy(item.id) ? <Loader2 className="animate-spin" size={12} aria-hidden={true} /> : null}
       {hasCorrections(item) ? t.agentVerifySaveCorrections : t.agentVerifyConfirmReported}
-    </button>
+    </Button>
   </div>
   {/* AGENTHUB UX BATCH 4: this ONE submit action does two possible things,
       decided by a single fact the agent controls - whether the item was
@@ -264,7 +299,7 @@ export default function AgentVerificationPanel({
       existing server route already does (record the verification; approve the
       drop-off when physically checked) and imply nothing about payment,
       refund, payout, claim approval, or notification. */}
-  <p className="text-xs text-stone-500 leading-tight">
+  <p className="break-words text-caption leading-relaxed text-[var(--appearance-text-muted)]">
     <span className="font-semibold">{t.agentVerifySubmitHint}:</span>{' '}
     {verifyPhysicallyChecked ? t.agentVerifyApprovesToo : t.agentVerifySavesOnly}
   </p>
