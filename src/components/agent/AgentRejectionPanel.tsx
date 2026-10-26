@@ -1,4 +1,6 @@
 import Button from '../ui/Button';
+// MOBILE-FIRST BATCH B — the SAME field language as the verification panel.
+import { FIELD_CLASS } from './agentPanelFieldStyles';
 import { panelFocusRef } from './panelFocus';
 
 /**
@@ -52,14 +54,14 @@ export default function AgentRejectionPanel({
 // tab order (tabIndex -1), so no visible focus stop is added to normal
 // keyboard flow, and `panelFocusRef` moves focus here on open and returns it
 // to this item's originating Reject action on close.
-<div ref={panelFocusRef(item.id, 'reject')} tabIndex={-1} className="bg-red-50/50 p-3 rounded-xl border border-red-100/50 space-y-3">
-  <label htmlFor={`reject-reason-${item.id}`} className="text-xs font-bold text-red-800 block">Reject Drop-off Reason:</label>
+<div ref={panelFocusRef(item.id, 'reject')} tabIndex={-1} className="space-y-4 rounded-panel border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] p-4 shadow-raised sm:p-5">
+  <label htmlFor={`reject-reason-${item.id}`} className="block text-body font-bold text-[var(--appearance-text-primary)]">Reject Drop-off Reason:</label>
   <div className="space-y-2">
     <select
       id={`reject-reason-${item.id}`}
       value={rejectionReason}
       onChange={(e) => setRejectionReason(e.target.value)}
-      className="w-full border border-stone-200 rounded-lg p-2 text-xs bg-white"
+      className={FIELD_CLASS}
     >
       <option value="Not a real item">Not a real item</option>
       <option value="Item doesn't match description">Item doesn't match description</option>
@@ -74,7 +76,7 @@ export default function AgentRejectionPanel({
         onChange={(e) => setRejectionCustomText(e.target.value)}
         placeholder="Enter custom rejection reason..."
         aria-label="Custom rejection reason"
-        className="w-full border border-stone-200 rounded-lg p-2 text-xs"
+        className={FIELD_CLASS}
         required
       />
     )}
@@ -84,12 +86,17 @@ export default function AgentRejectionPanel({
       action row, inside the action area, so it is read as part of deciding to
       reject. It is static content, not a new error or live region, and it
       asserts only what POST /api/agents/reject-dropoff actually enforces. */}
-  <p className="rounded-lg border border-red-200 bg-white/70 px-3 py-2 text-xs font-semibold leading-snug text-red-800">
+  <p className="break-words rounded-standard border border-[var(--appearance-danger)] bg-[var(--appearance-surface)] px-3 py-2 text-small font-semibold leading-snug text-[var(--appearance-danger)]">
     {t.agentRejectConsequence}
   </p>
 
-  <div className="flex flex-wrap items-center justify-end gap-2">
-    <Button type="button" variant="outline" size="md" onClick={() => setRejectingItemId(null)}>
+  {/* MOBILE-FIRST BATCH B — on a phone the two actions stack in a column and
+      the DESTRUCTIVE action sits on top, at thumb height, instead of sharing a
+      cramped row with Cancel. DOM order is unchanged (Cancel first, Submit
+      second); `flex-col-reverse` only flips the visual order below `sm`, and
+      from `sm` up the row is the same inline, right-aligned pair as before. */}
+  <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-end">
+    <Button type="button" variant="outline" size="md" onClick={() => setRejectingItemId(null)} className="w-full sm:w-auto">
       Cancel
     </Button>
     {/* BATCH 2 (UX-03): the destructive action now uses the SHARED Button
@@ -107,6 +114,7 @@ export default function AgentRejectionPanel({
       disabled={isItemBusy(item.id) || (rejectionReason === "Other" && rejectionCustomText.trim() === "")}
       loading={isItemBusy(item.id)}
       aria-busy={isItemBusy(item.id)}
+      className="w-full sm:w-auto"
     >
       Submit Rejection
     </Button>
