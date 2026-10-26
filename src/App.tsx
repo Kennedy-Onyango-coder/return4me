@@ -260,16 +260,11 @@ export default function App() {
         //       "/console redirects to the homepage".
         //
         // Nothing about admin authentication or authorization changes here.
-        // AdminView still renders its own passcode + 2FA gate when there is no
-        // token, and every /api/admin route still enforces its own explicit
-        // role check server-side (see adminRouteAudit.test.ts).
-        //
-        // ROLE GUARD: if /console is accessed without an admin token, redirect
-        // to sign-in so the protected dashboard cannot become publicly accessible.
-        if (!adminToken) {
-          navigate('/sign-in', 'signin');
-          return;
-        }
+        // AdminView renders its own passcode + 2FA gate when there is no token,
+        // and every /api/admin route still enforces its own explicit role check
+        // server-side (see adminRouteAudit.test.ts). We do NOT redirect to
+        // /sign-in here because SignInView has no admin sign-in path — the
+        // console's own login gate inside AdminView is the correct entry point.
         setView('admin');
         setCustomerMode(false);
         return;
