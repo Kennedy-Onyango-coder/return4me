@@ -14,6 +14,9 @@ import { translations } from '../types';
 import { countiesByUxGroup } from '../config/kenyaCounties';
 import { administrativeUnitsForCounty } from '../config/kenyaAdministrativeUnits';
 import { detectBrowserLocation, hasGeographyConflict, type DetectedLocation } from '../services/browserLocation';
+// Mandatory automatic image analysis reuses the one OCR capability already
+// shipped for this app, including its real file-signature validation.
+import { detectSupportedImageMimeType } from '../services/ocr';
 import { Camera, Upload, AlertCircle, AlertTriangle, MapPin, CheckCircle, Shield, ArrowRight, Loader2, RefreshCw, X, type LucideIcon } from 'lucide-react';
 // UX-05 — the guided five-stage journey is assembled from the shared UI
 // foundation (Stepper + the Input/Select/Button primitives) instead of
@@ -145,6 +148,12 @@ export default function FinderView({ categories, categoriesLoading = false, cate
   const [categoryManuallySet, setCategoryManuallySet] = useState(false);
   const [extractedNumber, setExtractedNumber] = useState('');
   const [extractedName, setExtractedName] = useState('');
+  // Analysis lifecycle shared by the camera and upload paths. Mandatory
+  // automatic analysis runs as soon as an image is selected; these fields
+  // drive the review/correct UI and the stale-response guards.
+  const [analysisStage, setAnalysisStage] = useState<'idle' | 'analysing' | 'success' | 'failed' | 'empty'>('idle');
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [suggestedCategory, setSuggestedCategory] = useState<{ id: string; name: string } | null>(null);
   const [description, setDescription] = useState('');
   const [locationDescription, setLocationDescription] = useState('');
   // PHASE 9D — the Finder's EXPLICIT county. Required, and kept separate from
@@ -172,18 +181,35 @@ export default function FinderView({ categories, categoriesLoading = false, cate
     setIsAnalyzing(false);
     setAnalysisStatus('');
     setErrorMsg('');
+    setAnalysisStage('idle');
+    setAnalysisError(null);
+    setSuggestedCategory(null);
+    // A fresh image deserves a fresh analysis: only a category the Finder
+    // explicitly chose survives a re-capture / re-upload.
+    if (!categoryManuallySet) {
+      setCategoryId('');
+      setCategoryManuallySet(false);
+    }
+    // Mandatory automatic analysis: no separate "Scan" button required.
+    analyzeImage(dataUrl);
   };
 
 // Cancel any pending OCR request and reset the photo preview and extracted data.
   const cancelPendingOcr = () => {
-    ocrRequestRef.current += 1; // increment cancel token
+    ocrRequestRef.current += 1; // increment cancel token to invalidate in-flight responses
     setPhotoBase64(null);
     setExtractedNumber('');
     setExtractedName('');
     setIsAnalyzing(false);
     setAnalysisStatus('');
     setErrorMsg('');
-  };;
+    setAnalysisStage('idle');
+    setAnalysisError(null);
+    setSuggestedCategory(null);
+    if (!categoryManuallySet) {
+      setCategoryId('');
+    }
+  };
   // REQUEST 10 — the "Estimated Replacement Value, KES (Optional)" field was
   // REMOVED from this form. It fed declared_value, which the fee engine used
   // only as an optional CEILING on the recovery fee. With it gone the server
@@ -320,46 +346,106 @@ export default function FinderView({ categories, categoriesLoading = false, cate
   // Run the item-scanning pipeline (provider-agnostic on purpose — the
   // person reporting an item should never see which backend service reads
   // it, only that Return4me is handling it).
-  const analyzePhoto = async (base64Data: string) => {
-    setIsAnalyzing(true);
-    setAnalysisStatus('Return4me is preparing to scan your item...');
-    setErrorMsg('');
+  const resolveOcrCategory = (documentType: string | null | undefined, confidence: number | null | undefined) => {
+    const GENERIC = new Set(['other-item', 'other-document']);
+    const conf = typeof confidence === 'number' && Number.isFinite(confidence) ? confidence : 0;
+    const level = conf >= 0.7 ? 'high' : conf >= 0.4 ? 'medium' : 'low';
+    if (!documentType) return { applyId: null as string | null, suggestion: null as { id: string; name: string } | null, confidence: level };
+    const exact = categories.find((c) => c.id === documentType);
+    if (exact) {
+      const suggestion = { id: exact.id, name: exact.name_en };
+      const applyId = conf >= 0.7 && !GENERIC.has(documentType) ? exact.id : null;
+      return { applyId, suggestion, confidence: level };
+    }
+    return { applyId: null as string | null, suggestion: null as { id: string; name: string } | null, confidence: level };
+  };
 
-    // Increment cancel token so a cancelled/pending OCR request won't overwrite our results
-    const currentToken = ocrRequestRef.current + 1;
+  const applyAnalysisResult = (data: any, token: number) => {
+    if (!isMountedRef.current || ocrRequestRef.current !== token) return;
+    const resolved = resolveOcrCategory(data.documentType, data.confidence);
+    if (resolved.applyId && !categoryManuallySetRef.current) {
+      setCategoryId(resolved.applyId);
+    }
+    setSuggestedCategory(resolved.suggestion);
+    setExtractedNumber(typeof data.documentNumber === 'string' ? data.documentNumber : (data.documentNumber || ''));
+    setExtractedName(typeof data.fullName === 'string' ? data.fullName : (data.fullName || ''));
+    const hasUseful = !!(resolved.applyId || resolved.suggestion || data.documentNumber || data.fullName);
+    setAnalysisStage(hasUseful ? 'success' : 'empty');
+    if (!hasUseful) {
+      setAnalysisStatus("We couldn't read anything useful from this image. Please enter the details manually.");
+    } else {
+      setAnalysisStatus('');
+    }
+  };
+
+  const analyzeImage = async (base64Data: string) => {
+    const mime = detectSupportedImageMimeType(base64Data);
+    if (!mime) {
+      setAnalysisStage('failed');
+      setAnalysisError('Unsupported image type. Please upload a real JPEG, PNG or WEBP image.');
+      setIsAnalyzing(false);
+      return;
+    }
+
+    const token = ++ocrRequestRef.current;
+    setIsAnalyzing(true);
+    setAnalysisStage('analysing');
+    setAnalysisError(null);
+    setAnalysisStatus('Analysing your image…');
+    setSuggestedCategory(null);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
 
     try {
-      // Simulate real-time progress steps for a gorgeous UX
-      setTimeout(() => setAnalysisStatus('Reading document layout...'), 800);
-      setTimeout(() => setAnalysisStatus('Extracting identity details...'), 1600);
-
       const response = await fetch('/api/items/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ photoBase64: base64Data }),
+        signal: controller.signal,
       });
 
-      const data = await response.json();
+      if (!isMountedRef.current || ocrRequestRef.current !== token) return;
+
       if (!response.ok) {
-        throw new Error(data.error || 'Item analysis failed');
+        throw new Error('Item analysis failed.');
       }
 
-      // Only update state if this request is still the latest (not cancelled)
-      if (ocrRequestRef.current === currentToken) {
-        // Pre-fill form
-        if (!categoryManuallySet) {
-          setCategoryId(data.documentType || 'national-id');
-        }
-        setExtractedNumber(data.documentNumber || '');
-        setExtractedName(data.fullName || '');
+      const data = await response.json();
+
+      if (!isMountedRef.current || ocrRequestRef.current !== token) return;
+
+      if (!data || typeof data !== 'object' || (data.documentType != null && typeof data.documentType !== 'string')) {
+        setAnalysisStage('empty');
+        setAnalysisStatus("We couldn't read anything useful from this image. Please enter the details manually.");
+        return;
       }
+
+      applyAnalysisResult(data, token);
     } catch (e: any) {
-      console.error(e);
-      setErrorMsg('We couldn\'t scan that automatically. Please enter the details manually below.');
+      if (!isMountedRef.current || ocrRequestRef.current !== token) return;
+      if (e && e.name === 'AbortError') {
+        setAnalysisError('Analysis took too long. Please try again.');
+      } else {
+        setAnalysisError((e && e.message) || 'Analysis failed. Please try again.');
+      }
+      setAnalysisStage('failed');
     } finally {
-      setIsAnalyzing(false);
+      clearTimeout(timeoutId);
+      if (isMountedRef.current && ocrRequestRef.current === token) {
+        setIsAnalyzing(false);
+        setAnalysisStatus('');
+      }
     }
   };
+
+  // Failed analysis is recoverable: the photo and every answer stay in place,
+  // and a retry re-runs the same image through the shared pipeline.
+  const retryAnalysis = () => {
+    if (!photoBase64) return;
+    analyzeImage(photoBase64);
+  };
+
 
   const getCoordinates = async () => {
     setGpsLoading(true);
@@ -889,7 +975,7 @@ export default function FinderView({ categories, categoriesLoading = false, cate
                 // CAT-11: the sensitivity decision comes from the live category
                 // record alone — see isSelectedCategorySensitive() above.
                 const isSensitive = isSelectedCategorySensitive();
-                if (isSensitive) {
+                if (isSelectedCategorySensitive()) {
                   // CAT-11: the former inner `if (categoryId !== 'other')` wrapper
                   // was removed. 'other' is not a canonical category id, so the
                   // test was always true and its `else` branch was unreachable
