@@ -35,6 +35,7 @@ import {
   AlertTriangle,
   Banknote,
   ScrollText,
+  BellRing,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -50,7 +51,8 @@ export type AdminSectionId =
   | 'categories'
   | 'strikes'
   | 'payouts'
-  | 'audit';
+  | 'audit'
+  | 'notifications';
 
 /** The console's page-level heading copy for one section. */
 export interface AdminSectionCopy {
@@ -159,6 +161,18 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         icon: FileCheck,
         title: 'Manual Review',
         description: 'Review operational items requiring administrative attention.',
+      },
+      {
+        // BATCH A2 — the operator surface for notifications that never arrived.
+        // Every claim in this description is backed by the two N9 endpoints that
+        // already exist in server.ts: a bounded failure READ and a single-row
+        // authorized retry. The retry re-sends a message only; it never replays
+        // the payment, handover or claim action behind it.
+        id: 'notifications',
+        label: 'Notification Outbox',
+        icon: BellRing,
+        title: 'Notification Outbox',
+        description: 'Read failed, undelivered and unknown-outcome notifications, and retry the ones the server can rebuild and send again.',
       },
     ],
   },
