@@ -28,7 +28,7 @@ import {
 // LOST-REPORT WIZARD (Phase 9C · UX-04 presentation pass)
 // ===========================================================================
 // Four bounded steps that mirror the server contract in routes/lostReports.ts:
-//  1. What was lost   — category (+ an optional identifier, hashed server-side)
+//  1. What was lost   — category (required), item name (optional)
 //  2. Describe it     — brand / model / colour / material / notes
 //  3. Where and when  — county, area, landmark, and a lost TIME WINDOW
 //  4. Review          — a plain summary, then submit
@@ -82,6 +82,7 @@ interface FormState {
   categoryId: string;
   documentType: string;
   documentNumber: string;
+  itemName: string;
   brand: string;
   model: string;
   colour: string;
@@ -109,6 +110,7 @@ const EMPTY_FORM: FormState = {
   categoryId: '',
   documentType: '',
   documentNumber: '',
+  itemName: '',
   brand: '',
   model: '',
   colour: '',
@@ -166,9 +168,11 @@ function validateStep(step: number, form: FormState): StepError | null {
     return null;
   }
 
-  // Step 1 is entirely optional, exactly as the server treats it. Requiring
-  // something here would be inventing a rule the API does not have.
-  if (step === 1) return null;
+  // Step 1 — category is required (server-side validation mirrors this).
+  // Item name remains optional on the server and is not validated here.
+  if (!form.categoryId) {
+    return { field: 'categoryId', message: 'Please choose what was lost.' };
+  }
 
   if (step === 2) {
     if (!form.county) {
@@ -413,6 +417,7 @@ export default function LostReportWizard({
     const payload: LostReportCreatePayload = {
       categoryId: form.categoryId,
       county: form.county,
+      itemName: form.itemName ?? null,
       administrativeUnitId: form.administrativeUnitId,
       locationArea: form.locationArea.trim(),
       locationLandmark: form.locationLandmark.trim() || null,
@@ -491,6 +496,15 @@ export default function LostReportWizard({
               </option>
             ))}
           </Select>
+<Input
+            label={'Item name'}
+            ref={setFieldRef<HTMLInputElement>('itemName')}
+            value={form.itemName ?? ''}
+            onChange={(e) => set('itemName', e.target.value)}
+            placeholder={'e.g. '}
+            disabled={submitting}
+          />
+
 
           {/* Revealed only once a category exists, because an identifier class is
               only meaningful for a chosen kind of item. No new rule is added: the

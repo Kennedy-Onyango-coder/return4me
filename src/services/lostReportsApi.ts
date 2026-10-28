@@ -100,6 +100,7 @@ export interface LostReportCreationResponse {
 export interface LostReportCreatePayload {
   categoryId: string;
   county: string;
+  itemName?: string | null;
   administrativeUnitId: string;
   locationArea: string;
   locationLandmark?: string | null;
