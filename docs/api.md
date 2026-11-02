@@ -33,18 +33,10 @@ No authentication required.
 | GET | `/api/items/:id/public` | Public item view |
 | POST | `/api/items/report` | Report a found item |
 | POST | `/api/items/analyze` | Analyse a document image |
-| GET | `/api/lost-reports` | List lost reports |
-| POST | `/api/lost-reports` | File a lost report |
-| GET | `/api/lost-reports/:id` | Lost report detail |
-| GET | `/api/lost-reports/:id/matches` | Candidate matches for a lost report |
 | POST | `/api/location/reverse` | Reverse geocode a coordinate |
 
-The search and lost-report routes are rate limited. Public item and lost-report
-responses use a restricted DTO that omits finder and owner identity fields.
-
-The lost-report routes accept an optional customer session: a signed-out
-visitor is handed through the account boundary before the form renders, and the
-server enforces the same rule rather than relying on the client.
+The search routes are rate limited. Public item responses use a restricted DTO
+that omits finder and owner identity fields.
 
 ## Customer
 
@@ -61,6 +53,10 @@ Requires a valid `r4m_customer_session` cookie.
 | GET | `/api/customer/claims` | The customer's claims, grouped active and history |
 | GET | `/api/customer/claims/:id` | One claim; requires the claim to be linked |
 | DELETE | `/api/customer/claims/:id/link` | Unlink a claim from the account |
+| GET | `/api/lost-reports` | List lost reports |
+| POST | `/api/lost-reports` | File a lost report |
+| GET | `/api/lost-reports/:id` | Lost report detail |
+| GET | `/api/lost-reports/:id/matches` | Candidate matches for a lost report |
 
 Registration returns **503** if the activation email cannot be sent, rather than
 reporting success for an account that cannot be activated. There is no
@@ -69,6 +65,62 @@ activation resend endpoint.
 `GET /api/customer/claims` groups by the same inactive-status predicate the
 server uses to decide whether a claim counts as a competing claimant, so the
 dashboard and the claim logic cannot drift apart.
+
+The lost-report routes require the `r4m_customer_session` cookie: a signed-out
+visitor is handed through the account boundary (`/account`) before the form
+renders, and the server enforces the same requirement rather than relying on the
+client. `POST /api/lost-reports` and `GET /api/lost-reports/:id/matches` are rate
+limited, and lost-report responses use a restricted DTO that omits finder and
+owner identity fields.
+
+### `GET /api/lost-reports/:id/matches` — the optional `county` filter
+
+The route requires the `r4m_customer_session` cookie and only ever reads the
+caller's own report: another customer's reference produces the same 404 as a
+reference that does not exist.
+
+`county` is an optional query parameter that narrows the candidate list to found
+items whose **declared** `found_county` is the named Kenyan county. It is an
+equality test against that one field, applied in memory to the claimable item set
+the route already loads (`src/services/foundItemCounty.ts`); nothing is inferred
+from location text, coordinates or an agent's address, and filtering never
+changes a candidate's score or its position in the response.
+
+| Request | Response |
+|---|---|
+| `county` omitted | No county constraint. Behaviour is unchanged, including for legacy items whose `found_county` is `NULL`. |
+| A canonical county (`Nairobi City`) or a supported alias | `200`, listing only items declared in that county. |
+| A valid county with no matching item (`Kiambu` against a Nairobi report) | `200` with an empty `matches` array and the usual notice — an empty result, never a `400`. |
+| Blank or whitespace-only (`?county=`, `?county=%20%20`) | `400` `{ "error": "That county is not a recognised Kenyan county." }` |
+| Unknown, partial, misspelled or non-county place (`Atlantis`, `Nair`, `Nairobii`, `Westlands`) | `400`, same message |
+| Repeated (`?county=Nairobi&county=Kiambu`), array (`?county[]=…`) or object (`?county[name]=…`) | `400`, same message — there is no "first value wins" coercion |
+
+A supplied value is never treated as absent: `?county=` is a `400` rather than an
+unfiltered list, so a malformed link cannot silently disable the filter.
+
+**Formatting is tolerated; spelling is not.** The canonical resolver
+(`src/config/kenyaCounties.ts`) folds case, leading/trailing/repeated whitespace,
+the separators `/ - – —` (so `Taita/Taveta`, `Taita - Taveta` and `Taita Taveta`
+are one value), apostrophe variants including the typographic `’`, stray dots and
+apostrophes, and one optional trailing `County` word (`Nairobi County`,
+`Nairobi City County`). The alias table contributes exactly two distinct
+spellings, `nairobi` for `Nairobi City` and `muranga` for `Murang'a`; its other
+keys — `nairobi city`, `taita taveta`, `homa bay`, `elgeyo marakwet` and
+`tharaka nithi` — simply repeat a canonical name that already resolves after
+normalisation. There is no fuzzy matching, no prefix matching and no default
+county: `Nair`, `Nairobii`, `Westlands` and `Nairobi City County County` are all
+rejected.
+
+**Exclusion is the point of filtering.** An item with no canonical
+`found_county` can never satisfy a county filter, so it is excluded when one is
+supplied and remains eligible when none is — that is the documented consequence
+of narrowing by county, not a loss of data.
+
+Validation runs after authentication and after the owner-scoped report lookup, so
+an invalid value can never reveal whether another customer's report exists (both
+cases are the same `404`), and it runs before the closed-report short-circuit, so
+a cancelled report with an invalid `county` is a `400` rather than a silent
+success.
 
 ## Authentication
 

@@ -37,6 +37,10 @@ import { db } from '../db/database.ts';
 import { requireCustomerAuth } from '../services/customerAuth.ts';
 import { hashDocument } from '../services/documentHash.ts';
 import { resolveCountyName } from '../config/kenyaCounties.ts';
+// The ONE found-item county rule (Phase 16.1 / GEO-16-01): `itemMatchesCanonicalCounty`
+// is what the public search filters on, and this route reuses it rather than
+// re-implementing "does this item count as county X" a second time.
+import { FOUND_COUNTY_MESSAGES, itemMatchesCanonicalCounty } from '../services/foundItemCounty.ts';
 import { resolveAdministrativeUnitId } from '../config/kenyaAdministrativeUnits.ts';
 import type { LocationSource } from '../services/locationProvenance.ts';
 import { DEFAULT_LOST_REPORT_STATUS } from '../config/lostReportStatuses.ts';
@@ -484,6 +488,46 @@ export function registerLostReportRoutes(app: any, deps: LostReportRouteDeps): v
       const lostReport = await db.getLostReportByIdForCustomer(reference, req.customer.id);
       if (!lostReport) return res.status(404).json({ error: MESSAGES.notFound });
 
+      // --- COUNTY FILTER (Batch 2 — Stage 2B-0A / Stage 2B-0A.1) ---
+      // ABSENT `county`               -> no county constraint at all, so every
+      //                                  existing caller behaves exactly as
+      //                                  before (including for legacy items whose
+      //                                  `found_county` is NULL).
+      // PRESENT and canonical         -> filter on the item's DECLARED county
+      //                                  through the ONE shared rule
+      //                                  (services/foundItemCounty.ts).
+      // PRESENT but not canonical     -> 400, never a silent downgrade to
+      //                                  "everything": a typo must not quietly
+      //                                  return the whole platform.
+      // PRESENT but EMPTY/whitespace   -> also 400. "I supplied a value" and "I
+      //                                  supplied nothing at all" are different
+      //                                  requests, and collapsing the first into
+      //                                  the second would let a malformed link
+      //                                  disable the filter. routes/publicSearch.ts
+      //                                  already draws exactly this line.
+      //
+      // ORDERING: this runs AFTER requireCustomerAuth, the owner-scoped lookup
+      // and the report-existence check (so a 400 can never become an oracle for
+      // whether another customer's report exists — a cross-customer reference
+      // still yields the same 404 as a non-existent one) and BEFORE the
+      // closed-report short-circuit (so an invalid supplied value is validated
+      // rather than silently bypassed by a closed report).
+      let filteredCounty: string | null = null;
+      if (req.query.county !== undefined) {
+        const rawCounty = req.query.county;
+        // A non-string value (Express parses `?county=a&county=b` as an array) is
+        // not a canonical county either, so it is refused the same way — nothing
+        // in this route does "first value wins" coercion.
+        const canonicalCounty = typeof rawCounty === 'string' ? resolveCountyName(rawCounty) : null;
+        if (!canonicalCounty) {
+          // The SAME string-based envelope and the SAME message the public search
+          // uses, so services/lostReportsApi.ts surfaces it like any other route
+          // error instead of needing to understand a novel object payload.
+          return res.status(400).json({ error: FOUND_COUNTY_MESSAGES.invalid });
+        }
+        filteredCounty = canonicalCounty;
+      }
+
       // A closed report (resolved / cancelled / lapsed) must not keep producing
       // candidates: the customer has told us they are no longer looking. This is
       // an EMPTY result with an explicit notice, never a 404 — the report does
@@ -492,7 +536,7 @@ export function registerLostReportRoutes(app: any, deps: LostReportRouteDeps): v
         return res.json(buildLostReportMatchesResponse(lostReport, [], REPORT_NOT_ACTIVE_NOTICE));
       }
 
-      const claimableItems = await loadClaimableItems(canCreateClaim);
+      const claimableItems = await loadClaimableItems(canCreateClaim, filteredCounty);
       const candidates = selectLostReportCandidates(lostReport, claimableItems);
       return res.json(buildLostReportMatchesResponse(lostReport, candidates));
     } catch (e: any) {
@@ -514,6 +558,11 @@ export function registerLostReportRoutes(app: any, deps: LostReportRouteDeps): v
  * indexed, and premature optimisation here would add machinery with no measured
  * need.
  *
+ * `filteredCounty` is OPTIONAL and additive (Batch 2 — Stage 2B-0A.1): when it is
+ * supplied, only items whose DECLARED county matches are considered; when it is
+ * omitted the function returns exactly the same set as before, so every existing
+ * caller (and every unfiltered search) is unaffected.
+ *
  * PHASE 11A: EXPORTED so routes/adminLostReports.ts computes its per-report
  * match counts from the SAME candidate set, through the SAME claimability rule,
  * instead of growing a second, drifting copy. The admin view is read-only
@@ -521,13 +570,27 @@ export function registerLostReportRoutes(app: any, deps: LostReportRouteDeps): v
  */
 export async function loadClaimableItems(
   canCreateClaim: LostReportRouteDeps['canCreateClaim'],
+  filteredCounty: string | null = null,
 ): Promise<any[]> {
   const items = await db.getItemsByStatus('at_agent');
   if (items.length === 0) return [];
 
   const disputesByItem = await db.getDisputesByItemIds(items.map((item: any) => item.id));
+
   const claimable: any[] = [];
   for (const item of items) {
+    // Apply the county filter if one was requested (Batch 2 — Stage 2B-0A /
+    // Stage 2B-0A.1). `null` means "no county parameter was supplied", so every
+    // item is considered and the pre-existing behaviour is untouched.
+    //
+    // The comparison is the ONE shared rule (services/foundItemCounty.ts), not a
+    // second inline definition: it tests the item's DECLARED `found_county` and
+    // nothing else, so a legacy item whose county is NULL matches no county
+    // filter (and no county is ever guessed for it from free text).
+    if (filteredCounty !== null && !itemMatchesCanonicalCounty(item, filteredCounty)) {
+      continue;
+    }
+
     const claimability = await canCreateClaim(item, disputesByItem.get(item.id) ?? []);
     if (claimability && claimability.allowed) claimable.push(item);
   }

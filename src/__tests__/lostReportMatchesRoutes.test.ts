@@ -49,6 +49,13 @@ const ITEM_CLAIMED = `TEST-9B-ITEM-CLAIMED-${RUN}`;
 const ITEM_DISPUTED = `TEST-9B-ITEM-DISPUTED-${RUN}`;
 const ITEM_WRONG_CATEGORY = `TEST-9B-ITEM-WRONG-${RUN}`;
 
+// Batch 2 — Stage 2B-0A.1: county-filter fixtures. A dedicated category keeps
+// these rows out of every other report's candidate set, so the ONLY thing that
+// can separate the two items below is the optional `county` query parameter.
+const CATEGORY_COUNTY = `TEST-9B-CAT-COUNTY-${RUN}`;
+const ITEM_COUNTY_DECLARED = `TEST-9B-ITEM-CTY-D-${RUN}`;
+const ITEM_COUNTY_LEGACY = `TEST-9B-ITEM-CTY-L-${RUN}`;
+
 const ITEM_SENSITIVE = `TEST-9B-ITEM-SENS-${RUN}`;
 const HASH_SENSITIVE = 'c'.repeat(64);
 
@@ -61,6 +68,7 @@ const LR_A_NONE = generateLostReportReference();
 const LR_A_FUTURE = generateLostReportReference();
 const LR_A_CANCELLED = generateLostReportReference();
 const LR_A_SENSITIVE = generateLostReportReference();
+const LR_A_COUNTY = generateLostReportReference();
 const LR_B = generateLostReportReference();
 
 // Values that must NEVER appear in a customer-facing payload.
@@ -145,6 +153,7 @@ async function seed() {
 
   await ensureTestCategory('smartphone');
   await ensureTestCategory('national-id');
+  await ensureTestCategory(CATEGORY_COUNTY);
 
   // --- items -------------------------------------------------------------
   await db.createItem(itemRow(ITEM_MATCH));
@@ -175,6 +184,25 @@ async function seed() {
     latitude: -1.2921,
     longitude: 36.8219,
     assigned_agent_id: SECRET_AGENT,
+  }));
+
+  // Batch 2 — Stage 2B-0A.1 — the county-filter pair. Identical in every field
+  // the matcher reads (category, location text, description) and differing ONLY
+  // in the DECLARED county: one names the report's county, the other is a legacy
+  // row recorded before Phase 9D and therefore has none. Both are candidates for
+  // LR_A_COUNTY, so a county-filtered request must drop exactly one of them.
+  await db.createItem(itemRow(ITEM_COUNTY_DECLARED, {
+    category_id: CATEGORY_COUNTY,
+    location_description: 'Karen, Nairobi',
+    description: 'green nokia feature phone with a cracked screen',
+    found_county: 'Nairobi City',
+  }));
+  await db.createItem(itemRow(ITEM_COUNTY_LEGACY, {
+    category_id: CATEGORY_COUNTY,
+    location_description: 'Karen, Nairobi',
+    description: 'green nokia feature phone with a cracked screen',
+    // Legacy: no declared county (Phase 9D deliberately did not backfill).
+    found_county: null,
   }));
 
   // An unresolved dispute on ITEM_DISPUTED makes it ineligible for a claim, and
@@ -218,6 +246,19 @@ async function seed() {
     brand: null, colour: null, description: null,
   }));
   await db.createLostReport(lostRow(LR_B, CUSTOMER_B));
+
+  // Batch 2 — Stage 2B-0A.1 — the report the county-filter pair is measured
+  // against. Its county is the one ITEM_COUNTY_DECLARED declares.
+  await db.createLostReport(lostRow(LR_A_COUNTY, CUSTOMER_A, {
+    category_id: CATEGORY_COUNTY,
+    county: 'Nairobi City',
+    location_area: 'Karen',
+    location_landmark: null,
+    brand: 'Nokia',
+    model: null,
+    colour: 'Green',
+    description: 'green nokia feature phone with a cracked screen',
+  }));
 }
 
 /** Mirrors server.ts's central canCreateClaim rule. */
@@ -262,10 +303,11 @@ afterAll(async () => {
   await new Promise<void>((resolve) => limitedServer.close(() => resolve()));
 });
 
-async function getMatches(token: string | undefined, reference: string, root = '') {
+async function getMatches(token: string | undefined, reference: string, root = '', query = '') {
   const headers: Record<string, string> = {};
   if (token) headers.cookie = 'r4m_customer_session=' + token;
-  const res = await fetch(`${root || baseUrl}/api/lost-reports/${reference}/matches`, { headers });
+  const suffix = query ? `?${query}` : '';
+  const res = await fetch(`${root || baseUrl}/api/lost-reports/${reference}/matches${suffix}`, { headers });
   const raw = await res.text();
   let json: any = null;
   try { json = JSON.parse(raw); } catch { json = null; }
@@ -565,6 +607,126 @@ describe('a closed lost report stops producing candidates', () => {
     expect(res.body.matches).toEqual([]);
     expect(res.body.notice).toBe('lost_report_not_active');
     expect(res.body.ownership_confirmed).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// COUNTY FILTER (Batch 2 — Stage 2B-0A.1)
+//
+// The filter is an ADDITIVE, opt-in narrowing of the same candidate set: it is
+// decided on the item's DECLARED `found_county` alone (the ONE shared rule in
+// services/foundItemCounty.ts), never on location text, coordinates or an
+// agent's address — and it never re-ranks or re-scores anything. Every test
+// below drives the REAL handler over a real socket and asserts the returned
+// candidates/status codes, not source text.
+// ---------------------------------------------------------------------------
+describe('the optional county filter', () => {
+  const countyQuery = (raw: string) => `county=${encodeURIComponent(raw)}`;
+
+  it('no county parameter preserves the unfiltered behaviour', async () => {
+    const res = await getMatches(TOKEN_A, LR_A_COUNTY);
+    expect(res.status).toBe(200);
+    const ids = res.body.matches.map((m: any) => m.id);
+    // Both fixtures — the one that declares the report's county AND the legacy
+    // one that declares none — are candidates when no filter is requested.
+    expect(ids).toContain(ITEM_COUNTY_DECLARED);
+    expect(ids).toContain(ITEM_COUNTY_LEGACY);
+    expect(res.body.notice).toBe('possible_matches_do_not_confirm_ownership');
+  });
+
+  it('a valid county keeps the candidates declared in it and drops every other county', async () => {
+    const res = await getMatches(TOKEN_A, LR_A_COUNTY, '', countyQuery('Nairobi City'));
+    expect(res.status).toBe(200);
+    const ids = res.body.matches.map((m: any) => m.id);
+    expect(ids).toContain(ITEM_COUNTY_DECLARED);
+    // ITEM_COUNTY_LEGACY was a candidate in the unfiltered request above, so its
+    // disappearance here is caused by the FILTER, not by the matching engine.
+    expect(ids).not.toContain(ITEM_COUNTY_LEGACY);
+    expect(ids).toEqual([ITEM_COUNTY_DECLARED]);
+  });
+
+  it('an alias is canonicalised before filtering', async () => {
+    const aliased = await getMatches(TOKEN_A, LR_A_COUNTY, '', countyQuery('nairobi'));
+    expect(aliased.status).toBe(200);
+    expect(aliased.body.matches.map((m: any) => m.id)).toEqual([ITEM_COUNTY_DECLARED]);
+
+    // An alias request and a canonical-name request produce the SAME candidate
+    // set: the query value is resolved through the single 47-county resolver, so
+    // it can never reach the comparison un-canonicalised. (The payload bytes are
+    // not compared: `found_at` is stamped per response.)
+    const canonical = await getMatches(TOKEN_A, LR_A_COUNTY, '', countyQuery('Nairobi City'));
+    expect(canonical.status).toBe(200);
+    expect(canonical.body.matches.map((m: any) => m.id))
+      .toEqual(aliased.body.matches.map((m: any) => m.id));
+  });
+
+  it('a valid county that nothing matches returns an empty list, not an error', async () => {
+    const res = await getMatches(TOKEN_A, LR_A_COUNTY, '', countyQuery('Mombasa'));
+    expect(res.status).toBe(200);
+    expect(res.body.matches).toEqual([]);
+    expect(res.body.ownership_confirmed).toBe(false);
+  });
+
+  it('an invalid county is refused with the shared public-search message', async () => {
+    const { FOUND_COUNTY_MESSAGES } = await import('../services/foundItemCounty');
+    const res = await getMatches(TOKEN_A, LR_A_COUNTY, '', countyQuery('Atlantis'));
+    expect(res.status).toBe(400);
+    // A plain STRING envelope, exactly like routes/publicSearch.ts — the client
+    // helper (services/lostReportsApi.ts) reads `body.error` as text like it does
+    // for every other route error, so no novel object payload is introduced.
+    expect(typeof res.body.error).toBe('string');
+    expect(res.body.error).toBe(FOUND_COUNTY_MESSAGES.invalid);
+    expect(res.body.matches).toBeUndefined();
+  });
+
+  it('an EMPTY or whitespace-only county value is refused, never treated as absent', async () => {
+    for (const raw of ['', '   ']) {
+      const res = await getMatches(TOKEN_A, LR_A_COUNTY, '', countyQuery(raw));
+      expect(res.status, `county=${JSON.stringify(raw)} must be refused`).toBe(400);
+      expect(typeof res.body.error).toBe('string');
+      expect(res.body.matches).toBeUndefined();
+    }
+  });
+
+  it('filtering preserves owner isolation and never becomes an existence oracle', async () => {
+    const asOther = await getMatches(TOKEN_B, LR_A_COUNTY, '', countyQuery('Nairobi City'));
+    expect(asOther.status).toBe(404);
+
+    const unknown = await getMatches(TOKEN_B, 'LR-ZZZZZZ', '', countyQuery('Nairobi City'));
+    expect(unknown.raw).toBe(asOther.raw);
+
+    // The ownership/existence check runs BEFORE county validation, so an invalid
+    // county cannot be used to probe for someone else's report: the answer is
+    // still the same 404, never a 400.
+    const probe = await getMatches(TOKEN_B, LR_A_COUNTY, '', countyQuery('Atlantis'));
+    expect(probe.status).toBe(404);
+    expect(probe.raw).toBe(asOther.raw);
+  });
+
+  it('filtering preserves the claimability restrictions', async () => {
+    const res = await getMatches(TOKEN_A, LR_A_MATCH, '', countyQuery('Nairobi City'));
+    expect(res.status).toBe(200);
+    const ids = res.body.matches.map((m: any) => m.id);
+    // The claimable, in-county item stays a candidate...
+    expect(ids).toContain(ITEM_MATCH);
+    // ...while every item that is NOT currently claimable is still excluded by
+    // the central claimability rule, not merely by the county match.
+    for (const excluded of [ITEM_AWAITING, ITEM_FLAGGED, ITEM_CLAIMED, ITEM_DISPUTED]) {
+      expect(ids, `${excluded} must stay excluded under a county filter`).not.toContain(excluded);
+    }
+  });
+
+  it('an invalid county is rejected even when the report is closed', async () => {
+    const res = await getMatches(TOKEN_A, LR_A_CANCELLED, '', countyQuery('Atlantis'));
+    expect(res.status).toBe(400);
+  });
+
+  it('a valid county preserves the existing closed-report response', async () => {
+    const res = await getMatches(TOKEN_A, LR_A_CANCELLED, '', countyQuery('Nairobi City'));
+    expect(res.status).toBe(200);
+    expect(res.body.lost_report_id).toBe(LR_A_CANCELLED);
+    expect(res.body.matches).toEqual([]);
+    expect(res.body.notice).toBe('lost_report_not_active');
   });
 });
 
