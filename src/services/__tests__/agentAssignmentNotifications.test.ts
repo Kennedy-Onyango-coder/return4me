@@ -252,8 +252,14 @@ describe('Batch B — assignment notifications are idempotent under retries', ()
     expect(second.finder?.status).toBe('duplicate');
     expect(second.claimant[0].status).toBe('duplicate');
 
-    // Durable evidence: the event row exists under the canonical key.
-    expect(await db.getNotificationEventByIdempotencyKey(`AGENT_ITEM_ASSIGNED:${item.id}`)).toBeTruthy();
+    // Durable evidence: the event row exists under the canonical key. STAGE 3B-3
+    // changed the IDENTITY the key is built from, not its shape: with no
+    // committed history event id in hand (the automatic path) the identity falls
+    // back to `item:agent`, so a retransmission of THIS event is still suppressed
+    // while a transfer to a DIFFERENT agent no longer is.
+    expect(
+      await db.getNotificationEventByIdempotencyKey(`AGENT_ITEM_ASSIGNED:${item.id}:${agent.id}`),
+    ).toBeTruthy();
   });
 });
 

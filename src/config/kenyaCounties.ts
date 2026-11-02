@@ -134,6 +134,11 @@ export const KENYA_COUNTY_NAMES: readonly string[] = KENYA_COUNTIES.map((c) => c
 /**
  * Spelling variants users actually type. Kept separate from the canonical list
  * so storage/display stays exact while search and de-duplication still work.
+ *
+ * Keys are compared AFTER `countyLookupKey()` normalisation below, so an entry
+ * written as 'taita taveta' also answers to 'Taita/Taveta' and
+ * '  TAITA - TAVETA '. Every value is a canonical name from the list above: an
+ * alias can never introduce a 48th county.
  */
 export const KENYA_COUNTY_ALIASES: Readonly<Record<string, string>> = {
   'nairobi': 'Nairobi City',
@@ -146,18 +151,78 @@ export const KENYA_COUNTY_ALIASES: Readonly<Record<string, string>> = {
 };
 
 /**
+ * THE ONLY FORMATTING VARIATIONS TREATED AS THE SAME COUNTY
+ * ---------------------------------------------------------
+ * Stage 3B-6C. These are formatting rules, not spelling rules, and every one of
+ * them is explicit. There is no similarity score, no edit distance, no prefix
+ * match and no default county, so a misspelling or a partial name can never
+ * resolve.
+ *
+ *   1. Unicode NFC            — one representation per character.
+ *   2. Case folding           — 'NAIROBI' and 'Nairobi' are one key.
+ *   3. Apostrophes            — straight ' and the typographic ’ ‘ ´ ` fold to
+ *                               one character: "Murang’a" === "Murang'a".
+ *   4. Separators             — '/', '-' '–' '—' and whitespace are all word
+ *                               breaks, so 'Taita/Taveta' (the Constitution's
+ *                               spelling), 'Taita - Taveta' and 'Taita Taveta'
+ *                               produce the same key.
+ *   5. Stray dots/apostrophes  — dropped, exactly as the original resolver did
+ *                               (an apostrophe is formatting, never a spelling
+ *                               difference).
+ *   6. Whitespace              — leading, trailing and repeated runs collapse.
+ *   7. Optional 'County'       — ONE trailing 'County' word is dropped, so
+ *                               'Nairobi County' and 'Murang’a County' work.
+ *                               A second suffix is not dropped, so
+ *                               'Nairobi City County County' stays invalid.
+ *
+ * Anything else is spelling, and spelling is deliberately NOT normalised:
+ * 'Nairobii', 'Taita', 'Elgeyo', 'Muranga East', 'Samburu East' and
+ * 'Westlands' all remain unknown, because guessing which county someone meant
+ * is exactly the failure this resolver must not commit.
+ */
+const COUNTY_APOSTROPHES = /[\u2018\u2019\u02BB\u02BC\u00B4`]/g;
+const COUNTY_SEPARATORS = /[/\u2013\u2014-]/g;
+const COUNTY_COUNTY_SUFFIX = /\s+county$/;
+
+/** The lookup key for a submitted county value. Never returns a county name. */
+function countyLookupKey(input: string): string {
+  const collapsed = input
+    .normalize('NFC')
+    .replace(COUNTY_APOSTROPHES, "'")
+    .toLowerCase()
+    .replace(COUNTY_SEPARATORS, ' ')
+    .replace(/[.']/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  // 'Nairobi County' -> 'nairobi'; a bare 'County' collapses to '' and is
+  // therefore invalid rather than a default.
+  return collapsed.replace(COUNTY_COUNTY_SUFFIX, '').trim();
+}
+
+/**
+ * The whole lookup table, built once: canonical names first, documented aliases
+ * second. A key can only collide with the canonical name it already points at,
+ * and every value is one of the 47 canonical names.
+ */
+const COUNTY_KEY_TO_NAME: ReadonlyMap<string, string> = (() => {
+  const table = new Map<string, string>();
+  for (const county of KENYA_COUNTIES) table.set(countyLookupKey(county.name), county.name);
+  for (const [alias, canonical] of Object.entries(KENYA_COUNTY_ALIASES)) {
+    table.set(countyLookupKey(alias), canonical);
+  }
+  return table;
+})();
+
+/**
  * Resolves a free-text county entry to its canonical name, or null when the
- * text does not name a Kenyan county. Case-tolerant; never "guesses" a
- * nearby county.
+ * text does not name a Kenyan county. Tolerates the formatting variations
+ * documented above; never "guesses" a nearby county.
  */
 export function resolveCountyName(input: string | null | undefined): string | null {
   if (typeof input !== 'string') return null;
-  const needle = input.trim().toLowerCase().replace(/\./g, '');
-  if (!needle) return null;
-  for (const county of KENYA_COUNTIES) {
-    if (county.name.toLowerCase() === needle) return county.name;
-  }
-  return KENYA_COUNTY_ALIASES[needle] ?? null;
+  const key = countyLookupKey(input);
+  if (!key) return null;
+  return COUNTY_KEY_TO_NAME.get(key) ?? null;
 }
 
 /**

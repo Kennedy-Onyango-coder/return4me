@@ -162,6 +162,14 @@ describe('AgentMatchingService.assignNearestAgent — never assigns an arbitrary
       agent_assignment_method: 'manual_override',
       needs_manual_agent_reassignment: false,
       agent_assignment_distance_km: null,
+    }, {
+      // BATCH 3 (3B-2) — an assignment now has to name its actor, trigger and
+      // reason, so the same call the route makes is what this test exercises.
+      method: 'manual_override',
+      triggerSource: 'admin_manual',
+      actorId: 'b3-test-admin',
+      actorRole: 'admin',
+      reason: 'Manual assignment of an unmatched item during the test.',
     });
 
     const item = await db.getItem(itemId);

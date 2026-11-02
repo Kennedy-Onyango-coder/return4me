@@ -520,6 +520,190 @@ export function renderSendClaimantAgentAssignedEmail(
 }
 
 /**
+ * STAGE 3B-3 — an item has been taken AWAY from a hub (EventType
+ * AGENT_ITEM_REASSIGNED, sent to the OUTGOING agent of a transfer).
+ *
+ * WHY THIS MESSAGE EXISTS. Before this stage a reassignment was silent for the
+ * hub that lost the item: it had been told to expect work, and then the work
+ * simply never arrived. The honest message is the one below — the assignment has
+ * moved, the hub no longer needs to expect or hold it, and nothing is asked of
+ * them.
+ *
+ * WHAT IT DELIBERATELY OMITS: the replacement hub's identity (the outgoing agent
+ * needs to know the work is gone, not who took it), the finder's contact details
+ * and every claimant detail. Only the item code travels.
+ */
+export function renderSendAgentItemReassignedEmail(
+    agentBusinessName: string,
+    dropoffCode: string
+): { subject: string; body: string } {
+    const subject = 'Item Reassigned to Another Hub - Return4me';
+
+    const content = [
+        emailKicker('Assignment changed'),
+        emailHeading('An item is no longer assigned to your hub'),
+        emailParagraph(
+            `Hello <strong>${escapeHtml(agentBusinessName)}</strong>, an administrator has reassigned a found item that was previously routed to you. You do not need to receive or check in this item.`
+        ),
+        emailDetails([
+            { label: 'Item code', value: dropoffCode, mono: true },
+        ]),
+        emailCallout({
+            tone: 'info',
+            label: 'What to do next',
+            text: 'Nothing. If the item has already reached your hub, contact support before releasing it to anyone — physical custody is handled separately from this assignment change.',
+        }),
+        emailNote('This message confirms that your assignment has ended. It does not mean the item has been collected.'),
+    ].join('\n');
+
+    const { html } = buildEmailMessage({
+        subject,
+        preheader: `Item ${dropoffCode} is no longer assigned to your hub.`,
+        headerLabel: 'Assignment changed',
+        accent: EMAIL_THEME.info,
+        content,
+        footerNote: `Keep this email. Quote item code ${escapeHtml(dropoffCode)} if you need to contact support.`,
+    });
+
+    return { subject, body: html };
+}
+
+/**
+ * STAGE 3B-3 — an item's assignment was REMOVED (EventType
+ * AGENT_ITEM_UNASSIGNED, sent to the outgoing agent).
+ *
+ * Distinct from the reassignment message on purpose: nobody has taken the item
+ * over, so the hub is not told to expect a replacement. A hub that is physically
+ * holding the item is never in this position — the custody policy refuses to
+ * unassign such an item at all — so the message can safely say the hub is no
+ * longer expected to receive it.
+ */
+export function renderSendAgentItemUnassignedEmail(
+    agentBusinessName: string,
+    dropoffCode: string
+): { subject: string; body: string } {
+    const subject = 'Item Assignment Removed - Return4me';
+
+    const content = [
+        emailKicker('Assignment removed'),
+        emailHeading('An item assignment has been removed'),
+        emailParagraph(
+            `Hello <strong>${escapeHtml(agentBusinessName)}</strong>, an administrator has removed the assignment of a found item that was routed to your hub. No hub is currently assigned to it.`
+        ),
+        emailDetails([
+            { label: 'Item code', value: dropoffCode, mono: true },
+        ]),
+        emailCallout({
+            tone: 'info',
+            label: 'What to do next',
+            text: 'Nothing. If the item has already reached your hub, contact support before releasing it to anyone — physical custody is handled separately from this assignment change.',
+        }),
+        emailNote('This message confirms that your assignment has been removed. It does not mean the item has been collected.'),
+    ].join('\n');
+
+    const { html } = buildEmailMessage({
+        subject,
+        preheader: `Item ${dropoffCode} is no longer assigned to your hub.`,
+        headerLabel: 'Assignment removed',
+        accent: EMAIL_THEME.info,
+        content,
+        footerNote: `Keep this email. Quote item code ${escapeHtml(dropoffCode)} if you need to contact support.`,
+    });
+
+    return { subject, body: html };
+}
+
+/**
+ * STAGE 3B-3 — the finder is told the hub assigned to their item was removed
+ * (EventType FINDER_AGENT_UNASSIGNED).
+ *
+ * The finder was previously told "an agent hub will receive it", so leaving that
+ * statement standing after a removal would be telling them something false about
+ * their own item. What is true: the item is back in the assignment queue and a
+ * new hub will be arranged. No agent contact detail is included.
+ */
+export function renderSendFinderAgentUnassignedEmail(
+    itemName: string,
+    dropoffCode: string
+): { subject: string; body: string } {
+    const subject = 'Update on the Item You Found - Return4me';
+
+    const content = [
+        emailKicker('Drop-off update'),
+        emailHeading('The drop-off hub for your item has changed'),
+        emailParagraph(
+            `The agent hub previously arranged to receive <strong>${escapeHtml(itemName)}</strong> is no longer assigned to it. Your report is still active and a new hub will be arranged.`
+        ),
+        emailDetails([
+            { label: 'Item code', value: dropoffCode, mono: true },
+            { label: 'Status', value: 'Awaiting a new drop-off hub' },
+        ]),
+        emailCallout({
+            tone: 'info',
+            label: 'What happens next',
+            text: 'Keep the item safe. You will be told when a new hub has been assigned; do not hand the item to anyone who cannot confirm the item code above.',
+        }),
+        emailNote('This message confirms a change of hub only. It does not mean the item has been claimed or returned.'),
+    ].join('\n');
+
+    const { html } = buildEmailMessage({
+        subject,
+        preheader: `The drop-off hub for ${itemName} has changed.`,
+        headerLabel: 'Drop-off update',
+        accent: EMAIL_THEME.info,
+        content,
+        footerNote: `Keep this email. Quote item code ${escapeHtml(dropoffCode)} if you need to contact support.`,
+    });
+
+    return { subject, body: html };
+}
+
+/**
+ * STAGE 3B-3 — a live claimant is told the agent handling their claim was removed
+ * (EventType CLAIMANT_AGENT_UNASSIGNED).
+ *
+ * The claim itself is untouched, and saying so is the point of the message: a
+ * claimant who is told "the agent was removed" without being told "your claim
+ * still stands" will assume the worst. No pickup code, no security answer and no
+ * agent contact detail is included.
+ */
+export function renderSendClaimantAgentUnassignedEmail(
+    itemName: string,
+    dropoffCode: string
+): { subject: string; body: string } {
+    const subject = 'Recovery Update: Agent Assignment Removed - Return4me';
+
+    const content = [
+        emailKicker('Recovery update'),
+        emailHeading('The agent handling your claim has been removed'),
+        emailParagraph(
+            `The agent previously handling <strong>${escapeHtml(itemName)}</strong> is no longer assigned to it. Your claim is unaffected and remains open.`
+        ),
+        emailDetails([
+            { label: 'Item code', value: dropoffCode, mono: true },
+            { label: 'Claim', value: 'Still active' },
+        ]),
+        emailCallout({
+            tone: 'info',
+            label: 'What happens next',
+            text: 'A new agent will be arranged for this item. You will be told when that happens, and nothing further is needed from you now.',
+        }),
+        emailNote('This message confirms a change of handling agent only. Your claim and its verification requirements are unchanged.'),
+    ].join('\n');
+
+    const { html } = buildEmailMessage({
+        subject,
+        preheader: `The agent handling ${itemName} has been removed; your claim is unaffected.`,
+        headerLabel: 'Recovery update',
+        accent: EMAIL_THEME.info,
+        content,
+        footerNote: `Keep this email. Quote item code ${escapeHtml(dropoffCode)} if you need to contact support.`,
+    });
+
+    return { subject, body: html };
+}
+
+/**
  * INTERNAL ledger notification for an admin-visible money event (N8, EventType
  * ADMIN_TRANSACTION_LOG, subtypes PAYMENT_CONFIRMED and
  * HANDOVER_CONFIRMED_PENDING_SETTLEMENT).

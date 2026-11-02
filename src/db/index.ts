@@ -16,6 +16,17 @@ import {
   PAYOUT_REPAIR_OPERATION_SQL_LIST,
   PAYOUT_REPAIR_STATUS_SQL_LIST,
 } from "../config/payoutRepairPolicy";
+// BATCH 3 (stage 3B-2) — the assignment-history vocabularies for the idempotent
+// DDL below. Imported from the shared policy module (never restated) so the
+// runtime DDL, src/db/schema.ts and sql/schema.sql are all generated from the
+// same lists.
+import {
+  ITEM_ASSIGNMENT_ACTOR_ROLE_SQL_LIST,
+  ITEM_ASSIGNMENT_EVENT_TYPE_SQL_LIST,
+  ITEM_ASSIGNMENT_METHOD_SQL_LIST,
+  ITEM_ASSIGNMENT_TRIGGER_SOURCE_SQL_LIST,
+} from "../config/itemAgentAssignmentPolicy";
+
 
 dotenv.config();
 
@@ -56,6 +67,13 @@ const mockDatabaseState: Record<string, any[]> = {
   // confirmation paths in src/db/database.ts. Listed here so the in-memory shape
   // is explicit rather than appearing by accident on first insert.
   payout_repair_requests: [],
+  // BATCH 3 (stage 3B-2) — the append-only item → agent assignment history.
+  // Only Drizzle INSERTS touch it (via the three assignment paths in
+  // database.ts, each inside the same transaction as the assignment itself) and
+  // only getItemAssignmentHistory() reads it. Listed here so the in-memory shape
+  // is explicit; a plain insert would auto-create it anyway, and keeping the
+  // declaration makes the absence of any update/delete path visible.
+  item_agent_assignments: [],
 };
 
 // Uniqueness invariants the in-memory mock enforces on a PLAIN insert.
@@ -1939,7 +1957,62 @@ created_at TIMESTAMP WITH TIME ZONE NOT NULL
     `ALTER TABLE payout_repair_requests ADD CONSTRAINT payout_repair_requests_dual_control_check CHECK (confirmed_by IS NULL OR confirmed_by <> proposed_by)`,
     `ALTER TABLE payout_repair_requests DROP CONSTRAINT IF EXISTS payout_repair_requests_confirmation_check`,
     `ALTER TABLE payout_repair_requests ADD CONSTRAINT payout_repair_requests_confirmation_check CHECK (status <> 'confirmed' OR (confirmed_by IS NOT NULL AND confirmed_at IS NOT NULL))`,
+    // ---------------------------------------------------------------------
+    // BATCH 3 (stage 3B-2) — ITEM → AGENT ASSIGNMENT HISTORY.
+    //
+    // Additive and idempotent in exactly the same way as the repair-request
+    // block above: CREATE TABLE IF NOT EXISTS + IF NOT EXISTS indexes, and
+    // DROP-then-ADD for every CHECK, so re-running this list on a database that
+    // already has the table converges instead of failing.
+    //
+    // NO BACKFILL AND NO DATA MIGRATION: the table starts EMPTY. Assignments
+    // that happened before it existed are deliberately not reconstructed —
+    // there is no trustworthy source for their previous holder, method or
+    // trigger, and inventing one would make the history lie about the past.
+    // An item assigned earlier simply has no events until it is next
+    // (re)assigned.
+    //
+    // APPEND-ONLY: nothing in this list (or anywhere else) updates or deletes a
+    // row, and no UPDATE/DELETE statement is ever issued against this table.
+    //
+    // The vocabularies come from src/config/itemAgentAssignmentPolicy.ts, so
+    // this DDL, src/db/schema.ts and sql/schema.sql cannot drift apart.
+    // ---------------------------------------------------------------------
+    `CREATE TABLE IF NOT EXISTS item_agent_assignments (
+      id VARCHAR(50) PRIMARY KEY,
+      item_id VARCHAR(50) NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+      previous_agent_id VARCHAR(50) REFERENCES agents(id),
+      new_agent_id VARCHAR(50) REFERENCES agents(id),
+      event_type VARCHAR(20) NOT NULL,
+      assignment_method VARCHAR(30) NOT NULL,
+      trigger_source VARCHAR(40) NOT NULL,
+      actor_id VARCHAR(100),
+      actor_role VARCHAR(20) NOT NULL,
+      reason TEXT,
+      distance_km NUMERIC(8,2),
+      created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_item_agent_assignments_item ON item_agent_assignments(item_id, created_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_item_agent_assignments_new_agent ON item_agent_assignments(new_agent_id)`,
+    `ALTER TABLE item_agent_assignments DROP CONSTRAINT IF EXISTS item_agent_assignments_event_type_check`,
+    `ALTER TABLE item_agent_assignments ADD CONSTRAINT item_agent_assignments_event_type_check CHECK (event_type IN (${ITEM_ASSIGNMENT_EVENT_TYPE_SQL_LIST}))`,
+    `ALTER TABLE item_agent_assignments DROP CONSTRAINT IF EXISTS item_agent_assignments_method_check`,
+    `ALTER TABLE item_agent_assignments ADD CONSTRAINT item_agent_assignments_method_check CHECK (assignment_method IN (${ITEM_ASSIGNMENT_METHOD_SQL_LIST}))`,
+    `ALTER TABLE item_agent_assignments DROP CONSTRAINT IF EXISTS item_agent_assignments_trigger_source_check`,
+    `ALTER TABLE item_agent_assignments ADD CONSTRAINT item_agent_assignments_trigger_source_check CHECK (trigger_source IN (${ITEM_ASSIGNMENT_TRIGGER_SOURCE_SQL_LIST}))`,
+    `ALTER TABLE item_agent_assignments DROP CONSTRAINT IF EXISTS item_agent_assignments_actor_role_check`,
+    `ALTER TABLE item_agent_assignments ADD CONSTRAINT item_agent_assignments_actor_role_check CHECK (actor_role IN (${ITEM_ASSIGNMENT_ACTOR_ROLE_SQL_LIST}))`,
+    // STAGE 3B-3 — the holder/event-type agreement rule, added to databases that
+    // already have the table. `unassigned` rows are only new ones, so this can be
+    // added without touching existing data: every pre-3B-3 row is an assignment
+    // and already satisfies the `event_type <> 'unassigned'` half.
+    `ALTER TABLE item_agent_assignments DROP CONSTRAINT IF EXISTS item_agent_assignments_holder_shape_check`,
+    `ALTER TABLE item_agent_assignments ADD CONSTRAINT item_agent_assignments_holder_shape_check CHECK (
+      (event_type = 'unassigned' AND new_agent_id IS NULL AND previous_agent_id IS NOT NULL)
+      OR (event_type <> 'unassigned' AND new_agent_id IS NOT NULL)
+    )`,
   ];
+
 
   let migrationFailureCount = 0;
   for (const sql of statements) {

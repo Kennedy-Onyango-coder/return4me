@@ -289,14 +289,22 @@ describe('UX-15B: the administrator identity band and its sign-out', () => {
 // -----------------------------------------------------------------------------
 
 describe('UX-15B: the console section navigation', () => {
-  it('still declares exactly the real sections — the ten, plus Payout Integrity and Audit Log — in the nav landmark', () => {
+  it('still declares exactly the real sections — the ten, plus Stranded Items, Payout Integrity and Audit Log — in the nav landmark', () => {
     const declared = [...NAV.matchAll(/aria-current=\{activeTab === '([a-z_]+)'/g)].map((m) => m[1]);
     // PROGRAMME 1 appended two sections, both backed by endpoints that exist and
     // both read-only, exactly as PHASE 11A appended 'lost_reports' before them.
+    //
+    // STAGE 3B-6B appended 'stranded_items' on the same terms, which is why the
+    // list below grew by one and did not shrink: the section is READ-ONLY, it is
+    // backed by GET /api/admin/stranded-items, and its single action reuses the
+    // pre-existing audited POST /api/admin/items/:id/unassign rather than an
+    // invented endpoint. The expectation stays an exact match — not a
+    // "contains" — so a section still cannot appear in the nav without a
+    // decision recorded here.
     expect(declared.sort()).toEqual(
       [
         'stats', 'agents', 'found_items', 'disputes', 'claims', 'ledger', 'review',
-        'categories', 'strikes', 'lost_reports', 'payouts', 'audit',
+        'categories', 'strikes', 'lost_reports', 'payouts', 'audit', 'stranded_items',
       ].sort(),
     );
     expect(NAV).toContain("aria-current={activeTab === 'stats' ? 'page' : undefined}");
@@ -315,6 +323,10 @@ describe('UX-15B: the console section navigation', () => {
       // unchanged: the exact text rendered for each section, and its state key.
       "<span>{'Agents Hub'}</span>",
       "<span>{'Found Items'}</span>",
+      // STAGE 3B-6B — the stranded-item queue section, declared in the same
+      // English-only form as the four labels above (this nav carries no
+      // bilingual ternary, and this batch did not add one).
+      "<span>{'Stranded Items'}</span>",
       "<span>{'Claims'}</span>",
       "<span>{'Lost Reports'}</span>",
       '<span>Manual Review</span>',
@@ -328,14 +340,20 @@ describe('UX-15B: the console section navigation', () => {
   });
 
   it('stays a navigation control, not a row of generic action buttons', () => {
-    expect(count(NAV, /<button\b/g)).toBe(12);
+    // One <button> per declared section: 13 since Stage 3B-6B added Stranded
+    // Items. The count is pinned (not derived from `declared`) so that a section
+    // added to the nav without its button — or a button added without a section —
+    // still fails here rather than silently in the console.
+    expect(count(NAV, /<button\b/g)).toBe(13);
     expect(NAV).not.toContain('<Button');
   });
 
   it('sizes every nav icon from the UX-01 ladder, decoratively', () => {
     expect(rawIconSize(NAV)).toEqual([]);
-    expect(count(NAV, /size=\{ICON_SIZE\.metadata\}/g)).toBe(12);
-    expect(count(NAV, /aria-hidden="true"/g)).toBe(12);
+    // The same 13 buttons: every icon is ladder-sized AND hidden from assistive
+    // technology, including the Stranded Items icon this batch added.
+    expect(count(NAV, /size=\{ICON_SIZE\.metadata\}/g)).toBe(13);
+    expect(count(NAV, /aria-hidden="true"/g)).toBe(13);
   });
 
   it('uses the appearance tokens for the nav text, the bar and the rule', () => {

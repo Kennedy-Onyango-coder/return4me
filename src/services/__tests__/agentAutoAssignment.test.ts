@@ -144,7 +144,9 @@ function stubDeps(options: {
           },
     notify: async ({ item, agent, trigger }) => {
       options.notified?.push({ itemId: item.id, agentId: agent.id, trigger });
-      return { agent: null, finder: null, claimant: [] };
+      // STAGE 3B-3 added `previousAgent` to the outcome (the outgoing agent of a
+      // transfer). The automatic path never transfers, so it is always null here.
+      return { agent: null, finder: null, claimant: [], previousAgent: null };
     },
   };
 }
@@ -293,7 +295,7 @@ function depsForRace(agent: Agent, item: FoundItem): AgentAutoAssignmentDeps {
       needsManualAgentReassignment: false,
       evidence: { declared_geography_present: true, coordinate_present: true, boundary_verified: false as const },
     }),
-    notify: async () => ({ agent: null, finder: null, claimant: [] }),
+    notify: async () => ({ agent: null, finder: null, claimant: [], previousAgent: null }),
   };
 }
 

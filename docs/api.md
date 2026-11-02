@@ -165,10 +165,17 @@ applicable a named permission.
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/api/admin/agents/:id/approve` | Approve |
-| POST | `/api/admin/agents/:id/location` | Assign a location |
-| POST | `/api/admin/agents/:id/suspend` | Suspend |
+| POST | `/api/admin/agents/:id/location` | Assign an operational coordinate pair |
+| POST | `/api/admin/agents/:id/geography` | Correct the hub's service county + sub-county (audited; requires a reason). Runs the pending-item matcher for that hub after the correction commits, and reports the pass as `auto_assignment`. See [`assignment-integrity-geography.md`](./assignment-integrity-geography.md) |
+| POST | `/api/admin/agents/:id/suspend` | Suspend, and report the items left stranded at the hub |
+| GET | `/api/admin/agents/:id/stranded-items` | Classify the items the hub is holding: releasable vs physically received |
+| POST | `/api/admin/agents/:id/release-stranded-items` | Return the releasable items to the assignment queue (audited; requires a reason; never releases an item the hub has received) |
 | POST | `/api/admin/agents/:id/warn` | Record a warning |
 | GET | `/api/admin/agents/:id/documents` | Review submitted documents |
+
+`POST /api/admin/items/:id/review` refuses an out-of-county assignment with `409
+{ code: 'ASSIGNMENT_GEOGRAPHY_UNCONFIRMED', geography }` unless the body carries
+`geographyAcknowledged: true`.
 
 ### Items and categories
 

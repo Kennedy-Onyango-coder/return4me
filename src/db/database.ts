@@ -60,6 +60,10 @@ import {
   // table comment in schema.ts: it is PROCESS state next to the ledger, never a
   // property of a payout row.
   payout_repair_requests as payoutRepairRequestsTable,
+  // BATCH 3 (stage 3B-2) — the append-only item → agent assignment history.
+  // This module only ever INSERTS into it (from the same transaction as the
+  // assignment it describes); there is no update or delete path.
+  item_agent_assignments as itemAgentAssignmentsTable,
 } from "./schema.ts";
 import { eq, and, or, isNull, isNotNull, inArray, notInArray, lt, lte, gte, ne, desc, asc, sql, like } from "drizzle-orm";
 import bcrypt from 'bcryptjs';
@@ -96,6 +100,29 @@ import {
   type PayoutRepairEvidence,
   type PayoutRepairLedgerSnapshot,
 } from "../config/payoutRepairPolicy";
+// BATCH 3 (stage 3B-2) — the assignment-history vocabulary. The writer validates
+// against these lists BEFORE inserting, because the in-memory test double does
+// not enforce the CHECK constraints those same lists generate: without this, an
+// out-of-vocabulary event would be persisted in tests and rejected only in
+// production.
+import {
+  describeManualAssignmentRefusal,
+  describeManualUnassignmentRefusal,
+  isItemAssignmentActorRole,
+  isItemAssignmentEventType,
+  isItemAssignmentMethod,
+  isItemAssignmentTriggerSource,
+  // STAGE 3B-6B — the statuses in which an item is still outstanding work for
+  // its assigned hub. Imported (never re-typed) so this read and the pure
+  // classifier in services/strandedItemsQueue.ts cannot disagree about which
+  // rows belong in the administrator's stranded-item queue.
+  ITEM_STATUSES_AWAITING_AGENT_ACTION,
+  type ItemAssignmentActorRole,
+  type ItemAssignmentEventType,
+  type ItemAssignmentMethod,
+  type ItemAssignmentTriggerSource,
+} from "../config/itemAgentAssignmentPolicy";
+
 // AGENT DASHBOARD BATCH 2 — the ONE payout-destination-change policy. The data
 // layer asks these pure functions rather than restating the activation rule, so
 // the route, the console projection and the persistence guard cannot disagree
@@ -130,6 +157,12 @@ import {
   type LocationSource,
   type CoordinateSource,
 } from "../services/locationProvenance.ts";
+// STAGE 3B-6A — the ONE validator for an administrator's service-geography
+// correction. Imported rather than re-implemented: a second copy of "is this a
+// real county with a real sub-county belonging to it" is exactly how a row ends
+// up holding a value no other code path can match. `agentGeography.ts` imports
+// only config modules, so this cannot create a cycle.
+import { validateAgentGeographyCorrection } from "../services/agentGeography.ts";
 
 // Local copy of the phone-masking helper (also defined in services/auth.ts
 // as maskPhoneForLog) — duplicated rather than imported to avoid a
@@ -310,6 +343,134 @@ export interface ItemVerificationChange {
   reason: string;
   reason_detail: string | null;
   created_at: string;
+}
+
+/**
+ * BATCH 3 (stage 3B-2) — ONE append-only assignment event, as stored in
+ * `item_agent_assignments`.
+ *
+ * WHY THIS IS NOT IN src/types.ts: that module is the shared domain surface used
+ * by routes and DTO builders, and this stage deliberately adds NO public
+ * surface. The history is internal to the database/service layer, so its record
+ * type lives here next to the other storage projections
+ * (ItemVerificationChange, AdminClaimListRow, ...) and is read only through
+ * getItemAssignmentHistory().
+ *
+ * `previous_agent_id` is null for a first assignment. `new_agent_id` is
+ * nullable only for a future, separately approved unassignment operation; this
+ * stage never writes a null one.
+ */
+export interface ItemAgentAssignment {
+  id: string;
+  item_id: string;
+  previous_agent_id: string | null;
+  new_agent_id: string | null;
+  event_type: ItemAssignmentEventType;
+  assignment_method: ItemAssignmentMethod;
+  trigger_source: ItemAssignmentTriggerSource;
+  /** The acting administrator, or null for a system-triggered assignment. */
+  actor_id: string | null;
+  actor_role: ItemAssignmentActorRole;
+  /** The administrator's stated reason; null when no human reason exists. */
+  reason: string | null;
+  /** Distance evidence in km, present only when the matcher measured one. */
+  distance_km: string | null;
+  created_at: string;
+}
+
+/**
+ * The ATTRIBUTION a manual assignment must supply.
+ *
+ * It exists so a caller cannot write `items.assigned_agent_id` without saying
+ * who did it, why, and through which route: `adminUpdateItem()` refuses an
+ * assignment that arrives without one. Nothing here is defaulted or invented —
+ * the route passes the administrator it already audit-logs and the reason it
+ * already requires.
+ */
+export interface ItemAssignmentEventContext {
+  /** The method the assignment used. Must equal `agent_assignment_method` if both are supplied. */
+  method: ItemAssignmentMethod;
+  triggerSource: ItemAssignmentTriggerSource;
+  /** The acting administrator (username or user id). Never a credential. */
+  actorId: string;
+  actorRole: ItemAssignmentActorRole;
+  /** The administrator's non-blank stated reason, or null when none exists. */
+  reason?: string | null;
+}
+
+/**
+ * The fields `adminUpdateItem()` may write.
+ *
+ * Extracted from that method's previously inline parameter type so its
+ * assignment half can take EXACTLY the same shape instead of a restated copy
+ * that a later edit could silently diverge from.
+ */
+export interface AdminItemUpdateFields {
+  category_id: string;
+  ocr_extracted_number: string | null;
+  ocr_extracted_name: string | null;
+  document_number_hash: string | null;
+  document_name_fuzzy: string | null;
+  description: string | null;
+  isDescriptionOnly: boolean;
+  flaggedForReview: boolean;
+  assigned_agent_id?: string;
+  agent_assignment_method?: string;
+  agent_assignment_distance_km?: string | number | null;
+  needs_manual_agent_reassignment?: boolean;
+}
+
+/**
+ * STAGE 3B-3 — WHAT A COMMITTED MANUAL ASSIGNMENT MUTATION ACTUALLY DID.
+ *
+ * Returned by `adminUpdateItem()` (for an assignment) and by
+ * `adminUnassignAgent()`, from INSIDE the transaction that performed it. The
+ * route uses it for two things it cannot safely reconstruct afterwards:
+ *
+ *   * WHICH event was written, so the notification layer can key on the event
+ *     rather than on the item (that key is what lets a second assignment of the
+ *     same item be announced at all, while a retry of the same event is still
+ *     suppressed); and
+ *   * WHO held the item before, so the outgoing agent can be told that
+ *     responsibility has changed — a fact the route's own pre-write read can
+ *     only guess at once two administrators work at the same moment.
+ *
+ * `eventType` is never supplied by a caller: it is derived from the mutation.
+ */
+export interface ItemAssignmentOutcome {
+  eventType: ItemAssignmentEventType;
+  eventId: string;
+  previousAgentId: string | null;
+  newAgentId: string | null;
+}
+
+/** Why a manual assignment mutation was refused, for status-code mapping. */
+export type ItemAssignmentRefusalCode =
+  | 'item_not_found'
+  | 'custody_blocked'
+  | 'no_current_holder'
+  | 'holder_changed'
+  | 'reason_required'
+  | 'unassignment_requires_endpoint';
+
+/**
+ * A refusal that is a CORRECT ANSWER, not a failure.
+ *
+ * The primitive throws this when the request is understandable but not allowed
+ * (a custody state that forbids the change, an item that does not exist, a
+ * removal with nothing to remove). It is deliberately distinguishable from an
+ * infrastructure error so a route can answer 404/409 instead of turning a
+ * correct decision into a 500 — and so the error does not get re-wrapped by the
+ * generic "Failed to update item by admin." catch, which would hide the reason.
+ */
+export class ItemAssignmentRefusedError extends Error {
+  public readonly code: ItemAssignmentRefusalCode;
+
+  constructor(code: ItemAssignmentRefusalCode, message: string) {
+    super(message);
+    this.name = 'ItemAssignmentRefusedError';
+    this.code = code;
+  }
 }
 
 export interface Claim {
@@ -853,6 +1014,48 @@ function parseItemVerificationChange(row: any): ItemVerificationChange {
     reason_detail: row.reason_detail ?? null,
     created_at: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
   };
+}
+
+/**
+ * BATCH 3 (3B-2) — one stored assignment event.
+ *
+ * Read-only normalisation: nothing here reinterprets what was written. A NULL
+ * previous holder (first assignment) stays NULL, a NULL reason (automatic
+ * assignment) stays NULL, and a NULL distance (no usable coordinates) stays
+ * NULL — an absent fact is never upgraded into a default.
+ */
+function parseItemAgentAssignment(row: any): ItemAgentAssignment {
+  return {
+    id: row.id,
+    item_id: row.item_id,
+    previous_agent_id: row.previous_agent_id ?? null,
+    new_agent_id: row.new_agent_id ?? null,
+    event_type: row.event_type,
+    assignment_method: row.assignment_method,
+    trigger_source: row.trigger_source,
+    actor_id: row.actor_id ?? null,
+    actor_role: row.actor_role,
+    reason: row.reason ?? null,
+    distance_km: row.distance_km === null || row.distance_km === undefined ? null : String(row.distance_km),
+    created_at: row.created_at ? new Date(row.created_at).toISOString() : new Date().toISOString(),
+  };
+}
+
+/**
+ * STAGE 3B-6B — is `candidate` strictly LATER than `current`?
+ *
+ * The tie-break on `id` is not decoration: two events can share a timestamp, and
+ * "the newest event" must be a total order or two reads of the same data could
+ * disagree about an item's assignment age. Ids sort the same way on PostgreSQL
+ * (varchar collation for these generated values) as they do here, and comparing
+ * the normalised ISO strings means a driver that returns a Date and one that
+ * returns a string still compare identically.
+ */
+function isLaterAssignmentEvent(candidate: ItemAgentAssignment, current: ItemAgentAssignment): boolean {
+  if (candidate.created_at !== current.created_at) {
+    return candidate.created_at > current.created_at;
+  }
+  return candidate.id > current.id;
 }
 
 /**
@@ -1993,6 +2196,206 @@ class DatabaseEngine {
     } catch (error) {
       console.error("Database query failed:", error);
       throw new Error("Failed to update agent location.", { cause: error });
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // STAGE 3B-6A — ADMIN AGENT GEOGRAPHIC CORRECTION (SERVICE GEOGRAPHY).
+  //
+  // WHY A SECOND CORRECTION PATH
+  // ----------------------------
+  // updateAgentLocation() above moves the hub's OPERATIONAL COORDINATE. It
+  // deliberately does not touch the SERVICE geography, because the two axes are
+  // independent (services/locationProvenance.ts): a hub can sit at a correct
+  // latitude/longitude while the county it serves was recorded wrongly, or not
+  // at all. Before this method there was no way to fix the second axis — an
+  // Agent whose county was missing or wrong could never be matched by
+  // scopeCandidateAgents(), no matter how often an administrator corrected its
+  // coordinates, and the console had no action that would change it.
+  //
+  // WHAT IS GUARANTEED
+  //   * VALIDATION HAPPENS HERE TOO. The route validates through the same
+  //     validateAgentGeographyCorrection() helper; the writer re-runs it, so a
+  //     direct caller cannot store a non-canonical county or a sub-county that
+  //     belongs to a different county. Callers get a thrown Error, never a
+  //     silently-NULLed field.
+  //   * THE AUDIT ROW COMMITS WITH THE WRITE, or not at all (logAuditInTx on the
+  //     mutation's own handle, written BEFORE the update for the same reason
+  //     adminUnassignAgent() records it first — see H-1 there).
+  //   * `location_source` IS DELIBERATELY NOT WRITTEN. It is tempting to stamp
+  //     'admin_corrected' here, and wrong: GEO-D+ restricts the PERSISTABLE
+  //     provenance to `user_selected` (AUTHORITATIVE_LOCATION_SOURCES in
+  //     services/locationProvenance.ts), so a corrected value would read back
+  //     through parseAgent() as NULL — silently ERASING a hub's existing
+  //     user_selected provenance while the console reported success. The
+  //     correction itself is recorded, with who/from/to, in the audit trail
+  //     below, which is where every other admin decision of this kind lives.
+  //     `coordinate_source` is likewise untouched: this call says nothing about
+  //     where the hub physically is.
+  //   * An unknown agent id returns undefined rather than reporting a correction
+  //     that never happened (the same rule approveAgent/suspendAgent apply).
+  // ---------------------------------------------------------------------------
+  public async updateAgentServiceGeography(
+    agentId: string,
+    geography: { county?: unknown; administrativeUnitId?: unknown },
+    adminUser: string,
+  ): Promise<Agent | undefined> {
+    const validated = validateAgentGeographyCorrection({
+      county: geography?.county,
+      administrativeUnitId: geography?.administrativeUnitId,
+    });
+    if (!validated.ok || !validated.correction) {
+      throw new Error(validated.error || "A canonical county and sub-county are required.");
+    }
+    const correction = validated.correction;
+
+    const existing = await this.getAgent(agentId);
+    if (!existing) return undefined;
+
+    try {
+      return await drizzleDb.transaction(async (tx) => {
+        await this.logAuditInTx(
+          tx,
+          adminUser,
+          "ADMIN_AGENT_GEOGRAPHY_CORRECTION",
+          `Agent ${agentId}: service geography corrected from ${existing.county ?? "(none)"}/${existing.administrative_unit_id ?? "(none)"} to ${correction.county}/${correction.administrativeUnitId} by ${adminUser}.`,
+        );
+
+        const rows = await tx
+          .update(agentsTable)
+          .set({
+            county: correction.county,
+            administrative_unit_id: correction.administrativeUnitId,
+          })
+          .where(eq(agentsTable.id, agentId))
+          .returning();
+
+        return rows.length > 0 ? parseAgent(rows[0]) : undefined;
+      });
+    } catch (error) {
+      console.error("Database update failed:", error);
+      throw new Error("Failed to correct agent geography.", { cause: error });
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // STAGE 3B-6B — EVERY ITEM CURRENTLY POINTING AT ONE AGENT.
+  //
+  // Used to answer "what did this suspension strand?". It returns rows in EVERY
+  // status on purpose: the classification (what can be released, what a hub has
+  // physically received, what has moved on) belongs to
+  // services/agentStrandedItems.ts, driven by the same custody policy the
+  // unassignment primitive enforces — not to the query.
+  // ---------------------------------------------------------------------------
+  public async getItemsAssignedToAgent(agentId: string): Promise<FoundItem[]> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(itemsTable)
+        .where(eq(itemsTable.assigned_agent_id, agentId));
+      return rows.map(parseFoundItem);
+    } catch (error) {
+      console.error("Database query failed:", error);
+      throw new Error("Failed to query items assigned to agent.", { cause: error });
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // STAGE 3B-6B — EVERY ITEM THAT IS STILL WAITING ON SOME HUB.
+  //
+  // THE CONSOLE-WIDE READ. getItemsAssignedToAgent() above answers "what does
+  // THIS hub hold?" once an administrator already suspects a particular hub. The
+  // administrator's stranded-item queue needs the opposite question answered
+  // first — "which items anywhere are still outstanding work for a hub that
+  // cannot act?" — because a suspended hub is exactly the hub nobody thinks to
+  // open.
+  //
+  // WHAT THE QUERY DECIDES, AND WHAT IT DELIBERATELY DOES NOT
+  //   * It decides WHICH ROWS ARE CANDIDATES: a non-NULL holder, in one of the
+  //     two statuses this repository already treats as "still with a hub"
+  //     (config/itemAgentAssignmentPolicy.ts). Both clauses are index-friendly
+  //     (`idx_items_agent` on assigned_agent_id, status is a low-cardinality
+  //     enum) and neither invents a column.
+  //   * It does NOT decide whether the HOLDER can act. That question belongs to
+  //     isAgentActionable() — the single eligibility authority — which also
+  //     consults the independent email-verification axis. Expressing that as SQL
+  //     here would create a second, silently divergent copy of the rule, so the
+  //     rows come back and the pure classifier applies the shared predicate.
+  //   * It does NOT join the agents table. The in-memory test double does not
+  //     implement JOINs, and a join here would mean the queue could not be
+  //     exercised at all under test; the caller resolves the handful of holders
+  //     it actually needs by id.
+  //
+  // ORDERING IS NOT PROMISED: the caller sorts (see
+  // services/strandedItemsQueue.ts) because the in-memory double ignores ORDER BY
+  // and a queue whose order differs between environments is not reviewable.
+  // ---------------------------------------------------------------------------
+  public async getItemsAwaitingAgentAction(): Promise<FoundItem[]> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(itemsTable)
+        .where(
+          and(
+            isNotNull(itemsTable.assigned_agent_id),
+            inArray(itemsTable.status, [...ITEM_STATUSES_AWAITING_AGENT_ACTION]),
+          ),
+        );
+      return rows.map(parseFoundItem);
+    } catch (error) {
+      console.error("Database query failed:", error);
+      throw new Error("Failed to query items awaiting agent action.", { cause: error });
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // STAGE 3B-6B — THE LATEST COMMITTED ASSIGNMENT EVENT FOR EACH OF THESE ITEMS.
+  //
+  // WHY THIS EXISTS AT ALL: "how long has this item been sitting with a hub that
+  // cannot act?" is the number that decides whether an operator drops everything
+  // for it. `items` carries no assignment timestamp — `items.created_at` is when
+  // the FINDER reported it, which is a different fact — so the honest source is
+  // the append-only history Stage 3B-2 introduced: the newest `assigned` /
+  // `reassigned` event naming the current holder.
+  //
+  // ABSENT MEANS ABSENT. Pre-3B-2 assignments have no events (that stage
+  // deliberately did not backfill), so those items return no entry and the
+  // classifier reports the age as unknown rather than substituting
+  // `created_at` — an invented age would be worse than an admitted gap.
+  //
+  // ORDERING: newest-first is asked of the database, but the winner is ALSO
+  // chosen in code by comparing timestamps (then ids, for a total order),
+  // because the in-memory test double ignores ORDER BY. The result is therefore
+  // identical under both drivers instead of only under PostgreSQL.
+  // ---------------------------------------------------------------------------
+  public async getLatestAssignmentEventsForItems(
+    itemIds: string[],
+  ): Promise<Map<string, ItemAgentAssignment>> {
+    const latest = new Map<string, ItemAgentAssignment>();
+    const ids = Array.isArray(itemIds)
+      ? Array.from(new Set(itemIds.filter((id): id is string => typeof id === 'string' && id !== '')))
+      : [];
+    // A queue with nothing in it must not become `IN ()`, which is a syntax
+    // error on PostgreSQL. No ids means no events, stated rather than queried.
+    if (ids.length === 0) return latest;
+
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(itemAgentAssignmentsTable)
+        .where(inArray(itemAgentAssignmentsTable.item_id, ids))
+        .orderBy(desc(itemAgentAssignmentsTable.created_at), desc(itemAgentAssignmentsTable.id));
+
+      for (const row of rows.map(parseItemAgentAssignment)) {
+        const current = latest.get(row.item_id);
+        if (!current || isLaterAssignmentEvent(row, current)) {
+          latest.set(row.item_id, row);
+        }
+      }
+      return latest;
+    } catch (error) {
+      console.error("Database query failed:", error);
+      throw new Error("Failed to query the latest agent assignment events.", { cause: error });
     }
   }
 
@@ -3202,56 +3605,252 @@ class DatabaseEngine {
     }
   }
 
-  // Save new found item
-  public async createItem(item: Omit<FoundItem, "created_at">): Promise<FoundItem> {
+  // ===========================================================================
+  // BATCH 3 (STAGE 3B-2) — THE APPEND-ONLY ASSIGNMENT HISTORY AND ITS ONE
+  // WRITER.
+  //
+  // WHY A TRANSACTION-SCOPED HELPER, NOT "A SECOND STATEMENT AFTER THE UPDATE".
+  // An assignment and the record of that assignment are ONE fact. Writing the
+  // history as a best-effort follow-up on the pooled connection — the shape
+  // audit logging has always had — would allow exactly the two failures this
+  // stage exists to remove: a committed assignment with no traceable event (the
+  // follow-up throws or the process dies), or an event describing an assignment
+  // that was then rolled back. Every caller therefore passes its transaction
+  // handle, so the mutation and the event commit or roll back together.
+  //
+  // WHY IT VALIDATES THE VOCABULARY ITSELF. The table's CHECK constraints are
+  // the database's copy of these rules, but the in-memory test double does not
+  // enforce CHECK constraints at all, so an out-of-vocabulary value would pass
+  // every test and fail only in production. These guards make the two engines
+  // agree, and they run BEFORE the insert so a bad event can never be the
+  // reason a transaction aborts half-way.
+  //
+  // WHAT IT REFUSES TO WRITE (each one is a bug in the caller, not a data
+  // condition): a non-mutation (previous === new), a system event naming a human
+  // actor, an admin event with no actor, or a missing/blank agent.
+  // ===========================================================================
+  private async insertItemAssignmentEventInTx(
+    tx: { insert: Function },
+    event: {
+      itemId: string;
+      previousAgentId: string | null;
+      /**
+       * The holder AFTER the mutation, or `null` for an unassignment (Stage
+       * 3B-3). `null` is not "unknown": it is the recorded fact that nobody
+       * holds the item, and it is only legal together with `unassigned`.
+       */
+      newAgentId: string | null;
+      assignmentMethod: string;
+      triggerSource: string;
+      actorId: string | null;
+      actorRole: string;
+      reason: string | null;
+      distanceKm: number | string | null | undefined;
+    },
+  ): Promise<string> {
+    if (!event.itemId) {
+      throw new Error('An assignment event requires an item id.');
+    }
+    // `assigned` / `reassigned` / `unassigned` is DERIVED, never supplied:
+    // whether a predecessor existed — and whether anyone holds the item now — is
+    // a property of the mutation, and a caller that could state it could also
+    // state it wrongly.
+    const eventType: ItemAssignmentEventType =
+      event.newAgentId === null ? 'unassigned' : event.previousAgentId ? 'reassigned' : 'assigned';
+
+    if (eventType === 'unassigned' && !event.previousAgentId) {
+      throw new Error(
+        `Refusing to record an unassignment for item ${event.itemId}: no previous holder was named, so nothing was removed.`,
+      );
+    }
+    if (eventType !== 'unassigned' && !event.newAgentId) {
+      throw new Error(
+        `Refusing to record an assignment event for item ${event.itemId}: the incoming agent id is required.`,
+      );
+    }
+    if (event.previousAgentId && event.previousAgentId === event.newAgentId) {
+      throw new Error(
+        `Refusing to record an assignment event for item ${event.itemId}: the holder did not change.`,
+      );
+    }
+    if (!isItemAssignmentEventType(eventType)) {
+      throw new Error(`Unrecognised assignment event type: ${String(eventType)}`);
+    }
+    if (!isItemAssignmentMethod(event.assignmentMethod)) {
+      throw new Error(`Unrecognised assignment method: ${String(event.assignmentMethod)}`);
+    }
+    if (!isItemAssignmentTriggerSource(event.triggerSource)) {
+      throw new Error(`Unrecognised assignment trigger/source: ${String(event.triggerSource)}`);
+    }
+    if (!isItemAssignmentActorRole(event.actorRole)) {
+      throw new Error(`Unrecognised assignment actor role: ${String(event.actorRole)}`);
+    }
+    if (event.actorRole === 'system' && event.actorId !== null) {
+      throw new Error('A system-triggered assignment must not name a human actor.');
+    }
+    if (event.actorRole === 'admin' && (!event.actorId || !event.actorId.trim())) {
+      throw new Error('A manual assignment must name the administrator who made it.');
+    }
+    // STAGE 3B-3 — A MANUAL CHANGE MUST SAY WHY.
+    // The table's `reason` column is the only free text a human contributed, and
+    // an administrator-driven row without one is exactly the untraceable record
+    // this programme exists to remove. Automatic paths have no human reason and
+    // are deliberately still allowed to write none.
+    if (event.actorRole === 'admin' && (!event.reason || !event.reason.trim())) {
+      throw new Error('A manual assignment change must record the administrator\'s reason.');
+    }
+
+    const id = 'ASG-' + Math.random().toString(36).substr(2, 9).toUpperCase();
+    await tx.insert(itemAgentAssignmentsTable).values({
+      id,
+      item_id: event.itemId,
+      previous_agent_id: event.previousAgentId,
+      new_agent_id: event.newAgentId,
+      event_type: eventType,
+      assignment_method: event.assignmentMethod,
+      trigger_source: event.triggerSource,
+      actor_id: event.actorId,
+      actor_role: event.actorRole,
+      reason: event.reason,
+      distance_km:
+        event.distanceKm === null || event.distanceKm === undefined ? null : event.distanceKm.toString(),
+      // Written explicitly rather than left to CURRENT_TIMESTAMP: the in-memory
+      // double applies no column defaults, so an omitted value would be absent
+      // in tests and the chronological ordering assertions would prove nothing.
+      created_at: new Date(),
+    });
+
+    // The id is returned so a caller can hand the COMMITTED event to the
+    // notification layer as its identity (Stage 3B-3): an event-derived
+    // idempotency key is what lets a second assignment of the same item be
+    // announced at all, while a retry of the same event stays suppressed.
+    return id;
+  }
+
+  /**
+   * BATCH 3 (STAGE 3B-2) — ONE item's assignment history, oldest first.
+   *
+   * The ONLY reader of `item_agent_assignments`. It is intentionally internal to
+   * the data layer in this stage: no route, DTO or public projection calls it, so
+   * no claimant, finder or public view gains a field. Stage 3B-3 (custody) and
+   * any later reconciliation work read the same method rather than querying the
+   * table directly, so the chronological contract has one definition.
+   *
+   * ORDER: `created_at` ascending, with `id` ascending as the tiebreaker — the
+   * mirror image of getRecentAuditLogs()'s newest-first rule, for the same
+   * reason: two events can share a timestamp, and an ordering that is not
+   * total is not reproducible.
+   *
+   * KNOWN HARNESS LIMITATION: the in-memory test double ignores ORDER BY (it
+   * filters WHERE and returns insertion order), so under test "chronological"
+   * is demonstrated by insertion order plus the stored timestamps rather than by
+   * executing this ORDER BY. On PostgreSQL this statement is the ordering.
+   */
+  public async getItemAssignmentHistory(itemId: string): Promise<ItemAgentAssignment[]> {
     try {
       const rows = await drizzleDb
-        .insert(itemsTable)
-        .values({
-          id: item.id,
-          category_id: item.category_id,
-          photo_url: item.photo_url,
-          ocr_extracted_number: item.ocr_extracted_number,
-          ocr_extracted_name: item.ocr_extracted_name,
-          document_number_hash: item.document_number_hash,
-          document_name_fuzzy: item.document_name_fuzzy,
-          location_description: item.location_description,
-          // PHASE 9D: explicit null checks so a VALID coordinate of exactly 0
-          // is persisted as 0 rather than silently becoming NULL (audit
-          // finding C3). Callers are expected to have validated the pair with
-          // services/coordinates.ts; this only removes the falsy-zero bug.
-          latitude: item.latitude !== undefined && item.latitude !== null ? String(item.latitude) : null,
-          longitude: item.longitude !== undefined && item.longitude !== null ? String(item.longitude) : null,
-          // PHASE 9D: the finder's explicitly chosen canonical county (see the
-          // column comment in schema.ts). Stored verbatim because it has
-          // already been canonicalized by resolveCountyName() at the API
-          // boundary; null for legacy/unknown.
-          found_county: item.found_county || null,
-          administrative_unit_id: item.administrative_unit_id || null,
-          // GEO-D+ — only an AUTHORITATIVE geography source is ever persisted.
-          // The finder report route passes 'user_selected'; anything else (or a
-          // legacy/absent value) stores NULL. No coordinate axis on items.
-          location_source: isAuthoritativeLocationSource(item.location_source) ? item.location_source : null,
-          finder_phone: item.finder_phone,
-          assigned_agent_id: item.assigned_agent_id,
-          status: item.status,
-          flaggedForReview: item.flaggedForReview || false,
-          isDescriptionOnly: item.isDescriptionOnly || false,
-          description: item.description,
-          is_sensitive_document: item.is_sensitive_document,
-          rejection_reason: item.rejection_reason || null,
-          locked_total_fee: item.locked_total_fee !== undefined && item.locked_total_fee !== null ? String(item.locked_total_fee) : null,
-          locked_finder_share: item.locked_finder_share !== undefined && item.locked_finder_share !== null ? String(item.locked_finder_share) : null,
-          locked_agent_share: item.locked_agent_share !== undefined && item.locked_agent_share !== null ? String(item.locked_agent_share) : null,
-          locked_platform_share: item.locked_platform_share !== undefined && item.locked_platform_share !== null ? String(item.locked_platform_share) : null,
-          agent_assignment_method: item.agent_assignment_method,
-          agent_assignment_distance_km: item.agent_assignment_distance_km !== undefined && item.agent_assignment_distance_km !== null ? String(item.agent_assignment_distance_km) : null,
-          needs_manual_agent_reassignment: item.needs_manual_agent_reassignment || false,
-          finder_email: item.finder_email || null,
-          declared_value: item.declared_value !== undefined && item.declared_value !== null ? String(item.declared_value) : null,
-          fee_ceiling_applied: item.fee_ceiling_applied || false,
-        })
-        .returning();
+        .select()
+        .from(itemAgentAssignmentsTable)
+        .where(eq(itemAgentAssignmentsTable.item_id, itemId))
+        .orderBy(asc(itemAgentAssignmentsTable.created_at), asc(itemAgentAssignmentsTable.id));
+      return rows.map(parseItemAgentAssignment);
+    } catch (error) {
+      console.error("Database query failed:", error);
+      throw new Error("Failed to read the item's agent assignment history.", { cause: error });
+    }
+  }
+
+  // Save new found item
+  //
+  // BATCH 3 (STAGE 3B-2) — THE FIRST ASSIGNMENT IS RECORDED HERE TOO.
+  //
+  // An item the finder's report matched is assigned BY THIS INSERT: the row is
+  // born with `assigned_agent_id` set, so there is no later UPDATE for an event
+  // to hang on. Leaving this out would make the most common assignment in the
+  // system — a confident match at report time — the one assignment with no
+  // history. The insert and its event therefore share ONE transaction.
+  //
+  // What is persisted is unchanged: same columns, same values, same audit line
+  // (still written afterwards, exactly as before).
+  //
+  // The event is written only when the inserted row also carries a RECOGNISED
+  // assignment method, because an event must state HOW the item was assigned and
+  // this stage does not invent a method for a row that never recorded one. Every
+  // production caller supplies one (routes/finderReport.ts passes
+  // matchingResult.method); a test fixture that sets `assigned_agent_id` with no
+  // method is a pre-existing inconsistency that stays exactly as it was —
+  // unrecorded rather than mis-recorded.
+  public async createItem(item: Omit<FoundItem, "created_at">): Promise<FoundItem> {
+    try {
+      const rows = await drizzleDb.transaction(async (tx) => {
+        const inserted = await tx
+          .insert(itemsTable)
+          .values({
+            id: item.id,
+            category_id: item.category_id,
+            photo_url: item.photo_url,
+            ocr_extracted_number: item.ocr_extracted_number,
+            ocr_extracted_name: item.ocr_extracted_name,
+            document_number_hash: item.document_number_hash,
+            document_name_fuzzy: item.document_name_fuzzy,
+            location_description: item.location_description,
+            // PHASE 9D: explicit null checks so a VALID coordinate of exactly 0
+            // is persisted as 0 rather than silently becoming NULL (audit
+            // finding C3). Callers are expected to have validated the pair with
+            // services/coordinates.ts; this only removes the falsy-zero bug.
+            latitude: item.latitude !== undefined && item.latitude !== null ? String(item.latitude) : null,
+            longitude: item.longitude !== undefined && item.longitude !== null ? String(item.longitude) : null,
+            // PHASE 9D: the finder's explicitly chosen canonical county (see the
+            // column comment in schema.ts). Stored verbatim because it has
+            // already been canonicalized by resolveCountyName() at the API
+            // boundary; null for legacy/unknown.
+            found_county: item.found_county || null,
+            administrative_unit_id: item.administrative_unit_id || null,
+            // GEO-D+ — only an AUTHORITATIVE geography source is ever persisted.
+            // The finder report route passes 'user_selected'; anything else (or a
+            // legacy/absent value) stores NULL. No coordinate axis on items.
+            location_source: isAuthoritativeLocationSource(item.location_source) ? item.location_source : null,
+            finder_phone: item.finder_phone,
+            assigned_agent_id: item.assigned_agent_id,
+            status: item.status,
+            flaggedForReview: item.flaggedForReview || false,
+            isDescriptionOnly: item.isDescriptionOnly || false,
+            description: item.description,
+            is_sensitive_document: item.is_sensitive_document,
+            rejection_reason: item.rejection_reason || null,
+            locked_total_fee: item.locked_total_fee !== undefined && item.locked_total_fee !== null ? String(item.locked_total_fee) : null,
+            locked_finder_share: item.locked_finder_share !== undefined && item.locked_finder_share !== null ? String(item.locked_finder_share) : null,
+            locked_agent_share: item.locked_agent_share !== undefined && item.locked_agent_share !== null ? String(item.locked_agent_share) : null,
+            locked_platform_share: item.locked_platform_share !== undefined && item.locked_platform_share !== null ? String(item.locked_platform_share) : null,
+            agent_assignment_method: item.agent_assignment_method,
+            agent_assignment_distance_km: item.agent_assignment_distance_km !== undefined && item.agent_assignment_distance_km !== null ? String(item.agent_assignment_distance_km) : null,
+            needs_manual_agent_reassignment: item.needs_manual_agent_reassignment || false,
+            finder_email: item.finder_email || null,
+            declared_value: item.declared_value !== undefined && item.declared_value !== null ? String(item.declared_value) : null,
+            fee_ceiling_applied: item.fee_ceiling_applied || false,
+          })
+          .returning();
+
+        const assignedAgentId = item.assigned_agent_id;
+        const assignmentMethod = item.agent_assignment_method;
+        if (assignedAgentId && isItemAssignmentMethod(assignmentMethod)) {
+          await this.insertItemAssignmentEventInTx(tx, {
+            itemId: item.id,
+            // A report-time match has no predecessor: the row did not exist.
+            previousAgentId: null,
+            newAgentId: assignedAgentId,
+            assignmentMethod,
+            triggerSource: 'finder_report',
+            actorId: null,
+            actorRole: 'system',
+            // No human reason exists, so none is recorded.
+            reason: null,
+            distanceKm: item.agent_assignment_distance_km,
+          });
+        }
+
+        return inserted;
+      });
 
       await this.logAudit(
         "SYSTEM",
@@ -3421,25 +4020,125 @@ class DatabaseEngine {
   }
 
   // Admin manually updates reviewed item details
+  //
+  // ===========================================================================
+  // BATCH 3 (STAGE 3B-2) — A MANUAL ASSIGNMENT IS NOW (a) TRACEABLE and
+  // (b) ATOMIC WITH ITS HISTORY ROW.
+  //
+  // (a) ATTRIBUTION IS MANDATORY. If the caller asks for an agent to be set, it
+  // must say who did it, through which trigger/source, with which method and
+  // with what reason — `assignmentEvent`. A manual assignment with no named
+  // actor is exactly the record this stage exists to prevent, so the call is
+  // REFUSED rather than written with an invented actor or an invented reason.
+  // Passing `assigned_agent_id: null` (the pre-3B-3 way to clear a holder) is
+  // now REFUSED: unassignment is a real operation with its own method
+  // (`adminUnassignAgent`) that records the previous holder, the administrator
+  // and the reason. A second, silent way to remove a holder would be a hole in
+  // the history this stage exists to keep complete.
+  //
+  // (b) WHY A TRANSACTION *AND* A CAS-RETRY, NOT A READ-THEN-WRITE. The event
+  // must name the holder that was ACTUALLY replaced. This method used to be a
+  // single blind UPDATE, and the route captured the previous holder with a
+  // separate pre-write read — a classic lost-update window: two administrators
+  // saving at the same moment can both read "A" while only one of them really
+  // replaced "A". Repeating that read here would make the recorded
+  // `previous_agent_id` a guess.
+  //
+  // The repository has two established answers to this, and one of them is not
+  // available: `SELECT ... FOR UPDATE` is explicitly avoided in this codebase
+  // because the in-memory test double returns zero rows for it (see the
+  // claim_payment_strikes transaction), so a locked read would be untestable.
+  // What is used instead is the same pattern that transaction already relies on:
+  // read the holder inside the transaction, then make the UPDATE CONDITIONAL on
+  // it (`WHERE id = ? AND assigned_agent_id IS [NOT] ?`) and retry if it applied
+  // to zero rows. Whichever write wins is therefore the one whose observed
+  // previous holder is true, and the event is inserted in the SAME transaction
+  // as that write.
+  //
+  // CUSTODY AND ELIGIBILITY (STAGE 3B-3). This method now enforces the custody
+  // policy itself, in the same transaction as the write (see
+  // describeManualAssignmentRefusal): an item that has already been received by a
+  // hub, or already claimed, cannot be re-pointed from here, and the attempt is
+  // REFUSED with an ItemAssignmentRefusedError rather than written. Target
+  // eligibility is still the route's job via isAgentActionable() — this method
+  // knows nothing about agents' operational status.
+  // The audit line is still written after the transaction, unchanged.
+  // ===========================================================================
   public async adminUpdateItem(
     id: string,
-    updates: {
-      category_id: string;
-      ocr_extracted_number: string | null;
-      ocr_extracted_name: string | null;
-      document_number_hash: string | null;
-      document_name_fuzzy: string | null;
-      description: string | null;
-      isDescriptionOnly: boolean;
-      flaggedForReview: boolean;
-      assigned_agent_id?: string;
-      agent_assignment_method?: string;
-      agent_assignment_distance_km?: string | number | null;
-      needs_manual_agent_reassignment?: boolean;
+    updates: AdminItemUpdateFields,
+    /**
+     * Attribution for the assignment this call performs. Required whenever
+     * `updates.assigned_agent_id` names an agent; ignored (and unused) when the
+     * call makes no assignment.
+     */
+    assignmentEvent?: ItemAssignmentEventContext,
+  ): Promise<ItemAssignmentOutcome | null> {
+    const incomingAgentId =
+      typeof updates.assigned_agent_id === 'string' && updates.assigned_agent_id.trim()
+        ? updates.assigned_agent_id
+        : null;
+
+    // -----------------------------------------------------------------------
+    // STAGE 3B-3 — REMOVING THE HOLDER IS NOT A FIELD EDIT.
+    // -----------------------------------------------------------------------
+    // Before this stage, `assigned_agent_id: null` cleared the holder with no
+    // event, no reason and no actor: the one assignment mutation that could not
+    // be traced. Unassignment now exists as a first-class operation
+    // (`adminUnassignAgent`), which records the previous agent, the
+    // administrator, the reason and the trigger in the same transaction, so this
+    // method REFUSES to be a second, silent way to do the same thing. A caller
+    // that reaches here with an empty agent id is a caller that has not been
+    // updated, and failing loudly is the only way its history stays truthful.
+    if (updates.assigned_agent_id !== undefined && !incomingAgentId) {
+      throw new ItemAssignmentRefusedError(
+        'unassignment_requires_endpoint',
+        `adminUpdateItem(${id}): removing an assigned agent is an unassignment. Use adminUnassignAgent(), which records the previous holder, the administrator and the reason.`,
+      );
     }
-  ): Promise<void> {
+
+    if (incomingAgentId) {
+      if (!assignmentEvent) {
+        throw new Error(
+          `adminUpdateItem(${id}): assigning an agent requires an ItemAssignmentEventContext. ` +
+            'An assignment with no actor, trigger and reason cannot be recorded.',
+        );
+      }
+      // Fail BEFORE the transaction opens, not half-way through it: a manual
+      // assignment with no reason is refused by the event writer anyway, but doing
+      // it here means no write is ever attempted for a request that cannot be
+      // recorded (and, unlike a mid-transaction throw, this refusal is fully
+      // observable in the in-memory harness, which applies no rollback).
+      if (
+        assignmentEvent.actorRole === 'admin' &&
+        (typeof assignmentEvent.reason !== 'string' || !assignmentEvent.reason.trim())
+      ) {
+        throw new ItemAssignmentRefusedError(
+          'reason_required',
+          `adminUpdateItem(${id}): a manual assignment must record the administrator's reason.`,
+        );
+      }
+      if (
+        updates.agent_assignment_method !== undefined &&
+        updates.agent_assignment_method !== assignmentEvent.method
+      ) {
+        throw new Error(
+          `adminUpdateItem(${id}): agent_assignment_method (${updates.agent_assignment_method}) and ` +
+            `the assignment event's method (${assignmentEvent.method}) disagree.`,
+        );
+      }
+      return this.adminAssignAgentAtomically(id, updates, incomingAgentId, assignmentEvent);
+    }
+
     try {
-      await drizzleDb
+      // STAGE 3B-3 — `.returning()` IS THE EXISTENCE CHECK.
+      // A blind UPDATE that matches zero rows still wrote an ADMIN_UPDATE_ITEM
+      // audit line claiming an item had been reviewed, so a request for an item
+      // that does not exist produced a phantom audit entry and a success reply.
+      // The route now checks existence first; this makes the write itself refuse
+      // to describe a row it did not touch, which also covers the (impossible
+      // today, but not by construction) case of a concurrent hard delete.
+      const written = await drizzleDb
         .update(itemsTable)
         .set({
           category_id: updates.category_id,
@@ -3459,12 +4158,428 @@ class DatabaseEngine {
           }),
           ...(updates.needs_manual_agent_reassignment !== undefined && { needs_manual_agent_reassignment: updates.needs_manual_agent_reassignment }),
         })
-        .where(eq(itemsTable.id, id));
+        .where(eq(itemsTable.id, id))
+        .returning({ id: itemsTable.id });
+
+      if (written.length === 0) {
+        throw new ItemAssignmentRefusedError(
+          'item_not_found',
+          `Item ${id} does not exist; no update and no audit entry were written.`,
+        );
+      }
 
       await this.logAudit("ADMIN", "ADMIN_UPDATE_ITEM", `Item ${id} was manually updated by admin.`);
+
+      return null;
     } catch (error) {
+      // A refusal is an ANSWER, not an infrastructure failure: re-throw it
+      // unwrapped so the caller can map it to 404/409 and so its message
+      // survives.
+      if (error instanceof ItemAssignmentRefusedError) throw error;
       console.error("Database update failed:", error);
       throw new Error("Failed to update item by admin.", { cause: error });
+    }
+  }
+
+  /**
+   * BATCH 3 (STAGE 3B-2) — the ASSIGNMENT half of adminUpdateItem().
+   *
+   * ONE TRANSACTION: (1) read the current holder, (2) write the item only if the
+   * holder is still the one that was read, (3) insert the history event naming
+   * that holder as `previous_agent_id`. All three commit together, so an event
+   * can never describe an assignment that was rolled back, and an assignment can
+   * never commit without its event.
+   *
+   * WHY THE RETRY IS NOT A "RACE-PRONE READ-THEN-WRITE". The read is only ever
+   * used together with a CONDITIONAL update on the same value; if any other
+   * writer changed the holder in between, the condition matches zero rows and
+   * nothing is written or recorded — the loop simply re-reads. The event is
+   * therefore always written against a holder that this transaction provably
+   * replaced. (This is the claim_payment_strikes CAS pattern, not a
+   * check-then-act.)
+   *
+   * WHAT IT DELIBERATELY DOES NOT DO: change custody rules, validate the target
+   * agent's eligibility (Stage 3B-1 already does that in the route), notify
+   * anyone, or clear the manual-queue flag beyond what the caller asked for.
+   */
+  private async adminAssignAgentAtomically(
+    id: string,
+    updates: AdminItemUpdateFields,
+    incomingAgentId: string,
+    event: ItemAssignmentEventContext,
+  ): Promise<ItemAssignmentOutcome | null> {
+    // Bounded because every extra attempt costs a re-read: five concurrent
+    // administrators is already far beyond this surface's real contention, and
+    // giving up LOUDLY is correct — silently writing an event against a stale
+    // previous holder would be worse than failing.
+    const MAX_CAS_ATTEMPTS = 5;
+
+    try {
+      const outcome = await drizzleDb.transaction(
+        async (tx): Promise<ItemAssignmentOutcome | null> => {
+          for (let attempt = 0; attempt < MAX_CAS_ATTEMPTS; attempt += 1) {
+            const current = await tx
+              .select()
+              .from(itemsTable)
+              .where(eq(itemsTable.id, id));
+
+            if (current.length === 0) {
+              // No previous holder exists to record, and no assignment happened.
+              // The old blind UPDATE silently matched zero rows and still wrote an
+              // audit line claiming an admin update; an assignment we cannot
+              // describe must fail instead.
+              throw new ItemAssignmentRefusedError(
+                'item_not_found',
+                `Item ${id} does not exist; no agent assignment was recorded.`,
+              );
+            }
+
+            // -----------------------------------------------------------------
+            // STAGE 3B-3 — CUSTODY PROTECTION, CHECKED INSIDE THE TRANSACTION.
+            // -----------------------------------------------------------------
+            // The route performs the same check to answer a precise 409. Doing it
+            // HERE as well is what closes the gap between that check and this
+            // write: an item that becomes `at_agent` or `claimed` in between (an
+            // agent checks it in while the administrator is looking at the form)
+            // must not be re-pointed by the stale decision. The refusal aborts the
+            // transaction, so the item, its history and the audit trail are all
+            // left exactly as they were.
+            const custodyRefusal = describeManualAssignmentRefusal(current[0].status);
+            if (custodyRefusal) {
+              throw new ItemAssignmentRefusedError('custody_blocked', custodyRefusal);
+            }
+
+            const previousAgentId: string | null = current[0].assigned_agent_id ?? null;
+
+            // -----------------------------------------------------------------
+            // H-1 — THE AUDIT ROW IS PART OF THIS TRANSACTION, AND IS WRITTEN
+            // BEFORE ANY MUTATION IS ISSUED.
+            // -----------------------------------------------------------------
+            // WHY INSIDE THE TRANSACTION. Before H-1 this line was a separate
+            // statement issued AFTER commit: if it failed, the assignment stayed
+            // committed but unaudited and unnotified, the administrator was
+            // answered with a 500, and the retry they were implicitly invited to
+            // make was then refused as `holder_changed`. Written on `tx`, the
+            // audit row and the assignment it describes commit or vanish
+            // together, and no retry sees a half-recorded mutation.
+            //
+            // WHY BEFORE THE WRITE. The in-memory harness this suite runs on
+            // strips BEGIN/COMMIT/ROLLBACK (see the header of
+            // db/__tests__/batch3CustodyAndUnassignment.test.ts), so a rollback
+            // cannot be observed from a test. Issuing the audit first makes the
+            // guarantee strictly stronger and testable: if the audit write
+            // fails, nothing has been written yet, so the holder and the history
+            // are untouched — in the harness and in PostgreSQL alike.
+            //
+            // WHY ONLY ON THE FIRST ATTEMPT. The prose is identical for every
+            // attempt and describes an ADMIN_UPDATE_ITEM, so a CAS retry must
+            // not add a second row: one call records exactly one line, and if
+            // the call ultimately refuses, the transaction rolls that line back.
+            if (attempt === 0) {
+              await this.logAuditInTx(
+                tx,
+                "ADMIN",
+                "ADMIN_UPDATE_ITEM",
+                `Item ${id} was manually updated by admin.`,
+              );
+            }
+
+            const written = await tx
+            .update(itemsTable)
+            .set({
+              category_id: updates.category_id,
+              ocr_extracted_number: updates.ocr_extracted_number,
+              ocr_extracted_name: updates.ocr_extracted_name,
+              document_number_hash: updates.document_number_hash,
+              document_name_fuzzy: updates.document_name_fuzzy,
+              description: updates.description,
+              isDescriptionOnly: updates.isDescriptionOnly,
+              flaggedForReview: updates.flaggedForReview,
+              assigned_agent_id: incomingAgentId,
+              ...(updates.agent_assignment_method !== undefined && {
+                agent_assignment_method: updates.agent_assignment_method,
+              }),
+              ...(updates.agent_assignment_distance_km !== undefined && {
+                agent_assignment_distance_km:
+                  updates.agent_assignment_distance_km !== null
+                    ? updates.agent_assignment_distance_km.toString()
+                    : null,
+              }),
+              ...(updates.needs_manual_agent_reassignment !== undefined && {
+                needs_manual_agent_reassignment: updates.needs_manual_agent_reassignment,
+              }),
+            })
+            // THE CAS: only the write that really replaces `previousAgentId`
+            // succeeds, so the event below cannot name a holder it did not
+            // actually replace.
+            .where(
+              and(
+                eq(itemsTable.id, id),
+                previousAgentId === null
+                  ? isNull(itemsTable.assigned_agent_id)
+                  : eq(itemsTable.assigned_agent_id, previousAgentId),
+              ),
+            )
+            .returning({ id: itemsTable.id });
+
+            if (written.length === 0) continue; // lost the race; re-read and retry
+
+            // A re-save that keeps the SAME holder is not an assignment mutation,
+            // so it writes no event (the row, the audit line and the notification
+            // still happen exactly as before) and reports no outcome, which is
+            // what stops the route announcing a transfer that never happened.
+            if (previousAgentId === incomingAgentId) return null;
+
+            const eventId = await this.insertItemAssignmentEventInTx(tx, {
+              itemId: id,
+              previousAgentId,
+              newAgentId: incomingAgentId,
+              assignmentMethod: event.method,
+              triggerSource: event.triggerSource,
+              actorId: event.actorId,
+              actorRole: event.actorRole,
+              // Stored verbatim. Never defaulted: an automatic assignment has no
+              // reason, and an administrator's reason is what the route required
+              // (and what the writer now refuses to do without).
+              reason: event.reason === undefined ? null : event.reason,
+              // A manual assignment carries no measured distance. Passing the
+              // column value through would let a stale distance from an earlier
+              // automatic match masquerade as evidence for this decision.
+              distanceKm: null,
+            });
+
+            return {
+              // Derived by the writer from the same facts; restated here only to
+              // type the outcome. `previousAgentId === null` is a first
+              // assignment, anything else is a transfer.
+              eventType: previousAgentId === null ? 'assigned' : 'reassigned',
+              eventId,
+              previousAgentId,
+              newAgentId: incomingAgentId,
+            };
+          }
+
+          throw new Error(
+            `Could not record a stable previous holder for item ${id} after ${MAX_CAS_ATTEMPTS} attempts.`,
+          );
+        },
+      );
+
+      return outcome;
+    } catch (error) {
+      // A refusal (missing item, custody block) is an answer, not an
+      // infrastructure failure: keep its code and message intact so the caller
+      // can answer 404/409 rather than a generic 500.
+      if (error instanceof ItemAssignmentRefusedError) throw error;
+      console.error("Database update failed:", error);
+      throw new Error("Failed to update item by admin.", { cause: error });
+    }
+  }
+
+  // ===========================================================================
+  // STAGE 3B-3 — REMOVING AN ITEM'S ASSIGNED AGENT: THE ONE ATOMIC UNASSIGNMENT.
+  //
+  // WHY A DEDICATED METHOD. Before this stage the only way to remove a holder was
+  // `adminUpdateItem(id, { assigned_agent_id: null })`, which wrote the column and
+  // nothing else: no previous holder, no administrator, no reason and no event.
+  // That is the one assignment mutation the history could not describe, and a
+  // history with a hole in it cannot answer "who had this item, and who took it
+  // away". This method is the opposite: the item write and its `unassigned` event
+  // commit in ONE transaction, so neither can exist without the other.
+  //
+  // WHY THERE IS NO CAS RETRY LOOP HERE (the assignment path has one). An
+  // assignment retries because its intent is "whoever holds this, replace them
+  // with X", and the event names the holder that was actually replaced. An
+  // unassignment's intent is narrower — "remove THIS holder" — so if the holder
+  // changed while the administrator was deciding, the correct answer is a
+  // refusal, not a retry: retrying would delete the NEWER assignment, which is
+  // precisely the lost-update an audit trail must not suffer. The conditional
+  // UPDATE therefore either removes the holder that was read or applies to zero
+  // rows, and zero rows is a conflict.
+  //
+  // CUSTODY. Only an item that has not yet been physically received may be
+  // unassigned (see describeManualUnassignmentRefusal): removing the recorded
+  // custodian of an item a hub is physically holding would destroy the only
+  // record of where the item is. The item's STATUS is never touched, so its
+  // lifecycle and custody state survive the operation unchanged.
+  // ===========================================================================
+  public async adminUnassignAgent(
+    itemId: string,
+    context: ItemAssignmentEventContext,
+    /**
+     * The holder the ADMINISTRATOR was looking at when they asked for the
+     * removal. THREE DISTINCT FORMS (H-2), and they are not interchangeable:
+     *
+     *   `undefined` — the caller has no expectation (it has not read the item);
+     *                 only the in-transaction `no_current_holder` check applies.
+     *   `null`      — the caller LOOKED AND SAW NOBODY. If a holder exists by
+     *                 the time this transaction runs, a NEWER assignment landed
+     *                 in between and removing it would be a lost update, so the
+     *                 removal is refused with `holder_changed`.
+     *   an agent id — the caller saw that holder. Any DIFFERENT holder means the
+     *                 decision is stale and is refused with `holder_changed`; if
+     *                 the item now has no holder at all, the answer is the more
+     *                 specific `no_current_holder` (also 409), because there is
+     *                 nothing left to remove.
+     *
+     * The route always supplies an observation, never `undefined`, which is what
+     * stops an unassignment from erasing a newer assignment made while the
+     * decision was being saved.
+     */
+    expectedPreviousAgentId?: string | null,
+  ): Promise<ItemAssignmentOutcome> {
+    // Refused before the transaction opens: a manual change with no reason must
+    // not reach the write path at all.
+    if (typeof context.reason !== 'string' || !context.reason.trim()) {
+      throw new ItemAssignmentRefusedError(
+        'reason_required',
+        `adminUnassignAgent(${itemId}): a manual unassignment must record the administrator's reason.`,
+      );
+    }
+
+    try {
+      const outcome = await drizzleDb.transaction(
+        async (tx): Promise<ItemAssignmentOutcome> => {
+          const current = await tx
+            .select()
+            .from(itemsTable)
+            .where(eq(itemsTable.id, itemId));
+
+          if (current.length === 0) {
+            throw new ItemAssignmentRefusedError(
+              'item_not_found',
+              `Item ${itemId} does not exist; no unassignment was recorded.`,
+            );
+          }
+
+          const custodyRefusal = describeManualUnassignmentRefusal(current[0].status);
+          if (custodyRefusal) {
+            throw new ItemAssignmentRefusedError('custody_blocked', custodyRefusal);
+          }
+
+          const previousAgentId: string | null = current[0].assigned_agent_id ?? null;
+
+          // -------------------------------------------------------------------
+          // H-2 — AN EXPLICITLY OBSERVED `null` IS A CONSTRAINT, NOT "UNKNOWN".
+          // -------------------------------------------------------------------
+          // The route always supplies the holder it read, or `null` when it read
+          // none (`existingItem.assigned_agent_id ?? null`). Before H-2 that
+          // `null` was treated as "the caller has no opinion", so a removal
+          // decided against a holder-less item silently removed whatever holder
+          // had appeared in the meantime — precisely the lost update this method
+          // exists to refuse. The three forms are now distinct:
+          //   undefined — no expectation (a caller that has not looked);
+          //   null      — the caller looked and saw NOBODY, so a holder now
+          //               existing means the decision is stale;
+          //   an agent  — any other holder means the decision is stale.
+          // A refusal is an ANSWER: it maps to 409 holder_changed, and nothing
+          // is written, recorded or notified.
+          if (expectedPreviousAgentId === null && previousAgentId !== null) {
+            throw new ItemAssignmentRefusedError(
+              'holder_changed',
+              `Item ${itemId}: an agent was assigned to this item while the removal was being saved. Nothing was removed; reload the item and try again.`,
+            );
+          }
+
+          if (!previousAgentId) {
+            throw new ItemAssignmentRefusedError(
+              'no_current_holder',
+              `Item ${itemId} has no assigned agent, so there is nothing to remove.`,
+            );
+          }
+
+          // THE STALE-DECISION GUARD. If the caller told us which holder it saw,
+          // a different one now means a NEWER assignment exists, and removing it
+          // would be the lost update this whole mechanism exists to prevent.
+          if (
+            expectedPreviousAgentId !== undefined &&
+            expectedPreviousAgentId !== null &&
+            expectedPreviousAgentId !== previousAgentId
+          ) {
+            throw new ItemAssignmentRefusedError(
+              'holder_changed',
+              `Item ${itemId}: the assigned agent changed while this request was being saved. Nothing was removed; reload the item and try again.`,
+            );
+          }
+
+          // -------------------------------------------------------------------
+          // H-1 — THE AUDIT ROW COMMITS WITH THE REMOVAL, OR NOT AT ALL.
+          // -------------------------------------------------------------------
+          // Written on `tx`, immediately before the conditional write, so a
+          // failed audit insert aborts the removal instead of leaving a
+          // committed removal with no record of who made it, why, and whose
+          // custody ended — the one outcome an audit trail must never produce.
+          // Ordering it before the write is also what makes that guarantee
+          // observable in the in-memory harness, which cannot model
+          // BEGIN/ROLLBACK: nothing has been written yet, so a failure leaves
+          // the holder, its history and the audit trail exactly as they were.
+          await this.logAuditInTx(
+            tx,
+            "ADMIN",
+            "MANUAL_AGENT_UNASSIGNMENT",
+            `Item ${itemId}: agent ${previousAgentId} was unassigned by ${context.actorId}. Reason: ${context.reason ?? ''}`,
+          );
+
+          const written = await tx
+            .update(itemsTable)
+            // `agent_assignment_method` returns to 'manual_required' and the
+            // distance evidence is cleared: the item is unassigned and back in
+            // the manual queue, and a stale method/distance pair would otherwise
+            // read as evidence of a current assignment that no longer exists.
+            // STATUS IS DELIBERATELY NOT TOUCHED.
+            .set({
+              assigned_agent_id: null,
+              agent_assignment_method: 'manual_required',
+              agent_assignment_distance_km: null,
+              needs_manual_agent_reassignment: true,
+            })
+            .where(
+              and(
+                eq(itemsTable.id, itemId),
+                eq(itemsTable.assigned_agent_id, previousAgentId),
+              ),
+            )
+            .returning({ id: itemsTable.id });
+
+          if (written.length === 0) {
+            // The holder changed between the read and this write. Nothing was
+            // removed and nothing is recorded; the administrator must reload.
+            throw new ItemAssignmentRefusedError(
+              'holder_changed',
+              `Item ${itemId}: the assigned agent changed while this request was being saved. Nothing was removed; reload the item and try again.`,
+            );
+          }
+
+          const eventId = await this.insertItemAssignmentEventInTx(tx, {
+            itemId,
+            previousAgentId,
+            // The recorded fact that nobody holds the item. NOT an invented
+            // placeholder agent id, and NOT an artificial "assigned to null"
+            // event: the vocabulary has a value for this and the CHECK constraint
+            // requires exactly this pairing.
+            newAgentId: null,
+            assignmentMethod: context.method,
+            triggerSource: context.triggerSource,
+            actorId: context.actorId,
+            actorRole: context.actorRole,
+            reason: context.reason ?? null,
+            distanceKm: null,
+          });
+
+          return {
+            eventType: 'unassigned',
+            eventId,
+            previousAgentId,
+            newAgentId: null,
+          };
+        },
+      );
+
+      return outcome;
+    } catch (error) {
+      if (error instanceof ItemAssignmentRefusedError) throw error;
+      console.error("Database adminUnassignAgent failed:", error);
+      throw new Error("Failed to unassign the item's agent.", { cause: error });
     }
   }
 
@@ -3498,35 +4613,84 @@ class DatabaseEngine {
   //     hold-frozen item can never be quietly re-assigned.
   //
   // Returns true ONLY if THIS call performed the assignment.
+  //
+  // BATCH 3 (STAGE 3B-2) — THE WINNING CAS NOW WRITES ITS HISTORY EVENT IN THE
+  // SAME TRANSACTION.
+  //
+  // The three properties this must keep, in order of importance:
+  //   1. A LOSING attempt records NOTHING. The event is written only inside the
+  //      `rows.length > 0` branch, so a failed CAS, a zero-row update, an item
+  //      that left the queue or a concurrent loser produces no event at all.
+  //   2. The event and the assignment COMMIT TOGETHER. Both statements run on the
+  //      same transaction handle, so neither can exist without the other.
+  //   3. Nothing about the decision changes. The WHERE clause, the values written
+  //      and the returned boolean are exactly what they were; Stage 3B-1's
+  //      isAgentActionable() eligibility (enforced by the matcher that calls
+  //      this) is untouched, and this primitive still knows nothing about it.
+  //
+  // `triggerSource` is defaulted rather than derived because this primitive has
+  // exactly ONE production trigger today — the "a previously non-operational
+  // agent has just become operational" matcher — and that trigger already passes
+  // the same string to the notification service. A second trigger must pass its
+  // own value explicitly; the default is not a guess about the caller.
+  //
+  // The audit line stays OUTSIDE the transaction, unchanged in content and
+  // order, so existing audit-log behaviour is preserved exactly.
   // ===========================================================================
   public async attemptAutoAgentAssignment(
     itemId: string,
     agentId: string,
     method: string,
     distanceKm: number | null,
+    triggerSource: ItemAssignmentTriggerSource = 'agent_now_operational',
   ): Promise<boolean> {
     try {
-      const rows = await drizzleDb
-        .update(itemsTable)
-        .set({
-          assigned_agent_id: agentId,
-          agent_assignment_method: method,
-          agent_assignment_distance_km: distanceKm === null || distanceKm === undefined
-            ? null
-            : distanceKm.toString(),
-          needs_manual_agent_reassignment: false,
-        })
-        .where(
-          and(
-            eq(itemsTable.id, itemId),
-            isNull(itemsTable.assigned_agent_id),
-            eq(itemsTable.needs_manual_agent_reassignment, true),
-            eq(itemsTable.status, "awaiting_dropoff"),
-          ),
-        )
-        .returning({ id: itemsTable.id });
+      const won = await drizzleDb.transaction(async (tx) => {
+        const rows = await tx
+          .update(itemsTable)
+          .set({
+            assigned_agent_id: agentId,
+            agent_assignment_method: method,
+            agent_assignment_distance_km: distanceKm === null || distanceKm === undefined
+              ? null
+              : distanceKm.toString(),
+            needs_manual_agent_reassignment: false,
+          })
+          .where(
+            and(
+              eq(itemsTable.id, itemId),
+              isNull(itemsTable.assigned_agent_id),
+              eq(itemsTable.needs_manual_agent_reassignment, true),
+              eq(itemsTable.status, "awaiting_dropoff"),
+            ),
+          )
+          .returning({ id: itemsTable.id });
 
-      if (rows.length === 0) return false;
+        // A LOSS IS NOT AN ERROR AND IT IS NOT AN EVENT. Zero rows means another
+        // writer got there first, or the item is no longer waiting; either way
+        // this call assigned nothing, so it records nothing.
+        if (rows.length === 0) return false;
+
+        await this.insertItemAssignmentEventInTx(tx, {
+          itemId,
+          // The CAS predicate above requires `assigned_agent_id IS NULL`, so
+          // there is provably no predecessor to name.
+          previousAgentId: null,
+          newAgentId: agentId,
+          assignmentMethod: method,
+          triggerSource,
+          actorId: null,
+          actorRole: 'system',
+          // Automatic assignment has no human reason to record, and inventing
+          // one would be worse than an empty field.
+          reason: null,
+          distanceKm,
+        });
+
+        return true;
+      });
+
+      if (!won) return false;
 
       // Accountability: who was assigned, to what, how, how far, and by which
       // trigger. `agent_assignment_method` already distinguishes this from an

@@ -400,6 +400,67 @@ const EVENT_DEFINITIONS: readonly NotificationEventDefinition[] = [
     stage: 'B',
     origin: 'services/agentAssignmentNotifications.ts (admin manual assignment + newly-operational-agent matcher)',
   },
+  // ---------------------------------------------------------------------------
+  // STAGE 3B-3/3B-4 — A HOLDER CHANGED, OR WAS REMOVED.
+  //
+  // The three events above describe "an agent now holds this item". They were
+  // keyed on the ITEM, which meant the SECOND assignment of an item could never
+  // be announced (the durable row already existed): the incoming agent of a
+  // transfer was told nothing, and the outgoing agent was never told at all.
+  // Stage 3B-3 fixes the identity (see services/agentAssignmentNotifications.ts)
+  // and adds the two revocation-shaped events the catalogue was missing, plus
+  // the finder/claimant counterparts for a removal.
+  //
+  // WHY SEPARATE EVENTS RATHER THAN REUSING THE ASSIGNMENT ONES FOR A REMOVAL:
+  // "an agent hub will receive your item" is FALSE once the assignment has been
+  // removed, and a message that states a false fact about someone's property is
+  // worse than no message. Each recipient therefore gets the sentence that is
+  // true for them.
+  //
+  // `reconstructable` on all four, for the same checked reason as above: no OTP,
+  // no pickup code, no activation token, no phone number and no security answer
+  // is in any of these messages, so a failed delivery is safe to rebuild.
+  // ---------------------------------------------------------------------------
+  {
+    eventType: 'AGENT_ITEM_REASSIGNED',
+    channel: 'email',
+    priority: 'transactional',
+    recipientKind: 'agent',
+    templateId: 'agent_item_reassigned',
+    retryClass: 'reconstructable',
+    stage: 'B',
+    origin: 'services/agentAssignmentNotifications.ts (outgoing agent, admin manual reassignment)',
+  },
+  {
+    eventType: 'AGENT_ITEM_UNASSIGNED',
+    channel: 'email',
+    priority: 'transactional',
+    recipientKind: 'agent',
+    templateId: 'agent_item_unassigned',
+    retryClass: 'reconstructable',
+    stage: 'B',
+    origin: 'services/agentAssignmentNotifications.ts (outgoing agent, admin manual unassignment)',
+  },
+  {
+    eventType: 'FINDER_AGENT_UNASSIGNED',
+    channel: 'email',
+    priority: 'transactional',
+    recipientKind: 'finder',
+    templateId: 'finder_agent_unassigned',
+    retryClass: 'reconstructable',
+    stage: 'B',
+    origin: 'services/agentAssignmentNotifications.ts (finder, admin manual unassignment)',
+  },
+  {
+    eventType: 'CLAIMANT_AGENT_UNASSIGNED',
+    channel: 'email',
+    priority: 'transactional',
+    recipientKind: 'owner',
+    templateId: 'claimant_agent_unassigned',
+    retryClass: 'reconstructable',
+    stage: 'B',
+    origin: 'services/agentAssignmentNotifications.ts (live claimant, admin manual unassignment)',
+  },
 ];
 
 // -----------------------------------------------------------------------------

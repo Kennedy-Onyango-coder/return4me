@@ -21,7 +21,7 @@
  * Every row NOT listed in CANONICAL_ENTITY_OVERRIDES below is a clean IEBC
  * electoral constituency whose canonical name equals its displayed name.
  */
-import { KENYA_COUNTIES, type KenyanCounty } from './kenyaCounties';
+import { KENYA_COUNTIES, resolveCountyName, type KenyanCounty } from './kenyaCounties';
 
 /** Controlled vocabulary for what geographic entity a product row represents. */
 export type CanonicalEntityType =
@@ -172,14 +172,30 @@ const unitIdByCountyAndName = new Map(KENYA_ADMINISTRATIVE_UNITS.map(unit => [
   unit.id,
 ]));
 
+/**
+ * COUNTY IDENTITY FOR EVERY COUNTY-SCOPED UNIT LOOKUP (Stage 3B-6C)
+ * -----------------------------------------------------------------
+ * The unit table is keyed by the county's ISO code, so a lookup needs a county
+ * IDENTITY, not the caller's exact string. Resolving it through
+ * `resolveCountyName()` — the ONE canonical resolver — means 'Nairobi County',
+ * '  nairobi  ' and 'Nairobi City' all reach the same code, while an unknown or
+ * partial value reaches none. This is what keeps the ownership check below
+ * intact: a value that does not name a Kenyan county cannot be smuggled in as
+ * "close enough" to unlock another county's units.
+ */
+function countyOrNull(countyName: string): KenyanCounty | null {
+  const canonical = resolveCountyName(countyName);
+  return canonical ? KENYA_COUNTIES.find(item => item.name === canonical) ?? null : null;
+}
+
 export function administrativeUnitsForCounty(countyName: string): readonly KenyaAdministrativeUnit[] {
-  const county = KENYA_COUNTIES.find(item => item.name === countyName);
+  const county = countyOrNull(countyName);
   return county ? KENYA_ADMINISTRATIVE_UNITS.filter(unit => unit.countyCode === county.code) : [];
 }
 
 export function resolveAdministrativeUnitId(countyName: string, unitId: unknown): string | null {
   if (typeof unitId !== 'string') return null;
-  const county = KENYA_COUNTIES.find(item => item.name === countyName);
+  const county = countyOrNull(countyName);
   const unit = unitMap.get(unitId);
   return county && unit?.countyCode === county.code ? unit.id : null;
 }
@@ -190,14 +206,14 @@ export function administrativeUnitById(unitId: string | null | undefined): Kenya
 
 export function administrativeUnitNameForCounty(countyName: string, unitId: string | null | undefined): string | null {
   if (!unitId) return null;
-  const county = KENYA_COUNTIES.find(item => item.name === countyName);
+  const county = countyOrNull(countyName);
   const unit = unitMap.get(unitId);
   return county && unit?.countyCode === county.code ? unit.name : null;
 }
 
 // Exported for tests/diagnostics; runtime submission resolution is ID-based.
 export function findAdministrativeUnitIdByName(countyName: string, name: string): string | null {
-  const county = KENYA_COUNTIES.find(item => item.name === countyName);
+  const county = countyOrNull(countyName);
   return county ? unitIdByCountyAndName.get(`${county.code}\u0000${name.trim().toLocaleLowerCase('en')}`) ?? null : null;
 }
 
@@ -230,7 +246,8 @@ const aliasUnitIdByCountyAndName = new Map(UNIT_ALIASES.map(alias => [
 export function resolveAdministrativeUnitAlias(countyIdentity: string, suppliedName: string): KenyaAdministrativeUnit | null {
   if (typeof countyIdentity !== 'string' || typeof suppliedName !== 'string') return null;
   const needle = countyIdentity.trim().toLocaleLowerCase('en');
-  const county = KENYA_COUNTIES.find(item => item.name.toLocaleLowerCase('en') === needle || item.code.toLocaleLowerCase('en') === needle);
+  const county = KENYA_COUNTIES.find(item => item.name.toLocaleLowerCase('en') === needle || item.code.toLocaleLowerCase('en') === needle)
+    ?? countyOrNull(countyIdentity);
   if (!county) return null;
   const unitId = aliasUnitIdByCountyAndName.get(`${county.code}\u0000${suppliedName.trim().toLocaleLowerCase('en')}`);
   return unitId ? unitMap.get(unitId) ?? null : null;

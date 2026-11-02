@@ -26,6 +26,7 @@ import {
   BarChart2,
   Users,
   Package,
+  PackageSearch,
   HelpCircle,
   ClipboardList,
   FileSearch,
@@ -43,6 +44,7 @@ export type AdminSectionId =
   | 'stats'
   | 'agents'
   | 'found_items'
+  | 'stranded_items'
   | 'disputes'
   | 'claims'
   | 'lost_reports'
@@ -147,6 +149,26 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
         icon: Package,
         title: 'Found Items',
         description: 'Review recovered items and their current recovery state.',
+      },
+      {
+        // STAGE 3B-6B — items still assigned to a hub that cannot act.
+        //
+        // Suspending a hub, or leaving it email-unverified, stops the platform
+        // handing it work — but the items ALREADY assigned to it stay assigned,
+        // awaiting a drop-off that will never be accepted. This section is the
+        // queue over GET /api/admin/stranded-items (a READ-ONLY classification),
+        // and its only action is the single-item release that already existed:
+        // POST /api/admin/items/:id/unassign, which requires a reason, refuses a
+        // hub that has physically received the item, compare-and-swaps the holder
+        // and appends the audit line.
+        //
+        // The description claims exactly that and no more: nothing here can
+        // reassign an item to another hub, move custody, or release a batch.
+        id: 'stranded_items',
+        label: 'Stranded Items',
+        icon: PackageSearch,
+        title: 'Stranded Items',
+        description: 'Review items still assigned to a hub that can no longer act, and return the ones the platform can safely release to the assignment queue.',
       },
       {
         id: 'lost_reports',

@@ -1026,3 +1026,72 @@ CREATE TABLE payout_repair_requests (
 CREATE INDEX idx_payout_repair_requests_ledger ON payout_repair_requests(ledger_entry_id, status);
 CREATE INDEX idx_payout_repair_requests_expiry ON payout_repair_requests(status, expires_at);
 CREATE UNIQUE INDEX uq_payout_repair_open_per_ledger ON payout_repair_requests(ledger_entry_id) WHERE status = 'proposed';
+
+-- =============================================================================
+-- BATCH 3 (stage 3B-2) — ITEM → AGENT ASSIGNMENT HISTORY
+-- =============================================================================
+-- `items.assigned_agent_id` records ONLY the current holder. Before this table
+-- there was no structured record of an assignment: the manual route wrote free
+-- text into audit_log ("agent changed from A to B ... Reason: ...") and the two
+-- automatic paths recorded no previous holder at all. An assignment is a
+-- business event with attributes (who, to whom, how, from where, why), so it
+-- gets its own append-only row.
+--
+-- APPEND-ONLY: no application code updates or deletes a row here — there is no
+-- writer for either operation.
+--
+-- EVERY ROW MEANS A MUTATION THAT COMMITTED: the insert is part of the SAME
+-- transaction as the `items.assigned_agent_id` write it describes, and is only
+-- reached on the winning branch (a losing CAS, a refused admin target or a
+-- no-op re-save writes nothing).
+--
+-- NO BACKFILL: assignments that happened before this table existed are not
+-- invented. There is no trustworthy source for their previous holder, method or
+-- trigger, so history begins when recording begins.
+--
+-- `previous_agent_id` is NULL only for a first assignment, and never NULL on an
+-- unassignment (the agent being removed is the point of the row). `new_agent_id`
+-- is NULL only for an unassignment: stage 3B-3 records the removal of a holder
+-- as `previous_agent_id = <the agent>, new_agent_id = NULL, event_type =
+-- 'unassigned'`, and the holder-shape CHECK below keeps that column/type pairing
+-- honest.
+--
+-- The matching Drizzle definition is in src/db/schema.ts and the idempotent
+-- runtime statements are in src/db/index.ts. The vocabularies are generated
+-- from src/config/itemAgentAssignmentPolicy.ts so the three declarations cannot
+-- drift apart.
+-- =============================================================================
+CREATE TABLE item_agent_assignments (
+    id VARCHAR(50) PRIMARY KEY,
+    item_id VARCHAR(50) NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    previous_agent_id VARCHAR(50) REFERENCES agents(id),
+    new_agent_id VARCHAR(50) REFERENCES agents(id),
+    event_type VARCHAR(20) NOT NULL,
+    assignment_method VARCHAR(30) NOT NULL,
+    -- Named `trigger_source` rather than `trigger`, which is a reserved keyword.
+    trigger_source VARCHAR(40) NOT NULL,
+    actor_id VARCHAR(100),
+    actor_role VARCHAR(20) NOT NULL,
+    reason TEXT,
+    distance_km NUMERIC(8,2),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT item_agent_assignments_event_type_check
+        CHECK (event_type IN ('assigned', 'reassigned', 'unassigned')),
+    CONSTRAINT item_agent_assignments_method_check
+        CHECK (assignment_method IN ('gps_haversine', 'geocoded_text', 'manual_override')),
+    CONSTRAINT item_agent_assignments_trigger_source_check
+        CHECK (trigger_source IN ('finder_report', 'agent_now_operational', 'admin_manual')),
+    CONSTRAINT item_agent_assignments_actor_role_check
+        CHECK (actor_role IN ('system', 'admin')),
+    -- Stage 3B-3: the holder columns and the event type must agree, so an
+    -- unassignment can never be stored as an assignment (or the reverse).
+    CONSTRAINT item_agent_assignments_holder_shape_check
+        CHECK (
+            (event_type = 'unassigned' AND new_agent_id IS NULL AND previous_agent_id IS NOT NULL)
+            OR (event_type <> 'unassigned' AND new_agent_id IS NOT NULL)
+        )
+);
+-- The chronological read: one item's whole assignment history.
+CREATE INDEX idx_item_agent_assignments_item ON item_agent_assignments(item_id, created_at);
+-- "Which items did this agent receive, and when".
+CREATE INDEX idx_item_agent_assignments_new_agent ON item_agent_assignments(new_agent_id);

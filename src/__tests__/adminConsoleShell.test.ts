@@ -29,11 +29,17 @@ const indexCss = read('src/index.css');
  * payload plus GET /api/admin/payout-reconciliation for the unresolved rows, and
  * 'audit' (Audit Log) reads GET /api/admin/audit-logs. Both endpoints exist and
  * both surfaces are read-only, so neither is an invented section.
+ *
+ * STAGE 3B-6B appended 'stranded_items': the READ-ONLY queue of items still
+ * assigned to a hub the platform will not hand work to, backed by
+ * GET /api/admin/stranded-items; its one action reuses the pre-existing audited
+ * POST /api/admin/items/:id/unassign, so no endpoint was invented for it either.
  */
 const REAL_SECTIONS = [
   'stats', 'agents', 'found_items', 'disputes', 'claims', 'ledger', 'review', 'categories', 'strikes',
   'lost_reports',
   'payouts', 'audit',
+  'stranded_items',
 ] as const;
 
 describe('admin sidebar (Request 05 / §11)', () => {

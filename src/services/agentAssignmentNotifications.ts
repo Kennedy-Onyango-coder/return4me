@@ -34,13 +34,26 @@
 //
 //   3. IT IS IDEMPOTENT BY CONSTRUCTION, using the repository's EXISTING
 //      `notification_events.idempotency_key` UNIQUE index rather than any new
-//      mechanism. Agent and finder notifications key on the ITEM
-//      (`...:<item id>`) — the item is what was assigned, and it is assigned
-//      once; the claimant notification keys on the CLAIM (`...:<claim id>`) —
-//      the claim is the party's business identity. A retry, a double-clicked
-//      admin action, or the same assignment observed twice therefore resolves to
-//      the single existing row and is never re-sent. The canonical
-//      `EVENT_TYPE:ACCOUNT_ID` shape is also exactly what
+//      mechanism.
+//
+//      STAGE 3B-3 CHANGED WHAT THE KEY IS BUILT FROM, BECAUSE THE OLD KEY WAS
+//      WRONG FOR TRANSFERS. Agent and finder notifications used to key on the
+//      ITEM (`...:<item id>`), which meant an item could only ever have ONE
+//      assignment message in its lifetime: the second assignment resolved to the
+//      existing row and was suppressed as a duplicate, so the incoming agent of a
+//      transfer was told nothing and the outgoing agent was never told at all.
+//      The key is now built from the COMMITTED assignment-history event id
+//      (falling back to `item:agent` for the automatic path, which has no event
+//      id in hand), so:
+//
+//        * two different assignments of the same item are two logical events and
+//          are both delivered;
+//        * a retry, a double-click or the same event observed twice resolves to
+//          the single existing row and is never re-sent;
+//        * a claimant notification is additionally keyed per claim, because two
+//          live claims on one item are two recipients.
+//
+//      The canonical `EVENT_TYPE:IDENTITY` shape is also exactly what
 //      `idempotencyKeyLooksLikeSecret` is written not to reject.
 //
 //   4. IT CARRIES NO SECRET AND NO UNNECESSARY PRIVATE DATA. All three events are
@@ -67,6 +80,10 @@ import {
   renderSendAgentItemAssignedEmail,
   renderSendFinderAgentAssignedEmail,
   renderSendClaimantAgentAssignedEmail,
+  renderSendAgentItemReassignedEmail,
+  renderSendAgentItemUnassignedEmail,
+  renderSendFinderAgentUnassignedEmail,
+  renderSendClaimantAgentUnassignedEmail,
 } from './email.ts';
 
 /** Which lifecycle event produced the assignment. Recorded for the audit trail. */
@@ -76,6 +93,24 @@ export interface AgentAssignmentNotificationInput {
   item: FoundItem;
   agent: Agent;
   trigger: AgentAssignmentTrigger;
+  /**
+   * STAGE 3B-3 — THE COMMITTED HISTORY EVENT THIS MESSAGE ANNOUNCES.
+   *
+   * Optional only so the automatic path (which has no route to hand it an id)
+   * keeps working unchanged. When present it IS the notification's identity: two
+   * different assignments of the same item are two different messages, while a
+   * retry or a double-clicked request for the SAME event resolves to the one
+   * existing row. Before this, the key was the item id, so the second
+   * assignment of an item could never be announced at all.
+   */
+  assignmentEventId?: string | null;
+  /**
+   * The agent that held the item before this assignment, when this call
+   * announces a TRANSFER. Supplying it is what makes the outgoing agent get the
+   * "responsibility has changed" message; omitting it (a first assignment, or the
+   * automatic path) sends nothing to anyone else.
+   */
+  previousAgent?: Agent | null;
 }
 
 /** What each recipient's notification resolved to. `null` means "not attempted". */
@@ -83,6 +118,41 @@ export interface AgentAssignmentNotificationOutcome {
   agent: NotificationResult | null;
   finder: NotificationResult | null;
   claimant: NotificationResult[];
+  /** The outgoing agent of a transfer; `null` when there was no predecessor. */
+  previousAgent: NotificationResult | null;
+}
+
+/** The input for the removal of a holder. There is deliberately no incoming agent. */
+export interface AgentUnassignmentNotificationInput {
+  item: FoundItem;
+  /** The agent being removed. Required: the whole event is about them. */
+  previousAgent: Agent;
+  /** The committed `unassigned` history event id. */
+  assignmentEventId: string;
+}
+
+/** What a removal notified. `null` means "not attempted" (no destination). */
+export interface AgentUnassignmentNotificationOutcome {
+  agent: NotificationResult | null;
+  finder: NotificationResult | null;
+  claimant: NotificationResult[];
+}
+
+/**
+ * STAGE 3B-3 — THE EVENT IDENTITY EVERY KEY IS BUILT FROM.
+ *
+ * With a committed history event id, the identity is the EVENT: retrying it is
+ * suppressed, a second assignment of the same item is not. Without one (the
+ * automatic matcher, which has no event id in hand) the identity falls back to
+ * `item:agent`, which is still a strictly better key than the bare item id: a
+ * transfer to a DIFFERENT agent is no longer suppressed. The one case the
+ * fallback cannot distinguish is the same item being given to the SAME agent
+ * twice, which requires an unassignment in between and is documented as a known
+ * limitation rather than claimed away.
+ */
+function assignmentIdentity(itemId: string, agentId: string, assignmentEventId?: string | null): string {
+  const eventId = typeof assignmentEventId === 'string' ? assignmentEventId.trim() : '';
+  return eventId ? eventId : `${itemId}:${agentId}`;
 }
 
 /** The same fallback label the existing handover emails already use. */
@@ -103,6 +173,12 @@ interface DispatchInput {
   recipient: string | null | undefined;
   /** The business identity the idempotency key is built from. */
   businessReference: string;
+  /**
+   * The logical-event identity used for deduplication. Kept separate from
+   * `businessReference` (which is what an operator reads to find the item or
+   * claim) because an event-keyed notification must still name its item.
+   */
+  identity: string;
   render: () => { subject?: string; body: string };
 }
 
@@ -120,7 +196,7 @@ async function dispatch(input: DispatchInput): Promise<NotificationResult | null
       eventType: input.eventType,
       recipient,
       businessReference: input.businessReference,
-      idempotencyKey: buildNotificationIdempotencyKey(input.eventType, input.businessReference),
+      idempotencyKey: buildNotificationIdempotencyKey(input.eventType, input.identity),
       render: input.render,
     });
   } catch (error) {
@@ -145,6 +221,9 @@ export async function notifyAgentAssignedToItem(
 ): Promise<AgentAssignmentNotificationOutcome> {
   const { item, agent } = input;
   const itemName = await resolveItemName(item);
+  // The identity of THIS assignment event, shared by the three "an agent now
+  // holds it" messages so one event is one message per recipient.
+  const identity = assignmentIdentity(item.id, agent.id, input.assignmentEventId);
 
   // 1. THE ASSIGNED AGENT. Always attempted — the agent is the one party that
   //    certainly exists at this point; whether they have an address is
@@ -153,6 +232,7 @@ export async function notifyAgentAssignedToItem(
     eventType: 'AGENT_ITEM_ASSIGNED',
     recipient: agent.contact_email,
     businessReference: item.id,
+    identity,
     render: () => renderSendAgentItemAssignedEmail(agent.business_name, item.id),
   });
 
@@ -162,6 +242,7 @@ export async function notifyAgentAssignedToItem(
     eventType: 'FINDER_AGENT_ASSIGNED',
     recipient: item.finder_email,
     businessReference: item.id,
+    identity,
     render: () =>
       renderSendFinderAgentAssignedEmail(
         itemName,
@@ -183,12 +264,100 @@ export async function notifyAgentAssignedToItem(
         eventType: 'CLAIMANT_AGENT_ASSIGNED',
         recipient: claim.owner_email,
         businessReference: claim.id,
+        // One claimant message per (event, claim): two live claims on the same
+        // item are two recipients, not one suppressed duplicate.
+        identity: `${identity}:${claim.id}`,
         render: () => renderSendClaimantAgentAssignedEmail(itemName, item.id, agent.business_name),
       });
       if (notification) claimantNotifications.push(notification);
     }
   } catch (error) {
     console.error('[ASSIGNMENT NOTIFICATION] Active-claim lookup failed; no claimant notified:', error);
+  }
+
+  // 4. THE OUTGOING AGENT — only on a TRANSFER, and only when the caller named
+  //    the predecessor. This is the message that did not exist at all before
+  //    Stage 3B-3: an agent whose hub was expecting an item was told nothing when
+  //    it was given to a different hub. It names no replacement agent: the
+  //    outgoing hub needs to know the work is gone, not who took it.
+  let previousAgentNotification: NotificationResult | null = null;
+  if (input.previousAgent && input.previousAgent.id !== agent.id) {
+    const outgoing = input.previousAgent;
+    previousAgentNotification = await dispatch({
+      eventType: 'AGENT_ITEM_REASSIGNED',
+      recipient: outgoing.contact_email,
+      businessReference: item.id,
+      identity,
+      render: () => renderSendAgentItemReassignedEmail(outgoing.business_name, item.id),
+    });
+  }
+
+  return {
+    agent: agentNotification,
+    finder: finderNotification,
+    claimant: claimantNotifications,
+    previousAgent: previousAgentNotification,
+  };
+}
+
+/**
+ * STAGE 3B-3 — THE REMOVAL OF A HOLDER, ANNOUNCED TO THE PEOPLE IT AFFECTS.
+ *
+ * WHO HEARS ABOUT IT, AND WHY:
+ *   * the OUTGOING AGENT, always — their hub was expecting this item and that
+ *     expectation has been withdrawn. This is the message an unassignment most
+ *     obviously needs;
+ *   * the FINDER, when the report carried an email address — they were told a hub
+ *     would receive the item, so they are told that is no longer true;
+ *   * a LIVE CLAIMANT, when the claim carries an email address — their recovery
+ *     still exists; only the hub changed.
+ *
+ * THE FINDER AND CLAIMANT GET DIFFERENT EVENTS FROM THE ASSIGNMENT ONES, on
+ * purpose: "an agent hub will receive your item" would be false now. Nothing
+ * here names a replacement agent, because there is none.
+ *
+ * NEVER THROWS, exactly like the assignment path: the removal has already
+ * committed and must not be reported as failed because a message could not be
+ * queued.
+ */
+export async function notifyAgentUnassignedFromItem(
+  input: AgentUnassignmentNotificationInput,
+): Promise<AgentUnassignmentNotificationOutcome> {
+  const { item, previousAgent } = input;
+  const itemName = await resolveItemName(item);
+  const identity = assignmentIdentity(item.id, previousAgent.id, input.assignmentEventId);
+
+  const agentNotification = await dispatch({
+    eventType: 'AGENT_ITEM_UNASSIGNED',
+    recipient: previousAgent.contact_email,
+    businessReference: item.id,
+    identity,
+    render: () => renderSendAgentItemUnassignedEmail(previousAgent.business_name, item.id),
+  });
+
+  const finderNotification = await dispatch({
+    eventType: 'FINDER_AGENT_UNASSIGNED',
+    recipient: item.finder_email,
+    businessReference: item.id,
+    identity,
+    render: () => renderSendFinderAgentUnassignedEmail(itemName, item.id),
+  });
+
+  const claimantNotifications: NotificationResult[] = [];
+  try {
+    const activeClaims = await db.getActiveClaimsForItem(item.id);
+    for (const claim of activeClaims) {
+      const notification = await dispatch({
+        eventType: 'CLAIMANT_AGENT_UNASSIGNED',
+        recipient: claim.owner_email,
+        businessReference: claim.id,
+        identity: `${identity}:${claim.id}`,
+        render: () => renderSendClaimantAgentUnassignedEmail(itemName, item.id),
+      });
+      if (notification) claimantNotifications.push(notification);
+    }
+  } catch (error) {
+    console.error('[UNASSIGNMENT NOTIFICATION] Active-claim lookup failed; no claimant notified:', error);
   }
 
   return {

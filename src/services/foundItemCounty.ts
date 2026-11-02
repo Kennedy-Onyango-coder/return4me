@@ -45,8 +45,12 @@ export interface FoundCountyResolution {
  * - a value that is not a Kenyan county        -> `invalid` (never coerced)
  * - a canonical name or a known alias          -> the canonical name
  *
- * Case and surrounding whitespace are tolerated (that is `resolveCountyName`'s
- * behaviour, reused rather than reimplemented).
+ * FORMATTING is tolerated; SPELLING is not. Case, surrounding and repeated
+ * whitespace, the slash in 'Taita/Taveta', a typographic apostrophe in
+ * "Murang’a" and an optional trailing 'County' all resolve (that is
+ * `resolveCountyName`'s behaviour from Stage 3B-6C, reused rather than
+ * reimplemented here). A misspelling, a partial name or an unknown place stays
+ * REJECTED: there is no fuzzy matching in this path and no default county.
  */
 export function resolveFoundCountyInput(raw: unknown): FoundCountyResolution {
   if (raw === undefined || raw === null) return { ok: false, error: FOUND_COUNTY_MESSAGES.required };

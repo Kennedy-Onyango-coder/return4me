@@ -8,7 +8,7 @@ import type { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import rateLimit from 'express-rate-limit';
 import { createServer as createViteServer } from 'vite';
-import { db, FoundItem, Claim, Agent, Dispute, LedgerEntry, ProvisionAdminError } from './db/database';
+import { db, FoundItem, Claim, Agent, Dispute, LedgerEntry, ProvisionAdminError, ItemAssignmentRefusedError, ItemAssignmentOutcome } from './db/database';
 import { pool, ensureSchemaUpToDate, isDatabaseConnectionError } from './db/index';
 import { AuthService, authenticateJWT, generateToken, verifyToken, toE164Kenyan, hashCode, timingSafeEqualHex, maskPhoneForLog, isAgentActionable, isAdminSessionCurrent, resolveAgentByPhone } from './services/auth';
 // Administrative 2FA hardening — authenticated encryption of the admin TOTP
@@ -22,7 +22,17 @@ import { AgentMatchingService, geocodeAddress } from './services/agent';
 //   notifyAgentAssignedToItem() tells the agent, the finder and any live claimant.
 // Both are invoked only from the agent lifecycle points below.
 import { matchPendingItemsForOperationalAgent } from './services/agentAutoAssignment';
-import { notifyAgentAssignedToItem } from './services/agentAssignmentNotifications';
+import { notifyAgentAssignedToItem, notifyAgentUnassignedFromItem } from './services/agentAssignmentNotifications';
+// STAGE 3B-3 — the TWO pure policies the manual assignment routes ask rather than
+// restating: which item statuses may be assigned or unassigned (the custody
+// rule, also enforced inside the data layer's transaction), and what a valid
+// administrator reason is. Neither reads a database, so both are unit-tested
+// without booting this file.
+import {
+  describeManualAssignmentRefusal,
+  describeManualUnassignmentRefusal,
+} from './config/itemAgentAssignmentPolicy';
+import { validateAdminAssignmentReason } from './config/adminAssignmentReasonPolicy';
 import { geocodeReverse } from './services/geocoding/index.ts';
 import {
   renderSendPaymentReceivedEmail,
@@ -230,6 +240,29 @@ import { resolveFoundCountyInput, FOUND_COUNTY_MESSAGES, itemMatchesCanonicalCou
 // file keeps no county list and no alias table of its own.
 import { resolveCountyName } from './config/kenyaCounties';
 import { resolveAdministrativeUnitId } from './config/kenyaAdministrativeUnits';
+// STAGE 3B-6A/B/D — the ONE geography vocabulary for agent service-area
+// correction, stranded-item classification and the manual-assignment county
+// check. Pure modules: no database handle, no geocoder, no boundary data.
+import {
+  assessAssignmentGeography,
+  describeGeographyLabel,
+  validateAgentGeographyCorrection,
+  OUT_OF_COUNTY_ASSIGNMENT_ACKNOWLEDGEMENT_MESSAGE,
+  type AssignmentGeographyAssessment,
+} from './services/agentGeography';
+import {
+  summariseStrandedItems,
+  describeStrandedItemsHeadline,
+} from './services/agentStrandedItems';
+// STAGE 3B-6B — the console-wide stranded-item queue. A pure classifier over
+// rows this server reads: it decides nothing itself, it asks the shared
+// eligibility (isAgentActionable) and custody
+// (describeManualUnassignmentRefusal) predicates, and it writes nothing.
+import {
+  buildStrandedItemsQueue,
+  toStrandedQueueAgent,
+  type StrandedQueueAgent,
+} from './services/strandedItemsQueue';
 // P14A (P14-05): the ONE authoritative vocabulary for
 // `categories.public_clue_style`. The admin category routes validate against
 // this list instead of re-typing it, so the console can configure the masking
@@ -1210,6 +1243,26 @@ function sendServerError(res: Response, error: any, context: string) {
     res.status(500).json({ error: error?.message || String(error) });
   }
 }
+
+// ---------------------------------------------------------------------------
+// STAGE 3B-3 — THE REFUSAL BODIES FOR A MANUAL ASSIGNMENT CHANGE.
+//
+// WHY CONSTANTS RATHER THAN `error.message`: this file never echoes a caught
+// error's message into a response body (see src/__tests__/errorDisclosure.test.ts,
+// which enforces it mechanically). The detailed, human-readable reason for a
+// custody refusal is produced by the PURE POLICY before any write is attempted
+// and returned from there; a refusal that surfaces from the data layer instead
+// can only mean the item changed state concurrently, for which "reload and try
+// again" is both the safe and the honest answer.
+// ---------------------------------------------------------------------------
+const ITEM_CUSTODY_CONFLICT_MESSAGE =
+  'This item changed state while the change was being saved. Reload the item and try again.';
+const ITEM_HOLDER_CHANGED_MESSAGE =
+  'The assigned agent changed while this request was being saved. Reload the item and try again.';
+const ITEM_NO_CURRENT_HOLDER_MESSAGE =
+  'This item has no assigned agent, so there is nothing to remove.';
+const ITEM_ASSIGNMENT_REFUSED_MESSAGE =
+  'The assignment change could not be recorded. Reload the item and try again.';
 
 async function seedAdminUser() {
   try {
@@ -2486,9 +2539,26 @@ async function createApp() {
           if (!businessName || !locationAddress || !tillNumber || !nationalId) {
             return res.status(400).json({ error: 'Please provide all of the business details required to register as an Agent.' });
           }
+          // COUNTY AND SUB-COUNTY ARE REFUSED SEPARATELY (Stage 3B-6C).
+          // One combined guard used to answer an unrecognised county value with
+          // "Please choose a sub-county belonging to your service county" — a
+          // message about the SECOND field for a problem in the FIRST, which sent
+          // applicants back to a sub-county list that could never satisfy it.
+          // Each field now fails with a sentence that names that field, and the
+          // applicant's own spelling is not echoed back. `resolveCountyName()` is
+          // the ONE resolver, so formatting variants ('Nairobi County',
+          // 'Taita/Taveta', 'Murang’a') are accepted rather than blamed.
           const canonicalAgentCounty = resolveCountyName(county);
-          const canonicalAgentUnit = canonicalAgentCounty ? resolveAdministrativeUnitId(canonicalAgentCounty, administrativeUnitId) : null;
-          if (!canonicalAgentCounty || !canonicalAgentUnit) {
+          if (!canonicalAgentCounty) {
+            const submittedCounty = typeof county === 'string' ? county.trim() : '';
+            return res.status(400).json({
+              error: submittedCounty
+                ? 'That county is not a recognised Kenyan county. Please choose the county your Agent hub serves.'
+                : 'Please choose the county your Agent hub serves.',
+            });
+          }
+          const canonicalAgentUnit = resolveAdministrativeUnitId(canonicalAgentCounty, administrativeUnitId);
+          if (!canonicalAgentUnit) {
             return res.status(400).json({ error: 'Please choose a sub-county belonging to your service county.' });
           }
           const suppliedCoordinates = normalizeCoordinateInput(latitude, longitude);
@@ -4202,6 +4272,13 @@ async function createApp() {
           // executor's own rule, and the DTO below copies its destination ONLY
           // in masked form.
           payout_eligibility: resolveAgentPayoutEligibility(agent),
+          // STAGE 3B-6D — can this hub receive WORK? Same authority every agent
+          // route and the auto-assignment trigger already use
+          // (services/auth.ts isAgentActionable), stated once here so the
+          // console's candidate list never has to re-derive eligibility from
+          // `status` — which is only the business-approval axis, not the whole
+          // rule. The item-review route re-checks this before any write.
+          actionable: isAgentActionable(agent),
         });
       });
 
@@ -4420,6 +4497,367 @@ async function createApp() {
     }
   });
 
+  // =========================================================================
+  // STAGE 3B-6A — ADMIN AGENT GEOGRAPHIC CORRECTION.
+  //
+  // WHAT WAS MISSING
+  //   An Agent's SERVICE geography (the county + sub-county it is eligible for)
+  //   could only be set once, at registration. The only admin correction action
+  //   was POST /api/admin/agents/:id/location, which writes the OPERATIONAL
+  //   coordinate pair and deliberately leaves the service geography alone. So a
+  //   hub whose county was recorded wrongly — or left NULL on a legacy row —
+  //   could never be matched by scopeCandidateAgents(), however often its
+  //   coordinates were corrected, and the console had no way to fix it at all.
+  //
+  // ORDER OF EVERY CHECK, AND WHY
+  //   1. admin gate          (403) — authorization first, always;
+  //   2. agent exists        (404) — before any validation of its new values;
+  //   3. geography valid     (400) — canonical county + a sub-county that
+  //                                  belongs to it, via the ONE validator;
+  //   4. reason present/valid(400) — the same administrator-reason policy every
+  //                                  other manual geography/assignment decision
+  //                                  uses (length + no obvious PII), with a
+  //                                  message that names THIS decision;
+  //   5. the write                  — db.updateAgentServiceGeography() records the
+  //                                  audit line and the update on one transaction.
+  // Nothing is written before step 5, so every refusal leaves the Agent exactly
+  // as it was.
+  //
+  // WHAT HAPPENS AFTER THE WRITE (post-commit, never inside the transaction)
+  //   A correction changes WHICH manual-queue items this hub can serve, so the
+  //   existing lifecycle trigger — matchPendingItemsForOperationalAgent(), the
+  //   same call the approval and location routes already make — runs AFTER the
+  //   geography and its audit line have committed, and before the response is
+  //   sent. It is deliberately OUTSIDE the correction's transaction: the trigger
+  //   opens its own transaction per item, it never throws, and a matching problem
+  //   must not undo a correction the administrator is about to be told succeeded.
+  //
+  //   What it may move is decided by the existing code, never by this route:
+  //     * isAgentActionable() — a pending, suspended or unverified hub is not
+  //       operational, so nothing is assigned to it;
+  //     * the matcher's county scope — no item is assigned across a county
+  //       boundary, and no radius threshold is consulted;
+  //     * the manual-queue contract — only items with assigned_agent_id NULL,
+  //       needs_manual_agent_reassignment = true and status 'awaiting_dropoff' are
+  //       considered, so an item in another hub's custody, or one an administrator
+  //       already placed, can never be taken;
+  //     * attemptAutoAgentAssignment()'s CAS — a repeat correction, or two
+  //       administrators correcting at once, assigns an item exactly once and
+  //       records exactly one history event; the loser records nothing.
+  //   Item status and custody are untouched: an assigned item stays
+  //   'awaiting_dropoff' until the normal drop-off flow moves it.
+  //
+  // WHAT THIS DOES NOT DO
+  //   It does not move the hub, change its coordinate pair, change its status or
+  //   verification, and it holds no assignment logic of its own — it delegates to
+  //   the one matcher and reports what that pass did as `auto_assignment`.
+  // =========================================================================
+  app.post('/api/admin/agents/:id/geography', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
+    const agentId = req.params.id;
+    const { county, administrativeUnitId, reason } = req.body ?? {};
+    try {
+      if (req.user?.role !== 'admin') {
+        return res.status(403).json({ error: 'Access denied.' });
+      }
+
+      const agent = await db.getAgent(agentId);
+      if (!agent) {
+        return res.status(404).json({ error: 'Agent not found.' });
+      }
+
+      // The ONE validator (services/agentGeography.ts). It canonicalises the
+      // county through resolveCountyName() and resolves the sub-county against
+      // that county's configured units, so an alias ("nairobi") is accepted and
+      // stored canonically while an invented sub-county is refused.
+      const validatedGeography = validateAgentGeographyCorrection({ county, administrativeUnitId });
+      if (!validatedGeography.ok) {
+        return res.status(400).json({ error: validatedGeography.error, field: validatedGeography.field });
+      }
+
+      if (typeof reason !== 'string' || reason.trim() === '') {
+        return res
+          .status(400)
+          .json({ error: 'A reason is required to correct an Agent hub’s service geography.', field: 'reason' });
+      }
+      const validatedReason = validateAdminAssignmentReason(reason);
+      if (!validatedReason.ok) {
+        return res.status(400).json({ error: validatedReason.error, field: 'reason' });
+      }
+
+      const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
+      const updated = await db.updateAgentServiceGeography(
+        agentId,
+        validatedGeography.correction,
+        adminIdentifier,
+      );
+      if (!updated) {
+        // The row disappeared between the read above and the write. Reported as
+        // not-found rather than as a correction that did not happen.
+        return res.status(404).json({ error: 'Agent not found.' });
+      }
+
+      // POST-COMMIT MATCHING — see the route header. Placed after the write (so it
+      // can only ever act on a correction that has committed) and after the
+      // not-found guard (so a 404 never triggers a matching pass), and before the
+      // response (so the call is not cut short by the request ending). The trigger
+      // never throws: a matching failure returns an empty outcome and leaves the
+      // committed correction exactly as it is.
+      const autoAssignment = await matchPendingItemsForOperationalAgent(agentId);
+
+      return res.json({
+        success: true,
+        // STAGE 3B-6D — this response is a RECEIPT for the correction, not a
+        // candidate source: the console calls fetchDashboardData() afterwards, so
+        // the eligibility verdict the candidate list needs arrives (stated, from
+        // isAgentActionable) on GET /api/admin/dashboard. The DTO therefore
+        // leaves `actionable` null here — "not stated" — rather than having this
+        // route form a second opinion.
+        agent: toAdminSafeAgentView(updated),
+        previous_geography: {
+          county: agent.county ?? null,
+          administrative_unit_id: agent.administrative_unit_id ?? null,
+        },
+        // What the post-correction matching pass did (item ids, the winning hub,
+        // the method and distance) — the same summary shape the trigger returns to
+        // every other lifecycle point. Empty when nothing was matched.
+        auto_assignment: autoAssignment,
+        message: `This Agent hub now serves ${describeGeographyLabel(
+          updated.county,
+          updated.administrative_unit_id,
+        )}.`,
+      });
+    } catch (e: any) {
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
+    }
+  });
+
+  // =========================================================================
+  // STAGE 3B-6B — THE CONSOLE-WIDE STRANDED-ITEM QUEUE (DISCOVERY).
+  //
+  // WHY THIS EXISTS ON TOP OF THE PER-HUB READ. GET /api/admin/agents/:id/
+  // stranded-items (below) answers "what is THIS hub holding?" — but only for a
+  // hub an administrator already suspects, which is the one hub nobody opens when
+  // the problem is a suspension they have forgotten about. This read answers the
+  // other question first: which items ANYWHERE are still outstanding work for a
+  // hub that cannot act?
+  //
+  // IT IS A READ, AND ONLY A READ. It classifies; it never moves an item, never
+  // changes a holder, never touches custody and never invents a replacement hub.
+  // The action behind an individual row is the EXISTING audited primitive
+  // POST /api/admin/items/:id/unassign (reason required, compare-and-swap on the
+  // holder, append-only history) — deliberately not a new bulk endpoint, because
+  // a bulk release of a mixed queue is exactly the kind of "helpful" operation
+  // that erases a custody record.
+  //
+  // WHOSE RULES DECIDE
+  //   * who cannot act        -> isAgentActionable(), via services/strandedItemsQueue
+  //   * what may be released  -> describeManualUnassignmentRefusal(), same module
+  //   * which statuses count  -> ITEM_STATUSES_AWAITING_AGENT_ACTION, the shared list
+  // This route restates none of them.
+  //
+  // PRIVACY. Item id, lifecycle status, county/sub-county, hub id and its public
+  // business name and standing, plus timestamps. No finder identity, no phone, no
+  // email, no document hash, no photo, no coordinate. Nothing here reads a lost
+  // report.
+  // =========================================================================
+  app.get('/api/admin/stranded-items', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
+    try {
+      if (req.user?.role !== 'admin') {
+        return res.status(403).json({ error: 'Access denied.' });
+      }
+
+      // 1. Candidates: every item that still points at a hub, in a status that
+      //    means "this hub still owes the finder something".
+      const items = await db.getItemsAwaitingAgentAction();
+
+      // 2. Resolve only the holders these rows actually name. The queue never
+      //    needs the platform's whole agent table, and a hub whose row has since
+      //    been deleted is reported as unreadable rather than silently dropped.
+      const holderIds = Array.from(
+        new Set(
+          items
+            .map((item) => item.assigned_agent_id)
+            .filter((id): id is string => typeof id === 'string' && id !== ''),
+        ),
+      );
+      const holders = new Map<string, StrandedQueueAgent>();
+      await Promise.all(
+        holderIds.map(async (agentId) => {
+          const view = toStrandedQueueAgent(await db.getAgent(agentId));
+          if (view) holders.set(agentId, view);
+        }),
+      );
+
+      // 3. The newest committed assignment event per item — the only honest
+      //    source for "how long has this been sitting there?". Absent for
+      //    pre-3B-2 assignments, and reported as unknown rather than guessed.
+      const latestEvents = await db.getLatestAssignmentEventsForItems(items.map((item) => item.id));
+
+      // 4. Classify. Every decision in this call is a shared predicate's.
+      const queue = buildStrandedItemsQueue({ items, agents: holders, latestEvents });
+
+      return res.json({ success: true, ...queue });
+    } catch (e: any) {
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
+    }
+  });
+
+  // =========================================================================
+  // STAGE 3B-6B — SUSPENDED-AGENT STRANDED ITEMS.
+  //
+  // THE GAP. Suspending an Agent closes every agent route (requireActiveAgent)
+  // but leaves the items already pointing at them exactly where they were: still
+  // `awaiting_dropoff`, still `assigned_agent_id = <that hub>`, still out of the
+  // manual-assignment queue because `needs_manual_agent_reassignment` is false.
+  // The finder waits for a drop-off that can never happen, and nothing says so.
+  //
+  // THE DESIGN. The suspension RESPONSE reports what it stranded; it does not
+  // move anything. Releasing items is a separate, explicit, audited decision
+  // (POST .../release-stranded-items) because unassigning someone else's property
+  // is a custody decision, not a side effect of a status change.
+  //
+  // This read is admin-only, scoped to the named Agent, and returns only what the
+  // console needs: item id, status, county and the free-text location. No finder
+  // identity, no hash, no assignment history.
+  // =========================================================================
+  app.get('/api/admin/agents/:id/stranded-items', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
+    try {
+      if (req.user?.role !== 'admin') {
+        return res.status(403).json({ error: 'Access denied.' });
+      }
+      const agent = await db.getAgent(req.params.id);
+      if (!agent) {
+        return res.status(404).json({ error: 'Agent not found.' });
+      }
+
+      // The classification is the pure module's, driven by the SAME custody
+      // policy the unassignment primitive enforces — never a local status list.
+      const items = await db.getItemsAssignedToAgent(agent.id);
+      const stranded = summariseStrandedItems(items, agent.id);
+
+      return res.json({
+        success: true,
+        agent: {
+          id: agent.id,
+          business_name: agent.business_name,
+          status: agent.status,
+          // Whether this hub can actually act on its own items RIGHT NOW is the
+          // shared operational predicate's answer, not this route's opinion.
+          actionable: isAgentActionable(agent),
+        },
+        stranded,
+        headline: describeStrandedItemsHeadline(stranded),
+      });
+    } catch (e: any) {
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
+    }
+  });
+
+  // =========================================================================
+  // STAGE 3B-6B — RELEASE THE ITEMS A SUSPENDED HUB CAN NO LONGER RECEIVE.
+  //
+  // WHAT IT DOES, AND WHAT IT REFUSES
+  //   * Releases EVERY item this Agent holds that the custody policy allows to be
+  //     released (status `awaiting_dropoff`) back into the assignment queue, using
+  //     the SAME primitive the single-item unassign route uses —
+  //     db.adminUnassignAgent() — so the append-only history event, the
+  //     holder-changed guard, the notification and the audit line are identical.
+  //   * NEVER touches an item the hub has already physically received
+  //     (`at_agent`), or a claimed/frozen one: those are reported back and need a
+  //     separate custody decision. Removing their holder would erase the only
+  //     record of where the item is.
+  //   * Continues past a per-item refusal (the holder changed since the read) and
+  //     reports it, rather than presenting a partial release as complete.
+  //   * Requires a reason — the same administrator-reason policy as every other
+  //     manual assignment decision — before anything is released.
+  // =========================================================================
+  app.post('/api/admin/agents/:id/release-stranded-items', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
+    const agentId = req.params.id;
+    const { reason } = req.body ?? {};
+    try {
+      if (req.user?.role !== 'admin') {
+        return res.status(403).json({ error: 'Access denied.' });
+      }
+
+      const agent = await db.getAgent(agentId);
+      if (!agent) {
+        return res.status(404).json({ error: 'Agent not found.' });
+      }
+
+      if (typeof reason !== 'string' || reason.trim() === '') {
+        return res
+          .status(400)
+          .json({ error: 'A reason is required to release the items stranded at this Agent hub.' });
+      }
+      const validatedReason = validateAdminAssignmentReason(reason);
+      if (!validatedReason.ok) {
+        return res.status(400).json({ error: validatedReason.error });
+      }
+
+      const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
+      const items = await db.getItemsAssignedToAgent(agentId);
+      const stranded = summariseStrandedItems(items, agentId);
+
+      const released: string[] = [];
+      const refused: Array<{ itemId: string; code: string }> = [];
+
+      for (const target of stranded.releasable) {
+        try {
+          const outcome = await db.adminUnassignAgent(
+            target.item_id,
+            {
+              method: 'manual_override',
+              triggerSource: 'admin_manual',
+              actorId: adminIdentifier,
+              actorRole: 'admin',
+              reason: validatedReason.reason,
+            },
+            // The holder this decision was taken against: the hub named in the
+            // URL. If a newer assignment landed in between, the primitive refuses
+            // with holder_changed rather than erasing it.
+            agentId,
+          );
+
+          // The removal has COMMITTED. Announcing it is best-effort and can never
+          // turn it into a failure (notifyAgentUnassignedFromItem never throws).
+          const updatedItem = await db.getItem(target.item_id);
+          if (updatedItem) {
+            await notifyAgentUnassignedFromItem({
+              item: updatedItem,
+              previousAgent: agent,
+              assignmentEventId: outcome.eventId,
+            });
+          }
+
+          released.push(target.item_id);
+        } catch (error) {
+          if (error instanceof ItemAssignmentRefusedError) {
+            refused.push({ itemId: target.item_id, code: error.code });
+            continue;
+          }
+          throw error;
+        }
+      }
+
+      return res.json({
+        success: true,
+        released,
+        refused,
+        held_at_hub: stranded.held_at_hub,
+        other: stranded.other,
+        total: stranded.total,
+        message:
+          released.length === 0
+            ? 'No item was released. ' + describeStrandedItemsHeadline(stranded)
+            : `${released.length} item${released.length === 1 ? '' : 's'} returned to the assignment queue. ${describeStrandedItemsHeadline(
+                stranded,
+              )}`,
+      });
+    } catch (e: any) {
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
+    }
+  });
+
   // On-demand agent vetting evidence.
   //
   // Deliberately NOT part of the bulk /api/admin/dashboard payload: an agent's
@@ -4451,7 +4889,30 @@ async function createApp() {
       }
       const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
       await db.suspendAgent(agentId, adminIdentifier);
-      res.json({ success: true, message: 'The Return4me Agent has been suspended.' });
+
+      // STAGE 3B-6B — THE SUSPENSION IS NOW HONEST ABOUT WHAT IT STRANDED.
+      //
+      // Suspending closes every agent route but does not move the items already
+      // pointing at this hub: they stay `awaiting_dropoff`, assigned, and out of
+      // the manual queue. The response used to say nothing about them, so the
+      // operator had no reason to look. This reports the situation; it does NOT
+      // release anything (that is POST .../release-stranded-items, an explicit and
+      // separately audited decision). Wrapped so a failed read can never turn a
+      // committed suspension into an error response.
+      let strandedSummary: ReturnType<typeof summariseStrandedItems> | null = null;
+      try {
+        const items = await db.getItemsAssignedToAgent(agentId);
+        strandedSummary = summariseStrandedItems(items, agentId);
+      } catch {
+        strandedSummary = null;
+      }
+
+      res.json({
+        success: true,
+        message: 'The Return4me Agent has been suspended.',
+        stranded: strandedSummary,
+        stranded_headline: strandedSummary ? describeStrandedItemsHeadline(strandedSummary) : null,
+      });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }
@@ -4840,11 +5301,35 @@ async function createApp() {
       description,
       assignedAgentId,
       reason,
+      // STAGE 3B-6D — the administrator's explicit confirmation of an
+      // out-of-county assignment. Never inferred from any other field: absent,
+      // false, "true" (a string) or 1 all mean "not confirmed".
+      geographyAcknowledged,
     } = req.body;
 
     try {
       if (req.user?.role !== 'admin') {
         return res.status(403).json({ error: 'Access denied.' });
+      }
+
+      // -----------------------------------------------------------------------
+      // STAGE 3B-3 - THE ITEM MUST EXIST BEFORE ANYTHING HAPPENS.
+      // -----------------------------------------------------------------------
+      // This route used to write whatever it was told: a review of an id that
+      // does not exist still produced a success response and a phantom
+      // `ADMIN_UPDATE_ITEM` audit line, and (once assignment history existed) an
+      // assignment attempt on such an id failed deep inside the transaction with a
+      // 500. Neither is acceptable: a request for an absent item is a 404, and it
+      // must not touch a record, write an audit entry, insert history or queue a
+      // notification.
+      //
+      // ONE authoritative read, placed before the category check and before the
+      // reason/eligibility checks, so every later branch (assignment AND plain
+      // edit) is covered by the same gate. `getItem()` is the same read the rest
+      // of the admin surface uses; there is no second existence rule.
+      const existingItem = await db.getItem(itemId);
+      if (!existingItem) {
+        return res.status(404).json({ error: 'Item not found.' });
       }
 
       // -----------------------------------------------------------------------
@@ -4878,12 +5363,121 @@ async function createApp() {
       // whenever an agent is actually being assigned here â€” matches the
       // same accountability standard already applied to stolen-property
       // flags and legal holds elsewhere in the admin API.
-      if (assignedAgentId && (!reason || typeof reason !== 'string' || !reason.trim())) {
-        return res.status(400).json({ error: 'A reason is required to assign an Agent.' });
+      // STAGE 3B-3 - A REASON IS REQUIRED, AND IT HAS TO BE A REASON.
+      //
+      // The old guard only asked "is this a non-blank string?". The reason is
+      // written to an append-only history table and copied into the audit trail,
+      // so it is also the one field where a claimant's phone number, email
+      // address or ID number could come to rest permanently, outside every
+      // field-level redaction path. validateAdminAssignmentReason() is the ONE
+      // policy for that: blank, too short, too long, or containing a clearly
+      // identifiable contact/identification pattern is refused HERE, before any
+      // hash, write, audit line, history row or notification.
+      //
+      // `assignmentReason` is the trimmed string the rest of this handler uses,
+      // so the event, the audit line and the response can never disagree about
+      // what the administrator said.
+      let assignmentReason = '';
+      if (assignedAgentId) {
+        const validatedReason = validateAdminAssignmentReason(reason);
+        if (!validatedReason.ok) {
+          return res.status(400).json({ error: validatedReason.error });
+        }
+        assignmentReason = validatedReason.reason;
       }
 
-      const existingItem = assignedAgentId ? await db.getItem(itemId) : null;
-      const oldAgentId = existingItem?.assigned_agent_id ?? null;
+      // -----------------------------------------------------------------------
+      // PHASE 16.1 BATCH 3 (3B-1) — THE TARGET AGENT MUST BE OPERATIONALLY
+      // ELIGIBLE, AND THAT DECISION BELONGS TO isAgentActionable().
+      // -----------------------------------------------------------------------
+      // This route used to write whatever id the console sent. A `pending`
+      // applicant, a suspended hub, or — the real gap — an ACTIVE agent whose
+      // email is still unverified was accepted: the item was re-pointed, the
+      // manual queue flag was cleared, and the work landed at an account that
+      // cannot sign in to process it (requireActiveAgent refuses them
+      // everywhere else). Two records then disagreed about whether the item
+      // needed an agent at all.
+      //
+      // The predicate is the SAME one the auto-matcher now uses (services/
+      // agent.ts) and the one every protected agent route is guarded by
+      // (requireActiveAgent), so there is one definition of "may receive work"
+      // rather than three. It is deliberately placed BEFORE any write, hash or
+      // audit line — a rejected assignment must leave the item exactly as it
+      // was, still in the manual queue, with nothing announced to anyone.
+      //
+      // An unknown id is rejected by the same test (isAgentActionable() is
+      // total: undefined/null -> false), so a bad id can no longer reach the
+      // update and fail later inside the FK constraint.
+      //
+      // NO OVERRIDE PATH: this is a hard rejection, as authorized. This route
+      // changes nothing about WHO may administer assignments — the admin gate
+      // above is untouched.
+      let assignmentGeography: AssignmentGeographyAssessment | null = null;
+      if (assignedAgentId) {
+        const targetAgent = await db.getAgent(assignedAgentId);
+        if (!isAgentActionable(targetAgent)) {
+          return res.status(400).json({ error: 'That Agent cannot receive items. Choose an active Agent with a verified email.' });
+        }
+
+        // ---------------------------------------------------------------------
+        // STAGE 3B-6D — THE ADMINISTRATOR NOW KNOWS WHERE THE HUB ACTUALLY IS.
+        // ---------------------------------------------------------------------
+        // This route used to say nothing at all about geography: an item whose
+        // county is Nairobi City could be pointed at a Mombasa hub, the console
+        // reported success, and nothing recorded that a disagreement existed.
+        //
+        // The decision is NOT forbidden — there are real cases (no hub in the
+        // item's county, or the finder picked the wrong county) where an
+        // out-of-county assignment is the correct call. What is required is that
+        // it be DELIBERATE: when both sides hold a county and they differ, the
+        // request must carry `geographyAcknowledged: true`. Same county, or an
+        // unknown county on either side, asks for nothing.
+        //
+        // No distance threshold is consulted and none is introduced here:
+        // MAX_AGENT_ASSIGNMENT_RADIUS_KM remains disabled (config/geoMatching.ts).
+        // This check runs BEFORE any write, hash, audit line or notification, so a
+        // refusal leaves the item exactly as it was.
+        assignmentGeography = assessAssignmentGeography({
+          itemCounty: existingItem.found_county,
+          itemAdministrativeUnitId: existingItem.administrative_unit_id,
+          agentCounty: targetAgent.county,
+          agentAdministrativeUnitId: targetAgent.administrative_unit_id,
+        });
+        if (assignmentGeography.requires_acknowledgement && geographyAcknowledged !== true) {
+          return res.status(409).json({
+            error: OUT_OF_COUNTY_ASSIGNMENT_ACKNOWLEDGEMENT_MESSAGE,
+            code: 'ASSIGNMENT_GEOGRAPHY_UNCONFIRMED',
+            geography: assignmentGeography,
+          });
+        }
+      }
+
+      // -----------------------------------------------------------------------
+      // STAGE 3B-3 - CUSTODY PROTECTION.
+      // -----------------------------------------------------------------------
+      // An item that has ALREADY been physically received by a hub (`at_agent`)
+      // or already claimed (`claimed`) must not be re-pointed by a form
+      // submission: the database would then assert that B holds an item that is
+      // physically at A, and nobody recorded a handover. Every other status fails
+      // closed for the same reason (see describeManualAssignmentRefusal).
+      //
+      // 409, not 400: the request is well-formed and the administrator is
+      // authorised - the item's STATE is what forbids it, and the state may change
+      // (an agent can still check the item in). Nothing has been written, audited,
+      // recorded or sent at this point. The data layer re-checks the same rule
+      // inside its transaction, because the status can change between this read
+      // and that write.
+      if (assignedAgentId) {
+        const custodyRefusal = describeManualAssignmentRefusal(existingItem.status);
+        if (custodyRefusal) {
+          return res.status(409).json({ error: custodyRefusal });
+        }
+      }
+
+      // Naming the previous holder in prose is all this read is used for: the
+      // AUTHORITATIVE previous holder for the history event is captured by the
+      // data layer's conditional write, never from this pre-write read.
+      const oldAgentId = existingItem.assigned_agent_id ?? null;
 
       // Calculate hashes and fuzzy names
       let documentNumberHash = null;
@@ -4897,6 +5491,28 @@ async function createApp() {
           documentNameFuzzy = maskName(ocrExtractedName);
         }
       }
+
+      // -----------------------------------------------------------------------
+      // PHASE 16.1 BATCH 3 (3B-2) — THE WRITE IS NOW ATTRIBUTED, SO THE HISTORY
+      // EVENT CAN NAME WHO DID IT.
+      // -----------------------------------------------------------------------
+      // `db.adminUpdateItem()` refuses an assignment that arrives without
+      // attribution, and records the event in the SAME transaction as the item
+      // write (see database.ts). Everything this route already knew is passed
+      // through unchanged:
+      //   * the administrator it already audit-logs, resolved exactly as before
+      //     (same expression, same fallbacks) — hoisted above the write because
+      //     the write now needs it;
+      //   * 'admin_manual', the same trigger this route already gives the
+      //     assignment notification;
+      //   * 'manual_override', the method it already writes into
+      //     `agent_assignment_method`;
+      //   * the reason it already REQUIRES for an assignment. Nothing is invented:
+      //     if the reason were missing the route has already returned 400.
+      // `oldAgentId` below is still used only for the audit prose. The event's
+      // previous holder is captured atomically by the database, never from this
+      // route's pre-write read — a read-then-write would race.
+      const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
 
       const updates: any = {
         category_id: validatedCategoryId,
@@ -4916,14 +5532,51 @@ async function createApp() {
         updates.agent_assignment_distance_km = null;
       }
 
-      await db.adminUpdateItem(itemId, updates);
+      let assignmentOutcome: ItemAssignmentOutcome | null = null;
+      try {
+        assignmentOutcome = await db.adminUpdateItem(
+          itemId,
+          updates,
+          // Attribution exists only when an agent is actually being assigned. A
+          // non-assignment edit (category correction, description fix) never had an
+          // actor to record here and still does not.
+          assignedAgentId
+            ? {
+                method: 'manual_override',
+                triggerSource: 'admin_manual',
+                actorId: adminIdentifier,
+                actorRole: 'admin',
+                // The VALIDATED, trimmed reason: the same string the audit line
+                // below records, so the event and the prose cannot disagree.
+                reason: assignmentReason,
+              }
+            : undefined,
+        );
+      } catch (error) {
+        // The data layer re-checks the same rules inside its own transaction, so
+        // reaching here means the item's state changed between the checks above
+        // and the write. The answer is still 404/409 - never a 500 that hides a
+        // correct decision behind "A server error occurred".
+        if (error instanceof ItemAssignmentRefusedError) {
+          if (error.code === 'item_not_found') {
+            return res.status(404).json({ error: 'Item not found.' });
+          }
+          if (error.code === 'custody_blocked') {
+            return res.status(409).json({ error: ITEM_CUSTODY_CONFLICT_MESSAGE });
+          }
+          if (error.code === 'holder_changed') {
+            return res.status(409).json({ error: ITEM_HOLDER_CHANGED_MESSAGE });
+          }
+          return res.status(400).json({ error: ITEM_ASSIGNMENT_REFUSED_MESSAGE });
+        }
+        throw error;
+      }
 
       if (assignedAgentId) {
-        const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
         await db.logAudit(
           adminIdentifier,
           'MANUAL_AGENT_ASSIGNMENT',
-          `Item ${itemId}: agent changed from ${oldAgentId || '(none)'} to ${assignedAgentId} by ${adminIdentifier}. Reason: ${reason.trim()}`
+          `Item ${itemId}: agent changed from ${oldAgentId || '(none)'} to ${assignedAgentId} by ${adminIdentifier}. Reason: ${assignmentReason}`
         );
 
         // BATCH B — THE NOTIFICATION GAP THIS ROUTE HAD.
@@ -4944,20 +5597,152 @@ async function createApp() {
         // The item and agent are re-read rather than reusing `existingItem`: that
         // row was fetched BEFORE the update, so it does not yet reflect the
         // assignment being announced.
-        const [assignedAgent, assignedItem] = await Promise.all([
-          db.getAgent(assignedAgentId),
-          db.getItem(itemId),
-        ]);
-        if (assignedAgent && assignedItem) {
-          await notifyAgentAssignedToItem({
-            item: assignedItem,
-            agent: assignedAgent,
-            trigger: 'admin_manual',
-          });
+        // STAGE 3B-3 - THE TRANSFER IS NOW ANNOUNCED TO EVERYONE IT AFFECTS.
+        //
+        // Three things changed here, and only these:
+        //   * `assignmentOutcome` is the COMMITTED history event, so the
+        //     notification identity is the EVENT, not the item - a second
+        //     assignment of the same item is no longer suppressed as a duplicate;
+        //   * `previousAgent` is read from that committed event (never from this
+        //     route's pre-write read, which two administrators can invalidate at
+        //     the same moment) and told that responsibility has changed;
+        //   * a re-save that keeps the SAME holder produces no event, so it
+        //     produces no message either (`assignmentOutcome === null`).
+        //
+        // The item and agent are re-read rather than reusing `existingItem`: that
+        // row was fetched BEFORE the update, so it does not yet reflect the
+        // assignment being announced.
+        if (assignmentOutcome) {
+          const [assignedAgent, assignedItem] = await Promise.all([
+            db.getAgent(assignedAgentId),
+            db.getItem(itemId),
+          ]);
+          if (assignedAgent && assignedItem) {
+            const outgoingAgentId =
+              assignmentOutcome.previousAgentId &&
+              assignmentOutcome.previousAgentId !== assignedAgentId
+                ? assignmentOutcome.previousAgentId
+                : null;
+            const outgoingAgent = outgoingAgentId ? await db.getAgent(outgoingAgentId) : null;
+            await notifyAgentAssignedToItem({
+              item: assignedItem,
+              agent: assignedAgent,
+              trigger: 'admin_manual',
+              assignmentEventId: assignmentOutcome.eventId,
+              previousAgent: outgoingAgent ?? null,
+            });
+          }
         }
       }
 
-      res.json({ success: true, message: 'Item manual review completed and saved.' });
+      res.json({
+        success: true,
+        message: 'Item manual review completed and saved.',
+        // STAGE 3B-6D — the geography behind this save, stated rather than
+        // implied. `null` when no agent was assigned by this request.
+        geography: assignmentGeography,
+      });
+    } catch (e: any) {
+      sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
+    }
+  });
+
+  // =========================================================================
+  // STAGE 3B-3 - REMOVE AN ITEM'S ASSIGNED AGENT.
+  //
+  // WHY A SEPARATE ENDPOINT RATHER THAN "review with no assignedAgentId". The
+  // review route edits an item's details; removing a holder is a different
+  // decision with a different audit line, a different history event and a
+  // different notification set, and overloading one body field to mean both
+  // would make "the administrator saved the form without choosing an agent"
+  // indistinguishable from "the administrator removed the agent". It also lets
+  // this endpoint demand a reason UNCONDITIONALLY, which is what the approved
+  // product decision requires for every manual assignment change.
+  //
+  // ORDER OF EVERY CHECK, AND WHY IT IS THIS ORDER:
+  //   1. admin gate            (403) - authorization first, always;
+  //   2. item exists           (404) - before any read that assumes it does;
+  //   3. reason valid          (400) - before anything is written;
+  //   4. custody allows it     (409) - `at_agent` / `claimed` / anything else is
+  //                                    refused, because removing a custodian
+  //                                    would lose where the item physically is;
+  //   5. the primitive         (409/400) - which re-checks 2-4 inside its own
+  //                                    transaction and refuses to remove a NEWER
+  //                                    assignment it did not read.
+  // Nothing is written, audited, recorded or sent before step 5 commits.
+  // =========================================================================
+  app.post('/api/admin/items/:id/unassign', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
+    const itemId = req.params.id;
+    const { reason } = req.body ?? {};
+
+    try {
+      if (req.user?.role !== 'admin') {
+        return res.status(403).json({ error: 'Access denied.' });
+      }
+
+      const existingItem = await db.getItem(itemId);
+      if (!existingItem) {
+        return res.status(404).json({ error: 'Item not found.' });
+      }
+
+      const validatedReason = validateAdminAssignmentReason(reason);
+      if (!validatedReason.ok) {
+        return res.status(400).json({ error: validatedReason.error });
+      }
+
+      const custodyRefusal = describeManualUnassignmentRefusal(existingItem.status);
+      if (custodyRefusal) {
+        return res.status(409).json({ error: custodyRefusal });
+      }
+
+      const adminIdentifier = req.user?.username || req.user?.userId || 'admin';
+
+      let outcome: ItemAssignmentOutcome;
+      try {
+        outcome = await db.adminUnassignAgent(itemId, {
+          method: 'manual_override',
+          triggerSource: 'admin_manual',
+          actorId: adminIdentifier,
+          actorRole: 'admin',
+          reason: validatedReason.reason,
+        }, existingItem.assigned_agent_id ?? null);
+      } catch (error) {
+        if (error instanceof ItemAssignmentRefusedError) {
+          if (error.code === 'item_not_found') {
+            return res.status(404).json({ error: 'Item not found.' });
+          }
+          if (error.code === 'custody_blocked') {
+            return res.status(409).json({ error: ITEM_CUSTODY_CONFLICT_MESSAGE });
+          }
+          if (error.code === 'holder_changed') {
+            return res.status(409).json({ error: ITEM_HOLDER_CHANGED_MESSAGE });
+          }
+          if (error.code === 'no_current_holder') {
+            return res.status(409).json({ error: ITEM_NO_CURRENT_HOLDER_MESSAGE });
+          }
+          return res.status(400).json({ error: ITEM_ASSIGNMENT_REFUSED_MESSAGE });
+        }
+        throw error;
+      }
+
+      // The removal has COMMITTED. Everything below is best-effort and can never
+      // turn it into a failure: `notifyAgentUnassignedFromItem` never throws.
+      const [previousAgent, updatedItem] = await Promise.all([
+        outcome.previousAgentId ? db.getAgent(outcome.previousAgentId) : Promise.resolve(null),
+        db.getItem(itemId),
+      ]);
+      if (previousAgent && updatedItem) {
+        await notifyAgentUnassignedFromItem({
+          item: updatedItem,
+          previousAgent,
+          assignmentEventId: outcome.eventId,
+        });
+      }
+
+      res.json({
+        success: true,
+        message: 'The assigned agent was removed and the item is back in the assignment queue.',
+      });
     } catch (e: any) {
       sendServerError(res, e, 'UNHANDLED_ROUTE_ERROR');
     }

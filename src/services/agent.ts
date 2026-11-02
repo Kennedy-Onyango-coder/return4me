@@ -2,12 +2,28 @@ import { db, Agent } from '../db/database';
 import { geocodeForward } from './geocoding/index.ts';
 import { isValidCoordinatePair } from './coordinates.ts';
 import { exceedsAssignmentRadius, type AgentAssignmentConfidence } from '../config/geoMatching.ts';
+// BATCH 3 (3B-1) — THE single operational-eligibility authority. Re-used, never
+// re-derived: this module must never hold a second opinion about which agents
+// may receive work.
+import { isAgentActionable } from './auth.ts';
+// STAGE 3B-6C — county/sub-county equality is decided by the ONE geography
+// comparison (services/agentGeography.ts), not by `===`. A hub whose stored
+// county predates the canonicaliser ('nairobi', ' Nairobi City ') serves the same
+// county as an item recorded as 'Nairobi City', and `===` silently excluded it
+// from matching for ever.
+import { isSameAdministrativeUnit, isSameCounty } from './agentGeography.ts';
+// STAGE 3B-6D — the single Haversine implementation, shared with the admin
+// candidate projection (services/adminAssignmentCandidates.ts). Imported for
+// this module's own use and re-exported below for existing callers.
+import { calculateHaversineDistance } from './geoDistance.ts';
 
 // NEAREST-AGENT MATCHING — GEO-E1 CONTRACT HARDENING.
 // ===================================================
 // This module decides WHICH Agent hub (if any) a found item is routed to. It is
-// the ONLY place in the application that performs agent matching, and it is
-// deliberately the ONLY place that computes a Haversine distance.
+// the ONLY place in the application that performs agent matching. The Haversine
+// formula it uses lives in services/geoDistance.ts — the single implementation,
+// re-exported below — so the admin candidate list (Stage 3B-6D) can show the SAME
+// distance without importing this module or re-implementing the maths.
 //
 // THREE CONCEPTS THAT MUST NEVER BE COLLAPSED (see the GEO-E1 brief):
 //   1. USER-DECLARED FOUND GEOGRAPHY — items.found_county / administrative_unit_id,
@@ -33,20 +49,12 @@ import { exceedsAssignmentRadius, type AgentAssignmentConfidence } from '../conf
 // GPS, item-found GPS semantics, or any geography reconciliation. Reverse
 // geocoding is NEVER used as matching evidence.
 
-/** Haversine distance in kilometres between two validated coordinate pairs. */
-export function calculateHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6371; // Earth's radius in kilometers
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLon = ((lon2 - lon1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-}
+// STAGE 3B-6D — the Haversine implementation now lives in services/geoDistance.ts
+// so the browser can compute the SAME distance for the administrator's candidate
+// list without importing this module (and therefore pg, bcrypt and the db graph).
+// It is re-exported here so every existing caller — and the matcher contract
+// tests — keep importing `calculateHaversineDistance` from the matcher.
+export { calculateHaversineDistance } from './geoDistance.ts';
 
 // ---------------------------------------------------------------------------
 // RESULT CONTRACT.
@@ -113,19 +121,47 @@ export async function geocodeAddress(address: string): Promise<{ latitude: numbe
 // ---------------------------------------------------------------------------
 // STAGE A — CANDIDATE ELIGIBILITY (pure).
 //
-// Candidates must be active; and when an item county is supplied they are
-// narrowed to that county. The declared county is the FILTER — matching never
-// silently expands outside it (if it yields no one, the result is manual).
+// BATCH 3 (3B-1) — ELIGIBILITY IS isAgentActionable(), NOT A LOCAL RULE.
+// Before this stage the candidate pool was `status === 'active'` alone, which is
+// strictly WEAKER than the predicate every protected agent route enforces
+// (services/auth.ts). An agent approved after N4 is `active` immediately but is
+// NOT actionable until their email is verified, so the matcher could hand an
+// item to an account that cannot sign in to process it — and clear
+// `needs_manual_agent_reassignment` while doing so, taking the item out of the
+// admin queue. An unverifiable second opinion also meant the auto-assignment
+// trigger (which calls isAgentActionable() on the agent whose arrival triggered
+// it) could still be handed an item for a DIFFERENT, non-operational agent.
+//
+// There is now exactly one definition of "may receive work" in this codebase and
+// it is re-used here. `activeAgents` (status only) is kept separate from
+// `scopedAgents` (the real candidate pool) so the two ideas cannot be conflated
+// by a future edit: `activeAgents` feeds only the "no agents at all" guard.
+//
+// When an item county is supplied, eligible candidates are narrowed to that
+// county. The declared county is the FILTER — matching never silently expands
+// outside it (if it yields no one, the result is manual).
 // ---------------------------------------------------------------------------
 export function scopeCandidateAgents(
   agents: Agent[],
   itemCounty?: string | null,
 ): { activeAgents: Agent[]; scopedAgents: Agent[]; scopedToCounty: boolean } {
   const activeAgents = agents.filter(a => a.status === 'active');
+  // THE OPERATIONAL GATE — the same predicate requireActiveAgent guards every
+  // agent route with, and the same one the auto-assignment trigger re-checks.
+  const eligibleAgents = activeAgents.filter(a => isAgentActionable(a));
   const scopedToCounty = !!itemCounty;
+  // STAGE 3B-6C — CANONICAL COUNTY COMPARISON, NOT STRING EQUALITY.
+  //
+  // The county filter itself is UNCHANGED: when the item declares a county, only
+  // agents serving that county are candidates, and if none do the result is a
+  // manual assignment. What changed is only how "serves that county" is decided.
+  // `isSameCounty()` canonicalises both sides through resolveCountyName(), so an
+  // alias, different casing and stray whitespace still match, while a genuinely
+  // different county — or a side with no county at all — does not. It never
+  // guesses: an uncanonicalisable value only matches the identical value.
   const scopedAgents = scopedToCounty
-    ? activeAgents.filter(a => a.county === itemCounty)
-    : activeAgents;
+    ? eligibleAgents.filter(a => isSameCounty(a.county, itemCounty))
+    : eligibleAgents;
   return { activeAgents, scopedAgents, scopedToCounty };
 }
 
@@ -134,10 +170,15 @@ export function scopeCandidateAgents(
  * in-scope Agent holds it, only those Agents are considered; otherwise the whole
  * county scope is used. This is a PREFERENCE inside the declared scope, never an
  * expansion of it.
+ *
+ * STAGE 3B-6C — the sub-county id is compared the same tolerant way (trim +
+ * case-fold). Ids are configured data, so there is no alias table and none is
+ * invented here; ' KE-47-SC-01 ' and 'ke-47-sc-01' are the same unit, and a
+ * missing id on either side is never treated as a match.
  */
 export function preferSubCountyAgents(scopedAgents: Agent[], itemAdministrativeUnitId?: string | null): Agent[] {
   if (!itemAdministrativeUnitId) return scopedAgents;
-  const sameSubCounty = scopedAgents.filter(a => a.administrative_unit_id === itemAdministrativeUnitId);
+  const sameSubCounty = scopedAgents.filter(a => isSameAdministrativeUnit(a.administrative_unit_id, itemAdministrativeUnitId));
   return sameSubCounty.length > 0 ? sameSubCounty : scopedAgents;
 }
 
@@ -205,7 +246,8 @@ const defaultAssignmentDeps: AgentAssignmentDeps = {
 
 export const AgentMatchingService = {
   /**
-   * Find the nearest active agent based on the strict fallback algorithm.
+   * Find the nearest operationally eligible agent (isAgentActionable()) based on
+   * the strict fallback algorithm.
    *
    * IMPORTANT: this NEVER pretends an arbitrary agent is the nearest one. If GPS
    * matching fails, address geocoding fails, no active agents exist, or the
@@ -232,10 +274,12 @@ export const AgentMatchingService = {
     const evidence = buildAssignmentEvidence(itemCounty, lat, lon);
     const { activeAgents, scopedAgents, scopedToCounty } = scopeCandidateAgents(await deps.getAgents(), itemCounty);
 
-    // Stage A guard 1 — a county was declared, but no active Agent serves it.
-    // Never widen the scope to "any county": queue for manual assignment.
+    // Stage A guard 1 — a county was declared, but no operationally eligible
+    // Agent serves it. Never widen the scope to "any county": queue for manual
+    // assignment. (3B-1: "eligible" now means isAgentActionable() — an active
+    // but unverified hub counts as nobody here, which is the point.)
     if (scopedToCounty && scopedAgents.length === 0) {
-      console.log('[AGENT ASSIGNMENT] No active agents in the declared county — routing to manual assignment queue.');
+      console.log('[AGENT ASSIGNMENT] No operationally eligible agents in the declared county — routing to manual assignment queue.');
       return manualAssignment(evidence);
     }
 
@@ -243,6 +287,16 @@ export const AgentMatchingService = {
     // failed the Finder's entire report; it must never do that.)
     if (activeAgents.length === 0) {
       console.log('[AGENT ASSIGNMENT] No active agents available — routing to manual assignment queue.');
+      return manualAssignment(evidence);
+    }
+
+    // Stage A guard 3 (BATCH 3 / 3B-1) — Agents exist, but NONE of them is
+    // operationally eligible (e.g. every active hub is still email-unverified).
+    // Assigning one of them would strand the item at an account that cannot
+    // sign in, so it stays in the manual queue instead. Only reachable when no
+    // county was declared, because guard 1 already covers the scoped case.
+    if (scopedAgents.length === 0) {
+      console.log('[AGENT ASSIGNMENT] No operationally eligible agents available — routing to manual assignment queue.');
       return manualAssignment(evidence);
     }
 

@@ -15,6 +15,17 @@ import {
 // column default, the Drizzle definition, sql/schema.sql and the runtime
 // migration all name the same method that will actually be paid.
 import { PERSONAL_MPESA_PAYOUT_METHOD } from "../config/payoutDestinations";
+// BATCH 3 (3B-2) — the assignment-history vocabulary and its SQL lists. Same
+// discipline as the repair-request lists above: the Drizzle CHECK constraints,
+// sql/schema.sql and the runtime DDL in src/db/index.ts are all generated from
+// these values, so a vocabulary change cannot land in only one of them.
+import {
+  ITEM_ASSIGNMENT_ACTOR_ROLE_SQL_LIST,
+  ITEM_ASSIGNMENT_EVENT_TYPE_SQL_LIST,
+  ITEM_ASSIGNMENT_METHOD_SQL_LIST,
+  ITEM_ASSIGNMENT_TRIGGER_SOURCE_SQL_LIST,
+} from "../config/itemAgentAssignmentPolicy";
+
 
 // 1. CATEGORIES TABLE
 export const categories = pgTable("categories", {
@@ -470,6 +481,137 @@ export const items = pgTable("items", {
     idx_items_finder_phone: index("idx_items_finder_phone").on(table.finder_phone),
   };
 });
+
+// 3b. ITEM → AGENT ASSIGNMENT HISTORY (Batch 3, stage 3B-2)
+//
+// WHY A DEDICATED TABLE RATHER THAN MORE AUDIT PROSE
+// -------------------------------------------------
+// `items.assigned_agent_id` is a single mutable pointer: it answers "who holds
+// this item NOW" and nothing else. Everything about how the item arrived there
+// was recorded as free text in `audit_log.details` ("Item X: agent changed from
+// A to B by admin. Reason: ..."), which cannot be joined, queried by agent, or
+// reconciled — and the two automatic paths did not even record the previous
+// holder, because there was none to state. An assignment is a business event
+// with structured attributes (who, to whom, how, from where, why), so it gets a
+// row, not a sentence.
+//
+// APPEND-ONLY, BY CONSTRUCTION
+// ----------------------------
+// Nothing in this codebase updates or deletes a row here. There is no
+// `updateItemAssignmentEvent()` and no delete path, and a parity test asserts
+// that no Drizzle `.update()`/`.delete()` against this table exists in
+// src/db/database.ts. History that can be rewritten is not history.
+//
+// EVERY ROW MEANS A MUTATION THAT ACTUALLY HAPPENED
+// ------------------------------------------------
+// A row is written in the SAME transaction as the assignment it describes, and
+// only on the winning branch:
+//   * a failed CAS (someone else assigned first, or the item left the queue)
+//     returns zero rows and writes nothing;
+//   * a rejected admin target is refused before any write at all;
+//   * a re-save that keeps the same holder is not a mutation and writes nothing.
+// So the table cannot contain an event for an assignment that did not commit.
+//
+// PRE-3B-2 ASSIGNMENTS ARE NOT BACKFILLED
+// --------------------------------------
+// Existing items were assigned before this table existed and there is no
+// trustworthy source for their previous holders or triggers. No rows are
+// invented for them: history begins at the moment this table starts recording,
+// and an item assigned earlier simply has no events until it is next
+// (re)assigned. That limitation is stated rather than papered over.
+//
+// NO PUBLIC SURFACE
+// -----------------
+// This table is internal to the service/database layer for this stage. It is
+// read only by `db.getItemAssignmentHistory()`, which nothing exposes through a
+// route or DTO, so no claim, finder or public view gains a new field.
+//
+// `previous_agent_id` is nullable because the first assignment has no
+// predecessor. `new_agent_id` is nullable because an UNASSIGNMENT (Stage 3B-3)
+// records the removal of a holder: the row names the outgoing agent in
+// `previous_agent_id` and nobody in `new_agent_id`. A CHECK constraint below
+// keeps that shape and the event type in agreement, so "no incoming agent" can
+// never be recorded as an assignment.
+export const item_agent_assignments = pgTable(
+  "item_agent_assignments",
+  {
+    id: varchar("id", { length: 50 }).primaryKey(),
+    // Cascade only with the item itself. An item row is never hard-deleted in
+    // this application (withdrawal and erasure are field-level), so this is a
+    // consistency guard, not a live delete path.
+    item_id: varchar("item_id", { length: 50 })
+      .notNull()
+      .references(() => items.id, { onDelete: "cascade" }),
+    // The holder BEFORE the mutation. NULL on a first assignment; never NULL on
+    // an unassignment (the agent being removed is the whole point of the row).
+    previous_agent_id: varchar("previous_agent_id", { length: 50 }).references(() => agents.id),
+    // The holder AFTER the mutation. NULL only for `unassigned` — Stage 3B-3
+    // writes exactly that one shape, and `item_agent_assignments_holder_shape_check`
+    // is what keeps the column and the event type in agreement.
+    new_agent_id: varchar("new_agent_id", { length: 50 }).references(() => agents.id),
+    event_type: varchar("event_type", { length: 20 }).notNull(),
+    // The same values `items.agent_assignment_method` already carries, so the
+    // item and its latest event can be compared directly.
+    assignment_method: varchar("assignment_method", { length: 30 }).notNull(),
+    // WHAT caused it. Named `trigger_source` because `trigger` is a Postgres
+    // keyword and this column is hand-written DDL in three places.
+    trigger_source: varchar("trigger_source", { length: 40 }).notNull(),
+    // The acting administrator (username/user id), or NULL for the two
+    // automatic paths. Never a credential and never a claimant identity.
+    actor_id: varchar("actor_id", { length: 100 }),
+    actor_role: varchar("actor_role", { length: 20 }).notNull(),
+    // The administrator's stated reason, verbatim. NULL for automatic
+    // assignments, which have no human reason to record — an invented reason
+    // would be worse than an absent one.
+    reason: text("reason"),
+    // Distance evidence, present only when the matcher actually measured one.
+    distance_km: numeric("distance_km", { precision: 8, scale: 2 }),
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => {
+    return {
+      // The chronological read: one item's whole assignment history.
+      idx_item_agent_assignments_item: index("idx_item_agent_assignments_item").on(
+        table.item_id,
+        table.created_at
+      ),
+      // "Which items did this agent receive, and when" — the read a later
+      // reconciliation stage needs, which is why a per-agent index exists before
+      // any application code consults it.
+      idx_item_agent_assignments_new_agent: index("idx_item_agent_assignments_new_agent").on(table.new_agent_id),
+      item_agent_assignments_event_type_check: check(
+        "item_agent_assignments_event_type_check",
+        sql`${table.event_type} IN (${sql.raw(ITEM_ASSIGNMENT_EVENT_TYPE_SQL_LIST)})`
+      ),
+      item_agent_assignments_method_check: check(
+        "item_agent_assignments_method_check",
+        sql`${table.assignment_method} IN (${sql.raw(ITEM_ASSIGNMENT_METHOD_SQL_LIST)})`
+      ),
+      item_agent_assignments_trigger_source_check: check(
+        "item_agent_assignments_trigger_source_check",
+        sql`${table.trigger_source} IN (${sql.raw(ITEM_ASSIGNMENT_TRIGGER_SOURCE_SQL_LIST)})`
+      ),
+      item_agent_assignments_actor_role_check: check(
+        "item_agent_assignments_actor_role_check",
+        sql`${table.actor_role} IN (${sql.raw(ITEM_ASSIGNMENT_ACTOR_ROLE_SQL_LIST)})`
+      ),
+      // STAGE 3B-3 — THE HOLDER SHAPE MUST MATCH THE EVENT TYPE.
+      //
+      // Before unassignment existed, `new_agent_id` being NOT NULL was implied
+      // by the vocabulary: every event named an incoming agent. Now that
+      // `unassigned` exists, the two columns and the event type can disagree,
+      // and a row saying `assigned` with a NULL new_agent_id (or `unassigned`
+      // naming one) would be a history that contradicts itself. This is the
+      // database's copy of the rule the writer also enforces in
+      // insertItemAssignmentEventInTx(); the in-memory double enforces neither,
+      // which is why the writer must.
+      item_agent_assignments_holder_shape_check: check(
+        "item_agent_assignments_holder_shape_check",
+        sql`((${table.event_type} = 'unassigned' AND ${table.new_agent_id} IS NULL AND ${table.previous_agent_id} IS NOT NULL) OR (${table.event_type} <> 'unassigned' AND ${table.new_agent_id} IS NOT NULL))`
+      ),
+    };
+  }
+);
 
 // 4. CLAIMS TABLE
 export const claims = pgTable("claims", {

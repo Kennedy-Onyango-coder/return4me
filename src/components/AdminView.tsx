@@ -4,10 +4,36 @@ import { translations } from '../types';
 // SAME authoritative engine the server uses, so the numbers an admin sees in
 // the console are the numbers the claim will actually be priced from.
 import { computeRecoveryFee } from '../services/feeEngine';
+// STAGE 3B-3 — the SAME pure reason policy the server enforces. Imported rather
+// than restated so the operator's inline verdict and the server's 400 can never
+// disagree about what a valid reason is.
+import { validateAdminAssignmentReason } from '../config/adminAssignmentReasonPolicy';
+// STAGE 3B-6A — the console's service-geography editor builds its options from
+// the ONE canonical county dataset and the ONE administrative-unit registry.
+// This component keeps no county list and no sub-county list of its own, and the
+// label it renders comes from the same helper the server's response uses.
+import { countiesByUxGroup } from '../config/kenyaCounties';
+import { administrativeUnitsForCounty } from '../config/kenyaAdministrativeUnits';
+// STAGE 3B-6A/D — the geography helpers the console shares with the server:
+// `describeGeographyLabel` renders a stored service area, and
+// `assessAssignmentGeography` is the SAME assessment the server applies, so the
+// console's warning and the server's 409 cannot disagree about a county mismatch.
+import { assessAssignmentGeography, describeGeographyLabel } from '../services/agentGeography';
+// STAGE 3B-6D — the candidate projection: the server's eligibility verdict, the
+// county/sub-county relationship to THIS item, an honest distance (or the words
+// that say there is none) and the matcher's own deterministic ordering. Pure —
+// it assigns nothing and forms no second opinion about eligibility.
+import {
+  buildAssignmentCandidates,
+  describeAssignmentCandidate,
+  excludedAssignmentCandidates,
+  findAssignmentCandidate,
+  selectableAssignmentCandidates,
+} from '../services/adminAssignmentCandidates';
 // PROGRAMME 1 — `Banknote` and `ScrollText` are the two icons the nav registry
 // already uses for the two sections this batch adds (Payout Integrity, Audit
 // Log). They are imported here because the sidebar renders its own buttons.
-import { ShieldCheck, BarChart2, Users, FileCheck, Coins, HelpCircle, Loader2, ArrowRight, AlertTriangle, RefreshCw, CheckCircle, ShieldAlert, Copy, Package, ClipboardList, FileSearch, X, Banknote, ScrollText, ArrowDownLeft, ArrowUpRight, Landmark } from 'lucide-react';
+import { ShieldCheck, BarChart2, Users, FileCheck, Coins, HelpCircle, Loader2, ArrowRight, AlertTriangle, RefreshCw, CheckCircle, ShieldAlert, Copy, Package, PackageSearch, ClipboardList, FileSearch, X, Banknote, ScrollText, ArrowDownLeft, ArrowUpRight, Landmark } from 'lucide-react';
 // BATCH 1 (shared admin visual language) — the console reuses the SAME design
 // system every other surface uses. These are presentation primitives only:
 // they hold no data, make no requests and change no behaviour.
@@ -135,6 +161,7 @@ import {
   summarizePayoutIntegrity,
 } from './admin/payouts/payoutIntegrityPresentation';
 import AuditLogPanel from './admin/audit/AuditLogPanel';
+import StrandedItemsQueueSection from './admin/stranded/StrandedItemsQueueSection';
 import AgentPayoutDestinationChangesPanel from './admin/payouts/AgentPayoutDestinationChangesPanel';
 import {
   canInitiateSettlementPayout,
@@ -440,7 +467,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
   // own section state: `payouts` (Payout Integrity, WS1/WS2/WS5) and `audit`
   // (Audit Log, WS4). Both ids exist in the shared nav registry, so the sidebar,
   // the top bar and this state cannot disagree about what a section is called.
-  const [activeTab, setActiveTab] = useState<'stats' | 'agents' | 'disputes' | 'ledger' | 'review' | 'categories' | 'strikes' | 'found_items' | 'claims' | 'lost_reports' | 'payouts' | 'audit'>('stats');
+  const [activeTab, setActiveTab] = useState<'stats' | 'agents' | 'disputes' | 'ledger' | 'review' | 'categories' | 'strikes' | 'found_items' | 'stranded_items' | 'claims' | 'lost_reports' | 'payouts' | 'audit'>('stats');
   const [dashboardData, setDashboardData] = useState<any | null>(null);
   const [dashboardLoading, setDashboardLoading] = useState(false);
   // Guards against duplicate concurrent /api/admin/dashboard fetches (e.g. the
@@ -681,8 +708,41 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
   const [reviewIsDescriptionOnly, setReviewIsDescriptionOnly] = useState(false);
   const [reviewDescription, setReviewDescription] = useState('');
   const [reviewAssignedAgentId, setReviewAssignedAgentId] = useState('');
+  // STAGE 3B-3 — the reason the server now REQUIRES for every manual assignment,
+  // reassignment or removal, and the inline error slot that shows its verdict.
+  // The value is validated with the SAME pure policy the server uses
+  // (config/adminAssignmentReasonPolicy) so the operator sees the refusal before
+  // a round trip, while the server remains the authority.
+  const [reviewAssignmentReason, setReviewAssignmentReason] = useState('');
+  const [reviewReasonError, setReviewReasonError] = useState('');
+  // STAGE 3B-6D — the administrator's explicit acknowledgement of an
+  // out-of-county assignment. Deliberately NOT derived from the reason text or
+  // from any other field: the server demands this one flag, and only this one.
+  const [reviewGeographyAck, setReviewGeographyAck] = useState(false);
   const [reviewSaving, setReviewSaving] = useState(false);
   const [adminActionProcessing, setAdminActionProcessing] = useState(false);
+  // ---------------------------------------------------------------------------
+  // STAGE 3B-6D — THE CANDIDATE LIST, DERIVED FROM THE SERVER'S OWN FACTS.
+  //
+  // The dropdown used to be `dashboardData.agents.filter(status === 'active')`,
+  // which is not the eligibility rule and showed none of the geography behind the
+  // choice. This projection (services/adminAssignmentCandidates) copies the
+  // server's isAgentActionable() verdict, places the item's county first, then the
+  // sub-county, then a real distance when both coordinate pairs are usable, and
+  // breaks ties on ascending id exactly as the matcher does.
+  //
+  // It is a PURE function of the item and the dashboard payload: no request, no
+  // assignment, no second opinion about eligibility, and no invented distance —
+  // an unusable coordinate yields the words "Distance not available", never 0 km.
+  // The panel still submits to the ONE existing review route, which re-checks
+  // eligibility, geography and the assignment reason before writing anything.
+  // ---------------------------------------------------------------------------
+  const reviewAssignmentCandidates = useMemo(
+    () => buildAssignmentCandidates({ item: selectedReviewItem, agents: dashboardData?.agents }),
+    [selectedReviewItem, dashboardData?.agents],
+  );
+
+
 
   // Confirmation Modal State
   const [confirmModal, setConfirmModal] = useState<{
@@ -758,15 +818,55 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
     setReviewIsDescriptionOnly(item.isDescriptionOnly || false);
     setReviewDescription(item.description || '');
     setReviewAssignedAgentId(item.assigned_agent_id || '');
+    // A reason typed for a previous item must never travel to this one.
+    setReviewAssignmentReason('');
+    setReviewReasonError('');
+    // STAGE 3B-6D — nor must a previous item's out-of-county acknowledgement.
+    setReviewGeographyAck(false);
   };
 
+  /**
+   * STAGE 3B-3 — THE REASON IS COLLECTED AND ENFORCED HERE.
+   *
+   * The form now distinguishes three saves, which the old code could not:
+   *   * a plain correction (no agent change) — no reason, no assignment field, so
+   *     it no longer trips the server's "a reason is required to assign an Agent";
+   *   * an assignment or reassignment (the selected hub differs from the current
+   *     one) — the reason is REQUIRED and validated, the currently selected agent
+   *     is preserved when validation fails, and the server's own refusal is
+   *     displayed in the same inline slot;
+   *   * a removal — its own explicit button (never a side effect of clearing the
+   *     dropdown), which posts the same reason to the removal endpoint.
+   */
   const handleSaveReview = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedReviewItem) return;
+    // DUPLICATE-SUBMIT PROTECTION: the flag is checked before anything else and
+    // the submit control is disabled while it is set, so a double click or a
+    // double Enter cannot produce two assignments (and therefore two history
+    // events and two sets of notifications).
+    if (reviewSaving) return;
+
+    const currentAgentId = selectedReviewItem.assigned_agent_id || '';
+    const agentChanged = reviewAssignedAgentId !== currentAgentId;
+
+    let assignmentReason = '';
+    if (agentChanged && reviewAssignedAgentId) {
+      const validated = validateAdminAssignmentReason(reviewAssignmentReason);
+      if (!validated.ok) {
+        // The selection and the typed reason are deliberately left untouched so
+        // the operator can correct the reason without re-picking the hub.
+        setReviewReasonError(validated.error);
+        return;
+      }
+      assignmentReason = validated.reason;
+    }
+
     setReviewSaving(true);
     setActionSuccess('');
     setActionWarning('');
     setDataError('');
+    setReviewReasonError('');
 
     try {
       const response = await fetch(`/api/admin/items/${selectedReviewItem.id}/review`, {
@@ -781,7 +881,17 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
           ocrExtractedName: reviewIsDescriptionOnly ? null : reviewOcrName,
           isDescriptionOnly: reviewIsDescriptionOnly,
           description: reviewDescription,
-          assignedAgentId: reviewAssignedAgentId || undefined,
+          // Sent ONLY when the holder actually changes. Sending the unchanged
+          // holder would demand a reason for a description fix and would record
+          // an assignment decision nobody made.
+          assignedAgentId: agentChanged && reviewAssignedAgentId ? reviewAssignedAgentId : undefined,
+          reason: agentChanged && reviewAssignedAgentId ? assignmentReason : undefined,
+          // STAGE 3B-6D — sent ONLY when the operator actually ticked the
+          // out-of-county confirmation. The server compares the item's county with
+          // the chosen hub's and refuses (409) without it; a same-county or
+          // unknown-county assignment ignores the flag entirely.
+          geographyAcknowledged:
+            agentChanged && reviewAssignedAgentId && reviewGeographyAck ? true : undefined,
         }),
       });
 
@@ -790,11 +900,64 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
         throw new Error(data.error || 'Review save failed');
       }
 
-      setActionSuccess('Item manual review saved successfully and is now searchable.');
+      setActionSuccess(
+        agentChanged && reviewAssignedAgentId
+          ? 'Item saved and the assigned agent was updated.'
+          : 'Item manual review saved successfully and is now searchable.'
+      );
       setSelectedReviewItem(null);
       fetchDashboardData();
     } catch (e: any) {
-      setDataError(e.message);
+      // The server's own reason/custody verdict is shown where the operator is
+      // looking, not only in the page-level banner.
+      setReviewReasonError(e.message);
+    } finally {
+      setReviewSaving(false);
+    }
+  };
+
+  /**
+   * STAGE 3B-3 — REMOVE THE ASSIGNED AGENT.
+   *
+   * A separate action on purpose: it is a different decision from "save the
+   * form", it removes responsibility rather than moving it, and it must never be
+   * triggered by clearing a dropdown. It shares the same reason field, uses the
+   * same validation policy, and the same duplicate-submit guard.
+   */
+  const handleRemoveAssignedAgent = async (itemId: string) => {
+    if (reviewSaving) return;
+    const validated = validateAdminAssignmentReason(reviewAssignmentReason);
+    if (!validated.ok) {
+      setReviewReasonError(validated.error);
+      return;
+    }
+
+    setReviewSaving(true);
+    setActionSuccess('');
+    setActionWarning('');
+    setDataError('');
+    setReviewReasonError('');
+
+    try {
+      const response = await fetch(`/api/admin/items/${itemId}/unassign`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ reason: validated.reason }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Removing the assigned agent failed');
+      }
+
+      setActionSuccess('The assigned agent was removed and the item is back in the assignment queue.');
+      setSelectedReviewItem(null);
+      fetchDashboardData();
+    } catch (e: any) {
+      setReviewReasonError(e.message);
     } finally {
       setReviewSaving(false);
     }
@@ -1700,6 +1863,185 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // STAGE 3B-6A — SERVICE GEOGRAPHY (COUNTY + SUB-COUNTY) CORRECTION.
+  //
+  // Two independent axes, two independent actions, on purpose:
+  //   * "Set Coordinates Manually" (above) fixes WHERE THE HUB IS;
+  //   * this fixes WHICH AREA THE HUB SERVES.
+  // Before this, the second axis could only be written once, at registration, so
+  // a hub with a wrong or missing county was permanently unmatchable and the
+  // console had no way to notice or repair it.
+  //
+  // The form collects the same three things the server requires — canonical
+  // county, a sub-county belonging to it, and an administrator's reason — and
+  // validates the reason through the SAME policy the server enforces, so the
+  // inline verdict and the server's 400 cannot disagree.
+  // ---------------------------------------------------------------------------
+  const [geoFormAgentId, setGeoFormAgentId] = useState<string | null>(null);
+  const [geoFormCounty, setGeoFormCounty] = useState('');
+  const [geoFormUnitId, setGeoFormUnitId] = useState('');
+  const [geoFormReason, setGeoFormReason] = useState('');
+  const [geoFormError, setGeoFormError] = useState('');
+
+  const openAgentGeographyForm = (agent: any) => {
+    setGeoFormAgentId(agent.id);
+    setGeoFormCounty(agent.county || '');
+    setGeoFormUnitId(agent.administrative_unit_id || '');
+    setGeoFormReason('');
+    setGeoFormError('');
+  };
+
+  const closeAgentGeographyForm = () => {
+    setGeoFormAgentId(null);
+    setGeoFormCounty('');
+    setGeoFormUnitId('');
+    setGeoFormReason('');
+    setGeoFormError('');
+  };
+
+  const handleCorrectAgentGeography = async (id: string) => {
+    setActionSuccess('');
+    setActionWarning('');
+    setDataError('');
+    setGeoFormError('');
+
+    if (!geoFormCounty) {
+      setGeoFormError('Choose the county this Agent hub serves.');
+      return;
+    }
+    if (!geoFormUnitId) {
+      setGeoFormError('Choose the sub-county this Agent hub serves.');
+      return;
+    }
+    const validatedReason = validateAdminAssignmentReason(geoFormReason);
+    if (!validatedReason.ok) {
+      // The selection and the typed reason stay exactly as they are, so the
+      // operator can fix the reason without re-picking the geography.
+      setGeoFormError(validatedReason.error);
+      return;
+    }
+
+    setAdminActionProcessing(true);
+    try {
+      const response = await fetch(`/api/admin/agents/${id}/geography`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          county: geoFormCounty,
+          administrativeUnitId: geoFormUnitId,
+          reason: validatedReason.reason,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to correct agent geography');
+      }
+      // STAGE 3B-6A §4 — WHAT THE CORRECTION ACTUALLY CHANGED.
+      //   The server re-runs the existing pending-item matcher after the correction
+      //   commits and reports it as `auto_assignment`. Reporting it here is the
+      //   difference between "saved" and "saved, and three waiting items are now
+      //   routed to this hub"; a correction that matched nothing is still a valid
+      //   correction, so the message is never turned into a failure.
+      const matchedCount = Array.isArray(data.auto_assignment?.assigned)
+        ? data.auto_assignment.assigned.length
+        : 0;
+      setActionSuccess(
+        matchedCount > 0
+          ? `${data.message} ${matchedCount} waiting item${matchedCount === 1 ? '' : 's'} from the manual queue ${matchedCount === 1 ? 'is' : 'are'} now matched to this hub.`
+          : data.message,
+      );
+      closeAgentGeographyForm();
+      fetchDashboardData(); // Reload
+    } catch (e: any) {
+      setGeoFormError(e.message);
+    } finally {
+      setAdminActionProcessing(false);
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // STAGE 3B-6B — ITEMS STRANDED AT A HUB THAT CANNOT ACT.
+  //
+  // Suspending a hub (or leaving it email-unverified) makes it ineligible for
+  // work, but the items already pointing at it stay assigned, awaiting a drop-off
+  // that will never be accepted. This panel asks the server what those items are
+  // and offers the ONE explicit, audited action that returns the releasable ones
+  // to the queue. Items the hub has already physically received are LISTED but
+  // never offered: they need a custody decision this console does not make.
+  // ---------------------------------------------------------------------------
+  const [strandedAgentId, setStrandedAgentId] = useState<string | null>(null);
+  const [strandedData, setStrandedData] = useState<any | null>(null);
+  const [strandedLoading, setStrandedLoading] = useState(false);
+  const [strandedReason, setStrandedReason] = useState('');
+  const [strandedError, setStrandedError] = useState('');
+
+  const fetchStrandedItems = async (agentId: string) => {
+    setStrandedAgentId(agentId);
+    setStrandedData(null);
+    setStrandedError('');
+    setStrandedReason('');
+    setStrandedLoading(true);
+    try {
+      const response = await fetch(`/api/admin/agents/${agentId}/stranded-items`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to load the items held by this Agent');
+      }
+      setStrandedData(data);
+    } catch (e: any) {
+      setStrandedError(e.message);
+    } finally {
+      setStrandedLoading(false);
+    }
+  };
+
+  const closeStrandedPanel = () => {
+    setStrandedAgentId(null);
+    setStrandedData(null);
+    setStrandedError('');
+    setStrandedReason('');
+  };
+
+  const handleReleaseStrandedItems = async (agentId: string) => {
+    if (strandedLoading) return;
+    setActionSuccess('');
+    setActionWarning('');
+    setDataError('');
+    setStrandedError('');
+
+    const validatedReason = validateAdminAssignmentReason(strandedReason);
+    if (!validatedReason.ok) {
+      setStrandedError(validatedReason.error);
+      return;
+    }
+
+    setStrandedLoading(true);
+    try {
+      const response = await fetch(`/api/admin/agents/${agentId}/release-stranded-items`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ reason: validatedReason.reason }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Releasing the stranded items failed');
+      }
+      setActionSuccess(data.message);
+      setStrandedReason('');
+      // Re-read rather than assuming: the server reports what it actually
+      // released, and anything it refused is still shown.
+      await fetchStrandedItems(agentId);
+      fetchDashboardData();
+    } catch (e: any) {
+      setStrandedError(e.message);
+    } finally {
+      setStrandedLoading(false);
+    }
+  };
+
   const handleApproveAgent = (id: string) => {
     setActionSuccess('');
     setActionWarning('');
@@ -1750,7 +2092,15 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
           if (!response.ok) {
             throw new Error(data.error || 'Failed to suspend agent');
           }
-          setActionSuccess(data.message);
+          // STAGE 3B-6B — a suspension that strands work must SAY so. The server
+          // reports what the hub was holding; without this the operator had no
+          // reason to look, and the finder waited for a drop-off that could never
+          // happen.
+          setActionSuccess(
+            data.stranded_headline
+              ? `${data.message} ${data.stranded_headline}`
+              : data.message
+          );
           fetchDashboardData(); // Reload
         } catch (e: any) {
           setDataError(e.message);
@@ -3455,6 +3805,20 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
               <Package size={ICON_SIZE.metadata} aria-hidden="true" />
               <span>{'Found Items'}</span>
             </button>
+            {/* STAGE 3B-6B — items still assigned to a hub that cannot act.
+                The section reads a server-made classification and offers the ONE
+                existing audited release primitive per item; it cannot reassign,
+                transfer custody or act on a batch. */}
+            <button
+              onClick={() => setActiveTab('stranded_items')}
+              aria-current={activeTab === 'stranded_items' ? 'page' : undefined}
+              className={`py-3 px-6 text-caption font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
+                activeTab === 'stranded_items' ? 'border-[var(--appearance-primary)] text-[var(--appearance-text-primary)] font-extrabold' : 'border-transparent text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'
+              }`}
+            >
+              <PackageSearch size={ICON_SIZE.metadata} aria-hidden="true" />
+              <span>{'Stranded Items'}</span>
+            </button>
             {/* Phase 6F — Lost Reports Administration. Read-only. */}
             <button
               onClick={() => setActiveTab('lost_reports')}
@@ -4434,6 +4798,177 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                                       )}
                                     </div>
                                   )}
+                                  {/* STAGE 3B-6A — SERVICE GEOGRAPHY.
+                                      The county + sub-county this hub may receive
+                                      items for. Shown always, corrected here, and
+                                      never confused with the coordinate pair
+                                      above: a hub can be at the right place and
+                                      still serve the wrong area. */}
+                                  <div className="border-t border-[var(--appearance-border)] pt-2 space-y-1">
+                                    <span className="text-caption font-extrabold text-[var(--appearance-text-muted)] uppercase tracking-wider block">Service Geography</span>
+                                    <p>
+                                      <b>County / Sub-county:</b>{' '}
+                                      {describeGeographyLabel(agent.county, agent.administrative_unit_id) || (
+                                        <span className="text-[var(--appearance-danger)] font-bold">
+                                          Not recorded — this hub cannot be matched to an item by county
+                                        </span>
+                                      )}
+                                    </p>
+                                    {geoFormAgentId === agent.id ? (
+                                      <div className="space-y-2 p-2 bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-xl">
+                                        <div className="flex flex-wrap items-end gap-2">
+                                          <div>
+                                            <label htmlFor={`agent-geo-county-${agent.id}`} className="text-caption font-bold text-[var(--appearance-text-muted)] block">County</label>
+                                            <select
+                                              id={`agent-geo-county-${agent.id}`}
+                                              value={geoFormCounty}
+                                              onChange={(e) => {
+                                                // The sub-county belongs to a county, so a
+                                                // county change MUST clear it — otherwise the
+                                                // form would submit a unit from the old county
+                                                // and the server would (correctly) refuse it.
+                                                setGeoFormCounty(e.target.value);
+                                                setGeoFormUnitId('');
+                                                setGeoFormError('');
+                                              }}
+                                              className="border border-[var(--appearance-border)] rounded-lg px-2 py-1 text-caption"
+                                            >
+                                              <option value="">-- Select County --</option>
+                                              {countiesByUxGroup().map((group) => (
+                                                <optgroup key={group.group} label={group.group}>
+                                                  {group.counties.map((c) => (
+                                                    <option key={c.code} value={c.name}>{c.name}</option>
+                                                  ))}
+                                                </optgroup>
+                                              ))}
+                                            </select>
+                                          </div>
+                                          <div>
+                                            <label htmlFor={`agent-geo-unit-${agent.id}`} className="text-caption font-bold text-[var(--appearance-text-muted)] block">Sub-county</label>
+                                            <select
+                                              id={`agent-geo-unit-${agent.id}`}
+                                              value={geoFormUnitId}
+                                              disabled={!geoFormCounty}
+                                              onChange={(e) => {
+                                                setGeoFormUnitId(e.target.value);
+                                                setGeoFormError('');
+                                              }}
+                                              className="border border-[var(--appearance-border)] rounded-lg px-2 py-1 text-caption"
+                                            >
+                                              <option value="">-- Select Sub-county --</option>
+                                              {administrativeUnitsForCounty(geoFormCounty).map((unit) => (
+                                                <option key={unit.id} value={unit.id}>{unit.name}</option>
+                                              ))}
+                                            </select>
+                                          </div>
+                                        </div>
+                                        <div>
+                                          <label htmlFor={`agent-geo-reason-${agent.id}`} className="text-caption font-bold text-[var(--appearance-text-muted)] block">Reason for the correction</label>
+                                          <textarea
+                                            id={`agent-geo-reason-${agent.id}`}
+                                            rows={2}
+                                            value={geoFormReason}
+                                            onChange={(e) => {
+                                              setGeoFormReason(e.target.value);
+                                              setGeoFormError('');
+                                            }}
+                                            placeholder="e.g. Hub operator confirmed the shop serves Kibra, not Langata."
+                                            className="w-full border border-[var(--appearance-border)] rounded-lg px-2 py-1 text-caption"
+                                          />
+                                          <p className="text-caption text-[var(--appearance-text-muted)]">
+                                            Required, and stored in the audit trail. Do not include phone numbers, email addresses or ID numbers.
+                                          </p>
+                                        </div>
+                                        {geoFormError && (
+                                          <p role="alert" className="text-caption text-status-danger font-bold">{geoFormError}</p>
+                                        )}
+                                        <div className="flex flex-wrap gap-2">
+                                          <Button variant="primary" size="sm" disabled={adminActionProcessing} onClick={() => handleCorrectAgentGeography(agent.id)}>Save Service Geography</Button>
+                                          <Button variant="secondary" size="sm" disabled={adminActionProcessing} onClick={closeAgentGeographyForm}>Cancel</Button>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <Button variant="outline" size="sm" onClick={() => openAgentGeographyForm(agent)}>Correct Service Geography</Button>
+                                    )}
+                                  </div>
+                                  {/* STAGE 3B-6B — WHAT THIS HUB IS HOLDING.
+                                      Items assigned to a hub that cannot act are
+                                      stranded: the finder waits for a drop-off
+                                      that will never be accepted. The panel shows
+                                      what the server reports and offers the one
+                                      explicit, audited release action — never a
+                                      silent side effect of suspending. */}
+                                  <div className="border-t border-[var(--appearance-border)] pt-2 space-y-1">
+                                    <span className="text-caption font-extrabold text-[var(--appearance-text-muted)] uppercase tracking-wider block">Items Held By This Hub</span>
+                                    {strandedAgentId === agent.id ? (
+                                      strandedLoading && !strandedData ? (
+                                        <p className="text-caption">Checking the items this hub is holding…</p>
+                                      ) : strandedData ? (
+                                        <div className="space-y-2">
+                                          <p className="font-bold">{strandedData.headline}</p>
+                                          {(strandedData.stranded?.releasable?.length ?? 0) > 0 && (
+                                            <>
+                                              <p className="text-caption text-[var(--appearance-text-muted)]">
+                                                These can be returned to the assignment queue. Nothing is released until you confirm below.
+                                              </p>
+                                              <ul className="space-y-0.5">
+                                                {strandedData.stranded.releasable.map((entry: any) => (
+                                                  <li key={entry.item_id} className="font-mono text-caption">
+                                                    {entry.item_id} · {entry.status} · {entry.county || 'county not recorded'}
+                                                  </li>
+                                                ))}
+                                              </ul>
+                                            </>
+                                          )}
+                                          {(strandedData.stranded?.held_at_hub?.length ?? 0) > 0 && (
+                                            <p className="text-caption text-[var(--appearance-danger)] font-bold">
+                                              {strandedData.stranded.held_at_hub.length} item(s) were already received by this hub. They are NOT released here — their custody must be resolved separately.
+                                            </p>
+                                          )}
+                                          {(strandedData.stranded?.other?.length ?? 0) > 0 && (
+                                            <p className="text-caption text-[var(--appearance-text-muted)]">
+                                              {strandedData.stranded.other.length} further item(s) are claimed, expired or frozen and are not affected by this hub’s status.
+                                            </p>
+                                          )}
+                                          {(strandedData.stranded?.releasable?.length ?? 0) > 0 && (
+                                            <div className="space-y-1">
+                                              <label htmlFor={`agent-stranded-reason-${agent.id}`} className="text-caption font-bold text-[var(--appearance-text-muted)] block">Reason for releasing these items</label>
+                                              <textarea
+                                                id={`agent-stranded-reason-${agent.id}`}
+                                                rows={2}
+                                                value={strandedReason}
+                                                onChange={(e) => {
+                                                  setStrandedReason(e.target.value);
+                                                  setStrandedError('');
+                                                }}
+                                                placeholder="e.g. Hub suspended for a verification failure; items returned to the queue for reassignment."
+                                                className="w-full border border-[var(--appearance-border)] rounded-lg px-2 py-1 text-caption"
+                                              />
+                                              <p className="text-caption text-[var(--appearance-text-muted)]">
+                                                Required. Recorded against every released item. Do not include phone numbers, email addresses or ID numbers.
+                                              </p>
+                                            </div>
+                                          )}
+                                          {strandedError && (
+                                            <p role="alert" className="text-caption text-status-danger font-bold">{strandedError}</p>
+                                          )}
+                                          <div className="flex flex-wrap gap-2">
+                                            {(strandedData.stranded?.releasable?.length ?? 0) > 0 && (
+                                              <Button variant="danger" size="sm" disabled={strandedLoading} onClick={() => handleReleaseStrandedItems(agent.id)}>
+                                                Release {strandedData.stranded.releasable.length} Item(s)
+                                              </Button>
+                                            )}
+                                            <Button variant="secondary" size="sm" disabled={strandedLoading} onClick={() => fetchStrandedItems(agent.id)}>Refresh</Button>
+                                            <Button variant="secondary" size="sm" disabled={strandedLoading} onClick={closeStrandedPanel}>Close</Button>
+                                          </div>
+                                        </div>
+                                      ) : (
+                                        <p role="alert" className="text-caption text-status-danger font-bold">{strandedError || 'The items held by this hub could not be read.'}</p>
+                                      )
+                                    ) : (
+                                      <Button variant="outline" size="sm" onClick={() => fetchStrandedItems(agent.id)}>Check Items Held By This Hub</Button>
+                                    )}
+                                  </div>
                                   <p><b>Date Registered:</b> {new Date(agent.created_at).toLocaleDateString()} {new Date(agent.created_at).toLocaleTimeString()}</p>
                                 </div>
 
@@ -5692,22 +6227,155 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                       </Select>
 
                       {/* Reassign Agent Dropdown */}
+                      {/* STAGE 3B-6D — WHAT THIS LIST IS, AND WHAT IT NOW SHOWS.
+                          Every option comes from the candidate projection: only hubs
+                          the SERVER marked actionable are selectable (the old filter
+                          was `status === 'active'`, which is the business-approval
+                          axis alone and would have offered a hub that cannot receive
+                          work). Each option states the hub's service area, its
+                          relationship to this item and — only when both coordinate
+                          pairs are usable — the distance. Hubs that are not eligible
+                          are listed underneath with the reason, so a hub never
+                          silently disappears from the console. */}
                       <Select
                         label="Assigned Agent Hub"
                         id="review-assigned-agent"
                         value={reviewAssignedAgentId}
-                        onChange={(e) => setReviewAssignedAgentId(e.target.value)}
+                        onChange={(e) => {
+                          // The confirmation belongs to the hub it was given for:
+                          // carrying a ticked box onto a DIFFERENT hub would turn a
+                          // deliberate cross-county override into an accidental one,
+                          // and the server's flag is per-request, not per-hub.
+                          setReviewAssignedAgentId(e.target.value);
+                          setReviewGeographyAck(false);
+                        }}
                       >
                           <option value="">-- Select Agent Hub --</option>
-                          {dashboardData.agents && dashboardData.agents
-                            .filter((agent: any) => agent.status === 'active')
-                            .map((agent: any) => (
-                              <option key={agent.id} value={agent.id}>
-                                {agent.business_name} ({agent.location_address})
-                              </option>
-                            ))
-                          }
+                          {(() => {
+                            const selectable = selectableAssignmentCandidates(reviewAssignmentCandidates);
+                            // The item's CURRENT holder is always rendered, even when
+                            // it has become non-actionable: the control must never sit
+                            // blank while the form still holds an agent id (the same
+                            // display/state mismatch the category selector documents).
+                            const current = findAssignmentCandidate(reviewAssignmentCandidates, reviewAssignedAgentId);
+                            const currentIsListed = !!current && current.selectable === true;
+                            return (
+                              <>
+                                {current && !currentIsListed && (
+                                  <option key={current.id} value={current.id}>
+                                    {describeAssignmentCandidate(current)} — current holder, not eligible for new work
+                                  </option>
+                                )}
+                                {selectable.map(candidate => (
+                                  <option key={candidate.id} value={candidate.id}>
+                                    {describeAssignmentCandidate(candidate)}
+                                  </option>
+                                ))}
+                              </>
+                            );
+                          })()}
                       </Select>
+                      {(() => {
+                        const excluded = excludedAssignmentCandidates(reviewAssignmentCandidates);
+                        if (excluded.length === 0) return null;
+                        return (
+                          <p className="text-caption text-[var(--appearance-text-muted)]">
+                            Not selectable — {excluded.map(candidate => candidate.businessName).join(', ')}:{' '}
+                            {excluded.length === 1 ? 'this hub cannot' : 'these hubs cannot'} receive items right now
+                            (eligibility is decided by the server, not by the hub's recorded status).
+                          </p>
+                        );
+                      })()}
+
+                      {/* STAGE 3B-6D — THE GEOGRAPHY BEHIND THIS CHOICE.
+                          The comparison is the server's own function. A hub in a
+                          different county is a legitimate choice, but never an
+                          accidental one: the operator must confirm it, and the
+                          server refuses the save without that confirmation. */}
+                      {(() => {
+                        if (!reviewAssignedAgentId) return null;
+                        const chosenCandidate = findAssignmentCandidate(reviewAssignmentCandidates, reviewAssignedAgentId);
+                        if (!chosenCandidate) return null;
+                        const assessment = assessAssignmentGeography({
+                          itemCounty: selectedReviewItem.found_county,
+                          itemAdministrativeUnitId: selectedReviewItem.administrative_unit_id,
+                          agentCounty: chosenCandidate.county,
+                          agentAdministrativeUnitId: chosenCandidate.administrativeUnitId,
+                        });
+                        return (
+                          <div
+                            className={
+                              assessment.requires_acknowledgement
+                                ? 'rounded-xl border border-[var(--appearance-danger)] bg-[var(--appearance-surface-muted)] p-3 space-y-2'
+                                : 'rounded-xl border border-[var(--appearance-border)] bg-[var(--appearance-surface-muted)] p-3 space-y-1'
+                            }
+                          >
+                            <p className="text-caption font-bold text-[var(--appearance-text-primary)]">
+                              Service geography: {assessment.summary}
+                            </p>
+                            <p className="text-caption text-[var(--appearance-text-muted)]">
+                              Item county: {assessment.item_county || 'not recorded'} · Hub county: {assessment.agent_county || 'not recorded'}
+                            </p>
+                            {/* THE RELATIONSHIP IN WORDS, AND A DISTANCE ONLY WHEN IT
+                                EXISTS. A number appears only when the item's report
+                                position AND the hub's recorded position are both valid
+                                coordinates; otherwise this line says the distance is
+                                unavailable (and why) instead of inventing a centroid,
+                                an estimate or a "0 km". */}
+                            <p className="text-caption text-[var(--appearance-text-muted)]">
+                              {chosenCandidate.relationLabel} Distance: {chosenCandidate.distanceLabel}
+                              {chosenCandidate.distanceKm === null ? ' (no usable coordinate on the item, the hub, or both).' : ''}
+                            </p>
+                            {assessment.requires_acknowledgement && (
+                              <label htmlFor="review-geography-ack" className="flex items-start gap-2 text-caption font-bold text-[var(--appearance-danger)]">
+                                <input
+                                  id="review-geography-ack"
+                                  type="checkbox"
+                                  checked={reviewGeographyAck}
+                                  onChange={(e) => setReviewGeographyAck(e.target.checked)}
+                                  disabled={reviewSaving}
+                                  className="mt-0.5"
+                                />
+                                <span>
+                                  I am assigning this item to a hub in a different county on purpose.
+                                </span>
+                              </label>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      {/* STAGE 3B-3 — THE REASON THE SERVER NOW REQUIRES.
+                          Shown whenever this panel could change who holds the
+                          item (assign, reassign, or remove), with the refusal
+                          inline so the operator never has to guess why a save
+                          was rejected, and the selected hub is never cleared by
+                          a failed validation. */}
+                      <Textarea
+                        label="Reason for the assignment decision"
+                        id="review-assignment-reason"
+                        value={reviewAssignmentReason}
+                        onChange={(e) => {
+                          setReviewAssignmentReason(e.target.value);
+                          setReviewReasonError('');
+                        }}
+                        disabled={reviewSaving}
+                        rows={3}
+                        placeholder="e.g. Nearest hub is closed for the week; routing to the next hub in the same sub-county."
+                        hint="Required when you assign, reassign or remove an Agent, and stored with the assignment record. Do not include the claimant's or finder's phone number, email address or ID number."
+                        error={reviewReasonError || undefined}
+                      />
+
+                      {selectedReviewItem.assigned_agent_id && (
+                        <Button
+                          type="button"
+                          variant="danger"
+                          disabled={reviewSaving}
+                          onClick={() => handleRemoveAssignedAgent(selectedReviewItem.id)}
+                        >
+                          <span>Remove Assigned Agent</span>
+                        </Button>
+                      )}
 
                       {/* Assignment Metadata Info */}
                       {selectedReviewItem.agent_assignment_method && (
@@ -5781,7 +6449,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
                       )}
 
                       <div className="flex gap-2">
-                        <Button type="submit" variant="primary" loading={reviewSaving} className="flex-1">
+                        <Button type="submit" variant="primary" loading={reviewSaving} disabled={reviewSaving} className="flex-1">
                           <span>Save Correction</span>
                           <ArrowRight size={ICON_SIZE.ui} aria-hidden="true" />
                         </Button>
@@ -6922,6 +7590,20 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
       {activeTab === 'audit' && (
         <div className="space-y-6">
           <AuditLogPanel token={token} />
+        </div>
+      )}
+
+      {/* STAGE 3B-6B — THE STRANDED-ITEM QUEUE.
+          Items still assigned to a hub the platform will not hand work to, with
+          the ONE release this console may perform. The classification and the
+          releasability verdict are the SERVER's (GET /api/admin/stranded-items);
+          the release is the pre-existing audited POST /api/admin/items/:id/unassign,
+          one item at a time, with a reason. The panel owns its own read, its own
+          confirmation dialog and its own re-read after any attempt, so this file
+          still fetches nothing new and decides nothing about custody. */}
+      {activeTab === 'stranded_items' && (
+        <div className="space-y-6">
+          <StrandedItemsQueueSection token={token} />
         </div>
       )}
 

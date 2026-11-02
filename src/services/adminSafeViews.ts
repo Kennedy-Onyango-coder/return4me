@@ -62,6 +62,19 @@ export function toAdminSafeAgentView(
       masked_destination?: string | null;
       summary?: string | null;
     } | null;
+    /**
+     * STAGE 3B-6D — the `isAgentActionable()` verdict for this hub, computed by
+     * the CALLER (server.ts), because that predicate also reads
+     * `email_verified_at`, which is deliberately NOT part of this DTO.
+     *
+     * The DTO copies the verdict; it never re-derives it. `null` (the caller did
+     * not state one) is reported as "not stated" rather than as `false`, so the
+     * console can distinguish "this hub may not receive items" from "nobody told
+     * the console whether it may". Selection treats only an explicit `true` as
+     * eligible and the server re-checks before any write, so a missing verdict
+     * can never talk its way into an assignment.
+     */
+    actionable?: boolean | null;
   }
 ): any {
   if (!agent) return null;
@@ -71,6 +84,16 @@ export function toAdminSafeAgentView(
     contact_phone: agent.contact_phone,
     contact_email: agent.contact_email ?? null,
     location_address: agent.location_address,
+    // STAGE 3B-6A — THE SERVICE GEOGRAPHY, WHICH THE CONSOLE MUST BE ABLE TO SEE.
+    //   `county` + `administrative_unit_id` are the Agent's SERVICE AREA: the
+    //   values scopeCandidateAgents() filters on. Without them the console could
+    //   correct a hub's geography but never show what it had been corrected to,
+    //   and could not warn an administrator that a chosen hub serves a different
+    //   county from the item (Stage 3B-6D). They are operational configuration,
+    //   not identity evidence: the item DTO has exposed the same two fields since
+    //   Phase 9D (see toAdminSafeItemView below).
+    county: agent.county ?? null,
+    administrative_unit_id: agent.administrative_unit_id ?? null,
     // GEO-D+ — internal location provenance, exposed ONLY on this admin DTO
     // (never on public/owner/customer/agent surfaces). Two independent axes:
     // how the service geography was chosen, and how the hub coordinate was set.
@@ -106,6 +129,10 @@ export function toAdminSafeAgentView(
     // PROGRAMME 1 / WS2 — the launch-policy verdict for this hub's payout
     // destination, whitelisted field by field below.
     payout_eligibility: toAdminSafePayoutEligibility(metrics?.payout_eligibility),
+    // STAGE 3B-6D — can this hub receive work at all? `true` / `false` is the
+    // server's isAgentActionable() answer; `null` means the caller did not state
+    // one. Neither value is inferred here from `status`.
+    actionable: metrics?.actionable === true ? true : metrics?.actionable === false ? false : null,
   };
 }
 
