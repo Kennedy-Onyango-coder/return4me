@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
@@ -56,6 +56,11 @@ const SESSION_REJECT = `TEST-9A-SESS-R-${RUN}`;
 
 const SECRET_DOC_NUMBER = `ID${String(Math.floor(1000000 + Math.random() * 8999999))}`;
 
+// Batch 2 — Stage 2B-0A.1: a category that EXISTS but is DEACTIVATED. A
+// dedicated id keeps the "inactive is refused" evidence independent of
+// `national-id`, which every other creation test needs to stay active.
+const CATEGORY_INACTIVE = `TEST-B2-INACTIVE-${RUN}`;
+
 let server: any;
 let limitedServer: any;
 let baseUrl = '';
@@ -78,6 +83,12 @@ async function seed() {
   await db.createCustomerSession(SESSION_REJECT, CUSTOMER_REJECT, hashCode(TOKEN_REJECT), in7Days);
 
   await ensureTestCategory('national-id');
+
+  // Batch 2 (CAT-04): created, then deactivated. It still EXISTS and still
+  // resolves for the reports that already reference it — it is simply not
+  // SELECTABLE for a new one.
+  await ensureTestCategory(CATEGORY_INACTIVE);
+  await db.setCategoryActive(CATEGORY_INACTIVE, false);
 }
 
 beforeAll(async () => {
@@ -245,6 +256,42 @@ describe('POST /api/lost-reports: validation', () => {
     expect(res.status).toBe(400);
   });
 
+  it('rejects a DEACTIVATED category with 400 — the row exists, it is simply not selectable', async () => {
+    // The category is present in the table (and still resolves for historical
+    // reports); `db.getActiveCategories()` is the boundary that excludes it.
+    expect(await db.getCategory(CATEGORY_INACTIVE)).toBeDefined();
+    expect((await db.getCategory(CATEGORY_INACTIVE)).is_active).toBe(false);
+
+    const res = await api('POST', '/api/lost-reports', TOKEN_A, validPayload({ categoryId: CATEGORY_INACTIVE }));
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('That item category is not valid.');
+  });
+
+  it('a rejected category (unknown OR inactive) persists nothing', async () => {
+    const before = (await reportsFor(CUSTOMER_REJECT)).length;
+    for (const categoryId of ['not-a-real-category', CATEGORY_INACTIVE]) {
+      const res = await api('POST', '/api/lost-reports', TOKEN_REJECT, validPayload({ categoryId }));
+      expect(res.status, `${categoryId} must be refused`).toBe(400);
+    }
+    expect((await reportsFor(CUSTOMER_REJECT)).length).toBe(before);
+  });
+
+  it('a category-lookup FAILURE is a 500, never a 400 "invalid category"', async () => {
+    const before = (await reportsFor(CUSTOMER_A)).length;
+    // A database fault must not be reported to the customer as "your category is
+    // wrong" — the existing error path turns it into a safe 500 and writes
+    // nothing. Only the FIRST lookup is forced to fail.
+    const spy = vi.spyOn(db, 'getActiveCategories').mockRejectedValueOnce(new Error('categories lookup failed'));
+    try {
+      const res = await api('POST', '/api/lost-reports', TOKEN_A, validPayload());
+      expect(res.status).toBe(500);
+      expect(res.body.error).not.toBe('That item category is not valid.');
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await reportsFor(CUSTOMER_A)).length).toBe(before);
+  });
+
   it('rejects a county that is not a Kenyan county', async () => {
     const res = await api('POST', '/api/lost-reports', TOKEN_A, validPayload({ county: 'Atlantis' }));
     expect(res.status).toBe(400);
@@ -323,6 +370,7 @@ describe('POST /api/lost-reports: validation', () => {
 
     const rejected = [
       validPayload({ categoryId: 'not-a-real-category' }),
+      validPayload({ categoryId: CATEGORY_INACTIVE }),
       validPayload({ county: 'Atlantis' }),
       validPayload({ locationArea: '' }),
       validPayload({ lostAtFrom: 'not-a-date' }),
