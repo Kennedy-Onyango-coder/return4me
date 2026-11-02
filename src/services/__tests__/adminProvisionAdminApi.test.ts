@@ -57,6 +57,26 @@ function stubFetch(handler: (url: string, init: RequestInit | undefined) => Resp
 const TOKEN = 'header.payload.signature';
 const REQUEST = { fullName: 'Asha Mwangi', username: 'asha.admin', password: 'Temp-Passw0rd!xyz' };
 
+/**
+ * Awaits a call that MUST reject and hands back the typed error, so the
+ * assertions below can read `.kind` / `.status` / `.code` / `.message` without
+ * re-casting the success DTO into the union at every site. If the client ever
+ * RESOLVES where a failure is expected, this fails the test loudly instead of
+ * silently reading `undefined` off a success payload.
+ */
+async function provisionFailure(promise: Promise<unknown>): Promise<ProvisionAdminApiError> {
+  try {
+    await promise;
+  } catch (error) {
+    if (error instanceof ProvisionAdminApiError) {
+      return error;
+    }
+
+    throw error;
+  }
+  throw new Error('expected provisionSecondAdmin to reject, but it resolved');
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -125,7 +145,7 @@ describe('the one-time closure and the username conflict are different outcomes'
   it('maps 409 provisioning_closed to a PERMANENT closure (the gate is spent)', async () => {
     const serverSentence = 'Provisioning is closed: a second administrator already exists.';
     stubFetch(() => jsonResponse(409, { error: serverSentence, code: 'provisioning_closed' }));
-    const failure = await provisionSecondAdmin(TOKEN, REQUEST).catch((e) => e as ProvisionAdminApiError);
+    const failure = await provisionFailure(provisionSecondAdmin(TOKEN, REQUEST));
     expect(failure).toBeInstanceOf(ProvisionAdminApiError);
     expect(failure.kind).toBe('closed');
     expect(failure.status).toBe(409);
@@ -143,7 +163,7 @@ describe('the one-time closure and the username conflict are different outcomes'
   it('maps 409 admin_username_exists to a RETRYABLE conflict — not closure', async () => {
     const serverSentence = 'An administrator with that username already exists.';
     stubFetch(() => jsonResponse(409, { error: serverSentence, code: 'admin_username_exists' }));
-    const failure = await provisionSecondAdmin(TOKEN, REQUEST).catch((e) => e as ProvisionAdminApiError);
+    const failure = await provisionFailure(provisionSecondAdmin(TOKEN, REQUEST));
     expect(failure.kind).toBe('conflict');
     expect(failure.code).toBe('admin_username_exists');
     expect(failure.message).toBe(serverSentence);
@@ -165,7 +185,7 @@ describe('the one-time closure and the username conflict are different outcomes'
 
   it('closure is inferred ONLY from the explicit server answer — a network failure never closes the form', async () => {
     stubFetch(() => { throw new TypeError('fetch failed'); });
-    const failure = await provisionSecondAdmin(TOKEN, REQUEST).catch((e) => e as ProvisionAdminApiError);
+    const failure = await provisionFailure(provisionSecondAdmin(TOKEN, REQUEST));
     expect(failure.kind).toBe('network');
     expect(failure.kind).not.toBe('closed');
     expect(failure.status).toBe(0);
@@ -175,7 +195,7 @@ describe('the one-time closure and the username conflict are different outcomes'
 describe('no error path can leak the password or a raw server body', () => {
   it('a network failure never echoes the request values', async () => {
     stubFetch(() => { throw new TypeError('connect ECONNREFUSED 127.0.0.1:4000'); });
-    const failure = await provisionSecondAdmin(TOKEN, REQUEST).catch((e) => e as ProvisionAdminApiError);
+    const failure = await provisionFailure(provisionSecondAdmin(TOKEN, REQUEST));
     expect(failure.message).not.toContain(REQUEST.password);
     expect(failure.message).not.toContain(REQUEST.username);
     expect(failure.message).not.toContain('ECONNREFUSED');
@@ -183,7 +203,7 @@ describe('no error path can leak the password or a raw server body', () => {
 
   it('a 5xx body is never rendered — the client shows its own fixed sentence', async () => {
     stubFetch(() => jsonResponse(500, { error: 'SqliteError: SQLITE_ERROR table admin_users stack at line 41', code: 'insert_failed' }));
-    const failure = await provisionSecondAdmin(TOKEN, REQUEST).catch((e) => e as ProvisionAdminApiError);
+    const failure = await provisionFailure(provisionSecondAdmin(TOKEN, REQUEST));
     expect(failure.kind).toBe('server');
     expect(failure.message).not.toContain('SqliteError');
     expect(failure.message).not.toContain('stack');
@@ -201,7 +221,7 @@ describe('no error path can leak the password or a raw server body', () => {
 
   it('an unparseable error body degrades to a fixed message, never a crash', async () => {
     stubFetch(() => ({ ok: false, status: 500, json: async () => { throw new Error('not json'); } }) as unknown as Response);
-    const failure = await provisionSecondAdmin(TOKEN, REQUEST).catch((e) => e as ProvisionAdminApiError);
+    const failure = await provisionFailure(provisionSecondAdmin(TOKEN, REQUEST));
     expect(failure.kind).toBe('server');
     expect(failure.message.length).toBeGreaterThan(0);
   });
