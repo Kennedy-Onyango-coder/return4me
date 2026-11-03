@@ -100,6 +100,11 @@ CREATE UNIQUE INDEX uq_agents_email ON agents(contact_email) WHERE contact_email
 CREATE TABLE items (
     id VARCHAR(50) PRIMARY KEY, -- Generates human-friendly drop-off codes, e.g. "7K2-941"
     category_id VARCHAR(50) REFERENCES categories(id),
+    -- PHASE 16.1 (BATCH 1) — the name the FINDER typed for the item they found.
+    -- Required at the API boundary (trimmed, 1..200 characters) but NULLABLE
+    -- here so every pre-Batch-1 row stays readable: historical items were named
+    -- only by their OCR output (`ocr_extracted_name`) and are NOT rewritten.
+    item_name VARCHAR(200),
     photo_url TEXT NOT NULL, -- Secure bucket path
     ocr_extracted_number VARCHAR(100), -- Plaintext for admin review queue
     ocr_extracted_name VARCHAR(150),   -- Plaintext for admin review queue
@@ -854,7 +859,23 @@ CREATE INDEX idx_customer_identity_changes_expiry ON customer_identity_changes(e
 CREATE TABLE lost_reports (
     id VARCHAR(50) PRIMARY KEY, -- public reference, e.g. 'LR-7QF2KM'
     customer_id VARCHAR(50) NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
-    category_id VARCHAR(50) NOT NULL REFERENCES categories(id),
+    -- PHASE 16.1 (BATCH 1) — NULLABLE BY DESIGN.
+    -- A report may be submitted with NO category ("I lost something but I am
+    -- not sure which kind"), which is stored as `category_id IS NULL` and shown
+    -- to administrators as "Unclassified". This is a MISSING classification, not
+    -- an invalid one: a supplied category is still checked against the live
+    -- active taxonomy at the API boundary and against this FK here, so an
+    -- unknown or inactive id can never be stored.
+    category_id VARCHAR(50) REFERENCES categories(id),
+    -- PHASE 16.1 (BATCH 1) — the name the reporter typed. Required at the API
+    -- boundary (trimmed, 1..200 characters); NULLABLE here so every pre-Batch-1
+    -- report remains readable. No backfill: an absent historical name is left
+    -- absent rather than guessed from the free-text description.
+    item_name VARCHAR(200),
+    -- PHASE 16.1 (BATCH 1) — OPTIONAL lost-report photo. Deliberately nullable
+    -- and deliberately NOT required by the UI: only a FOUND item must carry a
+    -- photo (items.photo_url above).
+    photo_url TEXT,
     status VARCHAR(30) NOT NULL DEFAULT 'active'
         CHECK (status IN ('active', 'match_review', 'resolved', 'cancelled', 'lapsed')),
     county VARCHAR(50) NOT NULL,

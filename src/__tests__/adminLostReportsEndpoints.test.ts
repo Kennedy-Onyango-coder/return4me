@@ -52,14 +52,19 @@ let pending2faToken = '';
 
 const passSession = (_req: any, _res: any, next: any) => next();
 
-async function api(method: string, urlPath: string, token?: string) {
+async function api(method: string, urlPath: string, token?: string, body?: any) {
   const headers: Record<string, string> = {};
   if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(baseUrl + urlPath, { method, headers });
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  const res = await fetch(baseUrl + urlPath, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
   const raw = await res.text();
-  let body: any = null;
-  try { body = JSON.parse(raw); } catch { body = null; }
-  return { status: res.status, body, raw };
+  let body2: any = null;
+  try { body2 = JSON.parse(raw); } catch { body2 = null; }
+  return { status: res.status, body: body2, raw };
 }
 
 let counter = 0;
@@ -168,7 +173,10 @@ describe('11A admin lost-reports: access control', () => {
     expect(res.body.success).toBe(true);
   });
 
-  it('the endpoint is READ-ONLY — no mutation verb is routed', async () => {
+  it('the COLLECTION path serves GET only — no mutation verb is routed there', async () => {
+    // PHASE 16.1 (BATCH 1): the one admin lost-report write is a per-report
+    // sub-resource (PATCH /api/admin/lost-reports/:id/classify), covered by its
+    // own suite below. Nothing is routable against the collection itself.
     for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
       const res = await api(method, '/api/admin/lost-reports', adminToken);
       expect(res.status, `${method} must not be served`).toBeGreaterThanOrEqual(400);
@@ -282,10 +290,15 @@ describe('11A admin lost-reports: DTO safety', () => {
       'created_at',
       'has_document_number',
       'id',
+      // PHASE 16.1 (BATCH 1) — the reported item's name and its optional photo
+      // joined the admin DTO: a name is what an administrator classifies a report
+      // BY, and the photo path is what they look at when the name is ambiguous.
+      'item_name',
       'location_area',
       'location_landmark',
       'lost_at_from',
       'lost_at_to',
+      'photo_url',
       'possible_match_count',
       'status',
       'updated_at',
@@ -344,7 +357,10 @@ describe('11A admin lost-reports: data correctness', () => {
     const source = read('src/db/database.ts');
     const start = source.indexOf('public async listAdminLostReports');
     expect(start, 'listAdminLostReports not found').toBeGreaterThan(-1);
-    const body = source.slice(start, start + 1200);
+    // The window covers the whole method. It is generous because PHASE 16.1
+    // (BATCH 1) added the documented `unclassifiedOnly` filter to the same
+    // method — the ordering assertion itself is unchanged.
+    const body = source.slice(start, start + 2200);
     expect(body).toContain('.orderBy(desc(lostReportsTable.created_at), desc(lostReportsTable.id))');
 
     const limit = read('src/db/database.ts');
@@ -493,8 +509,21 @@ describe('16.1 admin lost-reports: canonical county filter', () => {
 // PRESERVATION — nothing else was reopened
 // ---------------------------------------------------------------------------
 describe('11A admin lost-reports: nothing else was reopened', () => {
-  it('the admin module is GET-only by construction', () => {
-    expect(read('src/routes/adminLostReports.ts')).not.toMatch(/app\.(post|put|patch|delete)\(/);
+  it('the admin module exposes EXACTLY ONE mutation, and it is the classification PATCH', () => {
+    const source = read('src/routes/adminLostReports.ts');
+    // PHASE 16.1 (BATCH 1) deliberately added ONE write to this module. This
+    // asserts the precise shape rather than a blanket "no mutations": there is
+    // one PATCH, no POST/PUT/DELETE at all, it targets the per-report classify
+    // sub-resource, and it carries the SAME authorization chain as the read.
+    const mutations = [...source.matchAll(/app\.(post|put|patch|delete)\(/g)].map((m) => m[1]);
+    expect(mutations).toEqual(['patch']);
+    expect(source).not.toMatch(/app\.(post|put|delete)\(/);
+    expect(source).toContain(
+      "app.patch('/api/admin/lost-reports/:id/classify', authenticateJWT, requireCurrentAdminSession",
+    );
+    // The inline role check — required because authenticateJWT does not look at
+    // the role — is present on BOTH routes (the read and the write).
+    expect((source.match(/if \(req\.user\?\.role !== 'admin'\)/g) || []).length).toBe(2);
   });
 
   it('the lost-report router still guards every route with requireCustomerAuth', () => {
@@ -520,4 +549,243 @@ describe('11A admin lost-reports: nothing else was reopened', () => {
     expect(db).toContain('attemptClaimEscrowHold');
     expect(db).toContain('attemptSettlementRelease');
   });
+});
+
+// =============================================================================
+// PHASE 16.1 (BATCH 1) — CLASSIFICATION
+// =============================================================================
+// The one admin lost-report write: PATCH /api/admin/lost-reports/:id/classify.
+// Everything below drives the REAL route over a real socket with the REAL
+// authenticateJWT, so the authorization claims are demonstrated rather than
+// described.
+//
+// The four behaviours this suite exists to pin:
+//   1. an unclassified report can be CLASSIFIED;
+//   2. a classified report can be RECLASSIFIED;
+//   3. a classified report can be returned to UNCLASSIFIED (deliberately, and
+//      only by an explicit `categoryId: null`);
+//   4. a supplied category that is unknown or INACTIVE is refused, and a refusal
+//      changes NOTHING.
+describe('16.1 Batch 1: PATCH /api/admin/lost-reports/:id/classify', () => {
+  const classifyPath = (id: string) => `/api/admin/lost-reports/${id}/classify`;
+
+  /** An UNCLASSIFIED report: exactly the state Batch 1 makes representable. */
+  const makeUnclassified = (suffix: string) => makeLostReport(suffix, { category_id: null });
+
+  it('is refused without a token, and for a non-admin or 2FA-pending caller', async () => {
+    const id = await makeUnclassified('authz');
+
+    expect((await api('PATCH', classifyPath(id), undefined, { categoryId: 'national-id' })).status).toBe(401);
+    expect((await api('PATCH', classifyPath(id), pending2faToken, { categoryId: 'national-id' })).status).toBe(403);
+    expect((await api('PATCH', classifyPath(id), ownerToken, { categoryId: 'national-id' })).status).toBe(403);
+
+    // Nothing was written by any refused request.
+    const stored = await db.getLostReportById(id);
+    expect(stored!.category_id == null).toBe(true);
+  });
+
+  it('classifies an UNCLASSIFIED report and reports the previous value', async () => {
+    const id = await makeUnclassified('classify');
+    const res = await api('PATCH', classifyPath(id), adminToken, { categoryId: 'national-id' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.previousCategory).toBeNull();
+    expect(res.body.newCategory).toBe('national-id');
+
+    const stored = await db.getLostReportById(id);
+    expect(stored!.category_id).toBe('national-id');
+  });
+
+  /** A report that already carries a category — the reclassify/unclassify subject. */
+  const makeClassified = (suffix: string) => makeLostReport(suffix);
+
+  it('RECLASSIFIES an already-classified report', async () => {
+    // A category this test creates, so the assertion does not depend on the
+    // baseline taxonomy seed existing in either database.
+    const otherCategory = `TEST-B1-RECLASSIFY-${RUN}`;
+    await ensureTestCategory(otherCategory);
+
+    const id = await makeClassified('reclassify');
+    const res = await api('PATCH', classifyPath(id), adminToken, { categoryId: otherCategory });
+
+    expect(res.status).toBe(200);
+    expect(res.body.previousCategory).toBe('national-id');
+    expect(res.body.newCategory).toBe(otherCategory);
+    expect((await db.getLostReportById(id))!.category_id).toBe(otherCategory);
+  });
+
+  it('returns a classified report to UNCLASSIFIED only when `categoryId: null` is sent', async () => {
+    const id = await makeClassified('unclassify');
+    const res = await api('PATCH', classifyPath(id), adminToken, { categoryId: null });
+
+    expect(res.status).toBe(200);
+    expect(res.body.previousCategory).toBe('national-id');
+    expect(res.body.newCategory).toBeNull();
+    expect((await db.getLostReportById(id))!.category_id == null).toBe(true);
+  });
+
+  it('refuses a body with NO categoryId key instead of silently clearing the category', async () => {
+    const id = await makeClassified('no-key');
+    const res = await api('PATCH', classifyPath(id), adminToken, {});
+
+    expect(res.status).toBe(400);
+    expect(typeof res.body.error).toBe('string');
+    // An accidental blank body must never unclassify a report.
+    expect((await db.getLostReportById(id))!.category_id).toBe('national-id');
+  });
+
+  it('refuses an UNKNOWN category and changes nothing', async () => {
+    const id = await makeUnclassified('unknown-cat');
+    const res = await api('PATCH', classifyPath(id), adminToken, { categoryId: 'not-a-real-category' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('That item category is not valid.');
+    expect((await db.getLostReportById(id))!.category_id == null).toBe(true);
+  });
+
+  it('refuses a DEACTIVATED category and changes nothing', async () => {
+    const inactive = `TEST-B1-INACTIVE-CLASSIFY-${RUN}`;
+    await ensureTestCategory(inactive);
+    await db.setCategoryActive(inactive, false);
+
+    const id = await makeUnclassified('inactive-cat');
+    const res = await api('PATCH', classifyPath(id), adminToken, { categoryId: inactive });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('That item category is not valid.');
+    expect((await db.getLostReportById(id))!.category_id == null).toBe(true);
+  });
+
+  it('answers an unknown or malformed reference with the SAME 404', async () => {
+    const unknown = await api('PATCH', classifyPath(`LR-${'Z'.repeat(6)}`), adminToken, { categoryId: 'national-id' });
+    const malformed = await api('PATCH', classifyPath('not-a-reference'), adminToken, { categoryId: 'national-id' });
+
+    expect(unknown.status).toBe(404);
+    expect(malformed.status).toBe(404);
+    expect(unknown.body.error).toBe(malformed.body.error);
+  });
+
+  it('echoes only the classification — never any other report field', async () => {
+    const id = await makeUnclassified('shape');
+    const res = await api('PATCH', classifyPath(id), adminToken, { categoryId: 'national-id' });
+
+    expect(Object.keys(res.body).sort()).toEqual(['newCategory', 'previousCategory', 'success']);
+    // The protected identifier and the reporter's private text stay out.
+    expect(res.raw).not.toContain(S.documentNumberHash);
+    expect(res.raw).not.toContain(S.description);
+    expect(res.raw).not.toContain(S.customerId);
+  });
+
+// =============================================================================
+// PHASE 16.1 (BATCH 1) — THE UNCLASSIFIED-ONLY FILTER
+// =============================================================================
+// The console's "Unclassified only" checkbox must be a real server-side filter,
+// not a client-side hide: it has to compose with the county filter in the SAME
+// bounded page query, so pagination and `hasMore` describe the filtered set.
+describe('16.1 Batch 1: GET /api/admin/lost-reports?unclassified=', () => {
+  it('returns ONLY unclassified reports when asked, and omits classified ones', async () => {
+    const unclassified = await makeLostReport('filter-unclassified', { category_id: null });
+    const classified = await makeLostReport('filter-classified');
+
+    const res = await api('GET', '/api/admin/lost-reports?limit=100&unclassified=true', adminToken);
+    expect(res.status).toBe(200);
+
+    const ids = res.body.data.map((row: any) => row.id);
+    expect(ids).toContain(unclassified);
+    expect(ids).not.toContain(classified);
+    // Every returned row really is unclassified.
+    for (const row of res.body.data) {
+      expect(row.category_id, `${row.id} must be unclassified`).toBeNull();
+    }
+  });
+
+  it('the unfiltered list still contains BOTH kinds', async () => {
+    const unclassified = await makeLostReport('filter-both-unclassified', { category_id: null });
+    const classified = await makeLostReport('filter-both-classified');
+
+    const res = await api('GET', '/api/admin/lost-reports?limit=100', adminToken);
+    const ids = res.body.data.map((row: any) => row.id);
+    expect(ids).toContain(unclassified);
+    expect(ids).toContain(classified);
+  });
+
+  it('COMPOSES with the county filter instead of replacing it', async () => {
+    const inMombasa = await makeLostReport('filter-county-unclassified', {
+      category_id: null,
+      county: 'Mombasa',
+    });
+    const elsewhere = await makeLostReport('filter-county-other', {
+      category_id: null,
+      county: 'Nairobi',
+    });
+
+    const res = await api('GET', '/api/admin/lost-reports?limit=100&county=Mombasa&unclassified=true', adminToken);
+    expect(res.status).toBe(200);
+
+    const ids = res.body.data.map((row: any) => row.id);
+    expect(ids).toContain(inMombasa);
+    expect(ids).not.toContain(elsewhere);
+    for (const row of res.body.data) {
+      expect(row.category_id).toBeNull();
+      expect(row.county).toBe('Mombasa');
+    }
+  });
+
+  it('refuses a value that is neither `true` nor `false`', async () => {
+    for (const value of ['1', 'yes', 'TRUE', '']) {
+      const res = await api('GET', `/api/admin/lost-reports?unclassified=${value}`, adminToken);
+      expect(res.status, `?unclassified=${value} must be refused`).toBe(400);
+    }
+  });
+
+  it('reports NO possible-match count for an unclassified report — matching is deferred', async () => {
+    const id = await makeLostReport('filter-count', { category_id: null });
+    const res = await api('GET', '/api/admin/lost-reports?limit=100&unclassified=true', adminToken);
+
+    const row = res.body.data.find((r: any) => r.id === id);
+    expect(row).toBeDefined();
+    // null ("not applicable — cannot be matched yet"), NEVER 0 ("we looked and
+    // found nothing"), because the platform genuinely has not looked.
+    expect(row.possible_match_count).toBeNull();
+  });
+});
+
+// =============================================================================
+// PHASE 16.1 (BATCH 1) — DUPLICATE-SUBMISSION SAFETY
+// =============================================================================
+// The classify endpoint is idempotent by construction: applying the same
+// classification twice is a successful no-op, so a doubled request (a double
+// click, a retried fetch) cannot corrupt a report or produce a contradictory
+// response. The console additionally drops a second in-flight click per row.
+describe('16.1 Batch 1: classification is idempotent under a doubled request', () => {
+  it('classifying twice to the same category succeeds twice and leaves one stable state', async () => {
+    const id = await makeLostReport('idempotent', { category_id: null });
+    const path = `/api/admin/lost-reports/${id}/classify`;
+
+    const first = await api('PATCH', path, adminToken, { categoryId: 'national-id' });
+    const second = await api('PATCH', path, adminToken, { categoryId: 'national-id' });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    // The second call reports the same category as both previous and current —
+    // it is a no-op, not a change.
+    expect(first.body.previousCategory).toBeNull();
+    expect(second.body.previousCategory).toBe('national-id');
+    expect(second.body.newCategory).toBe('national-id');
+    expect((await db.getLostReportById(id))!.category_id).toBe('national-id');
+  });
+
+  it('unclassifying twice succeeds twice and leaves the report unclassified', async () => {
+    const id = await makeLostReport('idempotent-clear');
+    const path = `/api/admin/lost-reports/${id}/classify`;
+
+    expect((await api('PATCH', path, adminToken, { categoryId: null })).status).toBe(200);
+    const second = await api('PATCH', path, adminToken, { categoryId: null });
+    expect(second.status).toBe(200);
+    expect(second.body.newCategory).toBeNull();
+    expect((await db.getLostReportById(id))!.category_id == null).toBe(true);
+  });
+});
+
 });

@@ -9,10 +9,22 @@
 // every other operational entity (items, claims, disputes, agents) is visible.
 // This module is that missing read.
 //
-// READ-ONLY, and deliberately so. It exposes GET only. There is no admin edit,
-// delete, status transition, matching override, refund or claim action here —
-// those are separate product decisions with their own phases. Adding a mutation
-// to this file would be out of scope by construction.
+// READ, PLUS EXACTLY ONE MUTATION.
+//
+// Until Phase 16.1 Batch 1 this module was GET-only. It now also exposes
+//   PATCH /api/admin/lost-reports/:id/classify
+// and nothing else. That one endpoint exists because a lost report can be
+// submitted WITHOUT a category ("unclassified"), which makes classification a
+// necessary administrative action rather than an optional nicety: without it an
+// unclassified report could never become classifiable, and category-dependent
+// matching would be permanently deferred for it.
+//
+// It is deliberately the SMALLEST possible mutation: it changes `category_id`
+// (including back to NULL) and writes its audit row in the same transaction. There
+// is still no admin edit of a report's text, no delete, no status transition, no
+// matching override, no refund and no claim action here — those remain separate
+// product decisions with their own phases, and src/__tests__/adminRouteAudit.test.ts
+// still asserts the role check on every route in this file.
 //
 // WHY IT IS A SEPARATE MODULE
 // Same reason as routes/adminClaims.ts: server.ts constructs the whole
@@ -40,7 +52,7 @@ import { DEFAULT_LOST_REPORT_STATUS } from '../config/lostReportStatuses.ts';
 // customer-facing matches route uses. Reused, never re-implemented: the admin
 // value is a count, and it must be the count of exactly the candidates the
 // customer would be shown. No second matching algorithm exists.
-import { selectLostReportCandidates } from '../services/lostReportMatching.ts';
+import { selectLostReportCandidates, isLostReportClassified } from '../services/lostReportMatching.ts';
 import { loadClaimableItems } from './lostReports.ts';
 // PHASE 16.1 (GEO-16-04): the county filter reuses the ONE canonical resolver
 // and the ONE canonical error message rather than keeping a county list, an
@@ -115,6 +127,39 @@ function countyFilter(raw: unknown): { value: string | null; error: string | nul
   return { value: canonical, error: null };
 }
 
+/**
+ * PHASE 16.1 (BATCH 1) — the classification endpoint's own words.
+ *
+ * `categoryInvalid` is deliberately byte-identical to the message
+ * routes/lostReports.ts and routes/finderReport.ts already use for the same
+ * condition, so "this category is not valid" reads the same wherever an operator
+ * or a customer meets it.
+ */
+const CLASSIFY_MESSAGES = {
+  notFound: 'That lost report could not be found.',
+  categoryMissing: 'A category selection is required.',
+  categoryInvalid: 'That item category is not valid.',
+} as const;
+
+/**
+ * PHASE 16.1 (BATCH 1) — the optional UNCLASSIFIED-ONLY filter.
+ *
+ * `undefined` means "not supplied" -> no category constraint, which is what the
+ * console sends when the box is unticked, so the default request is unchanged.
+ *
+ * Only the two literal spellings are accepted. Anything else is a 400 rather
+ * than being coerced with `Boolean(raw)`: `?unclassified=no` must not silently
+ * mean `true`, and `?unclassified=0` must not silently mean `false`. An
+ * administrator asking for unclassified reports and being shown classified ones
+ * (or the reverse) would be a worse outcome than an honest error.
+ */
+function unclassifiedFilter(raw: unknown): { value: boolean; error: string | null } {
+  if (raw === undefined) return { value: false, error: null };
+  if (raw === 'true') return { value: true, error: null };
+  if (raw === 'false') return { value: false, error: null };
+  return { value: false, error: 'Value must be true or false.' };
+}
+
 export function registerAdminLostReportRoutes(app: Express, deps: AdminLostReportRouteDeps): void {
   const { requireCurrentAdminSession, sendServerError, canCreateClaim } = deps;
 
@@ -146,19 +191,40 @@ export function registerAdminLostReportRoutes(app: Express, deps: AdminLostRepor
       const county = countyFilter(q.county);
       if (county.error) return res.status(400).json({ error: county.error });
 
-      const { rows, hasMore } = await db.listAdminLostReports({ limit: limit.value, offset: offset.value, county: county.value });
+      // PHASE 16.1 (BATCH 1): the unclassified-only filter, validated the same
+      // way as every other query parameter and composed with `county` in the
+      // SAME bounded query — so the page, `hasMore` and the possible-match
+      // counts all describe the filtered set rather than an unfiltered one.
+      const unclassifiedOnly = unclassifiedFilter(q.unclassified);
+      if (unclassifiedOnly.error) return res.status(400).json({ error: unclassifiedOnly.error });
+
+      const { rows, hasMore } = await db.listAdminLostReports({
+        limit: limit.value,
+        offset: offset.value,
+        county: county.value,
+        unclassifiedOnly: unclassifiedOnly.value,
+      });
 
       // POSSIBLE-MATCH COUNTS.
       // Computed only for reports the platform is actually matching (the one
       // status the backend produces candidates for). A closed report gets null,
       // which the UI renders as "not applicable" rather than a misleading 0.
       //
+      // PHASE 16.1 (BATCH 1): an UNCLASSIFIED active report also gets null, for
+      // the same reason it gets no candidates — category-dependent matching is
+      // deferred until it is classified. Reporting "0" would read as "we looked
+      // and found nothing", which is not what happened; the truth is "we cannot
+      // look yet". The engine is asked about classified reports only, so no
+      // guessed category is ever involved.
+      //
       // The claimable-item set is loaded AT MOST ONCE per request, and only if
-      // the page actually contains an active report — so a page of closed
-      // reports costs no item query at all. Complexity is the same as the
-      // customer-facing matches route: one indexed query plus one batched
-      // dispute lookup, then a deterministic in-memory comparison per row.
-      const activeRows = rows.filter((report) => report.status === DEFAULT_LOST_REPORT_STATUS);
+      // the page actually contains a classifiable active report — so a page of
+      // closed or unclassified reports costs no item query at all. Complexity is
+      // the same as the customer-facing matches route: one indexed query plus one
+      // batched dispute lookup, then a deterministic in-memory comparison per row.
+      const activeRows = rows.filter(
+        (report) => report.status === DEFAULT_LOST_REPORT_STATUS && isLostReportClassified(report),
+      );
       let matchCounts = new Map<string, number>();
       if (activeRows.length > 0) {
         const claimableItems = await loadClaimableItems(canCreateClaim);
@@ -174,6 +240,95 @@ export function registerAdminLostReportRoutes(app: Express, deps: AdminLostRepor
       });
     } catch (e: any) {
       return sendServerError(res, e, 'ADMIN_LOST_REPORT_LIST_ERROR');
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // PATCH /api/admin/lost-reports/:id/classify   (PHASE 16.1 — BATCH 1)
+  //
+  // Sets, changes, or CLEARS a lost report's item category.
+  //
+  // AUTHORIZATION: identical to every other route in this module —
+  // authenticateJWT (signature + expiry) -> requireCurrentAdminSession (live
+  // admin account: is_active + token_version) -> the inline `role !== 'admin'`
+  // check. The role check is REQUIRED, not decorative: authenticateJWT does not
+  // look at the role, so without it an 'admin_pending_2fa' token would reach a
+  // mutation.
+  //
+  // REQUEST BODY: `{ categoryId: string | null }`, and the KEY MUST BE PRESENT.
+  //   - a non-empty string   -> classify (must be a live, ACTIVE category);
+  //   - `null` (or '')       -> UNCLASSIFY, i.e. return it to the unclassified
+  //                             queue deliberately.
+  // A body with no `categoryId` key at all is REFUSED rather than read as
+  // "clear it": the route cannot tell "the operator chose nothing" from "the
+  // client sent the wrong field name", and silently wiping a classification is
+  // the one destructive outcome this endpoint must never produce by accident.
+  //
+  // RESPONSE: `{ success: true, previousCategory, newCategory }` where each
+  // value is a category id or null. No other report field is echoed, so this
+  // endpoint cannot be used to read a report.
+  //
+  // IDEMPOTENT BY NATURE: classifying to the category a report already has is a
+  // successful no-op, so a doubled request cannot corrupt anything. The console
+  // additionally guards against duplicate submission per row.
+  // ---------------------------------------------------------------------------
+  app.patch('/api/admin/lost-reports/:id/classify', authenticateJWT, requireCurrentAdminSession, async (req, res) => {
+    try {
+      if (req.user?.role !== 'admin') {
+        return res.status(403).json({ error: 'Access denied.' });
+      }
+
+      // The reference is used EXACTLY as received (trimmed only). It is the
+      // table's primary key and the console sends back the value the list
+      // returned, so there is no case folding here: guessing at case could make
+      // this endpoint act on a value the caller never sent.
+      const reference = String(req.params.id || '').trim();
+      // NOTE: there is deliberately no separate reference-SHAPE check here. The
+      // lookup below IS the check: the reference is the table's primary key, so a
+      // malformed value is simply a miss, and a miss gets the same 404 as an
+      // unknown one. That keeps this endpoint from becoming a "is this reference
+      // well-formed?" oracle, and keeps it consistent with the customer routes'
+      // rule that malformed and unknown are indistinguishable.
+
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      if (!Object.prototype.hasOwnProperty.call(body, 'categoryId')) {
+        return res.status(400).json({ error: CLASSIFY_MESSAGES.categoryMissing });
+      }
+
+      const raw = body.categoryId;
+      if (raw !== null && raw !== undefined && typeof raw !== 'string') {
+        return res.status(400).json({ error: CLASSIFY_MESSAGES.categoryInvalid });
+      }
+      const supplied = typeof raw === 'string' ? raw.trim() : '';
+      const categoryId = supplied ? supplied : null;
+
+      // Only a SUPPLIED category is validated. `null` is a valid request: it is
+      // how a report is deliberately returned to unclassified.
+      if (categoryId) {
+        const categories = await db.getActiveCategories();
+        if (!categories.some((category: any) => category && category.id === categoryId)) {
+          return res.status(400).json({ error: CLASSIFY_MESSAGES.categoryInvalid });
+        }
+      }
+
+      const existing = await db.getLostReportById(reference);
+      if (!existing) {
+        return res.status(404).json({ error: CLASSIFY_MESSAGES.notFound });
+      }
+
+      const previousCategory = existing.category_id ?? null;
+      const actor = req.user?.username || req.user?.userId || 'admin';
+      const updated = await db.classifyLostReport(reference, categoryId, actor);
+
+      return res.json({
+        success: true,
+        previousCategory,
+        // Read back what was actually stored rather than echoing the request, so
+        // the console can never show a classification the database did not take.
+        newCategory: updated ? (updated.category_id ?? null) : categoryId,
+      });
+    } catch (e: any) {
+      return sendServerError(res, e, 'ADMIN_LOST_REPORT_CLASSIFY_ERROR');
     }
   });
 }

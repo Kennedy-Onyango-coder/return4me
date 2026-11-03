@@ -152,6 +152,9 @@ function validPayload(overrides: Record<string, any> = {}) {
   return {
     categoryId: 'national-id',
     county,
+    // PHASE 16.1 (BATCH 1) — the item name is REQUIRED by the route. Every
+    // fixture supplies one; the unclassified tests override `categoryId` only.
+    itemName: 'Brown leather wallet',
     administrativeUnitId: administrativeUnitsForCounty(county)[0]?.id,
     locationArea: 'Westlands',
     locationLandmark: 'Near Sarit Centre',
@@ -251,9 +254,67 @@ describe('POST /api/lost-reports: validation', () => {
     expect(typeof res.body.error).toBe('string');
   });
 
-  it('rejects a missing category', async () => {
+  it('ACCEPTS a report with an empty category and stores it as UNCLASSIFIED', async () => {
+    // PHASE 16.1 (BATCH 1) replaced "a category is required" with "a category
+    // is optional": a reporter who does not know which kind of item they lost
+    // can still report it, and an administrator classifies it later.
+    const before = (await reportsFor(CUSTOMER_A)).length;
     const res = await api('POST', '/api/lost-reports', TOKEN_A, validPayload({ categoryId: '' }));
+    expect(res.status).toBe(201);
+
+    const stored = (await reportsFor(CUSTOMER_A)).find((r) => r.id === res.body.reference)!;
+    expect(stored).toBeDefined();
+    // NULL, not ''. An empty-string category would be indistinguishable from a
+    // broken row and would never match the category index.
+    expect(stored.category_id == null).toBe(true);
+    expect((await reportsFor(CUSTOMER_A)).length).toBe(before + 1);
+  });
+
+  it('accepts a report with no categoryId KEY at all', async () => {
+    const res = await api('POST', '/api/lost-reports', TOKEN_A, validPayload({ categoryId: undefined }));
+    expect(res.status).toBe(201);
+
+    const stored = (await reportsFor(CUSTOMER_A)).find((r) => r.id === res.body.reference)!;
+    expect(stored.category_id == null).toBe(true);
+  });
+
+  it('stores the item name, trimmed', async () => {
+    const res = await api('POST', '/api/lost-reports', TOKEN_A,
+      validPayload({ itemName: '   Brown leather wallet   ' }));
+    expect(res.status).toBe(201);
+
+    const stored = (await reportsFor(CUSTOMER_A)).find((r) => r.id === res.body.reference)!;
+    expect(stored.item_name).toBe('Brown leather wallet');
+  });
+
+  it('rejects a MISSING item name', async () => {
+    const res = await api('POST', '/api/lost-reports', TOKEN_A, validPayload({ itemName: undefined }));
     expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Please enter the item name.');
+  });
+
+  it('rejects a WHITESPACE-ONLY item name', async () => {
+    const res = await api('POST', '/api/lost-reports', TOKEN_A, validPayload({ itemName: '    ' }));
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Please enter the item name.');
+  });
+
+  it('enforces the 200-character item-name ceiling', async () => {
+    const atLimit = await api('POST', '/api/lost-reports', TOKEN_A, validPayload({ itemName: 'n'.repeat(200) }));
+    expect(atLimit.status).toBe(201);
+
+    const overLimit = await api('POST', '/api/lost-reports', TOKEN_A, validPayload({ itemName: 'n'.repeat(201) }));
+    expect(overLimit.status).toBe(400);
+    expect(overLimit.body.error).toBe('Item name is too long (limit 200 characters).');
+  });
+
+  it('accepts an OMITTED lost-report photo — it is optional', async () => {
+    // Only a FOUND item must carry a photo. A lost report without one is normal.
+    const res = await api('POST', '/api/lost-reports', TOKEN_A, validPayload({ photoUrl: undefined }));
+    expect(res.status).toBe(201);
+
+    const stored = (await reportsFor(CUSTOMER_A)).find((r) => r.id === res.body.reference)!;
+    expect(stored.photo_url == null).toBe(true);
   });
 
   it('rejects a DEACTIVATED category with 400 — the row exists, it is simply not selectable', async () => {

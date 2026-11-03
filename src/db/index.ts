@@ -1037,6 +1037,11 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS warning_count INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS last_warning_reason TEXT`,
     `ALTER TABLE agents ADD COLUMN IF NOT EXISTS last_warning_at TIMESTAMPTZ`,
+    // PHASE 16.1 (BATCH 1) — the FINDER-supplied item name. Additive and
+    // NULLABLE: the API requires it for a NEW found-item report, while every
+    // pre-Batch-1 item keeps NULL (its name lived only in `ocr_extracted_name`)
+    // and stays readable. No backfill.
+    `ALTER TABLE items ADD COLUMN IF NOT EXISTS item_name VARCHAR(200)`,
     `ALTER TABLE items ADD COLUMN IF NOT EXISTS flagged_for_review BOOLEAN NOT NULL DEFAULT false`,
     `ALTER TABLE items ADD COLUMN IF NOT EXISTS is_description_only BOOLEAN NOT NULL DEFAULT false`,
     `ALTER TABLE items ADD COLUMN IF NOT EXISTS description TEXT`,
@@ -1569,7 +1574,13 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     `CREATE TABLE IF NOT EXISTS lost_reports (
       id VARCHAR(50) PRIMARY KEY,
       customer_id VARCHAR(50) NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
-      category_id VARCHAR(50) NOT NULL REFERENCES categories(id),
+      -- PHASE 16.1 (BATCH 1): nullable so a report may be submitted without a
+      -- category ("unclassified"). Kept in step with sql/schema.sql and
+      -- src/db/schema.ts; an already-running database is converged by the
+      -- ALTER statements immediately below this CREATE TABLE.
+      category_id VARCHAR(50) REFERENCES categories(id),
+      item_name VARCHAR(200),
+      photo_url TEXT,
       status VARCHAR(30) NOT NULL DEFAULT 'active',
       county VARCHAR(50) NOT NULL,
       location_area VARCHAR(120) NOT NULL,
@@ -1602,6 +1613,31 @@ export async function ensureSchemaUpToDate(pool: Pool) {
     // GEO-D+ — how the required county/sub-county was established. Additive,
     // nullable, NO default, NO backfill: legacy reports keep NULL.
     `ALTER TABLE lost_reports ADD COLUMN IF NOT EXISTS location_source VARCHAR(30)`,
+
+    // ----------------------------------------------------------------------
+    // PHASE 16.1 (BATCH 1) — REPORTING FOUNDATION
+    //
+    // Three statements, all safely re-runnable, that lift the pre-Batch-1
+    // "a lost report always names a category" assumption:
+    //
+    //  1. `ALTER COLUMN category_id DROP NOT NULL` makes an UNCLASSIFIED report
+    //     representable. It is idempotent in the strong sense: dropping a NOT
+    //     NULL that is already absent is a no-op, not an error, so every boot
+    //     converges on the same definition.
+    //  2. `item_name` is ADDITIVE and NULLABLE with NO default and NO backfill.
+    //     The application requires a name for a NEW report; a historical report
+    //     that never had one keeps NULL and stays readable. Backfilling it from
+    //     the free-text description would invent data a customer never supplied.
+    //  3. `photo_url` is ADDITIVE and NULLABLE by design: a lost-report photo is
+    //     optional. The mandatory-photo rule belongs to the FOUND side only
+    //     (`items.photo_url` is NOT NULL).
+    //
+    // Nothing here deletes, rewrites or reinterprets an existing row, and no
+    // statement references a value derived from application input.
+    // ----------------------------------------------------------------------
+    `ALTER TABLE lost_reports ALTER COLUMN category_id DROP NOT NULL`,
+    `ALTER TABLE lost_reports ADD COLUMN IF NOT EXISTS item_name VARCHAR(200)`,
+    `ALTER TABLE lost_reports ADD COLUMN IF NOT EXISTS photo_url TEXT`,
 
     // ======================================================================
     // BATCH 0 — FOUNDATIONAL SCHEMA PRIMITIVES

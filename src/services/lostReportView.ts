@@ -53,7 +53,12 @@ export function toCustomerSafeLostReportView(report: any): any {
   return {
     id: report.id,
     status: report.status,
-    category_id: report.category_id,
+    // PHASE 16.1 (BATCH 1) — null means UNCLASSIFIED, and it is returned as
+    // null rather than '' so the owner can tell "no category chosen yet" apart
+    // from a category id that happens to be empty (which cannot exist).
+    category_id: report.category_id ?? null,
+    item_name: report.item_name ?? null,
+    photo_url: report.photo_url ?? null,
     county: report.county,
     administrative_unit_id: report.administrative_unit_id ?? null,
     administrative_unit_name: administrativeUnitById(report.administrative_unit_id)?.name ?? null,
@@ -112,7 +117,17 @@ export function toAdminSafeLostReportView(report: any, possibleMatchCount?: numb
   return {
     id: report.id,
     status: report.status,
-    category_id: report.category_id,
+    // PHASE 16.1 (BATCH 1) — NULLABLE. An unclassified report is a real,
+    // triageable row: the console renders it as "Unclassified" and offers the
+    // classification control, so this field must be able to say "none".
+    category_id: report.category_id ?? null,
+    // The name the reporter typed. It is the single most useful field for
+    // deciding which category a report belongs to, and it is NOT private free
+    // text in the sense description/distinctive_marks are: it is the noun
+    // phrase the customer used to name the object.
+    item_name: report.item_name ?? null,
+    // Optional lost-report photo (a storage path, never a signed URL here).
+    photo_url: report.photo_url ?? null,
     county: report.county,
     administrative_unit_id: report.administrative_unit_id ?? null,
     administrative_unit_name: administrativeUnitById(report.administrative_unit_id)?.name ?? null,

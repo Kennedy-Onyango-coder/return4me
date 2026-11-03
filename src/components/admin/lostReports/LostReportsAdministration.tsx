@@ -6,7 +6,7 @@ import Button from '../../ui/Button';
 import EmptyState from '../../ui/EmptyState';
 import SectionHeading from '../../ui/SectionHeading';
 import Skeleton from '../../ui/Skeleton';
-import { getLostReportStatusDisplay } from '../../../config/lostReportPresentation';
+import { getLostReportItemNameDisplay, getLostReportStatusDisplay } from '../../../config/lostReportPresentation';
 // PHASE 16.1 (GEO-16-04): the county filter's 47 options come from the ONE
 // canonical county source. This component keeps no county list of its own.
 import { countiesByUxGroup } from '../../../config/kenyaCounties';
@@ -17,6 +17,14 @@ import {
   type AdminLostReportListView,
   type AdminLostReportsPagination,
 } from '../../../services/adminLostReportsApi';
+// PHASE 16.1 (BATCH 1) — CLASSIFICATION IS A WRITE, so it goes through its own
+// client. services/adminLostReportsApi.ts is GET-only by contract (and a test
+// enforces that), so the mutation lives beside it rather than inside it.
+import {
+  AdminLostReportClassifyApiError,
+  classifyLostReport,
+  unclassifyLostReport,
+} from '../../../services/adminLostReportClassificationApi';
 
 // =============================================================================
 // PHASE 11A — LOST REPORTS (ADMIN CONSOLE SECTION)
@@ -77,6 +85,24 @@ export default function LostReportsAdministration({ token }: {  token: string | 
   // Counties" — the parameter is then omitted from the request entirely.
   const [county, setCounty] = useState<string>('');
 
+  // PHASE 16.1 (BATCH 1) — show ONLY reports that carry no category yet. It
+  // composes with the county filter in the SAME request, so "unclassified
+  // reports in Mombasa" is one bounded page query.
+  const [unclassifiedOnly, setUnclassifiedOnly] = useState(false);
+
+  // The row currently being classified, or null. This is the duplicate-submit
+  // guard: while one classification is in flight every control on THAT row is
+  // disabled, and a second click for the same row is dropped before it can
+  // become a second request. Other rows stay usable, so the console is not
+  // frozen by one slow save.
+  const [classifyingId, setClassifyingId] = useState<string | null>(null);
+  // Failure and success feedback for the classification action. Deliberately
+  // separate from the LIST `error` above: a refused classification must not look
+  // like "the list failed to load", and it must not blank the table the operator
+  // is working in.
+  const [classifyError, setClassifyError] = useState<string | null>(null);
+  const [classifyNotice, setClassifyNotice] = useState<string | null>(null);
+
   // Only the newest request may commit its result.
   const requestId = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
@@ -97,6 +123,9 @@ export default function LostReportsAdministration({ token }: {  token: string | 
           // '' (All Counties) is passed through as null so no county parameter
           // is sent at all — the pre-16.1 request shape.
           county: county || null,
+          // PHASE 16.1 (BATCH 1) — omitted entirely when false, so the default
+          // request stays byte-identical to the pre-Batch-1 one.
+          unclassifiedOnly,
           signal: controller.signal,
         });
         if (id !== requestId.current) return; // superseded — stay silent
@@ -115,7 +144,7 @@ export default function LostReportsAdministration({ token }: {  token: string | 
         if (id === requestId.current) setLoading(false);
       }
     },
-    [token, county],
+    [token, county, unclassifiedOnly],
   );
 
   useEffect(() => {
@@ -132,6 +161,75 @@ export default function LostReportsAdministration({ token }: {  token: string | 
   const handleCountyChange = (value: string) => {
     setCounty(value);
     setOffset(0);
+  };
+
+  /**
+   * PHASE 16.1 (BATCH 1) — toggling the unclassified-only filter.
+   *
+   * Same change-of-result-set rule as the county filter: return to the first
+   * page. `setOffset(0)` alone is a no-op when the view is already on page one,
+   * so `reloadToken` is bumped explicitly — that is what re-runs the ONE load
+   * effect (whose dependency list is intentionally the pinned
+   * `[offset, reloadToken, token, county]` and therefore does not name this
+   * flag; the effect reads the CURRENT `load`, which closes over it).
+   */
+  const handleUnclassifiedChange = (next: boolean) => {
+    setUnclassifiedOnly(next);
+    setOffset(0);
+    setReloadToken((n) => n + 1);
+  };
+
+  /**
+   * PHASE 16.1 (BATCH 1) — classify, reclassify, or clear one report's category.
+   *
+   * `categoryId === null` is the deliberate "return to unclassified" action and
+   * is routed through `unclassifyLostReport()`, the only function that ever sends
+   * `null`. A real id is routed through `classifyLostReport()`, which refuses a
+   * blank value locally rather than letting an empty field clear a category by
+   * accident.
+   *
+   * REQUEST LIFECYCLE
+   *   - `classifyingId` is set BEFORE the first await and cleared in `finally`,
+   *     so a second click for the same row is dropped here (and every control on
+   *     that row is disabled) — no duplicate submission and no double-apply;
+   *   - the row is updated from what the SERVER confirmed (`result.categoryId`),
+   *     never from what was requested, so the table cannot show a classification
+   *     the database did not take;
+   *   - the list is then refreshed from the server, because classification also
+   *     changes `possible_match_count` (matching only runs once a category
+   *     exists) and, with the unclassified filter on, removes the row from the
+   *     current result set;
+   *   - a failure is shown in its own banner and changes nothing else. An aborted
+   *     request stays silent, as everywhere else in this console.
+   */
+  const handleClassify = async (reportId: string, categoryId: string | null) => {
+    if (classifyingId) return;
+    setClassifyError(null);
+    setClassifyNotice(null);
+    setClassifyingId(reportId);
+    try {
+      const result = categoryId
+        ? await classifyLostReport(token, reportId, categoryId)
+        : await unclassifyLostReport(token, reportId);
+
+      setRows((previous) =>
+        previous.map((row) => (row.id === reportId ? { ...row, category_id: result.categoryId } : row)),
+      );
+      setClassifyNotice(
+        result.categoryId
+          ? `Report ${reportId} is now classified.`
+          : `Report ${reportId} is now unclassified.`,
+      );
+      setReloadToken((n) => n + 1);
+    } catch (e: any) {
+      if (e instanceof AdminLostReportClassifyApiError) {
+        if (!e.isAbort) setClassifyError(e.message);
+      } else {
+        setClassifyError('The classification could not be saved. Please try again.');
+      }
+    } finally {
+      setClassifyingId(null);
+    }
   };
 
   // Category names are cosmetic here (the raw category id is shown otherwise),
@@ -161,6 +259,20 @@ export default function LostReportsAdministration({ token }: {  token: string | 
 
   const thClass = 'px-3 py-2.5 text-left text-caption font-extrabold uppercase tracking-wider text-brand-muted-text whitespace-nowrap';
   const tdClass = 'px-3 py-3 align-top text-xs text-stone-700';
+
+  // PHASE 16.1 (BATCH 1) — the empty state has to describe the filter that is
+  // actually applied. "No lost reports yet" would be a lie while an
+  // unclassified-only filter is hiding classified ones.
+  const emptyTitle = unclassifiedOnly
+    ? (county ? 'No unclassified reports in this county' : 'No unclassified reports')
+    : (county ? 'No lost reports in this county' : 'No lost reports yet');
+  const emptyDescription = unclassifiedOnly
+    ? (county
+        ? `Every report in ${county} has a category. Clear the unclassified filter to see them all.`
+        : 'Every lost report has a category. Clear the unclassified filter to see them all.')
+    : (county
+        ? `Nothing has been reported in ${county}. Choose "All Counties" to see every report.`
+        : 'When a customer reports something lost, it appears here with its county, area and any possible matches.');
 
   return (
     <div className="space-y-6">
@@ -207,9 +319,37 @@ export default function LostReportsAdministration({ token }: {  token: string | 
             </optgroup>
           ))}
         </select>
+
+        {/* PHASE 16.1 (BATCH 1) — UNCLASSIFIED-ONLY FILTER.
+            A checkbox, not a second select: the question is binary ("only
+            uncategorised reports?"), and it composes with the county select
+            beside it in the same request. */}
+        <label
+          htmlFor="admin-lost-unclassified"
+          className="ml-1 inline-flex items-center gap-2 text-body text-[var(--appearance-text-primary)]"
+        >
+          <input
+            id="admin-lost-unclassified"
+            type="checkbox"
+            checked={unclassifiedOnly}
+            onChange={(e) => handleUnclassifiedChange(e.target.checked)}
+            className="h-4 w-4 rounded border-[var(--appearance-border)]"
+          />
+          {'Unclassified only'}
+        </label>
       </div>
 
       {error && <Banner kind="error">{error}</Banner>}
+
+      {/* PHASE 16.1 (BATCH 1) — classification feedback, kept separate from the
+          list error above: a refused reclassification must not look like a
+          failed page load, and it must not blank the table. */}
+      {classifyError && <Banner kind="error">{classifyError}</Banner>}
+      {classifyNotice && (
+        <p role="status" aria-live="polite" className="text-small font-semibold text-[var(--appearance-text-primary)]">
+          {classifyNotice}
+        </p>
+      )}
 
       {loading ? (
         <div className="space-y-3" aria-busy="true">
@@ -220,15 +360,19 @@ export default function LostReportsAdministration({ token }: {  token: string | 
       ) : rows.length === 0 ? (
         <EmptyState
           icon={SearchX}
-          title={county
-            ? 'No lost reports in this county'
-            : 'No lost reports yet'}
-          description={county
-            ? `Nothing has been reported in ${county}. Choose "All Counties" to see every report.`
-            : 'When a customer reports something lost, it appears here with its county, area and any possible matches.'}
+          title={emptyTitle}
+          description={emptyDescription}
         />
       ) : (
-        <ReportsTable rows={rows} categoryName={categoryName} thClass={thClass} tdClass={tdClass} />
+        <ReportsTable
+          rows={rows}
+          categoryName={categoryName}
+          categories={categories}
+          classifyingId={classifyingId}
+          onClassify={handleClassify}
+          thClass={thClass}
+          tdClass={tdClass}
+        />
       )}
 
       {!loading && rows.length > 0 && (offset > 0 || pagination.hasMore) && (
@@ -266,10 +410,16 @@ export default function LostReportsAdministration({ token }: {  token: string | 
  * the screen without someone deliberately adding a column for it.
  */
 function ReportsTable({
-  rows, categoryName, thClass, tdClass,
+  rows, categoryName, categories, classifyingId, onClassify, thClass, tdClass,
 }: {
   rows: AdminLostReportListView[];
   categoryName: (id: string) => string;
+  /** The live category list, for the classify control's options. */
+  categories: any[];
+  /** The report whose classification is in flight, or null. */
+  classifyingId: string | null;
+  /** Classify to an id, or clear to null (return to unclassified). */
+  onClassify: (reportId: string, categoryId: string | null) => void;
   thClass: string;
   tdClass: string;
 }) {
@@ -284,6 +434,7 @@ function ReportsTable({
         <thead className="bg-stone-50 border-b border-stone-100">
           <tr>
             <th scope="col" className={thClass}>{'Lost Report'}</th>
+            <th scope="col" className={thClass}>{'Item name'}</th>
             <th scope="col" className={thClass}>{'Category'}</th>
             <th scope="col" className={thClass}>{'County'}</th>
             <th scope="col" className={thClass}>{'Sub-county'}</th>
@@ -300,6 +451,10 @@ function ReportsTable({
             // neutral badge showing the raw token, so an unexpected value can
             // never crash the console or render blank.
             const status = getLostReportStatusDisplay(report.status);
+            // PHASE 16.1 (BATCH 1 FOLLOW-UP) — the reporter's own name for the
+            // item, resolved ONCE per row through the shared display helper, so
+            // the "is a name present?" rule exists in exactly one place.
+            const itemName = getLostReportItemNameDisplay(report.item_name);
             const place = [report.location_area, report.location_landmark]
               .filter((v): v is string => Boolean(v && String(v).trim()))
               .join(' · ');
@@ -313,7 +468,41 @@ function ReportsTable({
                     </span>
                   )}
                 </td>
-                <td className={`${tdClass} font-bold text-stone-900`}>{categoryName(report.category_id)}</td>
+                <td className={tdClass}>
+                  {/* PHASE 16.1 (BATCH 1 FOLLOW-UP) — what the reporter said the
+                      item was. On an UNCLASSIFIED row this is the only human
+                      description of the object, so it is what an operator reads
+                      to choose a category. A row with no usable name SAYS so
+                      rather than showing an empty cell, and a long name is
+                      ellipsised inside a bounded column (the full value stays
+                      reachable through `title`) so one verbose report cannot
+                      stretch the table. */}
+                  {itemName.provided ? (
+                    <span className="block max-w-[16rem] truncate font-bold text-stone-900" title={itemName.text}>
+                      {itemName.text}
+                    </span>
+                  ) : (
+                    <span className="text-stone-400">{itemName.text}</span>
+                  )}
+                </td>
+                <td className={`${tdClass} font-bold text-stone-900`}>
+                  {/* PHASE 16.1 (BATCH 1) — an UNCLASSIFIED report is labelled as
+                      such. A blank cell or a raw `null` would read as a rendering
+                      bug, and a bold empty cell is exactly what an operator would
+                      fail to notice in a triage list. */}
+                  {report.category_id ? (
+                    <span>{categoryName(report.category_id)}</span>
+                  ) : (
+                    <Badge variant="warning">{'Unclassified'}</Badge>
+                  )}
+                  <ClassifyControl
+                    reportId={report.id}
+                    currentCategoryId={report.category_id}
+                    categories={categories}
+                    busy={classifyingId === report.id}
+                    onClassify={onClassify}
+                  />
+                </td>
                 <td className={tdClass}>{report.county}</td>
                 <td className={tdClass}>{report.administrative_unit_name || <span className="text-stone-400">-</span>}</td>
                 <td className={tdClass}>{place || <span className="text-stone-400">-</span>}</td>
@@ -333,6 +522,90 @@ function ReportsTable({
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/**
+ * PHASE 16.1 (BATCH 1) — the per-row classification control.
+ *
+ * WHY IT IS ITS OWN COMPONENT
+ *   Each row needs its OWN pending selection. Holding that in the table would
+ *   mean one shared map that a re-render (or a page change) could desynchronise
+ *   from the rows it describes. A component per row keeps `selected` local to the
+ *   row it belongs to, and re-syncs it whenever the server's value changes after
+ *   a refresh.
+ *
+ * THE TWO ACTIONS
+ *   SAVE  — classifies (or RECLASSIFIES) to the chosen category. Disabled while
+ *           nothing is chosen, and while the chosen value already equals the
+ *           stored one, so a no-op request is never sent.
+ *   CLEAR — returns the report to UNCLASSIFIED. Only offered when the report
+ *           currently HAS a category, so the destructive direction is never the
+ *           default and is never reachable by leaving the select empty.
+ *
+ * While `busy`, both controls are disabled. That mirrors the parent's
+ * `classifyingId` guard, so a double click cannot become a second request.
+ */
+function ClassifyControl({
+  reportId, currentCategoryId, categories, busy, onClassify,
+}: {
+  reportId: string;
+  currentCategoryId: string | null;
+  categories: any[];
+  busy: boolean;
+  onClassify: (reportId: string, categoryId: string | null) => void;
+}) {
+  const [selected, setSelected] = useState<string>(currentCategoryId || '');
+
+  // The STORED value is the source of truth: after a confirmed change (or any
+  // refresh) the control follows it instead of keeping a stale pick.
+  useEffect(() => {
+    setSelected(currentCategoryId || '');
+  }, [currentCategoryId]);
+
+  // Only categories with an English name are offered (the same rule the Finder's
+  // select applies), so the control can never present a blank option.
+  const options = (categories || []).filter((category: any) => category && category.id && category.name_en);
+  const canSave = Boolean(selected) && selected !== (currentCategoryId || '') && !busy;
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      <label htmlFor={`classify-${reportId}`} className="sr-only">
+        {`Item category for ${reportId}`}
+      </label>
+      <select
+        id={`classify-${reportId}`}
+        value={selected}
+        onChange={(e) => setSelected(e.target.value)}
+        disabled={busy || options.length === 0}
+        className="h-8 max-w-[11rem] rounded-standard border border-[var(--appearance-border)] bg-[var(--appearance-surface)] px-2 text-xs text-[var(--appearance-text-primary)]"
+      >
+        <option value="">{'Select category'}</option>
+        {options.map((category: any) => (
+          <option key={category.id} value={category.id}>
+            {category.name_en}
+          </option>
+        ))}
+      </select>
+      <Button
+        variant="secondary"
+        size="sm"
+        disabled={!canSave}
+        onClick={() => onClassify(reportId, selected)}
+      >
+        {busy ? 'Saving…' : 'Save'}
+      </Button>
+      {currentCategoryId && (
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={busy}
+          onClick={() => onClassify(reportId, null)}
+        >
+          {'Clear'}
+        </Button>
+      )}
     </div>
   );
 }

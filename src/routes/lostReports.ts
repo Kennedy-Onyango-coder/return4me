@@ -52,7 +52,7 @@ import { toCustomerSafeLostReportView, toLostReportCreationResponse } from '../s
 import { lostReportIpLimiter, lostReportCustomerLimiter, lostReportMatchIpLimiter, lostReportMatchCustomerLimiter } from '../config/lostReportLimiter.ts';
 // Phase 9B: the deterministic, explainable matching engine and its
 // customer-facing (privacy-bounded) view.
-import { selectLostReportCandidates } from '../services/lostReportMatching.ts';
+import { selectLostReportCandidates, isLostReportClassified } from '../services/lostReportMatching.ts';
 import { buildLostReportMatchesResponse, REPORT_NOT_ACTIVE_NOTICE } from '../services/lostReportMatchView.ts';
 
 export { lostReportIpLimiter, lostReportCustomerLimiter, lostReportMatchIpLimiter, lostReportMatchCustomerLimiter };
@@ -74,6 +74,13 @@ const FIELD_LIMITS = {
   description: 1000,
   distinctiveMarks: 500,
   documentNumber: 64,
+  // PHASE 16.1 (BATCH 1) — the reporter's own name for the item. Bounded
+  // because an unbounded varchar is a cheap storage-abuse target, and 200 is
+  // comfortably longer than any genuine item name while staying index-friendly.
+  itemName: 200,
+  // PHASE 16.1 (BATCH 1) — the OPTIONAL lost-report photo reference. Bounded
+  // like every other stored string; a data URI or storage path fits easily.
+  photoUrl: 1000,
 } as const;
 
 const LOCATION_AREA_MIN_LENGTH = 2;
@@ -95,8 +102,11 @@ const DISALLOWED_CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]
 const MESSAGES = {
   malformed: 'The request is malformed. Please send a complete payload.',
   clientIdentityRejected: 'You cannot specify an account in the request.',
-  categoryRequired: 'Please choose an item category.',
+  // PHASE 16.1 (BATCH 1) — a category is NO LONGER required: `categoryInvalid`
+  // is now only reachable when a value was actually supplied. The previous
+  // `categoryRequired` sentence is gone with the rule it described.
   categoryInvalid: 'That item category is not valid.',
+  itemNameRequired: 'Please enter the item name.',
   countyRequired: 'Please choose a county.',
   countyInvalid: 'That county is not a recognised Kenyan county.',
   administrativeUnitRequired: 'Please choose a sub-county.',
@@ -152,7 +162,12 @@ function parseDateInput(raw: any): Date | null {
 
 /** The validated, normalized draft — already free of client-supplied identity. */
 export interface LostReportDraft {
-  category_id: string;
+  // PHASE 16.1 (BATCH 1) — `null` means UNCLASSIFIED, which is a valid report.
+  category_id: string | null;
+  // Required by this boundary; trimmed before it reaches here.
+  item_name: string;
+  // Optional lost-report photo reference.
+  photo_url: string | null;
   county: string;
   administrative_unit_id: string;
   // GEO-D+ — how the required county/sub-county above was established. A
@@ -203,11 +218,50 @@ export function validateLostReportPayload(body: any, categories: Array<{ id: str
     return { ok: false, error: MESSAGES.clientIdentityRejected };
   }
 
-  const categoryId = typeof body.categoryId === 'string' ? body.categoryId.trim() : '';
-  if (!categoryId) return { ok: false, error: MESSAGES.categoryRequired };
-  if (!categories.some((c) => c && c.id === categoryId)) {
+  // -------------------------------------------------------------------------
+  // PHASE 16.1 (BATCH 1) — CATEGORY IS OPTIONAL.
+  //
+  // "I lost something but I am not sure which kind" is a real report, so an
+  // absent / empty / null category is accepted and recorded as UNCLASSIFIED
+  // (`category_id = NULL`). It is then classifiable later by an administrator.
+  //
+  // A SUPPLIED category is still validated against the live ACTIVE list (the
+  // Phase 16.1 Batch 2 / CAT-04 boundary), so a replay of an unknown or a
+  // deactivated id is refused exactly as before. This is the crucial
+  // distinction the product asks for: MISSING is allowed, INVALID is not.
+  // -------------------------------------------------------------------------
+  const rawCategoryId = typeof body.categoryId === 'string' ? body.categoryId.trim() : '';
+  const categoryId = rawCategoryId ? rawCategoryId : null;
+  if (categoryId && !categories.some((c) => c && c.id === categoryId)) {
     return { ok: false, error: MESSAGES.categoryInvalid };
   }
+
+  // -------------------------------------------------------------------------
+  // PHASE 16.1 (BATCH 1) — ITEM NAME IS REQUIRED.
+  //
+  // Trimmed BEFORE validation and persistence, so a name of spaces is empty
+  // rather than length-N, and a stored name never carries stray whitespace.
+  // Bounded on the server because the browser is never trusted.
+  // -------------------------------------------------------------------------
+  if (typeof body.itemName !== 'string' || !body.itemName.trim()) {
+    return { ok: false, error: MESSAGES.itemNameRequired };
+  }
+  const itemName = body.itemName.trim();
+  if (itemName.length > FIELD_LIMITS.itemName) {
+    return { ok: false, error: MESSAGES.tooLong(FIELD_LIMITS.itemName, 'Item name') };
+  }
+  if (DISALLOWED_CONTROL_CHARS.test(itemName)) {
+    return { ok: false, error: MESSAGES.invalidChars('Item name') };
+  }
+
+  // -------------------------------------------------------------------------
+  // PHASE 16.1 (BATCH 1) — the lost-report photo is OPTIONAL.
+  //
+  // Only a FOUND item must carry a photo. Omitting this field, or sending null,
+  // stores NULL; a supplied value is bounded like every other stored string.
+  // -------------------------------------------------------------------------
+  const photoUrl = optionalText(body.photoUrl, FIELD_LIMITS.photoUrl, 'Photo');
+  if (!photoUrl.ok) return photoUrl;
 
   if (body.county === undefined || body.county === null || body.county === '') {
     return { ok: false, error: MESSAGES.countyRequired };
@@ -295,7 +349,11 @@ export function validateLostReportPayload(body: any, categories: Array<{ id: str
   return {
     ok: true,
     draft: {
+      // Already normalised to `string | null`: null is the UNCLASSIFIED case the
+      // database column and the admin console both understand.
       category_id: categoryId,
+      item_name: itemName,
+      photo_url: photoUrl.value,
       county,
       administrative_unit_id: administrativeUnitId,
       // GEO-D+ — the county/sub-county above was explicitly chosen by the
@@ -534,6 +592,25 @@ export function registerLostReportRoutes(app: any, deps: LostReportRouteDeps): v
       // exist and the caller owns it.
       if (lostReport.status !== DEFAULT_LOST_REPORT_STATUS) {
         return res.json(buildLostReportMatchesResponse(lostReport, [], REPORT_NOT_ACTIVE_NOTICE));
+      }
+
+      // -----------------------------------------------------------------------
+      // PHASE 16.1 (BATCH 1) — CATEGORY-DEPENDENT MATCHING IS DEFERRED.
+      //
+      // An UNCLASSIFIED report has no category to gate on, so the engine could
+      // not compare anything without either inventing a category or treating
+      // "missing" as "matches everything" — the exact false positive this rule
+      // exists to prevent. The response is therefore the same honest empty
+      // result the engine itself would produce (`category_unclassified`), and
+      // the claimable-item set is not even loaded: there is nothing to compare
+      // it against yet.
+      //
+      // This runs AFTER the owner-scoped lookup (so it cannot become an
+      // existence oracle) and AFTER the closed-report short-circuit (a closed
+      // report keeps its own, more specific notice).
+      // -----------------------------------------------------------------------
+      if (!isLostReportClassified(lostReport)) {
+        return res.json(buildLostReportMatchesResponse(lostReport, []));
       }
 
       const claimableItems = await loadClaimableItems(canCreateClaim, filteredCounty);

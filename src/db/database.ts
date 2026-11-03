@@ -253,7 +253,20 @@ export interface Agent {
 
 export interface FoundItem {
   id: string; // Drop-off code like "7K2-941"
-  category_id: string;
+  // PHASE 16.1 (BATCH 1) — OPTIONAL on the found side too: a finder may hand in
+  // something without saying which category it belongs to, and an administrator
+  // can classify it later. `null` therefore means "unclassified", never
+  // "unknown because the row is broken".
+  category_id: string | null;
+  /**
+   * PHASE 16.1 (BATCH 1) — the name the FINDER typed for the item.
+   *
+   * Optional in the TYPE because every row created before Batch 1 has none (its
+   * name lived only in `ocr_extracted_name`) and must stay readable. The API
+   * boundary still requires it for a NEW report, so this is a storage-shape
+   * allowance, not a relaxation of the product rule.
+   */
+  item_name?: string | null;
   photo_url: string;
   ocr_extracted_number: string | null;
   ocr_extracted_name: string | null;
@@ -958,7 +971,11 @@ function parseAgent(row: any): Agent {
 function parseFoundItem(row: any): FoundItem {
   return {
     id: row.id,
-    category_id: row.category_id || "",
+    // `|| null` rather than `|| ""`: an absent category is a MEANINGFUL value
+    // ("unclassified") and must not be flattened into an empty-string category
+    // id that no row could ever match.
+    category_id: row.category_id || null,
+    item_name: row.item_name ?? null,
     photo_url: row.photo_url || "",
     ocr_extracted_number: row.ocr_extracted_number,
     ocr_extracted_name: row.ocr_extracted_name,
@@ -1237,7 +1254,27 @@ async function signDispute(dispute: Dispute): Promise<Dispute> {
 export interface LostReport {
   id: string;
   customer_id: string;
-  category_id: string;
+  /**
+   * PHASE 16.1 (BATCH 1) — NULLABLE, and the type says so.
+   *
+   * `null` means UNCLASSIFIED: the reporter did not choose a category, or an
+   * administrator deliberately returned the report to unclassified. It is a
+   * MISSING classification, not an invalid one — a category that IS supplied is
+   * still validated against the live active taxonomy before it reaches storage.
+   * Category-dependent matching is deferred until this becomes non-null (see
+   * services/lostReportMatching.ts).
+   */
+  category_id: string | null;
+  /**
+   * PHASE 16.1 (BATCH 1) — the name the reporter typed.
+   *
+   * Optional in the TYPE only so every pre-Batch-1 report (and every test
+   * fixture written before the field existed) stays valid; the create route
+   * requires it for a NEW report.
+   */
+  item_name?: string | null;
+  /** PHASE 16.1 (BATCH 1) — optional lost-report photo; null when none was given. */
+  photo_url?: string | null;
   status: string;
   county: string;
   administrative_unit_id?: string | null;
@@ -1273,7 +1310,11 @@ function parseLostReport(row: any): LostReport {
   return {
     id: row.id,
     customer_id: row.customer_id,
-    category_id: row.category_id,
+    // Preserved verbatim: NULL stays NULL because "unclassified" is a real,
+    // reportable state — not an absent value to be coerced into ''.
+    category_id: row.category_id ?? null,
+    item_name: row.item_name ?? null,
+    photo_url: row.photo_url ?? null,
     status: row.status,
     county: row.county,
     administrative_unit_id: row.administrative_unit_id ?? null,
@@ -3787,7 +3828,11 @@ class DatabaseEngine {
           .insert(itemsTable)
           .values({
             id: item.id,
-            category_id: item.category_id,
+            // PHASE 16.1 (BATCH 1): explicitly null when unclassified. An empty
+            // string would violate the category FK and would also make an
+            // unclassified item indistinguishable from a broken one.
+            category_id: item.category_id || null,
+            item_name: item.item_name ?? null,
             photo_url: item.photo_url,
             ocr_extracted_number: item.ocr_extracted_number,
             ocr_extracted_name: item.ocr_extracted_name,
@@ -10836,7 +10881,12 @@ await drizzleDb.transaction(async (tx) => {
         .values({
           id: report.id,
           customer_id: report.customer_id,
-          category_id: report.category_id,
+          // PHASE 16.1 (BATCH 1) — NULL is a first-class value here: it means
+          // "unclassified". The column has no NOT NULL constraint, and the
+          // route has already refused any category that is unknown or inactive.
+          category_id: report.category_id || null,
+          item_name: report.item_name ?? null,
+          photo_url: report.photo_url ?? null,
           status: report.status,
           county: report.county,
           administrative_unit_id: report.administrative_unit_id ?? null,
@@ -10861,11 +10911,12 @@ await drizzleDb.transaction(async (tx) => {
 
       // Audit entry deliberately records only the public reference and the
       // category — never the reporter's contact data, free text description,
-      // or the protected identifier hash.
+      // or the protected identifier hash. An unclassified report says so
+      // explicitly rather than printing a bare "null".
       await this.logAudit(
         "CUSTOMER",
         "CREATE_LOST_REPORT",
-        `Lost report ${report.id} created for category ${report.category_id}.`
+        `Lost report ${report.id} created for category ${report.category_id || 'unclassified'}.`
       );
 
       return parseLostReport(rows[0]);
@@ -10914,6 +10965,87 @@ await drizzleDb.transaction(async (tx) => {
   }
 
   /**
+   * PHASE 16.1 (BATCH 1) — ONE lost report by public reference, NOT scoped to a
+   * customer.
+   *
+   * WHY THIS EXISTS (and why it is deliberately separate from
+   * getLostReportByIdForCustomer above): an administrator classifying a report is
+   * acting on the platform's data, not on their own account, so there is no
+   * customer to scope by. It is not a widening of the customer path — the
+   * customer route still calls the owner-scoped method, and a cross-customer
+   * reference there still yields the same 404.
+   *
+   * The ONLY consumer is PATCH /api/admin/lost-reports/:id/classify, which is
+   * behind authenticateJWT + requireCurrentAdminSession + an explicit admin role
+   * check. The returned row is never handed to a client: the route extracts the
+   * previous category id and nothing else.
+   */
+  public async getLostReportById(id: string): Promise<LostReport | undefined> {
+    try {
+      const rows = await drizzleDb
+        .select()
+        .from(lostReportsTable)
+        .where(eq(lostReportsTable.id, id));
+      return rows[0] ? parseLostReport(rows[0]) : undefined;
+    } catch (error) {
+      console.error("Failed to read lost report by id:", error);
+      throw new Error("Failed to read lost report by id.");
+    }
+  }
+
+  /**
+   * PHASE 16.1 (BATCH 1) — set (or CLEAR) a lost report's category, atomically
+   * with its audit row.
+   *
+   * `categoryId === null` is a first-class request: it returns the report to
+   * UNCLASSIFIED. A non-null value must already have been validated by the
+   * caller against the live ACTIVE category list — this layer performs no
+   * taxonomy lookup of its own, exactly like createLostReport, so there is one
+   * place (routes/adminLostReports.ts) that decides what a valid category is.
+   *
+   * WHY A TRANSACTION: a category change that committed without its audit row
+   * would be an unattributable rewrite of a customer's report, which is the one
+   * thing this table's audit trail exists to prevent. If either statement fails,
+   * neither lands.
+   *
+   * Returns the report as it now stands, so the caller can report the previous
+   * and current category without a second read (and without a race between the
+   * two).
+   */
+  public async classifyLostReport(
+    id: string,
+    categoryId: string | null,
+    adminUser: string,
+  ): Promise<LostReport | undefined> {
+    try {
+      const rows = await drizzleDb.transaction(async (tx) => {
+        const updatedRows = await tx
+          .update(lostReportsTable)
+          .set({ category_id: categoryId || null, updated_at: new Date() })
+          .where(eq(lostReportsTable.id, id))
+          .returning();
+
+        // The audit row commits with the change, or not at all (logAuditInTx):
+        // a classification that landed without its record, or a record that
+        // survived a rolled-back classification, would both be unattributable.
+        await this.logAuditInTx(
+          tx,
+          adminUser,
+          "CLASSIFY_LOST_REPORT",
+          `Lost report ${id}: category set to ${categoryId || 'unclassified'}.`
+        );
+
+        return updatedRows;
+      });
+
+      return rows[0] ? parseLostReport(rows[0]) : undefined;
+    } catch (error) {
+      console.error("Failed to classify lost report:", error);
+      throw new Error("Failed to classify lost report.", { cause: error });
+    }
+  }
+
+  /**
    * PHASE 11A — a BOUNDED page of lost reports for the admin console.
    *
    * WHY THIS EXISTS
@@ -10939,18 +11071,41 @@ await drizzleDb.transaction(async (tx) => {
    * `idx_lost_reports_county` index usable — the filter is part of the SAME
    * bounded, newest-first query, so pagination stays correct: `hasMore` is
    * derived from the filtered result set, never from an unfiltered one.
+   *
+   * PHASE 16.1 (BATCH 1) — optional `unclassifiedOnly` filter. It is
+   * `category_id IS NULL` and it composes with `county` through `and(...)`, so
+   * "unclassified reports in Mombasa" is one query and its page, its `hasMore`
+   * and its possible-match counts all describe the same filtered set. The
+   * predicate is identical to the one the UI label promises: a report with an
+   * EMPTY-STRING category would not be "unclassified" here, but the create and
+   * classify paths both normalise an empty selection to NULL, so that state does
+   * not exist in practice.
    */
-  public async listAdminLostReports(opts: { limit: number; offset: number; county?: string | null }): Promise<{ rows: LostReport[]; hasMore: boolean }> {
+  public async listAdminLostReports(opts: {
+    limit: number;
+    offset: number;
+    county?: string | null;
+    unclassifiedOnly?: boolean;
+  }): Promise<{ rows: LostReport[]; hasMore: boolean }> {
     try {
       const limit = opts.limit;
       const offset = opts.offset;
       // An absent/null county means "all counties" — it must not be turned into
       // `county = NULL`, which would match nothing (or only the legacy rows).
       const county = typeof opts.county === 'string' && opts.county ? opts.county : null;
+
+      const conditions: any[] = [];
+      if (county) conditions.push(eq(lostReportsTable.county, county));
+      if (opts.unclassifiedOnly) conditions.push(isNull(lostReportsTable.category_id));
+      // `undefined` (no filter) is what the query builder treats as "no WHERE
+      // clause", so the unfiltered request stays byte-for-byte the pre-existing
+      // one rather than gaining an always-true predicate.
+      const where = conditions.length === 0 ? undefined : conditions.length === 1 ? conditions[0] : and(...conditions);
+
       const rows = await drizzleDb
         .select()
         .from(lostReportsTable)
-        .where(county ? eq(lostReportsTable.county, county) : undefined)
+        .where(where)
         .orderBy(desc(lostReportsTable.created_at), desc(lostReportsTable.id))
         .limit(offset + limit + 1);
 

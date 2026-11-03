@@ -242,6 +242,10 @@ function validPayload(overrides: Record<string, any> = {}) {
   return {
     categoryId: 'smartphone',
     county: 'Nairobi City',
+    // PHASE 16.1 (BATCH 1) — the item name is REQUIRED by the route, so every
+    // fixture carries one; tests that exercise the unclassified path override
+    // `categoryId` only.
+    itemName: 'Black Samsung phone',
     administrativeUnitId: 'KE-47-SC-01',
     locationArea: 'Westlands',
     locationLandmark: 'Near Sarit Centre',

@@ -5,6 +5,7 @@ import {
   evaluateLostReportAgainstItem,
   decideCandidate,
   selectLostReportCandidates,
+  isLostReportClassified,
   MIN_DISTINGUISHING_MATCHES,
   TIME_EARLY_TOLERANCE_MS,
   TIME_REPORTING_LAG_MS,
@@ -760,5 +761,87 @@ describe('candidate selection is conservative and deterministic', () => {
 });
 
 
+
+
+// =============================================================================
+// PHASE 16.1 (BATCH 1) — AN UNCLASSIFIED REPORT NEVER MATCHES
+// =============================================================================
+// The reporting foundation makes "no category" a real, storable state. The
+// danger it introduces is subtle: a MISSING category must never behave like a
+// WILDCARD. Every case below is a deliberate statement that category-dependent
+// matching is DEFERRED until an administrator classifies the report — not
+// guessed, and not skipped.
+describe('16.1 Batch 1: category-dependent matching is deferred until classification', () => {
+  it('isLostReportClassified() is the ONE predicate for "can this be matched?"', () => {
+    expect(isLostReportClassified(lostReport())).toBe(true);
+    expect(isLostReportClassified(lostReport({ category_id: null }))).toBe(false);
+    expect(isLostReportClassified(lostReport({ category_id: undefined }))).toBe(false);
+    expect(isLostReportClassified(lostReport({ category_id: '' }))).toBe(false);
+    expect(isLostReportClassified(lostReport({ category_id: '   ' }))).toBe(false);
+    // A report object that is missing entirely cannot be matched either.
+    expect(isLostReportClassified(null)).toBe(false);
+  });
+
+  it('reports category_match as UNKNOWN (not a match) when the report has no category', () => {
+    const result = evaluateLostReportAgainstItem(
+      lostReport({ category_id: null }),
+      foundItem({ category_id: 'smartphone' }),
+    );
+    expect(result.signals.category_match).toBe('unknown');
+    expect(result.candidate).toBe(false);
+    expect(result.reason).toBe('category_unclassified');
+  });
+
+  it('an unclassified report is never a candidate, even on an EXACT identifier match', () => {
+    // The strongest signal in the engine still cannot carry an unclassified
+    // report: the category gate is evaluated first, so this is a rejection and
+    // not a false positive.
+    const result = evaluateLostReportAgainstItem(
+      lostReport({ category_id: null, document_number_hash: 'HASH-EXACT' }),
+      foundItem({ document_number_hash: 'HASH-EXACT' }),
+    );
+    expect(result.signals.identifier_match).toBe('match');
+    expect(result.candidate).toBe(false);
+    expect(result.reason).toBe('category_unclassified');
+  });
+
+  it('a blank-string category behaves exactly like a missing one', () => {
+    const result = evaluateLostReportAgainstItem(
+      lostReport({ category_id: '   ' }),
+      foundItem(),
+    );
+    expect(result.candidate).toBe(false);
+    expect(result.reason).toBe('category_unclassified');
+  });
+
+  it('decideCandidate() distinguishes UNCLASSIFIED from a genuine MISMATCH', () => {
+    const unclassified = signalMatrix({ category_match: 'unknown' });
+    const mismatch = signalMatrix({ category_match: 'mismatch' });
+
+    expect(decideCandidate(unclassified, 100, 10).candidate).toBe(false);
+    expect(decideCandidate(unclassified, 100, 10).reason).toBe('category_unclassified');
+    expect(decideCandidate(mismatch, 100, 10).candidate).toBe(false);
+    expect(decideCandidate(mismatch, 100, 10).reason).toBe('category_mismatch');
+  });
+
+  it('selectLostReportCandidates() returns NOTHING for an unclassified report', () => {
+    const items = [
+      foundItem({ id: 'R4M-A', category_id: 'smartphone' }),
+      foundItem({ id: 'R4M-B', category_id: 'wallet' }),
+    ];
+    expect(selectLostReportCandidates(lostReport({ category_id: null }), items)).toEqual([]);
+    // A classified report is unaffected: the same item set still produces the
+    // same candidate, so Batch 1 did not narrow existing matching.
+    expect(selectLostReportCandidates(lostReport(), items).map((c) => c.item.id)).toEqual(['R4M-A']);
+  });
+
+  it('classifying the report restores ordinary matching (the deferral ends)', () => {
+    const item = foundItem({ category_id: 'smartphone' });
+    expect(selectLostReportCandidates(lostReport({ category_id: null }), [item])).toEqual([]);
+    // The same report, once classified, matches on exactly the same evidence it
+    // always did — nothing about the rules changed, only the deferral.
+    expect(selectLostReportCandidates(lostReport({ category_id: 'smartphone' }), [item]).length).toBe(1);
+  });
+});
 
 

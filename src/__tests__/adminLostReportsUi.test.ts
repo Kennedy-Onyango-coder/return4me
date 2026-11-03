@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+// PHASE 16.1 (BATCH 1 FOLLOW-UP) — the item-name fallback rule is React-free
+// (config/lostReportPresentation.ts), so its presence cases are asserted at
+// RUNTIME in this suite rather than only read out of the source text.
+import {
+  LOST_REPORT_ITEM_NAME_FALLBACK,
+  getLostReportItemNameDisplay,
+} from '../config/lostReportPresentation';
 
 // =============================================================================
 // PHASE 11A (WP-2) — ADMIN LOST-REPORT UI BOUNDARY
@@ -9,9 +16,11 @@ import path from 'path';
 // this repository (no jsdom / React Testing Library exists here; see
 // publicNavigation.test.ts and claimsAdminUiBoundary.test.ts).
 //
-// These assertions guard the two things that matter most about a new admin
-// surface: that it is READ-ONLY, and that it can never render a protected
-// identifier or dump a raw row.
+// These assertions guard the things that matter most about this admin surface:
+// that it renders every value explicitly (never a raw row, never a protected
+// identifier), and — since PHASE 16.1 (BATCH 1) — that its ONE write
+// (classification) lives in a separate, GET-only-audited client and is guarded
+// against duplicate submission.
 
 const ROOT = path.resolve(__dirname, '../..');
 const SRC = (p: string) => fs.readFileSync(path.resolve(ROOT, p), 'utf8');
@@ -42,7 +51,9 @@ describe('11A admin lost-reports UI: the console has a real, backed section', ()
     expect(adminView).toContain("onClick={() => setActiveTab('lost_reports')}");
     expect(adminView).toContain("aria-current={activeTab === 'lost_reports' ? 'page' : undefined}");
     expect(adminView).toContain("{activeTab === 'lost_reports' && (");
-    expect(adminView).toContain('<LostReportsAdministration lang={lang} token={token} />');
+    // The section takes the session token and nothing else: the Swahili half of
+    // the UI was removed product-wide, so there is no `lang` prop to pass.
+    expect(adminView).toContain('<LostReportsAdministration token={token} />');
   });
 
   it('the section keeps the console authentication gate it always had', () => {
@@ -127,7 +138,7 @@ describe('11A admin lost-reports UI: states and status handling', () => {
     // The same map the customer surface uses, whose own test asserts total
     // coverage of the status vocabulary and a safe fallback for unknown values.
     expect(sectionTsx).toContain("from '../../../config/lostReportPresentation'");
-    expect(sectionTsx).toContain('getLostReportStatusDisplay(report.status, lang)');
+    expect(sectionTsx).toContain('getLostReportStatusDisplay(report.status)');
     // No private status vocabulary is invented here.
     expect(codeOnly(SECTION)).not.toMatch(/'match_review'|'lapsed'|'resolved'/);
   });
@@ -156,8 +167,9 @@ describe('16.1 admin lost-reports UI: the county filter is canonical', () => {
     expect(sectionTsx).toContain('COUNTY_GROUPS.map');
     expect(sectionTsx).toContain('<optgroup');
     expect(sectionTsx).toContain('value={c.name}');
-    // "All Counties" is the cleared state — the unfiltered request.
-    expect(sectionTsx).toContain("t('All Counties', 'Kaunti Zote')");
+    // "All Counties" is the cleared state — the unfiltered request. It is a
+    // single English label now that the console no longer carries a `lang`.
+    expect(sectionTsx).toContain('<option value="">{\'All Counties\'}</option>');
   });
 
   it('passes the county to the client and omits it entirely when cleared', () => {
@@ -182,5 +194,154 @@ describe('16.1 admin lost-reports UI: the county filter is canonical', () => {
     const raw = stripComments(SRC(CLIENT));
     expect(raw).toContain("method: 'GET'");
     expect(raw).not.toMatch(/'POST'|'PUT'|'PATCH'|'DELETE'/);
+  });
+});
+
+// =============================================================================
+// PHASE 16.1 (BATCH 1) — UNCLASSIFIED REPORTS AND CLASSIFICATION CONTROLS
+// =============================================================================
+// The console must be able to SEE that a report has no category and to FIX it.
+// These are file-text assertions (this repository has no jsdom/RTL), chosen so
+// each one pins a distinct guarantee rather than a styling detail.
+describe('16.1 Batch 1: the console shows and resolves unclassified reports', () => {
+  it('labels an unclassified report instead of rendering a blank cell', () => {
+    // `category_id` can now be null, and the row branches on it.
+    expect(sectionTsx).toContain('report.category_id ?');
+    expect(sectionTsx).toContain("{'Unclassified'}");
+    // The label is a Badge, not bare text, so it reads as a STATE.
+    expect(sectionTsx).toMatch(/<Badge variant="warning">\s*\{'Unclassified'\}/);
+  });
+
+  it('offers a classify control with its own accessible name and its own pending state', () => {
+    expect(sectionTsx).toContain('function ClassifyControl(');
+    expect(sectionTsx).toContain('className="sr-only"');
+    expect(sectionTsx).toContain('{`Item category for ${reportId}`}');
+    // Reclassify and the deliberate return-to-unclassified action both exist.
+    expect(sectionTsx).toContain('onClick={() => onClassify(reportId, selected)}');
+    expect(sectionTsx).toContain('onClick={() => onClassify(reportId, null)}');
+    expect(sectionTsx).toContain("{'Clear'}");
+  });
+
+  it('adds the unclassified-only filter WITHOUT a second request path', () => {
+    expect(sectionTsx).toContain('id="admin-lost-unclassified"');
+    expect(sectionTsx).toContain("{'Unclassified only'}");
+    expect(sectionTsx).toContain('handleUnclassifiedChange');
+    // It is the same bounded list request, with one extra parameter.
+    expect(clientTs).toContain("if (opts.unclassifiedOnly) url += '&unclassified=true'");
+    // The pinned load-effect dependency list is unchanged (offset/reload/token/
+    // county); a filter change re-queries through `reloadToken`.
+    expect(sectionTsx).toMatch(/\[offset, reloadToken, token, county\]/);
+    expect(sectionTsx).toMatch(/const handleUnclassifiedChange[\s\S]{0,220}setReloadToken/);
+  });
+
+  it('keeps classification in its OWN client, because the list client is GET-only', () => {
+    expect(sectionTsx).toContain("from '../../../services/adminLostReportClassificationApi'");
+    expect(sectionTsx).toContain('classifyLostReport(');
+    expect(sectionTsx).toContain('unclassifyLostReport(');
+    // The read client never gains a mutation.
+    expect(stripComments(SRC(CLIENT))).not.toMatch(/'POST'|'PUT'|'PATCH'|'DELETE'/);
+  });
+
+  it('prevents duplicate classification submissions and races', () => {
+    // One in-flight row at a time, set BEFORE the await and cleared in finally.
+    expect(sectionTsx).toContain('if (classifyingId) return;');
+    expect(sectionTsx).toContain('setClassifyingId(reportId);');
+    expect(sectionTsx).toMatch(/finally \{\s*setClassifyingId\(null\);/);
+    // Every control on that row is disabled while it is in flight...
+    expect(sectionTsx).toContain('disabled={busy || options.length === 0}');
+    expect(sectionTsx).toContain('disabled={!canSave}');
+    // ...and a no-op save (same category) cannot be sent at all.
+    expect(sectionTsx).toContain("const canSave = Boolean(selected) && selected !== (currentCategoryId || '') && !busy;");
+  });
+
+  it('refreshes the list after a change and reports failures where the operator is looking', () => {
+    // The row is updated from what the server confirmed, and the list is then
+    // re-read — both inside the same handler, in that order.
+    expect(sectionTsx).toMatch(/setRows\(\(previous\)[\s\S]{0,400}setReloadToken\(\(n\) => n \+ 1\)/);
+    expect(sectionTsx).toContain('{classifyError && <Banner kind="error">{classifyError}</Banner>}');
+    expect(sectionTsx).toContain('role="status"');
+    // A failure is shown in its own banner rather than replacing the table with
+    // the list-level error state.
+    expect(sectionTsx).not.toMatch(/setError\(e\.message\)/);
+  });
+});
+
+// =============================================================================
+// PHASE 16.1 (BATCH 1 FOLLOW-UP) — THE ITEM-NAME COLUMN
+// =============================================================================
+// An administrator triaging a report has to know WHAT was lost before they can
+// judge which category it belongs to, and on an unclassified row the item name
+// is the only human description the table holds. The column therefore sits
+// beside the reference, ahead of the category it informs.
+//
+// The presence cases (a name, null, undefined, empty, whitespace-only) are
+// asserted at RUNTIME against the React-free helper the row renders through —
+// the same node-only pattern lostReportWizardUx04.test.ts uses for
+// identifierClassLabel(). Placement, truncation and the classification controls
+// are pinned by source text, as the rest of this suite does.
+describe('16.1 B1 follow-up: the admin table shows the item name', () => {
+  it('declares an Item name column between the reference and the category', () => {
+    expect(sectionTsx).toContain("<th scope=\"col\" className={thClass}>{'Item name'}</th>");
+    const head = sectionTsx.slice(sectionTsx.indexOf('<thead'), sectionTsx.indexOf('</thead>'));
+    expect(head.indexOf("{'Lost Report'}")).toBeGreaterThan(-1);
+    expect(head.indexOf("{'Lost Report'}")).toBeLessThan(head.indexOf("{'Item name'}"));
+    expect(head.indexOf("{'Item name'}")).toBeLessThan(head.indexOf("{'Category'}"));
+  });
+
+  it('renders each row through the ONE shared display helper', () => {
+    expect(sectionTsx).toContain('getLostReportItemNameDisplay(report.item_name)');
+    // The cell branches on the helper's own verdict, never on a second,
+    // hand-rolled emptiness test that could drift from it.
+    expect(sectionTsx).toContain('{itemName.provided ? (');
+    expect(sectionTsx).not.toMatch(/report\.item_name\s*(?:&&|\|\|)/);
+  });
+
+  it('shows the name a report carries', () => {
+    expect(getLostReportItemNameDisplay('Brown leather wallet'))
+      .toEqual({ text: 'Brown leather wallet', provided: true });
+  });
+
+  it('shows the fallback when the name is null or missing', () => {
+    // A pre-Batch-1 row has no item_name at all; the admin DTO forwards null.
+    expect(getLostReportItemNameDisplay(null))
+      .toEqual({ text: LOST_REPORT_ITEM_NAME_FALLBACK, provided: false });
+    expect(getLostReportItemNameDisplay(undefined))
+      .toEqual({ text: LOST_REPORT_ITEM_NAME_FALLBACK, provided: false });
+    expect(LOST_REPORT_ITEM_NAME_FALLBACK).toBe('Not provided');
+  });
+
+  it('shows the fallback when the name is empty or whitespace only', () => {
+    expect(getLostReportItemNameDisplay(''))
+      .toEqual({ text: LOST_REPORT_ITEM_NAME_FALLBACK, provided: false });
+    expect(getLostReportItemNameDisplay('   '))
+      .toEqual({ text: LOST_REPORT_ITEM_NAME_FALLBACK, provided: false });
+    expect(getLostReportItemNameDisplay('\t \n'))
+      .toEqual({ text: LOST_REPORT_ITEM_NAME_FALLBACK, provided: false });
+  });
+
+  it('renders a padded name trimmed rather than with its padding', () => {
+    expect(getLostReportItemNameDisplay('  Brown leather wallet  '))
+      .toEqual({ text: 'Brown leather wallet', provided: true });
+  });
+
+  it('keeps a long name inside the table layout', () => {
+    // A bounded column with ellipsis, and the full value kept reachable on the
+    // cell's title, so one verbose report cannot stretch the table.
+    expect(sectionTsx).toContain('block max-w-[16rem] truncate');
+    expect(sectionTsx).toContain('title={itemName.text}');
+    // The wrapper's existing scrolling region is untouched by this change.
+    expect(sectionTsx).toContain("r4m-scroll-x\" role=\"region\" aria-label={'Lost reports table'} tabIndex={0}");
+  });
+
+  it('leaves the Unclassified label and both classification actions usable', () => {
+    expect(sectionTsx).toContain('report.category_id ?');
+    expect(sectionTsx).toContain("<Badge variant=\"warning\">{'Unclassified'}</Badge>");
+    expect(sectionTsx).toContain('function ClassifyControl(');
+    // Save a chosen category, and deliberately return the row to unclassified.
+    expect(sectionTsx).toContain('onClick={() => onClassify(reportId, selected)}');
+    expect(sectionTsx).toContain('onClick={() => onClassify(reportId, null)}');
+    expect(sectionTsx).toContain("{'Clear'}");
+    // The fallback is muted, never styled as a real (bold) item name.
+    expect(sectionTsx).toContain('<span className="text-stone-400">{itemName.text}</span>');
   });
 });

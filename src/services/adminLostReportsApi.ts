@@ -13,7 +13,10 @@
 //      vitest environment.
 //
 // BOUNDARY RULES (the same discipline as the claims client)
-//   - issues GET only — there is no admin lost-report mutation anywhere;
+//   - issues GET only. This module has no admin lost-report mutation anywhere:
+//     classification lives in services/adminLostReportClassificationApi.ts, and
+//     components/customer/__tests__/lostReportUxBoundary.test.ts pins that split
+//     by asserting that THIS file contains no POST/PUT/PATCH/DELETE literal;
 //   - imports nothing from the database, the routes, the matching engine or any
 //     server module;
 //   - never logs a response;
@@ -24,7 +27,20 @@ export interface AdminLostReportListView {
   /** The public lost-report reference, e.g. LR-XXXXXX. */
   id: string;
   status: string;
-  category_id: string;
+  /**
+   * PHASE 16.1 (BATCH 1) — NULLABLE, and the type says so because the backend
+   * says so: `lost_reports.category_id` no longer carries a NOT NULL
+   * constraint, `PATCH /api/admin/lost-reports/:id/classify` accepts a null
+   * category, and the list DTO forwards the null. The earlier `string` type was
+   * a client-side fiction that made an unclassified report look impossible; the
+   * console now renders such a row explicitly as "Unclassified" instead of a
+   * blank cell or a raw `null`.
+   */
+  category_id: string | null;
+  /** The name the reporter typed. `null` for a pre-Batch-1 report. */
+  item_name: string | null;
+  /** Optional lost-report photo path. `null` when the reporter gave none. */
+  photo_url: string | null;
   county: string;
   administrative_unit_id: string | null;
   administrative_unit_name: string | null;
@@ -96,15 +112,30 @@ function errorKindForStatus(status: number): AdminLostReportsApiErrorKind {
  * administrator has "All Counties" selected, so the unfiltered request is
  * byte-for-byte the pre-16.1 request. A cleared filter therefore restores the
  * unfiltered list rather than asking the server for `county=`.
+ *
+ * PHASE 16.1 (BATCH 1): `unclassifiedOnly` adds `unclassified=true` to the
+ * query string and NOTHING when it is false, for exactly the same reason — the
+ * default request must stay byte-identical to the pre-Batch-1 one. It composes
+ * with `county`, so "unclassified reports in Mombasa" is one request.
  */
 export async function fetchAdminLostReports(
   token: string | null,
-  opts: { limit?: number; offset?: number; county?: string | null; signal?: AbortSignal } = {},
+  opts: {
+    limit?: number;
+    offset?: number;
+    county?: string | null;
+    unclassifiedOnly?: boolean;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<{ items: AdminLostReportListView[]; pagination: AdminLostReportsPagination }> {
   const limit = opts.limit ?? ADMIN_LOST_REPORTS_PAGE_SIZE;
   const offset = opts.offset ?? 0;
   let url = `${LIST_PATH}?limit=${encodeURIComponent(String(limit))}&offset=${encodeURIComponent(String(offset))}`;
   if (opts.county) url += `&county=${encodeURIComponent(opts.county)}`;
+  // Only ever the literal `true`: `unclassified=false` would be a second way of
+  // spelling "no filter" and there is no reason to send bytes the server must
+  // then re-interpret.
+  if (opts.unclassifiedOnly) url += '&unclassified=true';
 
   let res: Response;
   try {

@@ -37,7 +37,19 @@
 export interface LostReportView {
   id: string;
   status: string;
-  category_id: string;
+  /**
+   * PHASE 16.1 (BATCH 1) — NULL when the report is UNCLASSIFIED.
+   *
+   * This mirrors the server DTO (services/lostReportView.ts) exactly. Reading
+   * it as if it were always a string is what made "no category yet"
+   * unrepresentable on the client; a consumer must handle `null` explicitly
+   * (the wizard's own success screen and the admin console both do).
+   */
+  category_id: string | null;
+  /** The name the reporter typed. `null` for a pre-Batch-1 report. */
+  item_name: string | null;
+  /** Optional lost-report photo path. `null` when the reporter gave none. */
+  photo_url: string | null;
   county: string;
   administrative_unit_id: string | null;
   administrative_unit_name: string | null;
@@ -98,9 +110,25 @@ export interface LostReportCreationResponse {
 
 /** The payload the wizard submits. Mirrors routes/lostReports.ts exactly. */
 export interface LostReportCreatePayload {
-  categoryId: string;
+  /**
+   * PHASE 16.1 (BATCH 1) — OPTIONAL, and nullable.
+   *
+   * Omitting it (or sending `null` / `''`) creates an UNCLASSIFIED report: the
+   * server stores `category_id = NULL` and the report can be classified later.
+   * When a value IS supplied the server still rejects anything that is not a
+   * live, active category, so this is a relaxation of "must choose" and not of
+   * "must be valid".
+   */
+  categoryId?: string | null;
   county: string;
-  itemName?: string | null;
+  /**
+   * PHASE 16.1 (BATCH 1) — REQUIRED.
+   *
+   * Trimmed and validated by the server (1..200 characters) and re-validated by
+   * the wizard before submission. It is the customer's own name for the item and
+   * is what an administrator reads when deciding how to classify the report.
+   */
+  itemName: string;
   administrativeUnitId: string;
   locationArea: string;
   locationLandmark?: string | null;
@@ -114,6 +142,14 @@ export interface LostReportCreatePayload {
   distinctiveMarks?: string | null;
   documentType?: string | null;
   documentNumber?: string | null;
+  /**
+   * PHASE 16.1 (BATCH 1) — OPTIONAL lost-report photo (a storage path or data
+   * URI the server has already accepted). The wizard does not collect one, and
+   * the server treats an omitted value as `null`; the field exists so the
+   * client contract matches the route rather than silently omitting a value the
+   * route accepts.
+   */
+  photoUrl?: string | null;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 // =============================================================================
 // RETURN4ME UX-04 — REPORT-A-LOST-ITEM JOURNEY: STEP FOCUS, FIELD-LEVEL ERRORS,
-// GROUPED REVIEW, BILINGUAL COPY AND TOUCH ERGONOMICS
+// GROUPED REVIEW, INLINE COPY AND TOUCH ERGONOMICS
 // =============================================================================
 // Source-level tripwires, matching this repository's other UX batches
 // (homepageUx03Hierarchy, publicChromeUx02, designSystemPrimitives): there is no
@@ -22,7 +22,9 @@
 //   * there is exactly ONE submit action, and both "Continue" and the review's
 //     edit affordances are plain buttons, so pressing Enter in a text field can
 //     never submit a half-finished report;
-//   * every customer-visible string in this component is bilingual;
+//   * every customer-visible string is plain English and written inline in this
+//     component: the Swahili half of the UI was removed product-wide after UX-04,
+//     and the journey still owns every string it shows rather than inheriting one;
 //   * the journey sits on the UX-01 ladders (type, icon, radius, appearance) in
 //     BOTH themes, every control clears the 44px target floor, nothing
 //     suppresses the global focus indicator, and no raw palette survives;
@@ -57,28 +59,30 @@ const stripComments = (src: string) =>
     .replace(/(^|[^:])\/\/[^\n]*/g, '$1')
     .replace(/\r\n/g, '\n');
 
-/** The review's item value: the live bilingual category name, falling back to the id. */
-const categoryNameCall = 'categoryName(categories, form.categoryId, sw) || form.categoryId';
+/** The review's item value: the live category name, falling back to the id. */
+const categoryNameCall = 'categoryName(categories, form.categoryId) || form.categoryId';
 
 const WIZARD_TSX = read('src/components/customer/LostReportWizard.tsx');
 const WIZARD = stripComments(WIZARD_TSX);
 const SECTION = stripComments(read('src/components/customer/LostReportsSection.tsx'));
 const STEPPER_TSX = read('src/components/ui/Stepper.tsx');
 
-/** One bilingual literal, written the way the component writes it. */
-const copy = (en: string, sw: string) => `t('${en}', '${sw}')`;
+/** One copy literal, written the way the component writes it. */
+const copy = (en: string) => `'${en}'`;
 
 /* The three data-entry steps as ONE slice, cut on RENDERED anchors rather than
    on comment markers (comment stripping removes those): from the first step
    heading to the review heading. A rule asserted here can therefore never be
-   satisfied by markup belonging to the review step or the footer. */
+   satisfied by markup belonging to the review step or the footer.
+   The anchors are the `title={...}` the shared StepIntro actually renders, so
+   the slice follows the component's own step headings. */
 const QUESTIONS = WIZARD.slice(
-  WIZARD.indexOf(copy('What did you lose?', 'Ulipoteza nini?')),
-  WIZARD.indexOf(copy('Check your report', 'Hakiki ripoti yako')),
+  WIZARD.indexOf(`title={${copy('What did you lose?')}}`),
+  WIZARD.indexOf(`title={${copy('Check your report')}}`),
 );
 /* The review step: its heading to the navigation footer that follows it. */
 const REVIEW = WIZARD.slice(
-  WIZARD.indexOf(copy('Check your report', 'Hakiki ripoti yako')),
+  WIZARD.indexOf(`title={${copy('Check your report')}}`),
   WIZARD.indexOf('flex flex-col-reverse sm:flex-row'),
 );
 /* The footer itself (back / continue / submit). */
@@ -96,11 +100,14 @@ describe('UX-04 the journey is still the same four-step machine', () => {
     }
   });
 
-  it('still derives the progress rail from the shared step list, bilingually', () => {
+  it('still derives the progress rail from the shared step list', () => {
     expect(WIZARD).toContain(
-      'const stepperSteps = LOST_REPORT_WIZARD_STEPS.map((s) => ({ label: sw ? s.en : s.en }));',
+      'const stepperSteps = LOST_REPORT_WIZARD_STEPS.map((s) => ({ label: s.en }));',
     );
-    expect(WIZARD).toContain(copy('Report a lost item progress', 'Maendeleo ya kuripoti kitu kilichopotea'));
+    // The rail is labelled from the same shared list, and the live status line
+    // reads the current label out of it rather than keeping a second copy.
+    expect(WIZARD).toContain(copy('Report a lost item progress'));
+    expect(WIZARD).toContain('const currentStepLabel = stepperSteps[Math.max(0, Math.min(step, stepperSteps.length - 1))].label;');
   });
 
   it('keeps ONE submit path: re-validate every step, then one API call', () => {
@@ -108,7 +115,7 @@ describe('UX-04 the journey is still the same four-step machine', () => {
     // Re-validated from step 0 before sending, because the customer may have
     // gone back and changed an earlier answer.
     expect(WIZARD).toContain('for (let s = 0; s <= 2; s++) {');
-    expect(WIZARD).toContain('const error = validateStep(s, form, t);');
+    expect(WIZARD).toContain('const error = validateStep(s, form);');
     expect(WIZARD).toContain('if (error) { setStep(s); setStepError(error); return; }');
     expect(WIZARD).toContain('e.preventDefault();');
     // The browser's own validation UI can never interrupt a step.
@@ -160,9 +167,11 @@ describe('UX-04 focus moves deliberately, twice, and nowhere else', () => {
   });
 
   it('points its refs at real controls, not at wrappers', () => {
-    // One ref per validated field, each attached to the Input/Select itself.
-    expect((WIZARD.match(/ref=\{setFieldRef</g) || []).length).toBe(6);
+    // One ref per addressable field, each attached to the Input/Select itself:
+    // the five validated fields plus the optional window end and the item name.
+    expect((WIZARD.match(/ref=\{setFieldRef</g) || []).length).toBe(7);
     expect(WIZARD).toContain("ref={setFieldRef<HTMLSelectElement>('categoryId')}");
+    expect(WIZARD).toContain("ref={setFieldRef<HTMLInputElement>('itemName')}");
     expect(WIZARD).toContain("ref={setFieldRef<HTMLSelectElement>('county')}");
     expect(WIZARD).toContain("ref={setFieldRef<HTMLSelectElement>('administrativeUnitId')}");
     expect(WIZARD).toContain("ref={setFieldRef<HTMLInputElement>('locationArea')}");
@@ -174,7 +183,12 @@ describe('UX-04 focus moves deliberately, twice, and nowhere else', () => {
 describe('UX-04 a failure is reported at the field it belongs to', () => {
   it('routes every validation message through the field error channel', () => {
     expect(WIZARD).toContain('const fieldError = (field: WizardField) =>');
-    expect((WIZARD.match(/error=\{fieldError\('/g) || []).length).toBe(6);
+    // PHASE 16.1 (BATCH 1): SEVEN fields now carry the inline error slot — the
+    // item name joined the list (it is required) while the category kept its slot
+    // (it is optional, so the slot renders nothing, but the field keeps the same
+    // error/focus contract as the rest).
+    expect((WIZARD.match(/error=\{fieldError\('/g) || []).length).toBe(7);
+    expect(WIZARD).toContain("error={fieldError('itemName')}");
     expect(WIZARD).toContain("error={fieldError('categoryId')}");
     expect(WIZARD).toContain("error={fieldError('county')}");
     expect(WIZARD).toContain("error={fieldError('administrativeUnitId')}");
@@ -193,9 +207,11 @@ describe('UX-04 a failure is reported at the field it belongs to', () => {
   });
 
   it('keeps the required set to what the server itself rejects', () => {
-    // category, county, sub-county, exact place, lost-from — the five fields the
-    // API refuses when empty. Marking anything else required here would invent a
-    // rule the server does not have.
+    // PHASE 16.1 (BATCH 1): the five fields the API refuses when empty are now
+    // item name, county, sub-county, exact place and lost-from. The CATEGORY
+    // moved OFF this list (an unclassified report is valid and is classified
+    // later) and the ITEM NAME moved ON to it. Marking anything else required
+    // here would invent a rule the server does not have.
     expect((QUESTIONS.match(/(?:^|\n)\s*required\n/g) || []).length).toBe(5);
   });
 
@@ -211,11 +227,11 @@ describe('UX-04 a failure is reported at the field it belongs to', () => {
 
 describe('UX-04 the review step is grouped, editable and honest', () => {
   it('groups the summary by the part of the journey each value came from', () => {
-    expect(REVIEW).toContain(copy('What you lost', 'Ulipoteza nini'));
-    expect(REVIEW).toContain(copy('Identifying details', 'Maelezo ya kutambua'));
-    expect(REVIEW).toContain(copy('Where you lost it', 'Palipopotea'));
-    expect(REVIEW).toContain(copy('When you lost it', 'Ilipotea lini'));
-    expect(REVIEW).toContain(copy('What happens next', 'Kinachofuata'));
+    expect(REVIEW).toContain(copy('What you lost'));
+    expect(REVIEW).toContain(copy('Identifying details'));
+    expect(REVIEW).toContain(copy('Where you lost it'));
+    expect(REVIEW).toContain(copy('When you lost it'));
+    expect(REVIEW).toContain(copy('What happens next'));
     // Four groups. (Identifying details renders only once something was typed,
     // so the value list is driven by the form, never by a fixed template.)
     expect((REVIEW.match(/<ReviewGroup/g) || []).length).toBe(4);
@@ -233,7 +249,7 @@ describe('UX-04 the review step is grouped, editable and honest', () => {
   });
 
   it('gives every repeated edit control a distinct accessible name', () => {
-    expect((REVIEW.match(/editLabel=\{t\('Edit', 'Badilisha'\)\}/g) || []).length).toBe(4);
+    expect((REVIEW.match(/editLabel=\{'Edit'\}/g) || []).length).toBe(4);
     // The visible label is one word and repeats per group, so the accessible
     // name states WHICH group this edit returns to...
     expect(PRIMITIVES).toContain('aria-label={`${editLabel}: ${title}`}');
@@ -249,16 +265,23 @@ describe('UX-04 the review step is grouped, editable and honest', () => {
     expect(PRIMITIVES).toContain('<dt className="w-40 shrink-0 text-caption font-bold text-[var(--appearance-text-muted)]">{label}</dt>');
     expect(PRIMITIVES).toContain('<dd className="min-w-0 flex-1 text-body text-[var(--appearance-text-primary)] leading-relaxed break-words whitespace-pre-wrap">');
     // ...and the values come from the live form, not from a fixed template.
-    expect(REVIEW).toContain(copy('Item', 'Kitu'));
-    expect(REVIEW).toContain(copy('Place', 'Mahali'));
-    expect(REVIEW).toContain(copy('Time window', 'Kipindi cha muda'));
-    expect(REVIEW).toContain('formatWindow(form.lostAtFrom, form.lostAtTo, sw)');
+    // PHASE 16.1 (BATCH 1): the review shows the item NAME and the item
+    // CATEGORY as separate rows, so both labels are asserted and the category
+    // value is still the live lookup (categoryNameCall, overwritten when the
+    // report is deliberately submitted unclassified).
+    expect(REVIEW).toContain(copy('Item name'));
+    expect(REVIEW).toContain(copy('Item category'));
+    expect(REVIEW).toContain(copy('Unclassified'));
+    expect(REVIEW).toContain('form.itemName.trim()');
+    expect(REVIEW).toContain(copy('Place'));
+    expect(REVIEW).toContain(copy('Time window'));
+    expect(REVIEW).toContain('formatWindow(form.lostAtFrom, form.lostAtTo)');
     expect(REVIEW).toContain(categoryNameCall);
   });
 
   it('shows that an identifier was recorded WITHOUT echoing the number', () => {
-    expect(REVIEW).toContain('identifierClassLabel(form.documentType, sw)');
-    expect(REVIEW).toContain("form.documentNumber.trim() ? ` · ${t('recorded', 'imewekwa')}` : ''");
+    expect(REVIEW).toContain('identifierClassLabel(form.documentType)');
+    expect(REVIEW).toContain("form.documentNumber.trim() ? ` · ${'recorded'}` : ''");
     // The number itself never reaches the summary, the DOM or a screenshot.
     expect(REVIEW).not.toContain('${form.documentNumber}');
     expect(REVIEW).not.toContain('form.documentNumber}');
@@ -295,13 +318,15 @@ describe('UX-04 one submit action, and nothing that can submit early', () => {
   it('keeps exactly one submit control in the whole component', () => {
     expect((WIZARD.match(/type="submit"/g) || []).length).toBe(1);
     expect((WIZARD.match(/variant="accent"/g) || []).length).toBe(1);
-    expect(FOOTER).toContain(copy('Submit lost report', 'Tuma ripoti ya kitu kilichopotea'));
-    expect(FOOTER).toContain(copy('Submitting…', 'Inatuma…'));
+    expect(FOOTER).toContain(copy('Submit lost report'));
+    expect(FOOTER).toContain(copy('Submitting…'));
   });
 
   it('makes Continue and every review edit a plain button', () => {
-    expect((WIZARD.match(/type="button"/g) || []).length).toBe(3);
-    expect(FOOTER).toContain(copy('Continue', 'Endelea'));
+    // Back, Continue, the review's edit button and the two compact controls in
+    // the location-first affordance — never a second way to submit.
+    expect((WIZARD.match(/type="button"/g) || []).length).toBe(5);
+    expect(FOOTER).toContain(copy('Continue'));
     expect(FOOTER).toContain('onClick={goNext}');
     expect(PRIMITIVES).toContain('type="button"');
   });
@@ -309,7 +334,7 @@ describe('UX-04 one submit action, and nothing that can submit early', () => {
   it('swaps the action on the last step and keeps a way back on every step', () => {
     expect(FOOTER).toContain('{isLastStep ? (');
     expect(FOOTER).toContain(
-      `{step === 0 ? ${copy('Cancel', 'Ghairi')} : ${copy('Back', 'Rudi')}}`,
+      `{step === 0 ? ${copy('Cancel')} : ${copy('Back')}}`,
     );
     expect(FOOTER).toContain('onClick={goBack}');
   });
@@ -323,23 +348,24 @@ describe('UX-04 one submit action, and nothing that can submit early', () => {
   it('announces the step change politely as well as moving focus', () => {
     expect(WIZARD).toContain('className="sr-only" role="status" aria-live="polite"');
     expect(WIZARD).toContain(
-      `{${copy('Step', 'Hatua')}} {step + 1} {${copy('of', 'kati ya')}} {LOST_REPORT_WIZARD_STEPS.length}: {currentStepLabel}`,
+      `{'Step'} {step + 1} {'of'} {LOST_REPORT_WIZARD_STEPS.length}: {currentStepLabel}`,
     );
   });
 });
 
-describe('UX-04 every customer-visible string in the wizard is bilingual', () => {
-  it('passes two inline source strings to every translate call', () => {
-    const calls = (WIZARD.match(/\bt\(/g) || []).length;
-    const quoted = (WIZARD.match(/\bt\(\s*'/g) || []).length;
-    const interpolated = (WIZARD.match(/\bt\(\s*`/g) || []).length;
-    expect(calls).toBeGreaterThan(80);
-    // Every call is `t('<en>', '<sw>')` plus the single interpolated limit
-    // message. A copy string that existed in one language only would break this.
-    expect(quoted + interpolated).toBe(calls);
-    expect(interpolated).toBe(1);
-    expect(WIZARD).toContain("const sw = lang === 'sw';");
-    expect(WIZARD).toContain('const t = (en: string, swText: string) => (sw ? swText : en);');
+describe('UX-04 every customer-visible string in the wizard is present and inline', () => {
+  it('carries its copy as English literals, with no translator left over', () => {
+    // UX-04 originally pinned a `t(en, sw)` helper because the product was
+    // bilingual. The Swahili half of the UI has since been removed product-wide,
+    // so the journey writes its copy inline in English — but it still OWNS every
+    // string it shows: nothing is imported from a dictionary and no wording is
+    // left to a primitive's default.
+    expect(WIZARD).not.toContain('const t = (en: string, swText: string) =>');
+    expect(WIZARD).not.toContain("const sw = lang === 'sw';");
+    // Copy-bearing attributes are expressions rather than bare literals, so this
+    // file is the single source of the wording the customer reads.
+    expect((WIZARD.match(/\blabel=\{'/g) || []).length).toBeGreaterThan(10);
+    expect((WIZARD.match(/\bplaceholder=\{'/g) || []).length).toBeGreaterThan(5);
   });
 
   it('has no hard-coded English in a copy-bearing attribute', () => {
@@ -348,60 +374,90 @@ describe('UX-04 every customer-visible string in the wizard is bilingual', () =>
     expect(WIZARD).not.toMatch(/\b(?:label|hint|placeholder|aria-label|title)=(?:"|')/);
   });
 
-  it('names every step, group, field and action in both languages', () => {
-    const pairs: Array<[string, string]> = [
-      // Steps.
-      ['What did you lose?', 'Ulipoteza nini?'],
-      ['Describe the item', 'Eleza kitu'],
-      ['Where and when did you lose it?', 'Ulipopoteza na lini?'],
-      ['Check your report', 'Hakiki ripoti yako'],
-      // Group headings.
-      ['Item details', 'Maelezo ya kitu'],
-      ['Notes', 'Maelezo ya ziada'],
-      ['Where you lost it', 'Palipopotea'],
-      ['When you lost it', 'Ilipotea lini'],
-      ['What happens next', 'Kinachofuata'],
-      // Field labels.
-      ['Item category', 'Aina ya kitu'],
-      ['Identifying number (optional)', 'Namba ya utambulisho (si lazima)'],
-      ['What kind of number is it?', 'Ni namba ya aina gani?'],
-      ['The number', 'Namba yenyewe'],
-      ['Brand (optional)', 'Chapa (si lazima)'],
-      ['Model (optional)', 'Modeli (si lazima)'],
-      ['Colour (optional)', 'Rangi (si lazima)'],
-      ['Material (optional)', 'Nyenzo (si lazima)'],
-      ['Description (optional)', 'Maelezo (si lazima)'],
-      ['Distinctive marks (optional)', 'Alama za kipekee (si lazima)'],
-      ['County', 'Kaunti'],
-      ['Sub-county', 'Kaunti ndogo'],
-      ['Exact place', 'Mahali halisi'],
-      ['Landmark (optional)', 'Alama ya eneo (si lazima)'],
-      ['Lost from', 'Ilipotea kuanzia'],
-      ['Lost until (optional)', 'Ilipotea hadi (si lazima)'],
+  it('names every step, group, field and action in the copy it shows', () => {
+    // The whole inventory of strings a customer can read in this journey. Kept as
+    // a list so a string that is quietly dropped or reworded fails here, rather
+    // than disappearing from the product unnoticed.
+    const strings: string[] = [
+      // The progress rail and the four step headings.
+      'Report a lost item progress',
+      'What did you lose?',
+      'Describe the item',
+      'Where and when did you lose it?',
+      'Check your report',
+      // Field and group labels for what was lost.
+      'Item category',
+      'Item name',
+      'Identifying number (optional)',
+      'What kind of number is it?',
+      'The number',
+      'Brand (optional)',
+      'Model (optional)',
+      'Colour (optional)',
+      'Material (optional)',
+      'Description (optional)',
+      'Distinctive marks (optional)',
+      'Notes',
+      // Field labels for where and when it was lost.
+      'County',
+      'Sub-county',
+      'Exact place',
+      'Landmark (optional)',
+      'Lost from',
+      'Lost until (optional)',
+      // Empty states and option copy.
+      'Select a category',
+      'Select a county',
+      'Select county first',
+      'Select a sub-county',
+      'Not sure / prefer not to say',
+      // Hints.
+      'Stored only as a one-way fingerprint. It is never shown back to you, to a finder, or to an agent.',
+      'Select county first, then choose its sub-county.',
+      'Enter the street, estate, building or nearby place you know.',
+      'Roughly when you last had it.',
+      'Leave blank if you are not sure.',
+      // Placeholders.
+      'e.g. 12345678',
+      'e.g. Samsung',
+      'e.g. Galaxy A54',
+      'e.g. Black',
+      'e.g. Leather',
+      // Group headings inside the steps and the review.
+      'Where you lost it',
+      'When you lost it',
+      'What happens next',
+      'What you lost',
+      'Identifying details',
       // Review rows and their group titles.
-      ['What you lost', 'Ulipoteza nini'],
-      ['Identifying details', 'Maelezo ya kutambua'],
-      ['Item', 'Kitu'],
-      ['Identifying number', 'Namba ya utambulisho'],
-      ['Brand, model, colour, material', 'Chapa, modeli, rangi, nyenzo'],
-      ['Description', 'Maelezo'],
-      ['Distinctive marks', 'Alama za kipekee'],
-      ['Place', 'Mahali'],
-      ['Time window', 'Kipindi cha muda'],
-      // Actions.
-      ['Continue', 'Endelea'],
-      ['Back', 'Rudi'],
-      ['Cancel', 'Ghairi'],
-      ['Edit', 'Badilisha'],
-      ['Submit lost report', 'Tuma ripoti ya kitu kilichopotea'],
-      ['Submitting…', 'Inatuma…'],
+      // PHASE 16.1 (BATCH 1): the single "Item" row became two explicit rows —
+      // the item's NAME (now required) and its CATEGORY (now optional, so it has
+      // to be able to say "Unclassified" instead of rendering a blank value).
+      'Item name',
+      'Item category',
+      'Unclassified',
+      'Classification',
+      'Identifying number',
+      'Brand, model, colour, material',
+      'Description',
+      'Distinctive marks',
+      'Place',
+      'Time window',
+      // Actions, the live status line and the identifier marker.
+      'Continue',
+      'Cancel',
+      'Back',
+      'Edit',
+      'Submit lost report',
+      'Submitting…',
+      'Step',
+      'of',
+      'recorded',
     ];
-    expect(pairs.length).toBeGreaterThan(35);
-    for (const [en, sw] of pairs) {
-      expect(WIZARD, `missing copy: ${en}`).toContain(copy(en, sw));
-      // A real translation, never the English string reused as its own Swahili.
-      expect(sw, `untranslated: ${en}`).not.toBe(en);
+    expect(strings.length).toBeGreaterThan(45);
+    for (const en of strings) {
       expect(en).not.toBe('');
+      expect(WIZARD, `missing copy: ${en}`).toContain(copy(en));
     }
   });
 });
@@ -428,9 +484,17 @@ describe('UX-04 the journey sits on the UX-01 ladders, in both themes', () => {
     expect(WIZARD).not.toMatch(/size=\{\d+\}/);
     expect((WIZARD.match(/<(?:AlertCircle|Check|MapPin|Package|Pencil|Icon)\b/g) || []).length).toBe(4);
     expect((WIZARD.match(/aria-hidden="true"/g) || []).length).toBe(4);
-    // Every sized control clears 44px; the compact size UX-04 removed is gone.
-    expect(WIZARD).not.toMatch(/size="(?:xs|sm)"/);
+    // Every control the journey itself owns clears the 44px floor: submit is lg
+    // (52px), Back/Continue and each review edit are md (44px). The compact size
+    // UX-04 removed from those is gone.
+    expect(WIZARD).not.toMatch(/size="xs"/);
     expect((WIZARD.match(/size="(?:md|lg)"/g) || []).length).toBe(4);
+    // The only compact controls left are the two inside the location-first
+    // affordance added after this batch (Button sm = 36px). They are pinned BY
+    // COUNT rather than whitewashed, so a third compact control — or a compact
+    // size on any journey control — still fails this test.
+    expect((WIZARD.match(/size="sm"/g) || []).length).toBe(2);
+    expect(WIZARD).toContain('size="sm" onClick={applyDetectedLocation}>Use this location</Button>');
   });
 
   it('takes every colour from an appearance token, so both themes keep working', () => {
@@ -463,9 +527,8 @@ describe('UX-04 the journey sits on the UX-01 ladders, in both themes', () => {
 });
 
 describe('UX-04 the host contract and the shared primitives are unchanged', () => {
-  it('is still mounted by the lost-reports section with the same five props', () => {
+  it('is still mounted by the lost-reports section with the same four props', () => {
     expect(SECTION).toContain('<LostReportWizard');
-    expect(SECTION).toContain('lang={lang}');
     expect(SECTION).toContain('categories={categories}');
     expect(SECTION).toContain('categoriesLoading={categoriesLoading}');
     expect(SECTION).toContain('onCancel={() => setWizardOpen(false)}');

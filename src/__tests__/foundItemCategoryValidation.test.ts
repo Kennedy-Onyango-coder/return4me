@@ -108,10 +108,73 @@ describe('POST /api/items/report rejects an unknown category before any side eff
     expect(guard, 'category guard must run before the item insert').toBeLessThan(insert);
   });
 
-  it('no longer derives isSensitive from a possibly-undefined category', () => {
+  it('fails CLOSED on sensitivity when there is genuinely no category', () => {
     const handler = reportHandler();
-    // The `cat ? (...) : true` fallback is what silently concealed the miss.
-    expect(handler).not.toMatch(/const isSensitive = cat \? \(cat\.is_sensitive_document !== false\) : true;/);
-    expect(handler).toMatch(/const isSensitive = cat\.is_sensitive_document !== false;/);
+    // PHASE 16.1 (BATCH 1) changed the MEANING of a missing category: it is now
+    // an explicit "unclassified" state rather than the symptom of a failed
+    // lookup. A SUPPLIED-but-unknown id is still rejected by the `if (!cat)`
+    // guard before any side effect, so the only way `cat` is null here is that
+    // the finder supplied no category at all.
+    //
+    // With nothing to ask, sensitivity fails CLOSED (true): an unclassified item
+    // is treated as a possible document until an administrator classifies it,
+    // which is the privacy-safe direction. It is never derived from a missing
+    // category record.
+    expect(handler).toContain('const isSensitive = cat ? cat.is_sensitive_document !== false : true;');
+    // The lookup only runs when a category was actually supplied, and its miss
+    // path is still the authoritative 400.
+    expect(handler).toMatch(/if \(categoryId\) \{\s*\n\s*cat = categories\.find\(c => c\.id === categoryId\);/);
+    expect(handler.indexOf('if (!cat) {')).toBeGreaterThan(-1);
+  });
+});
+
+// =============================================================================
+// PHASE 16.1 (BATCH 1) — ITEM NAME REQUIRED, CATEGORY OPTIONAL, PHOTO REQUIRED
+// =============================================================================
+// The found side's half of the reporting foundation. These are source-level
+// assertions on the REAL handler (the same `reportHandler()` slice used above),
+// because each one is a validation-ORDER guarantee rather than a rendered value:
+//   * the item name is required, trimmed, and bounded at 200 characters, and it
+//     is checked before any paid/side-effecting work;
+//   * the FOUND photo stays MANDATORY (only the lost-report photo became
+//     optional);
+//   * a missing category is stored as NULL, never as '' or a guess.
+describe('16.1 Batch 1: POST /api/items/report — item name, category, photo', () => {
+  it('requires a trimmed item name and enforces the 200-character ceiling', () => {
+    const handler = reportHandler();
+    expect(handler).toContain("typeof req.body.itemName === 'string' ? req.body.itemName.trim() : ''");
+    expect(handler).toContain("return res.status(400).json({ error: 'Please enter the item name.' });");
+    expect(handler).toContain('if (itemName.length > 200) {');
+  });
+
+  it('validates the item name BEFORE the county, agent matching, upload and insert', () => {
+    const handler = reportHandler();
+    const nameGuard = handler.indexOf('if (!itemName) {');
+    expect(nameGuard, 'expected the required item-name guard').toBeGreaterThan(-1);
+    for (const later of ['resolveFoundCountyInput(', 'uploadBase64Image(', 'db.createItem(']) {
+      expect(handler.indexOf(later), `${later} must run after the item-name guard`).toBeGreaterThan(nameGuard);
+    }
+  });
+
+  it('keeps the FOUND photo MANDATORY', () => {
+    const handler = reportHandler();
+    // Only the lost-report photo became optional. A found item must still carry
+    // a photograph, and it is still part of the same required-field rejection.
+    expect(handler).toContain("if (!photoBase64 || !locationDescription || !finderPhone) {");
+    expect(handler).not.toMatch(/if \(!locationDescription \|\| !finderPhone\) \{/);
+  });
+
+  it('stores a missing category as NULL and persists the item name', () => {
+    const handler = reportHandler();
+    expect(handler).toContain('category_id: categoryId || null,');
+    expect(handler).toContain('item_name: itemName,');
+  });
+
+  it('defers pricing when there is no category instead of pricing a guessed one', () => {
+    const handler = reportHandler();
+    // resolveItemLockedPricing must only ever be asked about a real record.
+    expect(handler).toContain('if (cat) {');
+    const guarded = handler.indexOf('if (cat) {');
+    expect(handler.indexOf('resolveItemLockedPricing(cat, parsedDeclaredValue)')).toBeGreaterThan(guarded);
   });
 });

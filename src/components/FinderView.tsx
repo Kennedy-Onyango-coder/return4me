@@ -148,6 +148,16 @@ export default function FinderView({ categories, categoriesLoading = false, cate
   const [categoryManuallySet, setCategoryManuallySet] = useState(false);
   const [extractedNumber, setExtractedNumber] = useState('');
   const [extractedName, setExtractedName] = useState('');
+  /**
+   * PHASE 16.1 (BATCH 1) — the name the Finder gives the item they found.
+   *
+   * REQUIRED, and deliberately separate from `extractedName`: that value is
+   * whatever the document scan guessed (a name printed on a card, or a suggested
+   * title) and can be blank when the scan returns nothing. This one is the
+   * finder's own statement of what the object is, it is trimmed and validated
+   * before submission, and it is what `items.item_name` stores.
+   */
+  const [itemName, setItemName] = useState('');
   // Analysis lifecycle shared by the camera and upload paths. Mandatory
   // automatic analysis runs as soon as an image is selected; these fields
   // drive the review/correct UI and the stale-response guards.
@@ -503,7 +513,11 @@ export default function FinderView({ categories, categoriesLoading = false, cate
    */
   const stepErrorFor = (target: number): string | null => {
     if (target === 0) {
-      if (!categoryId || !photoBase64) {
+      // PHASE 16.1 (BATCH 1) — the CATEGORY is now optional (a finder may not
+      // know what kind of thing they picked up), but the PHOTO is not: a found
+      // item must be photographed. The message is unchanged because it already
+      // describes exactly the photograph requirement this stage still enforces.
+      if (!photoBase64) {
         return 'Please fill out all required fields and upload/capture a photo.';
       }
       return null;
@@ -512,6 +526,13 @@ export default function FinderView({ categories, categoriesLoading = false, cate
     const isSensitive = isSelectedCategorySensitive();
 
     if (target === 1) {
+      // PHASE 16.1 (BATCH 1) — the item name is required, and it is checked
+      // FIRST so the finder is told about the missing name rather than about a
+      // description they have not reached yet. Trimmed here for the same reason
+      // the server trims it: spaces are not a name.
+      if (!itemName.trim()) {
+        return 'Please enter the item name.';
+      }
       if (!isSensitive && (!description || !extractedName)) {
         return 'Please provide a title and description.';
       }
@@ -645,6 +666,10 @@ export default function FinderView({ categories, categoriesLoading = false, cate
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           categoryId,
+          // PHASE 16.1 (BATCH 1) — the finder's own name for the item, trimmed.
+          // The server re-validates it (1..200 characters) and an empty value is
+          // refused, so this client-side trim is convenience, never authority.
+          itemName: itemName.trim(),
           photoBase64,
           extractedNumber: isSensitive ? extractedNumber : undefined,
           extractedName,
@@ -770,6 +795,8 @@ export default function FinderView({ categories, categoriesLoading = false, cate
               setCategoryManuallySet(false);
               setExtractedNumber('');
               setExtractedName('');
+              // PHASE 16.1 (BATCH 1) — a fresh report starts with no item name.
+              setItemName('');
               setDescription('');
               setFoundCounty('');
               setFoundAdministrativeUnit('');
@@ -918,7 +945,7 @@ export default function FinderView({ categories, categoriesLoading = false, cate
               {/* Form Fields: Category Selector */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <label htmlFor="finder-category" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">{t.categoryLabel} *</label>
+                  <label htmlFor="finder-category" className="block text-xs font-extrabold text-primary-green uppercase tracking-wider">{t.categoryLabel} <span className="normal-case font-semibold text-ink-muted">{'(optional)'}</span></label>
                   <select
                     id="finder-category"
                     value={categoryId}
@@ -927,7 +954,11 @@ export default function FinderView({ categories, categoriesLoading = false, cate
                       setCategoryManuallySet(true);
                     }}
                     className="w-full border border-line-subtle rounded-xl px-3 py-2.5 text-sm bg-white focus:border-[var(--appearance-focus)] disabled:bg-stone-50 disabled:text-stone-400"
-                    required
+                    /* PHASE 16.1 (BATCH 1) — NOT `required`. A finder may hand in
+                       something without knowing what it is; the server stores the
+                       item as unclassified and an administrator classifies it.
+                       Leaving `required` here would make the browser block the
+                       submit for a field the product no longer requires. */
                     disabled={categoriesLoading || categoriesError}
                   >
                     {categoriesLoading ? (
@@ -969,6 +1000,24 @@ export default function FinderView({ categories, categoriesLoading = false, cate
                 headingRef={stepHeadingRef}
                 title={'Identify the item'}
                 description={'Add the identifying details, or correct anything the scan filled in. These are the details that make an exact match possible.'}
+              />
+
+              {/* PHASE 16.1 (BATCH 1) — THE ITEM NAME.
+                  Required, and asked for FIRST because it is the one field the
+                  item is filed under: it is what the owner reads when browsing
+                  found items, and what an administrator reads when classifying an
+                  unclassified report. The 200-character ceiling matches the
+                  server's own limit so the finder is not allowed to type
+                  something the server would reject. */}
+              <Input
+                id="finder-item-name-field"
+                label={'Item name'}
+                type="text"
+                value={itemName}
+                onChange={(e) => setItemName(e.target.value)}
+                placeholder={'e.g. Black leather wallet'}
+                maxLength={200}
+                required
               />
 
               {(() => {
@@ -1354,6 +1403,9 @@ export default function FinderView({ categories, categoriesLoading = false, cate
                 editLabel={'Edit'}
                 onEdit={() => goToStep(1)}
               >
+                {/* PHASE 16.1 (BATCH 1) — the finder's own name for the item,
+                    shown first in this group because it is the required one. */}
+                <SummaryRow label={'Item name'} value={itemName.trim() || 'Not provided'} />
                 {isSensitiveCategory ? (
                   <>
                     <SummaryRow label={t.docNumberLabel} value={extractedNumber.trim() || 'Not provided'} />

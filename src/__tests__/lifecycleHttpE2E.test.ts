@@ -358,6 +358,8 @@ afterAll(async () => {
 
 const reportBody = (over: Record<string, any> = {}) => ({
   categoryId: CATEGORY,
+  // PHASE 16.1 (BATCH 1) — the found-item route now REQUIRES an item name.
+  itemName: 'Black smartphone',
   photoBase64: PNG_B64,
   locationDescription: 'Kenyatta Avenue, Nairobi',
   foundCounty: 'Nairobi',

@@ -116,8 +116,28 @@ export function registerFinderReportRoutes(
       return res.status(503).json({ error: PAUSED_MESSAGES.reports });
     }
 
-    if (!categoryId || !photoBase64 || !locationDescription || !finderPhone) {
+    // PHASE 16.1 (BATCH 1) — the FOUND photo stays MANDATORY (a found item must
+    // be photographable evidence), while the CATEGORY becomes optional: a finder
+    // may hand in something without knowing which category it belongs to.
+    if (!photoBase64 || !locationDescription || !finderPhone) {
       return res.status(400).json({ error: 'Please complete all required fields.' });
+    }
+
+    // -----------------------------------------------------------------------
+    // PHASE 16.1 (BATCH 1) — ITEM NAME IS REQUIRED.
+    //
+    // Trimmed BEFORE validation and persistence so a name of spaces is empty,
+    // and bounded at 200 characters on the SERVER because the browser is never
+    // trusted. This runs with the required-field check (before any county
+    // resolution, agent matching, OCR or storage write), so a nameless report is
+    // refused with no side effects at all.
+    // -----------------------------------------------------------------------
+    const itemName = typeof req.body.itemName === 'string' ? req.body.itemName.trim() : '';
+    if (!itemName) {
+      return res.status(400).json({ error: 'Please enter the item name.' });
+    }
+    if (itemName.length > 200) {
+      return res.status(400).json({ error: 'Item name is too long (limit 200 characters).' });
     }
 
     // -----------------------------------------------------------------------
@@ -201,11 +221,25 @@ export function registerFinderReportRoutes(
       // this makes the found-item route behave the same way, with the same
       // wording, and keeps the rejection free of side effects.
       // -----------------------------------------------------------------------
-      const cat = categories.find(c => c.id === categoryId);
-      if (!cat) {
-        return res.status(400).json({ error: 'That item category is not valid.' });
+      // Reporting foundation (PHASE 16.1 BATCH 1): the category is now OPTIONAL.
+      //
+      // A SUPPLIED category must still exist in the ACTIVE list — the CAT-04
+      // boundary is unchanged, and the rejection is still raised here, before any
+      // upload or insert (the P12-F1 ordering guarantee).
+      //
+      // An ABSENT category means "unclassified": `category_id` is stored as NULL
+      // and an administrator can classify it later. Because no category record
+      // exists to ask, sensitivity FAILS CLOSED (true) — an unclassified item is
+      // treated as a potential document until someone says otherwise, which is
+      // the privacy-safe direction.
+      let cat: any = null;
+      if (categoryId) {
+        cat = categories.find(c => c.id === categoryId);
+        if (!cat) {
+          return res.status(400).json({ error: 'That item category is not valid.' });
+        }
       }
-      const isSensitive = cat.is_sensitive_document !== false;
+      const isSensitive = cat ? cat.is_sensitive_document !== false : true;
 
       // 1. Assign nearest physical Return4me agent
       //
@@ -272,16 +306,31 @@ export function registerFinderReportRoutes(
       // ONLY new items are priced here. An item already reported keeps whatever
       // was locked onto it, so a later category edit can never rewrite history.
       // -----------------------------------------------------------------------
-      const lockedPricing = resolveItemLockedPricing(cat, parsedDeclaredValue);
-      const lockedTotalFee: number | null = lockedPricing.totalFee;
-      const lockedFinderShare: number | null = lockedPricing.finderShare;
-      const lockedAgentShare: number | null = lockedPricing.agentShare;
-      const lockedPlatformShare: number | null = lockedPricing.platformShare;
-      const feeCeilingApplied = lockedPricing.ceilingApplied;
+      // PHASE 16.1 (BATCH 1) — with no category there is nothing to price
+      // against, so pricing is DEFERRED (all locked amounts stay NULL) rather
+      // than resolved from a guessed category. `resolveItemLockedPricing` must
+      // only ever be asked about a real category record.
+      let lockedTotalFee: number | null = null;
+      let lockedFinderShare: number | null = null;
+      let lockedAgentShare: number | null = null;
+      let lockedPlatformShare: number | null = null;
+      let feeCeilingApplied = false;
+      if (cat) {
+        const lockedPricing = resolveItemLockedPricing(cat, parsedDeclaredValue);
+        lockedTotalFee = lockedPricing.totalFee;
+        lockedFinderShare = lockedPricing.finderShare;
+        lockedAgentShare = lockedPricing.agentShare;
+        lockedPlatformShare = lockedPricing.platformShare;
+        feeCeilingApplied = lockedPricing.ceilingApplied;
+      }
 
       const newItem = await db.createItem({
         id: dropoffCode,
-        category_id: categoryId,
+        // NULL when the finder did not classify the item; classifiable later.
+        category_id: categoryId || null,
+        // PHASE 16.1 (BATCH 1) — the finder's own name for the item, trimmed
+        // above and validated before any side effect.
+        item_name: itemName,
         photo_url: photoUrl,
         ocr_extracted_number: isSensitive ? (extractedNumber || null) : null,
         ocr_extracted_name: isSensitive ? (extractedName ? extractedName.toUpperCase() : null) : null,

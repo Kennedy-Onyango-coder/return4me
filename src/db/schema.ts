@@ -303,6 +303,10 @@ export const agent_payout_destination_changes = pgTable(
 export const items = pgTable("items", {
   id: varchar("id", { length: 50 }).primaryKey(),
   category_id: varchar("category_id", { length: 50 }).references(() => categories.id),
+  // PHASE 16.1 (BATCH 1) — the name the FINDER typed. Required by the API
+  // boundary (trimmed, 1..200 characters); nullable here so every pre-Batch-1
+  // row remains readable and no historical item is rewritten.
+  item_name: varchar("item_name", { length: 200 }),
   photo_url: text("photo_url").notNull(),
   ocr_extracted_number: varchar("ocr_extracted_number", { length: 100 }),
   ocr_extracted_name: varchar("ocr_extracted_name", { length: 150 }),
@@ -2051,7 +2055,22 @@ export const sms_rate_limit_buckets = pgTable("sms_rate_limit_buckets", {
 export const lost_reports = pgTable("lost_reports", {
   id: varchar("id", { length: 50 }).primaryKey(),
   customer_id: varchar("customer_id", { length: 50 }).notNull().references(() => customers.id, { onDelete: "cascade" }),
-  category_id: varchar("category_id", { length: 50 }).notNull().references(() => categories.id),
+  // PHASE 16.1 (BATCH 1) — a lost report may be submitted WITHOUT a category.
+  // This column therefore has NO NOT NULL constraint: `category_id IS NULL`
+  // means "unclassified", which is a MISSING classification rather than an
+  // invalid one. A category that IS supplied is still validated against the
+  // live active taxonomy at the API boundary and against this FK, so an
+  // unknown or inactive id can never be stored. See sql/schema.sql and the
+  // idempotent `ALTER TABLE lost_reports ALTER COLUMN category_id DROP NOT NULL`
+  // in src/db/index.ts, which converges an already-running database.
+  category_id: varchar("category_id", { length: 50 }).references(() => categories.id),
+  // PHASE 16.1 (BATCH 1) — the name the reporter typed. Required by the API
+  // boundary (trimmed, 1..200 characters); nullable here so pre-Batch-1 reports
+  // stay readable and are never backfilled from free text.
+  item_name: varchar("item_name", { length: 200 }),
+  // PHASE 16.1 (BATCH 1) — OPTIONAL lost-report photo. Nullable by design; the
+  // mandatory-photo rule applies to FOUND items only (items.photo_url).
+  photo_url: text("photo_url"),
   status: varchar("status", { length: 30 }).default("active").notNull(),
   county: varchar("county", { length: 50 }).notNull(),
   // Structured second-level geography; nullable so historical reports remain unchanged.

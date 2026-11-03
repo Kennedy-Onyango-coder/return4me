@@ -96,6 +96,11 @@ export type MatchAcceptReason = 'exact_identifier' | 'corroborated_details';
 
 /** Why a comparison was rejected. Every rejection is explainable and testable. */
 export type MatchRejectionReason =
+  // PHASE 16.1 (BATCH 1) — the report carries NO category yet, so
+  // category-dependent matching is deferred until an administrator classifies
+  // it. Distinct from 'category_mismatch' (two DIFFERENT, known categories) and
+  // never a candidate: a missing category must not behave like a wildcard.
+  | 'category_unclassified'
   | 'category_mismatch'        // different category, and no equivalence exists in this repo
   | 'identifier_mismatch'      // BOTH sides declared an identifier and they differ
   | 'location_county_mismatch' // BOTH sides declared a canonical county, and the counties differ
@@ -477,7 +482,12 @@ export function evaluateLostReportAgainstItem(lost: any, item: any): LostReportM
   // taxonomy in config/categoryTaxonomy.ts groups categories for DISPLAY and
   // carries no alias/superset semantics. So a different category eliminates the
   // candidate rather than being guessed at.
-  const lostCategory = String(lost?.category_id || '');
+  // PHASE 16.1 (BATCH 1) — `.trim()` so a blank-string category is treated
+  // EXACTLY like a missing one (isLostReportClassified() draws the same line).
+  // Without it, '   ' would compare unequal to every real category id and be
+  // reported as a MISMATCH — "these are different things" — when the truth is
+  // "we do not know what this is yet".
+  const lostCategory = String(lost?.category_id ?? '').trim();
   const itemCategory = effectiveItemCategoryId(item);
   signals.category_match = (lostCategory && itemCategory)
     ? (normalizeForMatch(lostCategory) === normalizeForMatch(itemCategory) ? 'match' : 'mismatch')
@@ -634,6 +644,20 @@ export function decideCandidate(
   const evaluation = (candidate: boolean, reason: MatchAcceptReason | MatchRejectionReason) =>
     ({ candidate, score, signals, reason, sharedTextTokens });
 
+  // PHASE 16.1 (BATCH 1) — CATEGORY DEFERRAL, stated before anything else.
+  //
+  // An UNCLASSIFIED report (`category_id` null/empty on the lost side) has no
+  // category to gate on, so matching cannot even begin: category-dependent
+  // comparison is DEFERRED until an administrator classifies the report. The
+  // rejection reason is distinct from 'category_mismatch' because the two mean
+  // opposite things to a human — one says "these are different things", the
+  // other says "we do not know what this is yet".
+  //
+  // This is the safety property the reporting foundation depends on: a missing
+  // category must never be read as "matches anything". The branch is FIRST, so
+  // even an exact identifier agreement cannot carry an unclassified report, and
+  // no amount of corroborating evidence can either.
+  if (signals.category_match === 'unknown') return evaluation(false, 'category_unclassified');
   if (signals.category_match !== 'match') return evaluation(false, 'category_mismatch');
   if (signals.identifier_match === 'mismatch') return evaluation(false, 'identifier_mismatch');
   if (signals.identifier_match === 'match') return evaluation(true, 'exact_identifier');
@@ -657,6 +681,24 @@ export function decideCandidate(
     return evaluation(true, 'corroborated_details');
   }
   return evaluation(false, 'insufficient_evidence');
+}
+
+/**
+ * PHASE 16.1 (BATCH 1) — does this lost report carry a USABLE category?
+ *
+ * THE ONE predicate for "can this report be matched at all". A report with no
+ * category (null, undefined or a blank string) is UNCLASSIFIED: the engine
+ * defers category-dependent comparison until an administrator classifies it, and
+ * callers (the matches route, the admin list's possible-match count) use this to
+ * say so plainly instead of reporting a misleading "0 matches".
+ *
+ * It is exported so the rule is not re-implemented per caller — the same
+ * discipline as itemMatchesCanonicalCounty and the central claimability rule.
+ */
+export function isLostReportClassified(lost: any): boolean {
+  const categoryId = lost?.category_id;
+  if (categoryId === null || categoryId === undefined) return false;
+  return String(categoryId).trim() !== '';
 }
 
 export interface LostReportMatchCandidate {

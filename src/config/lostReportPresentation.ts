@@ -246,6 +246,13 @@ export const LOST_REPORT_FIELD_LIMITS = {
   description: 1000,
   distinctiveMarks: 500,
   documentNumber: 64,
+  // PHASE 16.1 (BATCH 1) — kept byte-identical to the server's own limit so the
+  // wizard's `maxLength` cannot let a customer type a name the server refuses.
+  itemName: 200,
+  // PHASE 16.1 (BATCH 1) — the optional lost-report photo reference. Present
+  // here so this table mirrors the server's `FIELD_LIMITS` key-for-key; the
+  // wizard does not collect a photo.
+  photoUrl: 1000,
 } as const;
 
 /** Minimum lengths the server enforces for the two bounded required fields. */
@@ -261,6 +268,45 @@ export const LOST_REPORT_FIELD_MINIMUMS = {
  * absent from the product copy.
  */
 export const LOST_REPORT_MAX_WINDOW_DAYS = 31;
+
+/**
+ * PHASE 16.1 (BATCH 1 FOLLOW-UP) — the reporter's own name for what they lost,
+ * as the ADMIN console renders it.
+ *
+ * WHY A DISPLAY DESCRIPTOR RATHER THAN A PASS-THROUGH OF THE RAW FIELD
+ *   `lost_reports.item_name` is nullable, and it is absent in two different
+ *   ways: a report written before Batch 1 never carried the field at all, and a
+ *   name is only ever stored after trimming, so a blank one can still arrive
+ *   from an older or a hand-corrected row. Both would render as an empty table
+ *   cell, which an operator reads as a broken screen rather than as missing
+ *   information. The absence is therefore NAMED — exactly as an absent category
+ *   is named "Unclassified" rather than left blank.
+ *
+ * `provided` is returned so the caller can style a real name differently from
+ * the fallback WITHOUT re-deriving the same emptiness rule a second way, which
+ * is how a "Not provided" that is silently treated as a name would appear.
+ *
+ * React-free, so the four cases (a name, null, empty, whitespace-only) are
+ * unit-testable in this repository's node-only vitest environment.
+ */
+export interface LostReportItemNameDisplay {
+  /** The trimmed name, or the fallback wording when the report has none. */
+  text: string;
+  /** False when the report carries no usable item name. */
+  provided: boolean;
+}
+
+/** Rendered wherever a lost report carries no usable item name. */
+export const LOST_REPORT_ITEM_NAME_FALLBACK = 'Not provided';
+
+export function getLostReportItemNameDisplay(itemName: string | null | undefined): LostReportItemNameDisplay {
+  // `typeof` (not a truthiness test) so null, undefined and any unexpected
+  // non-string value all take the same safe path instead of throwing on trim().
+  const text = typeof itemName === 'string' ? itemName.trim() : '';
+  return text
+    ? { text, provided: true }
+    : { text: LOST_REPORT_ITEM_NAME_FALLBACK, provided: false };
+}
 
 
 

@@ -55,6 +55,7 @@ describe('Kenya county → sub-county → exact place hierarchy', () => {
   it('requires and validates the sub-county on new lost reports while exact place stays separate', () => {
     const categories = [{ id: 'phone' }];
     const base = {
+      itemName: 'Brown leather wallet',
       categoryId: 'phone', county: 'Nairobi City', administrativeUnitId: 'KE-47-SC-01',
       locationArea: 'Near Sarit Centre', lostAtFrom: new Date(Date.now() - 3_600_000).toISOString(),
     };

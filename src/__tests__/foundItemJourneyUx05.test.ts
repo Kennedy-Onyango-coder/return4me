@@ -184,7 +184,11 @@ describe('UX-05 the workflow enforces exactly the rules it always enforced', () 
       expect(FINDER, `missing stage branch ${branch}`).toContain(branch);
     }
     // The stage rules still read the same state the single screen validated.
-    expect(FINDER).toContain('if (!categoryId || !photoBase64) {');
+    // PHASE 16.1 (BATCH 1): stage 0 now requires ONLY the photograph — the
+    // category became optional (a finder may not know what they picked up), and
+    // the item name became required on stage 1.
+    expect(FINDER).toContain('if (!photoBase64) {');
+    expect(FINDER).toContain('if (!itemName.trim()) {');
     expect(FINDER).toContain('if (!isSensitive && (!description || !extractedName)) {');
     expect(FINDER).toContain('if (!foundCounty) {');
     expect(FINDER).toContain('if (!foundAdministrativeUnit) {');
@@ -259,6 +263,8 @@ describe('UX-05 the report data path is untouched', () => {
   it('sends the same payload keys, in the same shape', () => {
     for (const key of [
       'categoryId,',
+      // PHASE 16.1 (BATCH 1) — the finder's own name for the item, trimmed.
+      'itemName: itemName.trim(),',
       'photoBase64,',
       'extractedNumber: isSensitive ? extractedNumber : undefined,',
       'extractedName,',
@@ -520,5 +526,53 @@ describe('UX-05 the chrome sits on the UX-01 ladders and the shared primitives',
 
 
 
+
+
+// =============================================================================
+// PHASE 16.1 (BATCH 1) — ITEM NAME REQUIRED, CATEGORY OPTIONAL
+// =============================================================================
+// The Finder's half of the reporting foundation:
+//   * the finder names the item they found, and that name is required;
+//   * the category is optional — someone who picks up an object they cannot
+//     identify can still hand it in, and an administrator classifies it later;
+//   * the FOUND photo remains mandatory.
+describe('16.1 Batch 1: the Finder collects an item name and makes the category optional', () => {
+  it('collects the item name in its own field, with the server 200-character ceiling', () => {
+    expect(FINDER).toContain('const [itemName, setItemName] = useState(');
+    expect(FINDER).toContain('id="finder-item-name-field"');
+    expect(FINDER).toContain("label={'Item name'}");
+    expect(FINDER).toContain('value={itemName}');
+    expect(FINDER).toContain('maxLength={200}');
+    // The name is user-typed state, NOT the OCR-derived `extractedName`.
+    expect(FINDER).not.toContain('value={itemName} onChange={(e) => setExtractedName(');
+  });
+
+  it('requires the item name before the identify stage can advance', () => {
+    expect(FINDER).toContain('if (!itemName.trim()) {');
+    expect(FINDER_TSX).toContain('Please enter the item name.');
+  });
+
+  it('no longer requires a category anywhere in the journey', () => {
+    // The stage-0 gate is the photograph alone...
+    expect(FINDER).toContain('if (!photoBase64) {');
+    // ...and the category select is not natively required either, so the
+    // browser cannot block a submission the product allows.
+    const categorySelect = FINDER.slice(
+      FINDER.indexOf('id="finder-category"'),
+      FINDER.indexOf('id="finder-category"') + 700,
+    );
+    expect(categorySelect).not.toMatch(/(?:^|\s)required(?:\s|$|\n)/);
+    expect(FINDER_TSX).toContain("'(optional)'");
+  });
+
+  it('shows the item name in the review recap', () => {
+    expect(REVIEW).toContain("label={'Item name'}");
+    expect(REVIEW).toContain('itemName.trim() ||');
+  });
+
+  it('still shows the photo requirement as mandatory', () => {
+    expect(FINDER_TSX).toContain('{t.capturePhoto} *');
+  });
+});
 
 

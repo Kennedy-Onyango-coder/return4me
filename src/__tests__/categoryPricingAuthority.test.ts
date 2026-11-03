@@ -178,6 +178,8 @@ async function reportItem(categoryId: string) {
   const finderPhone = nextFinderPhone();
   const r = await http('/api/items/report', {
     categoryId,
+    // PHASE 16.1 (BATCH 1) — the found-item route now REQUIRES an item name.
+    itemName: 'Pricing-authority fixture item',
     photoBase64: PNG_B64,
     locationDescription: 'Kenyatta Avenue, Nairobi',
     foundCounty: 'Nairobi',

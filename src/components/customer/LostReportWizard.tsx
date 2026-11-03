@@ -58,8 +58,10 @@ import {
 //    number is the contact.
 //  * It never claims a field is required that the server treats as optional,
 //    and it never invents a requirement the server does not have. Only the
-//    fields the server rejects when empty (category, county, area, lost-from)
-//    are required here.
+//    fields the server rejects when empty (item name, county, exact place,
+//    lost-from) are required here. PHASE 16.1 (BATCH 1) moved the CATEGORY off
+//    that list — an unclassified report is valid and is classified later — and
+//    put the ITEM NAME on it.
 //  * It never states a recovery outcome. Submitting a report starts a search
 //    for possible matches; it does not guarantee anything.
 //
@@ -151,28 +153,39 @@ const MIN_LOST_AT = (() => {
 })();
 
 /**
- * Per-step validation, mirroring the SERVER's required fields exactly:
- * category, county, area and lost-from are required there; everything else in
- * this form is optional there and therefore optional here.
+ * Per-step validation, mirroring the SERVER's required fields exactly.
  *
- * It returns the failing field TOGETHER WITH its bilingual message, so the
- * message can be rendered at that field (and focus moved to it) instead of
- * being dumped into one form-level box. The rules, their order and their
- * wording are unchanged from the original per-step check.
+ * PHASE 16.1 (BATCH 1) changed WHICH fields those are:
+ *   - the CATEGORY is now OPTIONAL (an unclassified report is valid and is
+ *     classified later), so it is no longer gated here;
+ *   - the ITEM NAME is now REQUIRED, so it is gated here;
+ *   - county, exact place and lost-from remain required server-side and are
+ *     unchanged.
+ *
+ * It returns the failing field TOGETHER WITH its message, so the message can be
+ * rendered at that field (and focus moved to it) instead of being dumped into
+ * one form-level box. The rules, their order and their wording are otherwise
+ * unchanged from the original per-step check.
  */
 function validateStep(step: number, form: FormState): StepError | null {
   if (step === 0) {
-    if (!form.categoryId) {
-      return { field: 'categoryId', message: 'Please choose what was lost.' };
+    // The one required field on this step. Trimmed first so a name of spaces is
+    // not a name — exactly the rule the server applies before it stores it.
+    const itemName = form.itemName.trim();
+    if (!itemName) {
+      return { field: 'itemName', message: 'Please enter the item name.' };
+    }
+    if (itemName.length > LOST_REPORT_FIELD_LIMITS.itemName) {
+      return {
+        field: 'itemName',
+        message: `Please shorten the item name to ${LOST_REPORT_FIELD_LIMITS.itemName} characters or fewer.`,
+      };
     }
     return null;
   }
 
-  // Step 1 — category is required (server-side validation mirrors this).
-  // Item name remains optional on the server and is not validated here.
-  if (!form.categoryId) {
-    return { field: 'categoryId', message: 'Please choose what was lost.' };
-  }
+  // Step 1 — every field here is optional server-side, and the category is no
+  // longer required on any step, so there is nothing to gate.
 
   if (step === 2) {
     if (!form.county) {
@@ -415,9 +428,13 @@ export default function LostReportWizard({
     // Only non-empty optionals are sent; the server treats omitted and empty
     // identically and stores NULL either way.
     const payload: LostReportCreatePayload = {
-      categoryId: form.categoryId,
+      // PHASE 16.1 (BATCH 1) — an empty selection is sent as NULL, which the
+      // server stores as an UNCLASSIFIED report. It is not sent as '' because
+      // "no category chosen" is a state, not an absent string.
+      categoryId: form.categoryId ? form.categoryId : null,
       county: form.county,
-      itemName: form.itemName ?? null,
+      // Required, and trimmed here exactly as the server trims it.
+      itemName: form.itemName.trim(),
       administrativeUnitId: form.administrativeUnitId,
       locationArea: form.locationArea.trim(),
       locationLandmark: form.locationLandmark.trim() || null,
@@ -473,15 +490,41 @@ export default function LostReportWizard({
           <StepIntro
             headingRef={stepHeadingRef}
             title={'What did you lose?'}
-            description={'Choose the closest match. It is how we compare your report with found items of the same kind.'}
+            description={'Name the item, then choose the closest category if you know it. The category is how we compare your report with found items of the same kind.'}
           />
 
+          {/* PHASE 16.1 (BATCH 1) — THE ITEM NAME FIRST, because it is now the
+              one required field on this step. The 200-character ceiling mirrors
+              the server's limit, so the customer cannot type a name the server
+              would refuse; the server still re-validates everything. */}
+          <Input
+            label={'Item name'}
+            required
+            ref={setFieldRef<HTMLInputElement>('itemName')}
+            value={form.itemName}
+            onChange={(e) => set('itemName', e.target.value)}
+            maxLength={LOST_REPORT_FIELD_LIMITS.itemName}
+            placeholder={'e.g. Brown leather wallet'}
+            hint={'What you would call it — the kind of thing it is, not who owns it.'}
+            error={fieldError('itemName')}
+            disabled={submitting}
+          />
+
+          {/* PHASE 16.1 (BATCH 1) — THE CATEGORY IS OPTIONAL.
+              A customer who lost something and does not know which category fits
+              can submit anyway; the report is stored as UNCLASSIFIED and an
+              administrator classifies it later. `required` is therefore gone.
+
+              The `error` slot is kept even though no validation currently assigns
+              a category error: it keeps this field's inline-error and focus
+              contract identical to every other field on the step, and renders
+              nothing while there is no error. */}
           <Select
             label={'Item category'}
-            required
             value={form.categoryId}
             onChange={(e) => handleCategoryChange(e.target.value)}
             disabled={categoriesLoading || submitting}
+            hint={'Optional — leave it blank if you are not sure and it will be classified for you.'}
             error={fieldError('categoryId')}
             ref={setFieldRef<HTMLSelectElement>('categoryId')}
           >
@@ -496,14 +539,6 @@ export default function LostReportWizard({
               </option>
             ))}
           </Select>
-<Input
-            label={'Item name'}
-            ref={setFieldRef<HTMLInputElement>('itemName')}
-            value={form.itemName ?? ''}
-            onChange={(e) => set('itemName', e.target.value)}
-            placeholder={'e.g. '}
-            disabled={submitting}
-          />
 
 
           {/* Revealed only once a category exists, because an identifier class is
@@ -824,9 +859,27 @@ export default function LostReportWizard({
           >
             <SummaryRow
               icon={Package}
-              label={'Item'}
-              value={categoryName(categories, form.categoryId) || form.categoryId}
+              label={'Item name'}
+              value={form.itemName.trim()}
             />
+            <SummaryRow
+              label={'Item category'}
+              // PHASE 16.1 (BATCH 1) — an empty selection is shown as the
+              // product's own word for it. A blank cell would read as a rendering
+              // bug; "Unclassified" is a state the customer can understand and
+              // that an administrator will act on.
+              value={
+                form.categoryId
+                  ? (categoryName(categories, form.categoryId) || form.categoryId)
+                  : 'Unclassified'
+              }
+            />
+            {!form.categoryId && (
+              <SummaryRow
+                label={'Classification'}
+                value={'Not chosen yet. Submit anyway and it will be classified for you; matching starts once a category is set.'}
+              />
+            )}
             {form.documentType && (
               <SummaryRow
                 label={'Identifying number'}
