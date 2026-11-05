@@ -32,7 +32,12 @@ describe('processClaimPaymentConfirmed: claim CAS precedes session confirmation'
 
   it('consumes the session confirmation AFTER the claim CAS won', () => {
     const escrowIdx = idx('await db.attemptClaimEscrowHold(claimId, invoiceId');
-    const nullReturnIdx = idx('if (!won) return null;');
+    // GATE C / C1: the lost-CAS early return is now a BLOCK (it has to tell a
+    // duplicate apart from a claim that is not payable), not the old
+    // `if (!won) return null;`. The ordering contract this file exists for is
+    // unchanged: nothing may be written to the session before the CAS, and the
+    // early return still sits between the CAS and the session confirmation.
+    const nullReturnIdx = idx('if (!won) {');
     const sessionConfirmIdx = idx('await db.attemptPaymentSessionConfirm(session.id);');
 
     expect(escrowIdx, 'claim escrow CAS must exist').toBeGreaterThan(-1);

@@ -522,6 +522,30 @@ the claimant taps "check payment status"). Check the `[PAYMENT RECONCILE SWEEP]`
 and `[INTASEND AUTHORITATIVE LOOKUP]` log lines for the reason. See
 [claims-and-payments.md](claims-and-payments.md).
 
+### A webhook delivery is in doubt: what did we actually tell IntaSend?
+
+`GET /api/admin/webhook-deliveries` returns a bounded page (25 by default, 100
+maximum) of every recorded delivery attempt, newest first, filterable by `status`,
+`eventCategory`, `claimId`, `paymentSessionId`, `providerInvoiceId`,
+`receivedFrom` and `receivedTo`. Each row is the answer to "what did this
+application tell the provider, and what happened to the payment afterwards":
+
+| Field | Meaning |
+|---|---|
+| `status` | `received` / `processing` are OPEN (in progress or abandoned); the rest are terminal outcomes |
+| `httpStatus` | the code IntaSend actually received — not an assumption |
+| `outcomeCode` | the stable refusal/internal code (`cross_claim_invoice`, `INTASEND_WEBHOOK_CLAIM_UPDATE_ERROR`, …) |
+| `retryable` | `true`/`false` for a refusal; `null` when retryability does not apply |
+| `authenticated` | `true` = challenge verified; `false` = challenge refused; `null` = no challenge configured, nothing checked |
+| `incomplete` | `true` means the delivery never reached a terminal state. It is NOT a success, and it is not evidence that nothing happened — the process may have died mid-request |
+| `sessionResolution` | derived at read time: `resolved_by_this_delivery`, `resolved_by_later_delivery`, `resolved_by_other_recovery`, `already_resolved_before_this_delivery`, `unresolved` (a session exists but was never confirmed) or `no_payment_session` |
+| `payloadFingerprint` | sha256 over topic/invoice/state/api_ref/provider_ref/value — a correlation aid, never an identity, never unique |
+
+The log is **read-only**: there is no endpoint to retry, replay or "resolve" a
+delivery. Retrying a callback is the provider's decision, and reconciling a
+payment remains the job of the sweep and the on-demand status route. Passwords,
+the webhook `challenge` and the payer's phone number are never stored in it.
+
 ### A session is `confirmed` but the claim is still unpaid
 
 The `[PAYMENT RECONCILE SWEEP] UNEXPECTED STATE COMBINATION` and

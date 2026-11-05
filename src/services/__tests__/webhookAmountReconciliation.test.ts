@@ -180,7 +180,12 @@ describe('processClaimPaymentConfirmed is wired to actually enforce the reconcil
     // to the same injected confirmation helper.
     const start = webhooksTs.indexOf("app.post('/api/webhooks/intasend'");
     expect(start, 'webhook route not found in routes/webhooks.ts').toBeGreaterThan(-1);
-    const body = webhooksTs.slice(start, start + 6000);
+    // STRUCTURAL SLICE (GATE C / C1). This was `start + 6000`, a guess about how
+    // long the route body happens to be. The route is the LAST registration in
+    // the module (asserted in paymentProviderContract.test.ts), so the slice runs
+    // to the end of the source: adding a comment can no longer push the amount
+    // plumbing out of the window and turn a correct route red.
+    const body = webhooksTs.slice(start);
     expect(body).toMatch(/const webhookAmount = value \?\? amount;/);
     expect(body).toMatch(/processClaimPaymentConfirmed\(claimId, invoice_id, webhookAmount\)/);
   });

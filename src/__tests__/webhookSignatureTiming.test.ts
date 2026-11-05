@@ -19,16 +19,36 @@ import path from 'path';
 const serverTs = fs.readFileSync(path.resolve(__dirname, '../server.ts'), 'utf8');
 const webhooksTs = fs.readFileSync(path.resolve(__dirname, '../routes/webhooks.ts'), 'utf8');
 
+/**
+ * The body of one registered route handler.
+ *
+ * The window used to be a fixed 3,000 characters. Gate C / Stage C2 added the
+ * durable-arrival prologue (recorded before authentication, with its rationale)
+ * to POST /api/webhooks/intasend, which pushed the challenge comparison past that
+ * mark and made this audit report "the helper is missing" for a route that still
+ * calls it. Slicing to the NEXT route registration (or EOF for the last handler)
+ * measures the handler itself instead of an arbitrary length, so the audit keeps
+ * meaning the same thing as the handler grows.
+ */
 function routeBody(method: 'get' | 'post', route: string): string {
   const marker = `app.${method}('${route}'`;
-  const start = serverTs.indexOf(marker);
-  if (start > -1) return serverTs.slice(start, start + 3000);
-  const moduleStart = webhooksTs.indexOf(marker);
+  const handlerAt = (source: string): string | null => {
+    const start = source.indexOf(marker);
+    if (start === -1) return null;
+    const rest = source.slice(start);
+    const next = rest.indexOf('\n  app.', 1);
+    return next > -1 ? rest.slice(0, next) : rest;
+  };
+
+  const fromServer = handlerAt(serverTs);
+  if (fromServer !== null) return fromServer;
+
+  const fromModule = handlerAt(webhooksTs);
   expect(
-    moduleStart,
+    fromModule,
     `route ${method.toUpperCase()} ${route} not found in server.ts or routes/webhooks.ts`
-  ).toBeGreaterThan(-1);
-  return webhooksTs.slice(moduleStart, moduleStart + 3000);
+  ).not.toBeNull();
+  return fromModule as string;
 }
 
 describe('IntaSend webhook challenge verification is timing-safe', () => {

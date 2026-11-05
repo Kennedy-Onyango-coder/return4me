@@ -35,6 +35,11 @@ import { PAYMENT_SESSION_WINDOW_MS } from '../config/paymentWindows.ts';
 // background sweep in server.ts so the on-demand path and the durable backstop
 // can never disagree about which sessions are worth a provider lookup.
 import { paymentReconciliationRefusal } from '../config/paymentReconciliation.ts';
+// GATE C / STAGE C1 - the confirmation path's explicit OUTCOME contract. This
+// route discards the value (it re-reads the claim and session afterwards), but
+// it must share the ONE type the canonical path returns rather than the old
+// `string | null` that could not distinguish a duplicate from a refusal.
+import type { PaymentConfirmationOutcome } from '../config/paymentConfirmationOutcome.ts';
 import { toOwnerSafeAgentView, toOwnerSafeItemView, toOwnerSafeClaimView } from '../services/ownerSafeViews.ts';
 
 
@@ -55,13 +60,16 @@ export function registerClaimPaymentRoutes(
      * The ONE canonical financial-confirmation path (server.ts). Injected so the
      * payment-session status route can perform on-demand provider reconciliation
      * for a missed webhook WITHOUT inventing a second confirmation implementation.
-     * Returns a pickup code on an actual confirmation, or null otherwise.
+     * Returns the explicit confirmation OUTCOME (Gate C / C1): reconciled,
+     * already reconciled (duplicate), or refused with a stable code. Never
+     * `null`. This route discards it and re-reads the claim/session afterwards,
+     * but it must speak the same vocabulary as the one implementation.
      */
     processClaimPaymentConfirmed: (
       claimId: string,
       invoiceId: string,
       confirmedAmount?: number | string | null
-    ) => Promise<string | null>;
+    ) => Promise<PaymentConfirmationOutcome>;
   }
 ) {
   const {

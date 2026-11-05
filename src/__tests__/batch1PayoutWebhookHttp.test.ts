@@ -31,7 +31,16 @@ const CHALLENGE = 'BATCH1-TEST-CHALLENGE-' + Math.random().toString(36).slice(2)
 let server: Server;
 let baseUrl = '';
 
-const processClaimPaymentConfirmed = vi.fn(async () => 'PICK-B1');
+// GATE C / C1: the canonical confirmation path returns an explicit OUTCOME, not
+// `string | null`. The route is what this file pins, so the stub answers with the
+// union's "reconciled" member (see config/paymentConfirmationOutcome.ts).
+const processClaimPaymentConfirmed = vi.fn(async () => ({
+  kind: 'reconciled',
+  claimId: 'CLAIM-B1',
+  invoiceId: 'INV-B1',
+  pickupCode: 'PICK-B1',
+  recoveredExpiredClaim: false,
+}));
 const reconcilePayoutBatchStatus = vi.fn();
 const reconcileCollectionFailureEvent = vi.fn(async () => ({ outcome: 'not_a_failure_state' }));
 const sendServerError = vi.fn((res: any, _error: any, context: string) =>

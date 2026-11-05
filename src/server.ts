@@ -220,6 +220,11 @@ import { registerAdminPayoutRepairRoutes } from './routes/adminPayoutRepair';
 // the claims read routes.
 import { ADMIN_PERMISSIONS, requireAdminPermission } from './services/adminPermissions';
 import { registerAdminLostReportRoutes } from './routes/adminLostReports';
+// GATE C / STAGE C2 — the read-only webhook-delivery log. A separate module for
+// the same reason as every other admin read: an HTTP integration test can mount
+// the REAL handler behind the REAL authenticateJWT, requireCurrentAdminSession and
+// payments.webhook_read guard chain.
+import { registerAdminWebhookDeliveryRoutes } from './routes/adminWebhookDeliveries';
 import { registerPublicItemRoutes } from './routes/publicItems';
 // Phase 9A: the customer lost-item reporting routes. Registered the same way as
 // the customer-claim routes below so an HTTP test can mount the real handlers.
@@ -318,6 +323,12 @@ import { registerClaimPaymentRoutes } from './routes/claimPayments';
 // database or a network (see services/collectionFailureReconciliation.ts).
 import { reconcileCollectionFailureEvent as reconcileCollectionFailure } from './services/collectionFailureReconciliation';
 import { registerWebhookRoutes } from './routes/webhooks';
+// GATE C / STAGE C2 — durable, read-only webhook-delivery records. The recorder is
+// composed HERE and injected into the webhook route, which is the same pattern the
+// route already uses for every financial dependency. It cannot change what a
+// provider is told: every method swallows its own failure, so a broken record
+// leaves the delivery unreconciled in the log and never alters the response.
+import { createWebhookDeliveryLog } from './services/webhookDeliveryLog';
 // P2-A3.4A: the four Agent physical item-handling routes were extracted verbatim
 // into routes/agentOps.ts so they can be mounted for real HTTP integration
 // testing. confirm-viewing and confirm-handover deliberately remain inline.
@@ -339,6 +350,22 @@ import { hasClaimPaymentWindowElapsed } from './config/paymentWindows';
 // lookup. It is a selection decision only: every selected session is still
 // authorised by processClaimPaymentConfirmed's own gates and the atomic CAS.
 import { isPaymentReconciliationEligible } from './config/paymentReconciliation';
+// GATE C / STAGE C1 - the payment-confirmation OUTCOME CONTRACT.
+//
+// `processClaimPaymentConfirmed` used to return `string | null`, where `null`
+// meant eleven different refusals, so the IntaSend callback route had no way to
+// distinguish "already reconciled" from "provider unavailable" from "amount
+// mismatch" and acknowledged all of them as success. It now returns the closed
+// union below, and this is the only vocabulary any caller uses.
+import {
+  alreadyReconciledPaymentConfirmation,
+  describePaymentConfirmationOutcome,
+  isReconciledPaymentConfirmation,
+  pickupCodeFromOutcome,
+  reconciledPaymentConfirmation,
+  refusePaymentConfirmation,
+  type PaymentConfirmationOutcome,
+} from './config/paymentConfirmationOutcome';
 // PHASE 10 (F-1): the ONE server-port resolver. This file previously hardcoded
 // the listen port and ignored the environment, which breaks port-injecting
 // container platforms (see config/serverPort.ts for the full reasoning).
@@ -3545,7 +3572,17 @@ async function createApp() {
   // simulator below, so both paths run through the exact same business
   // logic â€” no duplicated/diverging implementation between "real" and
   // "simulated" payment confirmation.
-  async function processClaimPaymentConfirmed(claimId: string, invoiceId: string, confirmedAmount?: number | string | null): Promise<string | null> {
+  async function processClaimPaymentConfirmed(claimId: string, invoiceId: string, confirmedAmount?: number | string | null): Promise<PaymentConfirmationOutcome> {
+    // RETURNS (Gate C / C1): a `PaymentConfirmationOutcome`, never `null`.
+    //
+    // This used to answer `string | null`, where the string was the pickup code
+    // and `null` covered ELEVEN distinct refusals. Its only production caller
+    // that acknowledges an external provider - the IntaSend collection route -
+    // could therefore not tell a duplicate delivery from an unverifiable
+    // provider from a cross-claim invoice, and answered `200 {"status":"ok"}`
+    // for all of them. Every refusal below now names itself
+    // (config/paymentConfirmationOutcome.ts), and NO caller is allowed to infer
+    // an outcome from truthiness again.
     // P1: webhook amount reconciliation. Before this, the webhook handler
     // never looked at the paid amount at all â€” only invoice_id, state, and
     // api_ref were read from the payload. Signature verification means an
@@ -3569,9 +3606,9 @@ async function createApp() {
     // an external API's field name should never be able to silently halt
     // every real payment, only add a soft warning until it's verified.
     const claim = await db.getClaim(claimId);
-    if (!claim) return null;
+    if (!claim) return refusePaymentConfirmation(claimId, invoiceId, 'claim_not_found');
     const item = await db.getItem(claim.item_id);
-    if (!item) return null;
+    if (!item) return refusePaymentConfirmation(claimId, invoiceId, 'item_not_found');
 
     // --- PAYMENT-SESSION RESOLUTION (primary production payment path) ---
     // If this provider invoice belongs to a payment session, verify it is bound
@@ -3584,7 +3621,12 @@ async function createApp() {
     if (session && session.claim_id !== claimId) {
       console.error(`[WEBHOOK SESSION] Refusing confirmation: invoice ${invoiceId} belongs to payment session ${session.id} for claim ${session.claim_id}, not claim ${claimId}. Cross-claim payment blocked.`);
       await db.logAudit('SYSTEM', 'WEBHOOK_CROSS_CLAIM_REFUSED', `Invoice ${invoiceId} tried to confirm claim ${claimId} but belongs to session ${session.id} of claim ${session.claim_id}. Refused.`);
-      return null;
+      return refusePaymentConfirmation(
+        claimId,
+        invoiceId,
+        'cross_claim_invoice',
+        `invoice belongs to claim ${session.claim_id}`
+      );
     }
     // P1 HARDENING (B-1). A claim must NOT reach 'escrow_held' unless the amount
     // has been POSITIVELY reconciled â€” either from the callback's own value, or
@@ -3599,7 +3641,12 @@ async function createApp() {
     if (sessionRecon === 'mismatch') {
       console.error(`[WEBHOOK SESSION AMOUNT] Refusing to confirm session ${session.id} for claim ${claimId}: webhook amount ${confirmedAmount} != session amount ${session.amount}. Invoice ${invoiceId}.`);
       await db.logAudit('SYSTEM', 'WEBHOOK_AMOUNT_MISMATCH_REFUSED', `Claim ${claimId} session ${session.id}: webhook amount ${confirmedAmount} did not match session amount ${session.amount} (invoice ${invoiceId}). Refused.`);
-      return null;
+      return refusePaymentConfirmation(
+        claimId,
+        invoiceId,
+        'session_amount_mismatch',
+        `callback amount ${String(confirmedAmount)} != session amount ${String(session.amount)}`
+      );
     }
     if (session && sessionRecon === 'unknown') {
       // Escalate to the provider BEFORE the session is marked confirmed, so a
@@ -3608,12 +3655,22 @@ async function createApp() {
       if (!resolved.verified) {
         await db.logAudit('SYSTEM', 'WEBHOOK_AMOUNT_UNVERIFIED', `Claim ${claimId} session ${session.id} invoice ${invoiceId}: callback amount unusable and provider verification failed (${resolved.reason}). Payment NOT confirmed; escrow withheld.`);
         console.error(`[WEBHOOK SESSION AMOUNT] Provider verification failed for session ${session.id} (${resolved.reason}). Escrow withheld.`);
-        return null;
+        return refusePaymentConfirmation(
+          claimId,
+          invoiceId,
+          'provider_verification_unavailable',
+          `provider verification failed: ${String(resolved.reason)}`
+        );
       }
       const providerRecon = reconcileWebhookAmount(resolved.providerAmount, session.amount);
       if (providerRecon !== 'match') {
         await db.logAudit('SYSTEM', 'WEBHOOK_AMOUNT_MISMATCH_REFUSED', `Claim ${claimId} session ${session.id} invoice ${invoiceId}: provider amount ${resolved.providerAmount} did not match session amount ${session.amount} (${providerRecon}). Refused.`);
-        return null;
+        return refusePaymentConfirmation(
+          claimId,
+          invoiceId,
+          'provider_amount_mismatch',
+          `provider amount ${String(resolved.providerAmount)} != session amount ${String(session.amount)} (${String(providerRecon)})`
+        );
       }
       authoritativeAmount = resolved.providerAmount;
     }
@@ -3632,7 +3689,17 @@ async function createApp() {
         sessionConfirmed = true;
       } else {
         console.warn(`[WEBHOOK SESSION] Invoice ${invoiceId} for session ${session.id} was not in a confirmable state (status=${session.status}).`);
-        return null;
+        // A provider-COMPLETE callback naming a session that cannot be
+        // confirmed is a real operator question (was it refunded? voided?), so
+        // it is recorded durably rather than only printed. Nothing is written:
+        // this is an audit row, not a state change.
+        await db.logAudit('SYSTEM', 'WEBHOOK_SESSION_NOT_CONFIRMABLE_REFUSED', `Claim ${claimId} session ${session.id} invoice ${invoiceId}: provider reported COMPLETE but the session status '${session.status}' cannot be confirmed. Nothing reconciled; escrow withheld.`);
+        return refusePaymentConfirmation(
+          claimId,
+          invoiceId,
+          'session_not_confirmable',
+          `session ${session.id} status=${String(session.status)}`
+        );
       }
     }
 
@@ -3649,7 +3716,12 @@ async function createApp() {
         `[WEBHOOK AMOUNT RECONCILIATION] REFUSING to confirm payment for claim ${claimId}: amount ${authoritativeAmount}, claim expects ${expectedFee}. Invoice ${invoiceId}. This claim will remain in its current status pending manual admin investigation â€” it will NOT be silently held in escrow with a mismatched amount.`
       );
       await db.logAudit('SYSTEM', 'WEBHOOK_AMOUNT_MISMATCH_REFUSED', `Claim ${claimId}: amount ${authoritativeAmount} did not reconcile with expected fee ${expectedFee} (invoice ${invoiceId}). Payment confirmation refused pending manual review.`);
-      return null;
+      return refusePaymentConfirmation(
+        claimId,
+        invoiceId,
+        'claim_amount_mismatch',
+        `amount ${String(authoritativeAmount)} != expected fee ${expectedFee}`
+      );
     }
     if (claimRecon === 'unknown') {
       // No session existed, or the session already reconciled the amount above.
@@ -3660,13 +3732,23 @@ async function createApp() {
       if (!resolved.verified) {
         await db.logAudit('SYSTEM', 'WEBHOOK_AMOUNT_UNVERIFIED', `Claim ${claimId} invoice ${invoiceId}: no usable amount in callback and provider verification failed (${resolved.reason}). Payment NOT confirmed; escrow withheld.`);
         console.error(`[WEBHOOK AMOUNT RECONCILIATION] Provider verification failed for claim ${claimId} (${resolved.reason}). Escrow withheld.`);
-        return null;
+        return refusePaymentConfirmation(
+          claimId,
+          invoiceId,
+          'provider_verification_unavailable',
+          `provider verification failed: ${String(resolved.reason)}`
+        );
       }
       const providerRecon = reconcileWebhookAmount(resolved.providerAmount, expectedFee);
       if (providerRecon !== 'match') {
         await db.logAudit('SYSTEM', 'WEBHOOK_AMOUNT_MISMATCH_REFUSED', `Claim ${claimId} invoice ${invoiceId}: provider amount ${resolved.providerAmount} did not match expected fee ${expectedFee} (${providerRecon}). Refused.`);
         console.error(`[WEBHOOK AMOUNT RECONCILIATION] Provider amount did not reconcile for claim ${claimId} (${providerRecon}). Escrow withheld.`);
-        return null;
+        return refusePaymentConfirmation(
+          claimId,
+          invoiceId,
+          'provider_amount_mismatch',
+          `provider amount ${String(resolved.providerAmount)} != expected fee ${expectedFee} (${String(providerRecon)})`
+        );
       }
     }
 
@@ -3694,11 +3776,42 @@ async function createApp() {
     // Atomic CAS: only the delivery that actually wins the 'pending_payment' ->
     // 'escrow_held' transition (or the gated 'payment_window_expired' ->
     // 'escrow_held' edge) proceeds past this point. A duplicate webhook for an
-    // already-confirmed claim returns false and is dropped as a no-op.
+    // already-confirmed claim returns false: nothing is written, and the branch
+    // below NAMES that loss (duplicate vs not-payable) instead of reporting a
+    // success - or dropping it silently.
     const won = recoverExpiredClaim
       ? await db.attemptClaimEscrowHold(claimId, invoiceId, { recoverExpiredClaim: true })
       : await db.attemptClaimEscrowHold(claimId, invoiceId);
-    if (!won) return null;
+    if (!won) {
+      // LOST CAS = this delivery reconciled nothing, but TWO different things
+      // hide behind that and they must not be acknowledged the same way:
+      //
+      //   * an earlier delivery already settled this collection - a DUPLICATE,
+      //     which is an idempotent SUCCESS (the claim and its session were moved
+      //     together, and this delivery wrote nothing); and
+      //   * a claim that was not payable for any other reason - a PERMANENT
+      //     refusal that a redelivery can never turn into a payment.
+      //
+      // `claims.paid_at` is the authoritative payment marker the rest of the
+      // money path already uses (config/paymentReconciliation.ts refuses a
+      // session for a claim that carries it), so it is read FRESH here rather
+      // than inferred from a value that predates the CAS. Nothing is written on
+      // either branch: this only names what happened.
+      const settledClaim = await db.getClaim(claimId).catch(() => null);
+      const alreadyPaid =
+        !!settledClaim && settledClaim.paid_at !== null && settledClaim.paid_at !== undefined;
+      if (alreadyPaid) {
+        return alreadyReconciledPaymentConfirmation(claimId, invoiceId);
+      }
+      const notPayableStatus = settledClaim ? String(settledClaim.status) : 'unknown';
+      await db.logAudit('SYSTEM', 'WEBHOOK_CLAIM_NOT_PAYABLE_REFUSED', `Claim ${claimId} invoice ${invoiceId}: provider reported COMPLETE but the claim compare-and-swap could not move it (status=${notPayableStatus}). Nothing reconciled; escrow withheld.`);
+      return refusePaymentConfirmation(
+        claimId,
+        invoiceId,
+        'claim_not_payable',
+        `claim status=${notPayableStatus}`
+      );
+    }
 
     // The claim CAS above and the session's single confirmation were consumed
     // ATOMICALLY, in ONE transaction, inside attemptClaimEscrowHold: the claim
@@ -3911,7 +4024,17 @@ async function createApp() {
     }).catch(err => console.error('[EMAIL NOTIFICATION ERROR] Admin payment log email failed:', err));
 
     console.log(`[PAYMENT CONFIRMED] Claim ${claimId} successfully transitioned to escrow_held.`);
-    return pickupCode;
+    // RETURN CONTRACT (Gate C / C1). Only the delivery that WON the claim CAS
+    // reaches this line, so this is the one place that may report a real
+    // reconciliation. `recoverExpiredClaim` travels with the outcome so a log or
+    // a response can name the gated late-payment edge without re-deriving it,
+    // and the pickup code stays inside a value that is never logged.
+    return reconciledPaymentConfirmation({
+      claimId,
+      invoiceId,
+      pickupCode,
+      recoveredExpiredClaim: recoverExpiredClaim,
+    });
   }
 
   registerWebhookRoutes(app, {
@@ -3951,11 +4074,25 @@ async function createApp() {
         // Recovery goes through the ONE canonical confirmation path: claim CAS,
         // session CAS, pickup-code issuance, amount reconciliation and every
         // audit/email it already owns stay single-implementation.
-        confirmPayment: (claimId: string, invoiceId: string, confirmedAmount: any) =>
-          processClaimPaymentConfirmed(claimId, invoiceId, confirmedAmount),
+        // GATE C / C1 - the service's own contract is `string | null`: it asks
+        // only "did a confirmation happen, and what was the code?", and it
+        // acknowledges nothing to a provider. The compatibility adapter answers
+        // exactly that, so this seam's contract and its tests are unchanged. The
+        // webhook route - the ONE caller that acknowledges a provider - consumes
+        // the union directly and never collapses it.
+        confirmPayment: async (claimId: string, invoiceId: string, confirmedAmount: any) =>
+          pickupCodeFromOutcome(await processClaimPaymentConfirmed(claimId, invoiceId, confirmedAmount)),
         markSessionFailed: (sessionId: string, reasonCode: string) => db.markPaymentSessionFailed(sessionId, reasonCode),
         audit: (action: string, message: string) => db.logAudit('SYSTEM', action, message),
       }),
+    // GATE C / STAGE C2 — durable delivery records.
+    //
+    // READ-ONLY with respect to money. The recorder writes ONLY diagnostic rows
+    // and performs exactly one read (invoice -> payment session) to correlate a
+    // collection delivery. It never confirms, retries, refunds or releases
+    // anything, and its failures are contained: the response above is produced by
+    // the financial path and is unaffected by whether this table accepts a write.
+    webhookDeliveryLog: createWebhookDeliveryLog({ store: db }),
   });
 
   // DEV/TEST-ONLY: lets a local tester complete a payment without a real
@@ -4026,7 +4163,12 @@ async function createApp() {
             'No confirmable payment attempt exists for this claim, so its success cannot be simulated. Start the payment (claim payment-session, then initiate) first.',
         });
       }
-      const pickupCode = await processClaimPaymentConfirmed(claim.id, attempt.invoiceId, attempt.amount);
+      const outcome = await processClaimPaymentConfirmed(claim.id, attempt.invoiceId, attempt.amount);
+      // GATE C / C1: the response shape here is deliberately unchanged (a pickup
+      // code on a real confirmation, null otherwise). This endpoint is dev-only
+      // and acknowledges nothing to a provider; the adapter collapses the union
+      // to exactly what its callers - and their tests - already expect.
+      const pickupCode = pickupCodeFromOutcome(outcome);
       const updatedClaim = await db.getClaim(req.params.claimId);
       // pickupCode is only ever returned here â€” a dev/test-only endpoint,
       // already hard-gated off in production above. In the real flow it's
@@ -5055,6 +5197,22 @@ async function createApp() {
   //
   // READ-ONLY: GET only. No lost-report mutation endpoint is registered here.
   registerAdminLostReportRoutes(app, { requireCurrentAdminSession, sendServerError, canCreateClaim });
+
+  // ============================================================
+  // WEBHOOK DELIVERY LOG (READ-ONLY, GATE C / STAGE C2)
+  // ============================================================
+  //   GET /api/admin/webhook-deliveries
+  //
+  // What the application told the payment provider, delivery by delivery: the
+  // authentication verdict, the terminal status, the outcome/refusal code, the
+  // ACTUAL HTTP status, whether a redelivery could help, and (derived at read
+  // time) whether the underlying payment session was later resolved.
+  //
+  // READ-ONLY: GET only, and the handler performs exactly one bounded read. There
+  // is deliberately no endpoint here that retries, replays or resolves a
+  // delivery — a provider callback is the provider's to retry, and reconciling a
+  // payment stays with the 60-second sweep and the on-demand status route.
+  registerAdminWebhookDeliveryRoutes(app, { requireCurrentAdminSession, sendServerError });
 
 
   // ============================================================
@@ -7405,14 +7563,16 @@ async function createApp() {
           lastReconcileAttemptByInvoice.set(session.provider_invoice_id, Date.now());
           processed++;
           try {
-            const pickupCode = await processClaimPaymentConfirmed(claim.id, session.provider_invoice_id);
-            if (pickupCode) {
+            const outcome = await processClaimPaymentConfirmed(claim.id, session.provider_invoice_id);
+            if (isReconciledPaymentConfirmation(outcome)) {
               console.log(`[PAYMENT RECONCILE SWEEP] Recovered a completed payment for claim ${claim.id} (session ${session.id}).`);
             } else if (repairingConfirmedSession) {
               // Logged ONLY for the non-ordinary repair case, so an ordinary
               // polling cycle stays silent. IDs and a non-sensitive reason only
-              // — never an amount, a phone number or a credential.
-              console.warn(`[PAYMENT RECONCILE SWEEP] Confirmed-session recovery REFUSED for claim ${claim.id} (session ${session.id}): the canonical path did not verify a recoverable completion (provider unverified, pending, failed, or a refused precondition).`);
+              // - never an amount, a phone number or a credential. C1: the
+              // refusal NAMES itself (config/paymentConfirmationOutcome.ts)
+              // instead of being inferred from a falsy return value.
+              console.warn(`[PAYMENT RECONCILE SWEEP] Confirmed-session recovery REFUSED for claim ${claim.id} (session ${session.id}): ${describePaymentConfirmationOutcome(outcome)}.`);
             }
           } catch (err) {
             console.error(`[PAYMENT RECONCILE SWEEP] Reconciliation failed for session ${session.id}:`, err);

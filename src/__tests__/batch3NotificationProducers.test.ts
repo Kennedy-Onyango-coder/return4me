@@ -593,7 +593,12 @@ describe('B3 - structural wiring', () => {
     const casIdx = src.indexOf('attemptClaimEscrowHold(claimId');
     const produceIdx = src.indexOf('producePaymentReceived(');
     expect(produceIdx).toBeGreaterThan(casIdx);
-    expect(src.slice(casIdx, produceIdx)).toContain('if (!won) return null;');
+    // GATE C / C1: the lost-CAS early return is now a BLOCK - it has to tell a
+    // duplicate delivery apart from a claim that is not payable - instead of the
+    // old `if (!won) return null;` one-liner. The invariant this test exists for
+    // is unchanged: the early return still sits between the escrow CAS and the
+    // producer, so P5 can only run for the delivery that won.
+    expect(src.slice(casIdx, produceIdx)).toContain('if (!won) {');
   });
 
   it('P3 fires only on the real transition branch, for the specific losing claim', () => {

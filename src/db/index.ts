@@ -26,6 +26,15 @@ import {
   ITEM_ASSIGNMENT_METHOD_SQL_LIST,
   ITEM_ASSIGNMENT_TRIGGER_SOURCE_SQL_LIST,
 } from "../config/itemAgentAssignmentPolicy";
+// GATE C / STAGE C2 — the webhook-delivery CHECK vocabularies for the idempotent
+// DDL below, generated from src/config/webhookDeliveries.ts so this DDL,
+// src/db/schema.ts and sql/schema.sql cannot drift apart.
+import {
+  WEBHOOK_DELIVERY_PROVIDER_SQL_LIST,
+  WEBHOOK_DELIVERY_EVENT_CATEGORY_SQL_LIST,
+  WEBHOOK_DELIVERY_STATUS_SQL_LIST,
+  WEBHOOK_DELIVERY_OPEN_STATUS_SQL_LIST,
+} from "../config/webhookDeliveries";
 
 
 dotenv.config();
@@ -74,6 +83,14 @@ const mockDatabaseState: Record<string, any[]> = {
   // is explicit; a plain insert would auto-create it anyway, and keeping the
   // declaration makes the absence of any update/delete path visible.
   item_agent_assignments: [],
+  // GATE C / STAGE C2 — one row per incoming IntaSend delivery ATTEMPT. Listed
+  // explicitly (rather than appearing on first insert) because two properties
+  // matter to the tests that use this double: rows are INSERTed on arrival and
+  // then UPDATEd only while still open, and NOTHING deletes them. There is
+  // deliberately no entry in MOCK_UNIQUE_INDEXES below: Postgres has no unique
+  // constraint on this table either, because repeated deliveries of the same
+  // logical event must be recordable.
+  intasend_webhook_deliveries: [],
 };
 
 // Uniqueness invariants the in-memory mock enforces on a PLAIN insert.
@@ -2046,6 +2063,72 @@ created_at TIMESTAMP WITH TIME ZONE NOT NULL
     `ALTER TABLE item_agent_assignments ADD CONSTRAINT item_agent_assignments_holder_shape_check CHECK (
       (event_type = 'unassigned' AND new_agent_id IS NULL AND previous_agent_id IS NOT NULL)
       OR (event_type <> 'unassigned' AND new_agent_id IS NOT NULL)
+    )`,
+    // ---------------------------------------------------------------------
+    // GATE C / STAGE C2 — DURABLE WEBHOOK DELIVERY RECORDS.
+    //
+    // Additive and idempotent in exactly the same way as the blocks above:
+    // CREATE TABLE IF NOT EXISTS + IF NOT EXISTS indexes, and DROP-then-ADD for
+    // every CHECK, so re-running this list on a database that already has the
+    // table converges instead of failing.
+    //
+    // NO BACKFILL. The table starts EMPTY: deliveries that happened before it
+    // existed are not reconstructed, because there is no trustworthy source for
+    // their authentication result or HTTP status and inventing one would make
+    // the record lie about the past.
+    //
+    // NO UNIQUE CONSTRAINT ON PROVIDER IDENTITY — deliberately. IntaSend
+    // supplies no stable event id, and repeated deliveries of the same logical
+    // event are exactly what must remain recordable, so the primary key is an
+    // application id and invoice / reference / fingerprint are indexed but not
+    // unique. NO FOREIGN KEYS either: a delivery may name a claim or session
+    // this database has never seen, and an FK would reject the insert (losing
+    // the record of the very delivery worth investigating) or, with ON DELETE
+    // SET NULL, rewrite history.
+    //
+    // The vocabularies come from src/config/webhookDeliveries.ts, so this DDL,
+    // src/db/schema.ts and sql/schema.sql cannot drift apart.
+    // ---------------------------------------------------------------------
+    `CREATE TABLE IF NOT EXISTS intasend_webhook_deliveries (
+      id VARCHAR(50) PRIMARY KEY,
+      provider VARCHAR(20) NOT NULL DEFAULT 'intasend',
+      event_topic VARCHAR(60),
+      event_category VARCHAR(40) NOT NULL,
+      authenticated BOOLEAN,
+      status VARCHAR(30) NOT NULL DEFAULT 'received',
+      outcome_code VARCHAR(60),
+      retryable BOOLEAN,
+      http_status INTEGER,
+      claim_id VARCHAR(50),
+      payment_session_id VARCHAR(64),
+      provider_invoice_id VARCHAR(100),
+      provider_reference VARCHAR(100),
+      payload_fingerprint VARCHAR(64),
+      diagnostic VARCHAR(200),
+      received_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      processed_at TIMESTAMP WITH TIME ZONE
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_intasend_webhook_deliveries_received ON intasend_webhook_deliveries(received_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_intasend_webhook_deliveries_status ON intasend_webhook_deliveries(status)`,
+    `CREATE INDEX IF NOT EXISTS idx_intasend_webhook_deliveries_claim ON intasend_webhook_deliveries(claim_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_intasend_webhook_deliveries_session ON intasend_webhook_deliveries(payment_session_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_intasend_webhook_deliveries_invoice ON intasend_webhook_deliveries(provider_invoice_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_intasend_webhook_deliveries_fingerprint ON intasend_webhook_deliveries(payload_fingerprint)`,
+    // The closed vocabularies, enforced in Postgres as well as in code.
+    `ALTER TABLE intasend_webhook_deliveries DROP CONSTRAINT IF EXISTS intasend_webhook_deliveries_provider_check`,
+    `ALTER TABLE intasend_webhook_deliveries ADD CONSTRAINT intasend_webhook_deliveries_provider_check CHECK (provider IN (${WEBHOOK_DELIVERY_PROVIDER_SQL_LIST}))`,
+    `ALTER TABLE intasend_webhook_deliveries DROP CONSTRAINT IF EXISTS intasend_webhook_deliveries_event_category_check`,
+    `ALTER TABLE intasend_webhook_deliveries ADD CONSTRAINT intasend_webhook_deliveries_event_category_check CHECK (event_category IN (${WEBHOOK_DELIVERY_EVENT_CATEGORY_SQL_LIST}))`,
+    `ALTER TABLE intasend_webhook_deliveries DROP CONSTRAINT IF EXISTS intasend_webhook_deliveries_status_check`,
+    `ALTER TABLE intasend_webhook_deliveries ADD CONSTRAINT intasend_webhook_deliveries_status_check CHECK (status IN (${WEBHOOK_DELIVERY_STATUS_SQL_LIST}))`,
+    // STORAGE-LEVEL PROOF THAT http_status IS WHAT THE PROVIDER RECEIVED. An open
+    // delivery (received/processing) has no processed_at and must not claim an
+    // HTTP status; a settled one must carry the status it actually answered
+    // with. Without this, "unknown" and "204" would be indistinguishable.
+    `ALTER TABLE intasend_webhook_deliveries DROP CONSTRAINT IF EXISTS intasend_webhook_deliveries_processed_shape_check`,
+    `ALTER TABLE intasend_webhook_deliveries ADD CONSTRAINT intasend_webhook_deliveries_processed_shape_check CHECK (
+      (processed_at IS NULL AND status IN (${WEBHOOK_DELIVERY_OPEN_STATUS_SQL_LIST}))
+      OR (processed_at IS NOT NULL AND http_status IS NOT NULL)
     )`,
   ];
 

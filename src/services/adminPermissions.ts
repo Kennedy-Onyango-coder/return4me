@@ -63,6 +63,21 @@ export const ADMIN_PERMISSIONS = {
    * GRANTED TO NO ROLE. See ADMIN_ROLE_GRANTS below — deliberately absent.
    */
   CLAIMS_PAYOUT_REPAIR_CONFIRM: 'claims.payout_repair_confirm',
+  /**
+   * GATE C / STAGE C2 — read the read-only webhook-delivery log.
+   *
+   * A DIAGNOSTIC read: it exposes what this application told the payment
+   * provider (status, HTTP code, refusal code, retryability) and whether the
+   * underlying payment session was later resolved. It exposes no payload, no
+   * phone number and no money, and it grants no ability to retry, replay or
+   * resolve anything — the route it guards is GET-only.
+   *
+   * GRANTED to `admin` (see ADMIN_ROLE_GRANTS): the flat single-role model
+   * documented in docs/ROLE_SEPARATION_PLAN.md, so this is a NAMED declaration of
+   * what the existing administrator reads rather than a new privilege tier, and
+   * no administrator loses access. Narrowing it later is a one-line change here.
+   */
+  PAYMENTS_WEBHOOK_READ: 'payments.webhook_read',
 } as const;
 
 export type AdminPermission = (typeof ADMIN_PERMISSIONS)[keyof typeof ADMIN_PERMISSIONS];
@@ -74,7 +89,7 @@ export type AdminPermission = (typeof ADMIN_PERMISSIONS)[keyof typeof ADMIN_PERM
  * construction, so they grant nothing.
  */
 const ADMIN_ROLE_GRANTS: Record<string, readonly string[]> = {
-  admin: [ADMIN_PERMISSIONS.CLAIMS_READ, ADMIN_PERMISSIONS.CLAIMS_DETAIL, ADMIN_PERMISSIONS.CLAIMS_SETTLEMENT_APPROVE, ADMIN_PERMISSIONS.CLAIMS_SETTLEMENT_INITIATE],
+  admin: [ADMIN_PERMISSIONS.CLAIMS_READ, ADMIN_PERMISSIONS.CLAIMS_DETAIL, ADMIN_PERMISSIONS.CLAIMS_SETTLEMENT_APPROVE, ADMIN_PERMISSIONS.CLAIMS_SETTLEMENT_INITIATE, ADMIN_PERMISSIONS.PAYMENTS_WEBHOOK_READ],
   // PHASE 1 (payout readiness) — INTENTIONALLY ABSENT:
   //   claims.payout_repair_propose
   //   claims.payout_repair_confirm

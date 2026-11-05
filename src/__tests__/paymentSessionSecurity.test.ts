@@ -87,7 +87,15 @@ describe('payment session: initiation endpoint', () => {
 
 describe('payment session: webhook confirmation', () => {
   const fnStart = serverTs.indexOf('const session = await db.getPaymentSessionByProviderInvoice(invoiceId);');
-  const body = fnStart > -1 ? serverTs.slice(fnStart, fnStart + 12000) : '';
+  // GATE C / C1: this was `serverTs.slice(fnStart, fnStart + 12000)`, a guess at
+  // how long the confirmation path happens to be. Adding a refusal comment to the
+  // path pushed the session CAS past that budget and turned CORRECT code red.
+  // The boundary is now STRUCTURAL: the block runs from the session resolution to
+  // the `registerWebhookRoutes` composition that follows the function, so a
+  // comment can never move the goalposts again (the same de-brittling this repo
+  // already documents in paymentProviderContract.test.ts).
+  const fnEnd = serverTs.indexOf('registerWebhookRoutes(app, {', fnStart);
+  const body = fnStart > -1 && fnEnd > fnStart ? serverTs.slice(fnStart, fnEnd) : '';
 
   it('resolves the provider invoice to its payment session', () => {
     expect(fnStart).toBeGreaterThan(-1);

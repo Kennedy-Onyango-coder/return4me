@@ -1116,3 +1116,109 @@ CREATE TABLE item_agent_assignments (
 CREATE INDEX idx_item_agent_assignments_item ON item_agent_assignments(item_id, created_at);
 -- "Which items did this agent receive, and when".
 CREATE INDEX idx_item_agent_assignments_new_agent ON item_agent_assignments(new_agent_id);
+
+-- =============================================================================
+-- GATE C / STAGE C2 — DURABLE WEBHOOK DELIVERY RECORDS
+-- (intasend_webhook_deliveries)
+--
+-- WHY THIS TABLE EXISTS. The IntaSend callback route is the only thing that can
+-- move a claim into escrow_held, and it previously left no durable trace of a
+-- delivery it refused: a provider-confirmed collection the application declined
+-- to reconcile existed only as a console line. This table is the queryable
+-- record of every delivery ATTEMPT — when it arrived, whether the shared
+-- challenge verified, which event category it was, what the application decided,
+-- which HTTP status the provider actually received, whether a redelivery could
+-- help, and which claim/payment session it correlates with.
+--
+-- WHAT IT IS NOT. It is not financial state and not proof of payment. No
+-- money-moving code reads it. `status = 'reconciled'` can only be written by a
+-- delivery whose canonical confirmation path (Gate C stage C1) itself reported a
+-- reconciliation.
+--
+-- ONE ROW PER DELIVERY, NOT PER LOGICAL EVENT. IntaSend supplies no stable event
+-- id, so the primary key is an application-generated id and there is
+-- deliberately NO unique constraint on provider_invoice_id,
+-- provider_reference or payload_fingerprint: repeated deliveries of the same
+-- logical event are exactly what must remain recordable, and a duplicate must
+-- produce a second row rather than be rejected by a constraint. The fingerprint
+-- is a correlation aid (sha256 over topic/invoice/state/api_ref/provider_ref/
+-- value) and never an identity.
+--
+-- NO FOREIGN KEYS, DELIBERATELY. A delivery can legitimately name a claim or a
+-- payment session this database has never seen. An FK would make the INSERT fail
+-- — destroying the record of exactly the delivery an operator needs to
+-- investigate — and ON DELETE SET NULL/CASCADE would rewrite or erase historical
+-- deliveries. claim_id and payment_session_id are therefore plain, sanitised id
+-- strings; the writer only fills payment_session_id after confirming that the
+-- session row exists.
+--
+-- NO RAW PAYLOAD, NO SECRETS, NO PERSONAL DATA. The webhook `challenge` is never
+-- stored, no payload text is copied, no phone number and no amount are recorded.
+-- `diagnostic` is a bounded, sanitised internal note for operators.
+--
+-- APPEND-ONLY IN PRACTICE. A row is inserted on arrival and updated only by the
+-- same request that created it, and only while it is still open
+-- ('received' -> 'processing' -> one terminal status). A settled row is never
+-- rewritten and there is no delete path.
+--
+-- The matching Drizzle definition is in src/db/schema.ts and the idempotent
+-- runtime statements are in src/db/index.ts. The vocabularies are generated from
+-- src/config/webhookDeliveries.ts so the declarations cannot drift.
+-- =============================================================================
+CREATE TABLE intasend_webhook_deliveries (
+    -- Application-generated (`WHD-…`). Never a provider-supplied value, because
+    -- the provider supplies no stable event id.
+    id VARCHAR(50) PRIMARY KEY,
+    provider VARCHAR(20) NOT NULL DEFAULT 'intasend',
+    -- The provider's own topic string, echoed for triage. Sanitised and bounded
+    -- before it is written; NULL when the payload carried none.
+    event_topic VARCHAR(60),
+    -- The internal, closed classification. Never an attacker-supplied string.
+    event_category VARCHAR(40) NOT NULL,
+    -- NULL, not FALSE: "no challenge was configured, so none was checked" is a
+    -- different fact from "a challenge was checked and failed".
+    authenticated BOOLEAN,
+    status VARCHAR(30) NOT NULL DEFAULT 'received',
+    -- The C1 refusal/error code, or an internal error code. NULL for a success.
+    outcome_code VARCHAR(60),
+    -- Whether a redelivery could help. NULL when the status is not a refusal, so
+    -- "not applicable" is never confused with "no".
+    retryable BOOLEAN,
+    -- The status the provider ACTUALLY received. NULL while the delivery is open.
+    http_status INTEGER,
+    -- Correlation only (see the no-FK note above).
+    claim_id VARCHAR(50),
+    payment_session_id VARCHAR(64),
+    provider_invoice_id VARCHAR(100),
+    provider_reference VARCHAR(100),
+    -- sha256 correlation aid. NEVER unique, never an identity.
+    payload_fingerprint VARCHAR(64),
+    diagnostic VARCHAR(200),
+    received_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- NULL while the delivery is still open — including a delivery abandoned by a
+    -- process that died mid-request. Such a row is reported as INCOMPLETE and
+    -- never as a success.
+    processed_at TIMESTAMP WITH TIME ZONE,
+    CONSTRAINT intasend_webhook_deliveries_provider_check
+        CHECK (provider IN ('intasend')),
+    CONSTRAINT intasend_webhook_deliveries_event_category_check
+        CHECK (event_category IN ('collection_complete', 'collection_non_complete', 'collection_other', 'payout_batch', 'unrouted')),
+    CONSTRAINT intasend_webhook_deliveries_status_check
+        CHECK (status IN ('received', 'processing', 'authentication_rejected', 'validation_rejected', 'reconciled', 'already_reconciled', 'refused_retryable', 'refused_permanent', 'ignored', 'collection_failure_recorded', 'payout_verification_routed', 'internal_error')),
+    -- A settled delivery must carry the status code it answered with; an open one
+    -- must not claim one. This makes "http_status is the status the provider
+    -- received" true at the storage layer, not only in the writer.
+    CONSTRAINT intasend_webhook_deliveries_processed_shape_check
+        CHECK (
+            (processed_at IS NULL AND status IN ('received', 'processing'))
+            OR (processed_at IS NOT NULL AND http_status IS NOT NULL)
+        )
+);
+-- The list read: most recent first, optionally filtered by status.
+CREATE INDEX idx_intasend_webhook_deliveries_received ON intasend_webhook_deliveries(received_at);
+CREATE INDEX idx_intasend_webhook_deliveries_status ON intasend_webhook_deliveries(status);
+-- Correlation lookups.
+CREATE INDEX idx_intasend_webhook_deliveries_claim ON intasend_webhook_deliveries(claim_id);
+CREATE INDEX idx_intasend_webhook_deliveries_session ON intasend_webhook_deliveries(payment_session_id);
+CREATE INDEX idx_intasend_webhook_deliveries_invoice ON intasend_webhook_deliveries(provider_invoice_id);
+CREATE INDEX idx_intasend_webhook_deliveries_fingerprint ON intasend_webhook_deliveries(payload_fingerprint);

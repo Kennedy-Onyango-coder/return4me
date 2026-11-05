@@ -30,6 +30,12 @@ describe('adminPermissions', () => {
     // "manage everything" permission exists, and defining one would be the
     // unenforced "fake permission" the module comment forbids. This test
     // fails loudly if someone adds the string without an enforcing endpoint.
+    //
+    // GATE C / STAGE C2 adds `PAYMENTS_WEBHOOK_READ`, which IS enforced: it
+    // guards the read-only GET /api/admin/webhook-deliveries route
+    // (routes/adminWebhookDeliveries.ts). Adding it here is therefore not a fake
+    // permission — the entry and its enforcement land together, and
+    // src/__tests__/adminWebhookDeliveriesEndpointC2.test.ts pins the 403s.
     expect(Object.values(ADMIN_PERMISSIONS)).not.toContain('claims.manage');
     expect(Object.keys(ADMIN_PERMISSIONS).sort()).toEqual([
       'CLAIMS_DETAIL',
@@ -38,8 +44,23 @@ describe('adminPermissions', () => {
       'CLAIMS_READ',
       'CLAIMS_SETTLEMENT_APPROVE',
       'CLAIMS_SETTLEMENT_INITIATE',
+      'PAYMENTS_WEBHOOK_READ',
     ]);
   });
+
+  it('the delivery log read is a diagnostic grant, held by the admin role only', () => {
+    // C2: the webhook-delivery log is READ-ONLY diagnostics. The single admin
+    // role holds it (the documented flat model, so no administrator loses
+    // access); every other role, including the incomplete-login role, holds
+    // nothing.
+    const admin = { role: 'admin', username: 'a' };
+    expect(adminHasPermission(admin, ADMIN_PERMISSIONS.PAYMENTS_WEBHOOK_READ)).toBe(true);
+    expect(
+      adminHasPermission({ role: 'admin_pending_2fa' }, ADMIN_PERMISSIONS.PAYMENTS_WEBHOOK_READ),
+    ).toBe(false);
+    expect(adminHasPermission({ role: 'owner' }, ADMIN_PERMISSIONS.PAYMENTS_WEBHOOK_READ)).toBe(false);
+  });
+
 
   it('the two payout-repair permissions are defined but granted to NO role', () => {
     // Phase 1 adds the endpoints and the permissions, deliberately without a

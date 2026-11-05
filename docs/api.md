@@ -158,7 +158,11 @@ The webhook is the only authority on whether money moved. It is authenticated
 against `INTASEND_WEBHOOK_CHALLENGE` (the challenge value IntaSend sends in the
 collection payload), its amount is reconciled against the persisted payment
 session, and the escrow transition is a compare-and-swap so a repeated delivery
-cannot pay twice. A completed payment that was missed by the webhook is also
+cannot pay twice. Its response reports what was actually decided: `200` for a
+reconciliation (including an idempotent duplicate, marked
+`"outcome":"already_reconciled"`), and never a `2xx` for a refusal - `409` for a
+permanent conflict and `424` when the authoritative provider lookup could not
+verify the collection. A completed payment that was missed by the webhook is also
 recovered through the authoritative IntaSend status API (on demand and by a
 background sweep). See [claims-and-payments.md](claims-and-payments.md).
 
@@ -302,6 +306,23 @@ and never invents a translation.
 | GET | `/api/admin/notifications` | Notification failure console |
 | POST | `/api/admin/notifications/:id/retry` | Retry one row |
 | POST | `/api/admin/social/:id/retry` | Retry a social publication |
+
+### Webhook deliveries (read-only)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/admin/webhook-deliveries` | Durable record of every incoming IntaSend callback |
+
+Permission `payments.webhook_read` (held by the single `admin` role). Bounded
+(25 default, 100 maximum) and filterable by `limit`, `offset`, `status` (repeatable),
+`eventCategory`, `claimId`, `paymentSessionId`, `providerInvoiceId`,
+`receivedFrom`, `receivedTo`. Each row carries the outcome, the HTTP status the
+provider actually received, retryability, the derived `sessionResolution` and an
+`incomplete` flag for deliveries that never reached a terminal state.
+
+There is no mutation here: nothing can retry, replay or resolve a delivery. The
+raw payload, the webhook `challenge` and the payer's phone number are not stored.
+See [operations.md](operations.md#a-webhook-delivery-is-in-doubt-what-did-we-actually-tell-intasend).
 
 The notification retry route refuses any event outside the retry-eligible list.
 See [notifications.md](notifications.md).

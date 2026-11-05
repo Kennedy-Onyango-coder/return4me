@@ -64,6 +64,11 @@ import {
   // This module only ever INSERTS into it (from the same transaction as the
   // assignment it describes); there is no update or delete path.
   item_agent_assignments as itemAgentAssignmentsTable,
+  // GATE C / STAGE C2 — one row per incoming IntaSend delivery ATTEMPT. This
+  // module INSERTS on arrival and UPDATEs only while the row is still open
+  // (received/processing); there is no delete path and no settled row is ever
+  // rewritten.
+  intasend_webhook_deliveries as webhookDeliveriesTable,
 } from "./schema.ts";
 import { eq, and, or, isNull, isNotNull, inArray, notInArray, lt, lte, gte, ne, desc, asc, sql, like } from "drizzle-orm";
 import bcrypt from 'bcryptjs';
@@ -122,6 +127,19 @@ import {
   type ItemAssignmentMethod,
   type ItemAssignmentTriggerSource,
 } from "../config/itemAgentAssignmentPolicy";
+// GATE C / STAGE C2 — the ONE webhook-delivery vocabulary. Imported (never
+// restated) so the stored row, the derived session resolution and the admin read
+// cannot disagree with the DDL that constrains them.
+import {
+  isOpenWebhookDeliveryStatus,
+  isWebhookDeliveryStatus,
+  WEBHOOK_DELIVERY_OPEN_STATUSES,
+  WEBHOOK_DELIVERY_PAGE_DEFAULT,
+  WEBHOOK_DELIVERY_PAGE_MAX,
+  type WebhookDeliveryEventCategory,
+  type WebhookDeliveryStatus,
+  type WebhookSessionResolution,
+} from "../config/webhookDeliveries";
 
 // AGENT DASHBOARD BATCH 2 — the ONE payout-destination-change policy. The data
 // layer asks these pure functions rather than restating the activation rule, so
@@ -661,6 +679,162 @@ export const ADMIN_CLAIMS_MAX_LIMIT = 100;
  */
 export const ADMIN_LOST_REPORTS_DEFAULT_LIMIT = 25;
 export const ADMIN_LOST_REPORTS_MAX_LIMIT = 100;
+
+// ============================================================================
+// GATE C / STAGE C2 — WEBHOOK DELIVERY RECORDS (types shared with the writer,
+// the read path and the admin route)
+// ============================================================================
+
+/**
+ * An ARRIVAL: the facts known when the delivery is first seen. Everything here
+ * is already sanitised by the caller through src/config/webhookDeliveries.ts —
+ * this layer stores what it is given and never re-interprets a payload.
+ */
+export interface WebhookDeliveryRecordInput {
+  /** Application-generated (`WHD-…`), bounded by WEBHOOK_DELIVERY_ID_MAX. */
+  id: string;
+  eventCategory: WebhookDeliveryEventCategory;
+  eventTopic?: string | null;
+  /**
+   * `true`  — a challenge was configured and verified for this delivery
+   * `false` — a challenge was configured and did NOT verify
+   * `null`  — no challenge was configured, so nothing was checked
+   */
+  authenticated?: boolean | null;
+  claimId?: string | null;
+  paymentSessionId?: string | null;
+  providerInvoiceId?: string | null;
+  providerReference?: string | null;
+  payloadFingerprint?: string | null;
+  diagnostic?: string | null;
+  /** Injected for determinism in tests; defaults to now. */
+  receivedAt?: Date;
+}
+
+/**
+ * A SETTLEMENT: what the application decided and what the provider was actually
+ * told. `httpStatus` is mandatory because a settled delivery that does not know
+ * the status it answered with is not settled — the DDL enforces the same rule.
+ */
+export interface WebhookDeliverySettlement {
+  status: WebhookDeliveryStatus;
+  httpStatus: number;
+  outcomeCode?: string | null;
+  retryable?: boolean | null;
+  claimId?: string | null;
+  paymentSessionId?: string | null;
+  /**
+   * The authentication verdict, when one was reached. `undefined` means "not
+   * decided" (the request died, or no challenge was configured) and leaves the
+   * stored value untouched rather than asserting a check that never happened.
+   */
+  authenticated?: boolean | null;
+  diagnostic?: string | null;
+  processedAt?: Date;
+}
+
+export interface AdminWebhookDeliveryListParams {
+  limit?: number;
+  offset?: number;
+  /** One or more delivery statuses (closed vocabulary). */
+  statuses?: string[];
+  eventCategory?: string;
+  claimId?: string;
+  paymentSessionId?: string;
+  providerInvoiceId?: string;
+  receivedFrom?: Date;
+  receivedTo?: Date;
+}
+
+/**
+ * A delivery row as read back for administration. `session_resolution` is
+ * DERIVED HERE, at read time, and never persisted: the stored HTTP result must
+ * stay frozen, while "was this collection eventually reconciled, and by what"
+ * is a property of the whole history and can change after the row was written.
+ */
+export interface AdminWebhookDeliveryRow {
+  id: string;
+  provider: string;
+  event_topic: string | null;
+  event_category: string;
+  authenticated: boolean | null;
+  status: string;
+  outcome_code: string | null;
+  retryable: boolean | null;
+  http_status: number | null;
+  claim_id: string | null;
+  payment_session_id: string | null;
+  provider_invoice_id: string | null;
+  provider_reference: string | null;
+  payload_fingerprint: string | null;
+  diagnostic: string | null;
+  received_at: string;
+  processed_at: string | null;
+  /** True while the delivery never reached a terminal status (INCOMPLETE). */
+  is_open: boolean;
+  /** Derived, never stored. See deriveWebhookSessionResolution(). */
+  session_resolution: WebhookSessionResolution;
+}
+
+/**
+ * DERIVES "was the underlying payment session resolved, and by what" for one
+ * delivery, WITHOUT storing the answer.
+ *
+ * WHY DERIVED AND NOT A COLUMN. The stored row is a historical fact — "we
+ * answered this delivery with this status" — and must never be rewritten. Whether
+ * the collection was eventually reconciled is a property of the WHOLE history:
+ * it can become true minutes later, via a later delivery or via the recovery
+ * sweep. Persisting it would mean mutating a settled row and would let the record
+ * of the past change; deriving it at read time keeps both statements true at once.
+ *
+ * Every branch is conservative:
+ *   * silence is `unresolved`, never a success;
+ *   * it never returns `no_payment_session` — only the caller knows whether a
+ *     session id was recorded at all, so that verdict is assigned there;
+ *   * `resolved_by_this_delivery` requires this delivery's OWN status to be
+ *     `reconciled` — the canonical confirmation path reported it;
+ *   * `already_resolved_before_this_delivery` is used when the session was
+ *     confirmed at or before this delivery arrived, i.e. this delivery changed
+ *     nothing;
+ *   * when the session was confirmed AFTER this delivery arrived, a later
+ *     reconciling delivery is looked for; finding none is reported honestly as
+ *     `resolved_by_other_recovery` (the status route or the sweep), never as
+ *     something this table did.
+ */
+export function deriveWebhookSessionResolution(input: {
+  deliveryStatus: string;
+  deliveryReceivedAt: Date | string | null;
+  /** `payment_sessions.confirmed_at` for the correlated session, if any. */
+  sessionConfirmedAt: Date | string | null;
+  /** `received_at` of every delivery in this session whose status is `reconciled`. */
+  reconciledDeliveryReceivedAt: Array<Date | string | null>;
+}): WebhookSessionResolution {
+  if (input.deliveryStatus === 'reconciled') return 'resolved_by_this_delivery';
+
+  const confirmedAt = toMs(input.sessionConfirmedAt);
+  if (confirmedAt === null) return 'unresolved';
+
+  const receivedAt = toMs(input.deliveryReceivedAt);
+  // No usable arrival time on this row: we cannot say that the resolution came
+  // after it, so we report the only fact we do have — it was already resolved.
+  if (receivedAt === null || confirmedAt <= receivedAt) {
+    return 'already_resolved_before_this_delivery';
+  }
+
+  const laterReconciled = input.reconciledDeliveryReceivedAt
+    .map((value) => toMs(value))
+    .some((value) => value !== null && receivedAt !== null && value >= receivedAt);
+
+  return laterReconciled ? 'resolved_by_later_delivery' : 'resolved_by_other_recovery';
+}
+
+/** Epoch millis for a timestamp-ish value; null when it is not a usable time. */
+function toMs(value: any): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const d = value instanceof Date ? value : new Date(value);
+  const ms = d.getTime();
+  return isNaN(ms) ? null : ms;
+}
 
 /** ISO-8601 normaliser that preserves null/undefined instead of inventing a value. */
 function toIsoOrNull(value: any): string | null {
@@ -11119,7 +11293,354 @@ await drizzleDb.transaction(async (tx) => {
   }
 
   // ==========================================================================
+  // GATE C / STAGE C2 — WEBHOOK DELIVERY RECORDS
+  //
+  // ONE DELIVERY ATTEMPT, ONE ROW, ONE REQUEST.
+  //
+  //   recordWebhookDelivery()          INSERT on arrival, status 'received'
+  //   markWebhookDeliveryProcessing()  'received' -> 'processing'
+  //   finishWebhookDelivery()          open -> exactly ONE terminal status
+  //
+  // WHY THE TRANSITIONS ARE COMPARE-AND-SWAP. Every update names the state it
+  // expects to find (`status = 'received'`, or `status IN (open statuses)`), so a
+  // settled row can never be rewritten and two concurrent requests for the same
+  // id cannot both move it. The method returns whether a row actually moved; a
+  // caller that gets `false` must NOT conclude the delivery was processed.
+  //
+  // WHY NOTHING HERE THROWS A FALSE SUCCESS. A failed read or write raises, and
+  // the caller (services/webhookDeliveryLog.ts) turns that into "we could not
+  // record this delivery" — it never turns it into a recorded success. Nothing in
+  // this section makes a financial decision; the only writer of `reconciled` is a
+  // settlement built from a C1 outcome that itself reported a reconciliation.
+  // ==========================================================================
+
+  /**
+   * Records the ARRIVAL of a delivery. Called before the handler decides
+   * anything, so a delivery the application later refuses still leaves a trace —
+   * which is the entire point of this stage.
+   */
+  public async recordWebhookDelivery(input: WebhookDeliveryRecordInput): Promise<void> {
+    try {
+      await drizzleDb.insert(webhookDeliveriesTable).values({
+        id: input.id,
+        provider: 'intasend',
+        event_topic: input.eventTopic ?? null,
+        event_category: input.eventCategory,
+        authenticated: input.authenticated ?? null,
+        // An arrival is never a terminal state and never carries a result.
+        status: 'received',
+        outcome_code: null,
+        retryable: null,
+        http_status: null,
+        claim_id: input.claimId ?? null,
+        payment_session_id: input.paymentSessionId ?? null,
+        provider_invoice_id: input.providerInvoiceId ?? null,
+        provider_reference: input.providerReference ?? null,
+        payload_fingerprint: input.payloadFingerprint ?? null,
+        diagnostic: input.diagnostic ?? null,
+        received_at: input.receivedAt ?? new Date(),
+        processed_at: null,
+      });
+    } catch (error) {
+      console.error('Failed to record webhook delivery:', error);
+      throw new Error('Failed to record webhook delivery.', { cause: error });
+    }
+  }
+
+  /**
+   * Marks an arrival as actively processing. Open-only CAS: returns false when
+   * the row is missing or already settled, and never resurrects a terminal row.
+   */
+  public async markWebhookDeliveryProcessing(deliveryId: string): Promise<boolean> {
+    try {
+      const rows = await drizzleDb
+        .update(webhookDeliveriesTable)
+        .set({ status: 'processing' })
+        .where(
+          and(
+            eq(webhookDeliveriesTable.id, deliveryId),
+            eq(webhookDeliveriesTable.status, 'received'),
+          ),
+        )
+        .returning({ id: webhookDeliveriesTable.id });
+      return (rows as any[]).length > 0;
+    } catch (error) {
+      console.error('Failed to mark webhook delivery as processing:', error);
+      throw new Error('Failed to mark webhook delivery as processing.', { cause: error });
+    }
+  }
+
+  /**
+   * Settles a delivery with the status the provider ACTUALLY received.
+   *
+   * VALIDATION BEFORE THE WRITE, because the in-memory test double does not
+   * enforce the CHECK constraints the DDL declares: an open or invented status
+   * would be persisted in tests and rejected only in production.
+   */
+  public async finishWebhookDelivery(
+    deliveryId: string,
+    settlement: WebhookDeliverySettlement,
+  ): Promise<boolean> {
+    if (!isWebhookDeliveryStatus(settlement.status)) {
+      throw new Error(`Refusing to settle a webhook delivery with an unknown status.`);
+    }
+    if (isOpenWebhookDeliveryStatus(settlement.status)) {
+      throw new Error('Refusing to settle a webhook delivery into a non-terminal status.');
+    }
+    if (!Number.isInteger(settlement.httpStatus) || settlement.httpStatus < 100 || settlement.httpStatus > 599) {
+      throw new Error('Refusing to settle a webhook delivery without a real HTTP status.');
+    }
+
+    try {
+      const patch: Record<string, any> = {
+        status: settlement.status,
+        outcome_code: settlement.outcomeCode ?? null,
+        retryable: settlement.retryable ?? null,
+        http_status: settlement.httpStatus,
+        processed_at: settlement.processedAt ?? new Date(),
+        diagnostic: settlement.diagnostic ?? null,
+      };
+      // Correlation learned during processing is filled in only when present; a
+      // null here must not erase an id recorded at arrival.
+      if (settlement.claimId) patch.claim_id = settlement.claimId;
+      if (settlement.paymentSessionId) patch.payment_session_id = settlement.paymentSessionId;
+      // `undefined` = no verdict was reached, so the column keeps whatever the
+      // arrival wrote (NULL) instead of asserting a check that never ran.
+      if (settlement.authenticated !== undefined) patch.authenticated = settlement.authenticated;
+
+      const rows = await drizzleDb
+        .update(webhookDeliveriesTable)
+        .set(patch)
+        .where(
+          and(
+            eq(webhookDeliveriesTable.id, deliveryId),
+            inArray(webhookDeliveriesTable.status, [...WEBHOOK_DELIVERY_OPEN_STATUSES]),
+          ),
+        )
+        .returning({ id: webhookDeliveriesTable.id });
+      return (rows as any[]).length > 0;
+    } catch (error) {
+      console.error('Failed to settle webhook delivery:', error);
+      throw new Error('Failed to settle webhook delivery.', { cause: error });
+    }
+  }
+
+  // ==========================================================================
+  // GATE C / STAGE C2 — READ PATH (administrator console, READ-ONLY)
+  // ==========================================================================
+
+  /**
+   * Bounded, read-only listing of recorded deliveries.
+   *
+   * WHAT IT CANNOT DO: it selects only. It never acknowledges, replays or
+   * re-settles anything, and it never returns the payload — only a fingerprint,
+   * which is a digest of the fields that identify the event.
+   *
+   * WHY THE PAGE IS RE-SORTED AND RE-CUT IN JS. The test double matches rows but
+   * applies no ORDER BY/LIMIT, so trusting it would make an unbounded page look
+   * correct in tests and unbounded in production. Sorting and slicing here means
+   * the same bounds hold on both engines, mirroring listAdminClaims().
+   *
+   * WHY SESSION RESOLUTION IS DERIVED. See deriveWebhookSessionResolution(): it is
+   * history-wide, so it cannot live as a column on this row.
+   */
+  public async listAdminWebhookDeliveries(
+    params: AdminWebhookDeliveryListParams = {},
+  ): Promise<{ rows: AdminWebhookDeliveryRow[]; hasMore: boolean }> {
+    const limit = Math.min(
+      Math.max(1, Math.floor(params.limit ?? WEBHOOK_DELIVERY_PAGE_DEFAULT)),
+      WEBHOOK_DELIVERY_PAGE_MAX,
+    );
+    const offset = Math.max(0, Math.floor(params.offset ?? 0));
+
+    try {
+      const where: any[] = [];
+      if (params.statuses && params.statuses.length > 0) {
+        // CLOSED vocabulary: an unrecognised status filter must not silently widen
+        // the page to "everything" — that is how a caller ends up believing it
+        // filtered for refusals when it filtered for nothing.
+        const statuses = params.statuses.filter((status) => isWebhookDeliveryStatus(status));
+        if (statuses.length === 0) return { rows: [], hasMore: false };
+        where.push(inArray(webhookDeliveriesTable.status, statuses as any));
+      }
+      if (params.eventCategory) {
+        where.push(eq(webhookDeliveriesTable.event_category, params.eventCategory));
+      }
+      if (params.claimId) where.push(eq(webhookDeliveriesTable.claim_id, params.claimId));
+      if (params.paymentSessionId) {
+        where.push(eq(webhookDeliveriesTable.payment_session_id, params.paymentSessionId));
+      }
+      if (params.providerInvoiceId) {
+        where.push(eq(webhookDeliveriesTable.provider_invoice_id, params.providerInvoiceId));
+      }
+      if (params.receivedFrom) {
+        where.push(gte(webhookDeliveriesTable.received_at, params.receivedFrom));
+      }
+      if (params.receivedTo) {
+        where.push(lte(webhookDeliveriesTable.received_at, params.receivedTo));
+      }
+
+      const rawRows: any[] = await drizzleDb
+        .select({
+          id: webhookDeliveriesTable.id,
+          provider: webhookDeliveriesTable.provider,
+          event_topic: webhookDeliveriesTable.event_topic,
+          event_category: webhookDeliveriesTable.event_category,
+          authenticated: webhookDeliveriesTable.authenticated,
+          status: webhookDeliveriesTable.status,
+          outcome_code: webhookDeliveriesTable.outcome_code,
+          retryable: webhookDeliveriesTable.retryable,
+          http_status: webhookDeliveriesTable.http_status,
+          claim_id: webhookDeliveriesTable.claim_id,
+          payment_session_id: webhookDeliveriesTable.payment_session_id,
+          provider_invoice_id: webhookDeliveriesTable.provider_invoice_id,
+          provider_reference: webhookDeliveriesTable.provider_reference,
+          payload_fingerprint: webhookDeliveriesTable.payload_fingerprint,
+          diagnostic: webhookDeliveriesTable.diagnostic,
+          received_at: webhookDeliveriesTable.received_at,
+          processed_at: webhookDeliveriesTable.processed_at,
+        })
+        .from(webhookDeliveriesTable)
+        .where(where.length > 0 ? and(...where) : undefined)
+        .orderBy(desc(webhookDeliveriesTable.received_at), desc(webhookDeliveriesTable.id))
+        .limit(limit + 1);
+
+      const sorted = [...rawRows].sort((a, b) => {
+        const at = toMs(a.received_at) ?? 0;
+        const bt = toMs(b.received_at) ?? 0;
+        if (bt !== at) return bt - at;
+        return String(b.id ?? '').localeCompare(String(a.id ?? ''));
+      });
+      const page = sorted.slice(offset, offset + limit);
+      const hasMore = sorted.length > offset + limit;
+      const resolution = await this.webhookSessionResolutions(page);
+
+      return {
+        rows: page.map((r) => {
+          const status = String(r.status ?? '');
+          const sessionId = r.payment_session_id ? String(r.payment_session_id) : '';
+          // No recorded session id, or an id with no local session row, is
+          // `no_payment_session` — never a resolution. A session that exists but
+          // is not confirmed is `unresolved`.
+          const sessionResolution: WebhookSessionResolution = sessionId
+            ? resolution.get(sessionId) ?? 'no_payment_session'
+            : 'no_payment_session';
+          return {
+            id: String(r.id),
+            provider: String(r.provider ?? ''),
+            event_topic: r.event_topic ?? null,
+            event_category: String(r.event_category ?? ''),
+            authenticated: r.authenticated === null || r.authenticated === undefined
+              ? null
+              : r.authenticated === true,
+            status,
+            outcome_code: r.outcome_code ?? null,
+            retryable: r.retryable === null || r.retryable === undefined
+              ? null
+              : r.retryable === true,
+            http_status: r.http_status === null || r.http_status === undefined
+              ? null
+              : Number(r.http_status),
+            claim_id: r.claim_id ?? null,
+            payment_session_id: r.payment_session_id ?? null,
+            provider_invoice_id: r.provider_invoice_id ?? null,
+            provider_reference: r.provider_reference ?? null,
+            payload_fingerprint: r.payload_fingerprint ?? null,
+            diagnostic: r.diagnostic ?? null,
+            received_at: toIsoOrNull(r.received_at) ?? '',
+            processed_at: toIsoOrNull(r.processed_at),
+            // An OPEN status is INCOMPLETE, never success.
+            is_open: isOpenWebhookDeliveryStatus(status),
+            session_resolution: sessionResolution,
+          };
+        }),
+        hasMore,
+      };
+    } catch (error) {
+      console.error('Failed to list webhook deliveries:', error);
+      throw new Error('Failed to list webhook deliveries.', { cause: error });
+    }
+  }
+
+  /**
+   * Session resolution keyed by payment_session_id for one page of deliveries.
+   * Two extra BOUNDED reads (session confirmations, reconciling deliveries). A
+   * failure degrades to `unresolved` — a diagnostic aid must not become a new
+   * outage, and silence must never be reported as a resolution.
+   */
+  private async webhookSessionResolutions(
+    page: any[],
+  ): Promise<Map<string, WebhookSessionResolution>> {
+    const result = new Map<string, WebhookSessionResolution>();
+    const sessionIds = Array.from(
+      new Set(
+        page
+          .map((r) => (r.payment_session_id ? String(r.payment_session_id) : ''))
+          .filter((id) => id.length > 0),
+      ),
+    );
+    if (sessionIds.length === 0) return result;
+
+    let confirmedById = new Map<string, string | null>();
+    let reconciledBySession = new Map<string, Array<string | null>>();
+    try {
+      const sessionRows: any[] = await drizzleDb
+        .select({
+          id: paymentSessionsTable.id,
+          confirmed_at: paymentSessionsTable.confirmed_at,
+        })
+        .from(paymentSessionsTable)
+        .where(inArray(paymentSessionsTable.id, sessionIds));
+      confirmedById = new Map(
+        sessionRows.map((s) => [String(s.id), toIsoOrNull(s.confirmed_at)]),
+      );
+
+      const reconciledRows: any[] = await drizzleDb
+        .select({
+          payment_session_id: webhookDeliveriesTable.payment_session_id,
+          received_at: webhookDeliveriesTable.received_at,
+        })
+        .from(webhookDeliveriesTable)
+        .where(
+          and(
+            eq(webhookDeliveriesTable.status, 'reconciled'),
+            inArray(webhookDeliveriesTable.payment_session_id, sessionIds),
+          ),
+        );
+      for (const r of reconciledRows) {
+        const key = String(r.payment_session_id ?? '');
+        if (!key) continue;
+        const list = reconciledBySession.get(key) ?? [];
+        list.push(toIsoOrNull(r.received_at));
+        reconciledBySession.set(key, list);
+      }
+    } catch (error) {
+      console.error('Failed to derive webhook session resolution:', error);
+      return result;
+    }
+
+    for (const row of page) {
+      const sessionId = row.payment_session_id ? String(row.payment_session_id) : '';
+      // An id with no local session row is not a resolution — it is an
+      // association this application cannot stand behind, so it stays absent
+      // from the map and the caller reports `no_payment_session`.
+      if (!sessionId || !confirmedById.has(sessionId)) continue;
+      result.set(
+        sessionId,
+        deriveWebhookSessionResolution({
+          deliveryStatus: String(row.status ?? ''),
+          deliveryReceivedAt: toIsoOrNull(row.received_at),
+          sessionConfirmedAt: confirmedById.get(sessionId) ?? null,
+          reconciledDeliveryReceivedAt: reconciledBySession.get(sessionId) ?? [],
+        }),
+      );
+    }
+    return result;
+  }
+
+  // ==========================================================================
   // AGENT DASHBOARD BATCH 2 — PAYOUT DESTINATION CHANGES
+
   //
   // A proposed destination lives ONLY in `agent_payout_destination_changes`
   // until BOTH real phone verification and admin approval exist. Nothing in this

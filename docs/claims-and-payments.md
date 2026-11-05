@@ -127,6 +127,27 @@ authoritative IntaSend payment-status API, and a COMPLETE, amount-reconciled
 response is confirmed through the SAME canonical confirmation path the webhook
 uses.
 
+### Callback acknowledgement
+
+A callback is answered with what the application ACTUALLY decided, never with a
+blanket success. The canonical confirmation path returns one of three explicit
+outcomes (`src/config/paymentConfirmationOutcome.ts`), and the route derives its
+response from that outcome rather than from "the handler did not throw":
+
+| Outcome | When | Response |
+|---|---|---|
+| reconciled | this delivery won the compare-and-swap | `200 {"status":"ok"}` |
+| already reconciled | an earlier delivery settled the same collection | `200 {"status":"ok","outcome":"already_reconciled"}` |
+| refused | nothing was reconciled; a stable code says why | `409` (permanent) or `424` (the provider lookup could not verify it) |
+
+A refusal is never reported as success, an unexpected exception is a 5xx rather
+than a 2xx, and the response body carries only the outcome code and its
+retryability - never an amount, a phone number, a pickup code or any part of the
+payload. Recovery does not depend on the provider retrying a non-2xx callback
+(IntaSend's retry behaviour is unverified): the sweep and the on-demand status
+route are the durable recovery, and they re-read the provider rather than
+trusting the callback.
+
 #### Late payment after the window
 
 The claim window (24h) and a single M-Pesa prompt's session window (minutes)

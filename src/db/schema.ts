@@ -10,6 +10,25 @@ import {
   PAYOUT_REPAIR_OPERATION_SQL_LIST,
   PAYOUT_REPAIR_STATUS_SQL_LIST,
 } from "../config/payoutRepairPolicy";
+// GATE C / STAGE C2 — the webhook-delivery vocabulary and column widths. Generated
+// from one module so the Drizzle definition, sql/schema.sql and the idempotent
+// runtime DDL in src/db/index.ts cannot drift apart.
+import {
+  WEBHOOK_DELIVERY_PROVIDER_SQL_LIST,
+  WEBHOOK_DELIVERY_EVENT_CATEGORY_SQL_LIST,
+  WEBHOOK_DELIVERY_STATUS_SQL_LIST,
+  WEBHOOK_DELIVERY_ID_MAX,
+  WEBHOOK_DELIVERY_TOPIC_MAX,
+  WEBHOOK_DELIVERY_EVENT_CATEGORY_MAX,
+  WEBHOOK_DELIVERY_STATUS_MAX,
+  WEBHOOK_DELIVERY_OUTCOME_CODE_MAX,
+  WEBHOOK_DELIVERY_CLAIM_ID_MAX,
+  WEBHOOK_DELIVERY_SESSION_ID_MAX,
+  WEBHOOK_DELIVERY_PROVIDER_INVOICE_MAX,
+  WEBHOOK_DELIVERY_PROVIDER_REFERENCE_MAX,
+  WEBHOOK_DELIVERY_FINGERPRINT_MAX,
+  WEBHOOK_DELIVERY_DIAGNOSTIC_MAX,
+} from "../config/webhookDeliveries";
 // B1 — the ONE payout-method policy, imported from the pure config module the
 // settlement executor itself asks rather than restated as a literal, so the
 // column default, the Drizzle definition, sql/schema.sql and the runtime
@@ -2134,3 +2153,123 @@ export const lost_reports = pgTable("lost_reports", {
     idx_lost_reports_county: index("idx_lost_reports_county").on(table.county),
   };
 });
+
+// =============================================================================
+// GATE C / STAGE C2 — DURABLE WEBHOOK DELIVERY RECORDS.
+//
+// WHAT A ROW IS. ONE HTTP DELIVERY ATTEMPT of an incoming IntaSend callback,
+// captured before the application decides anything about it and settled once the
+// decision (and the response actually written) is known. It records:
+//
+//   authenticated     did the shared challenge verify for THIS delivery
+//                     (NULL = authentication was not required, e.g. sandbox)
+//   event_category    the internal, closed classification of the payload
+//   status            the processing lifecycle (see ../config/webhookDeliveries)
+//   outcome_code      the C1 refusal/error code, or an internal error code
+//   retryable         whether a redelivery could help (NULL when not a refusal)
+//   http_status       the status the provider ACTUALLY received
+//   claim_id /
+//   payment_session_id  correlation, only ever a validated value
+//
+// WHAT A ROW IS NOT. It is not financial state, not proof of payment, and not a
+// source any money-moving code reads. `status = 'reconciled'` can only be written
+// by a delivery whose canonical confirmation path itself reported a
+// reconciliation; nothing infers money from this table.
+//
+// NO UNIQUE CONSTRAINT ON PROVIDER IDENTITY. IntaSend supplies no stable event
+// id, and repeated deliveries of the SAME logical event are exactly what must be
+// recordable (a duplicate must produce a second row, not be rejected). So the
+// primary key is an application id, and provider_invoice_id /
+// provider_reference / payload_fingerprint are indexed, never unique. The
+// fingerprint is a correlation AID (see buildWebhookDeliveryFingerprint), never
+// an identity.
+//
+// NO FOREIGN KEYS, DELIBERATELY. A delivery can legitimately name a claim or
+// session this database has never seen (an unknown api_ref, a session created
+// outside this deployment). An FK would make the INSERT fail — destroying the
+// record of exactly the delivery an operator needs to investigate — and ON
+// DELETE SET NULL/CASCADE would rewrite or erase historical deliveries. The
+// correlation columns are therefore plain, sanitised id strings; writers only
+// fill payment_session_id after confirming the session row exists.
+//
+// NO RAW PAYLOAD AND NO SECRETS. The challenge is never stored, and no payload
+// text, phone number or amount is copied here; `diagnostic` is a bounded,
+// sanitised internal note.
+//
+// APPEND-ONLY FROM THE APPLICATION'S POINT OF VIEW. A row is INSERTed at
+// arrival and updated only by the same request that created it, only while it is
+// still open ('received' -> 'processing' -> one terminal status). No code
+// rewrites a settled row, and there is no delete path: a historical delivery
+// result never changes.
+// =============================================================================
+export const intasend_webhook_deliveries = pgTable(
+  "intasend_webhook_deliveries",
+  {
+    id: varchar("id", { length: WEBHOOK_DELIVERY_ID_MAX }).primaryKey(),
+    provider: varchar("provider", { length: 20 }).default("intasend").notNull(),
+    // The provider's own topic string, echoed for triage. Sanitised + bounded
+    // before it is written; NULL when the payload carried none.
+    event_topic: varchar("event_topic", { length: WEBHOOK_DELIVERY_TOPIC_MAX }),
+    event_category: varchar("event_category", { length: WEBHOOK_DELIVERY_EVENT_CATEGORY_MAX }).notNull(),
+    // NULL, not false: "no challenge was configured, so none was checked" is a
+    // different fact from "a challenge was checked and failed".
+    authenticated: boolean("authenticated"),
+    status: varchar("status", { length: WEBHOOK_DELIVERY_STATUS_MAX }).default("received").notNull(),
+    outcome_code: varchar("outcome_code", { length: WEBHOOK_DELIVERY_OUTCOME_CODE_MAX }),
+    retryable: boolean("retryable"),
+    http_status: integer("http_status"),
+    claim_id: varchar("claim_id", { length: WEBHOOK_DELIVERY_CLAIM_ID_MAX }),
+    payment_session_id: varchar("payment_session_id", { length: WEBHOOK_DELIVERY_SESSION_ID_MAX }),
+    provider_invoice_id: varchar("provider_invoice_id", { length: WEBHOOK_DELIVERY_PROVIDER_INVOICE_MAX }),
+    provider_reference: varchar("provider_reference", { length: WEBHOOK_DELIVERY_PROVIDER_REFERENCE_MAX }),
+    payload_fingerprint: varchar("payload_fingerprint", { length: WEBHOOK_DELIVERY_FINGERPRINT_MAX }),
+    diagnostic: varchar("diagnostic", { length: WEBHOOK_DELIVERY_DIAGNOSTIC_MAX }),
+    received_at: timestamp("received_at", { withTimezone: true }).defaultNow().notNull(),
+    // NULL while the delivery is still open — including a delivery abandoned by
+    // a process that died mid-request. Such a row is reported as INCOMPLETE and
+    // never as a success.
+    processed_at: timestamp("processed_at", { withTimezone: true }),
+  },
+  (table) => {
+    return {
+      // The list read is "most recent first", filtered by status.
+      idx_intasend_webhook_deliveries_received: index("idx_intasend_webhook_deliveries_received").on(
+        table.received_at
+      ),
+      idx_intasend_webhook_deliveries_status: index("idx_intasend_webhook_deliveries_status").on(table.status),
+      // Correlation lookups: "what happened to this claim's deliveries".
+      idx_intasend_webhook_deliveries_claim: index("idx_intasend_webhook_deliveries_claim").on(table.claim_id),
+      idx_intasend_webhook_deliveries_session: index("idx_intasend_webhook_deliveries_session").on(
+        table.payment_session_id
+      ),
+      // "Every delivery that mentioned this invoice / this provider reference".
+      idx_intasend_webhook_deliveries_invoice: index("idx_intasend_webhook_deliveries_invoice").on(
+        table.provider_invoice_id
+      ),
+      idx_intasend_webhook_deliveries_fingerprint: index("idx_intasend_webhook_deliveries_fingerprint").on(
+        table.payload_fingerprint
+      ),
+      // The closed vocabularies, enforced by the database as well as by code.
+      intasend_webhook_deliveries_provider_check: check(
+        "intasend_webhook_deliveries_provider_check",
+        sql`${table.provider} IN (${sql.raw(WEBHOOK_DELIVERY_PROVIDER_SQL_LIST)})`
+      ),
+      intasend_webhook_deliveries_event_category_check: check(
+        "intasend_webhook_deliveries_event_category_check",
+        sql`${table.event_category} IN (${sql.raw(WEBHOOK_DELIVERY_EVENT_CATEGORY_SQL_LIST)})`
+      ),
+      intasend_webhook_deliveries_status_check: check(
+        "intasend_webhook_deliveries_status_check",
+        sql`${table.status} IN (${sql.raw(WEBHOOK_DELIVERY_STATUS_SQL_LIST)})`
+      ),
+      // A settled delivery must carry the status code it answered with; an open
+      // one must not claim one. This is what makes "http_status is the status the
+      // provider received" true at the storage layer, not just in the writer.
+      intasend_webhook_deliveries_processed_shape_check: check(
+        "intasend_webhook_deliveries_processed_shape_check",
+        sql`(${table.processed_at} IS NULL AND ${table.status} IN ('received', 'processing'))
+          OR (${table.processed_at} IS NOT NULL AND ${table.http_status} IS NOT NULL)`
+      ),
+    };
+  }
+);
