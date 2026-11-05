@@ -419,3 +419,62 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/* ============================================================================
+   STAGE 3B — SHARED ADMIN SHELL (collapsible desktop sidebar)
+
+   The console keeps ONE navigation landmark and one definition of every
+   destination: `AdminView`'s existing <nav class="r4m-admin-nav">. This block
+   adds nothing to that markup — it only lets the long-standing 236px sidebar
+   column collapse to an icon rail, and it is scoped to the shell wrapper's
+   `data-sidebar` state so the expanded layout is byte-for-byte what it was.
+
+   Accessibility note: a collapsed rail CLIPS each button's label instead of
+   hiding it with `display: none`. The label text stays in the accessibility
+   tree, so an icon-only button is still announced by its full section name.
+   ========================================================================= */
+@media (min-width: 1024px) {
+  .r4m-admin-shell[data-sidebar='collapsed'] {
+    grid-template-columns: 4.5rem minmax(0, 1fr);
+    gap: 1.5rem;
+  }
+
+  .r4m-admin-shell[data-sidebar='collapsed'] .r4m-admin-nav {
+    width: 4.5rem;
+    padding-right: 0;
+  }
+
+  .r4m-admin-shell[data-sidebar='collapsed'] .r4m-admin-nav > button {
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .r4m-admin-shell[data-sidebar='collapsed'] .r4m-admin-nav > button > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .r4m-admin-shell[data-sidebar='collapsed'] .r4m-admin-nav-group {
+    display: none;
+  }
+
+  .r4m-admin-shell[data-sidebar='collapsed'] .r4m-admin-sidebar-toggle-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+}

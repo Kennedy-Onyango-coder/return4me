@@ -33,7 +33,7 @@ import {
 // PROGRAMME 1 — `Banknote` and `ScrollText` are the two icons the nav registry
 // already uses for the two sections this batch adds (Payout Integrity, Audit
 // Log). They are imported here because the sidebar renders its own buttons.
-import { ShieldCheck, BarChart2, Users, FileCheck, Coins, HelpCircle, Loader2, ArrowRight, AlertTriangle, RefreshCw, CheckCircle, ShieldAlert, Copy, Package, PackageSearch, ClipboardList, FileSearch, X, Banknote, ScrollText, ArrowDownLeft, ArrowUpRight, Landmark } from 'lucide-react';
+import { ShieldCheck, BarChart2, Users, FileCheck, Coins, HelpCircle, Loader2, ArrowRight, AlertTriangle, RefreshCw, CheckCircle, ShieldAlert, Copy, Package, PackageSearch, ClipboardList, FileSearch, X, Banknote, ScrollText, ArrowDownLeft, ArrowUpRight, Landmark, Menu } from 'lucide-react';
 // BATCH 1 (shared admin visual language) — the console reuses the SAME design
 // system every other surface uses. These are presentation primitives only:
 // they hold no data, make no requests and change no behaviour.
@@ -137,6 +137,14 @@ import {
 import AdminTopBar from './admin/shell/AdminTopBar';
 import AdminNavGroupLabel from './admin/shell/AdminNavGroupLabel';
 import { describeAdminSectionCopy } from './admin/shell/adminNavRegistry';
+// STAGE 3B — the shared admin shell surfaces. `AdminSidebar` is the desktop
+// (lg+) column and its collapse rail; `MobileDrawer` is the sub-lg navigation
+// drawer. Both are presentation only: neither holds data, makes a request, nor
+// decides a permission. They render the SAME destination set the console
+// already had, and picking one calls the console's existing `setActiveTab`.
+import { AdminSidebar, MobileDrawer } from './admin/shell';
+import type { AdminSectionId } from './admin/shell/adminNavRegistry';
+import { ADMIN_MOBILE_DRAWER_ID } from './ui/adminTokens';
 // PROGRAMME 1 — the two sections this batch adds, each a READ-ONLY surface over
 // an endpoint that already exists:
 //   * Payout Integrity (WS1/WS2/WS5) reads the agent rows of the dashboard
@@ -437,6 +445,35 @@ function isReported(value: unknown): boolean {
   return isReportedNumber(value);
 }
 
+/**
+ * STAGE 3B — the sections the console can actually render, in the registry's
+ * order (overview → money → operations → configuration).
+ *
+ * The registry (`ADMIN_NAV_GROUPS`) is the owner of a section's id, label, icon
+ * and heading copy, but it also lists `notifications`, which this console does
+ * not yet wire to a panel — a pre-existing gap that
+ * `adminProgramme1Sections.test.ts` documents by name and that
+ * `notificationOutboxWiring.test.ts` is red about on this tree. Rendering a
+ * drawer entry for it would put a control on screen whose only effect is to set
+ * state nothing renders, so the drawer is given the intersection instead. This
+ * list is the `activeTab` union below, spelled out once.
+ */
+const WIRED_ADMIN_SECTIONS: readonly AdminSectionId[] = [
+  'stats',
+  'claims',
+  'ledger',
+  'disputes',
+  'payouts',
+  'agents',
+  'found_items',
+  'stranded_items',
+  'lost_reports',
+  'review',
+  'categories',
+  'strikes',
+  'audit',
+];
+
 export default function AdminView({ token, setToken, onCategoriesChanged }: AdminViewProps) {
   const t = translations.en;
   // B0 FIX — the console is fixed-English (translations.en above); this is the
@@ -468,6 +505,12 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
   // (Audit Log, WS4). Both ids exist in the shared nav registry, so the sidebar,
   // the top bar and this state cannot disagree about what a section is called.
   const [activeTab, setActiveTab] = useState<'stats' | 'agents' | 'disputes' | 'ledger' | 'review' | 'categories' | 'strikes' | 'found_items' | 'stranded_items' | 'claims' | 'lost_reports' | 'payouts' | 'audit'>('stats');
+  // STAGE 3B — shell state. Two INDEPENDENT booleans on purpose: collapsing the
+  // desktop rail must never open or close the mobile drawer, and closing the
+  // drawer must never expand or collapse the rail. Neither is persisted and
+  // neither is sent to the server — they are pure presentation.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [dashboardData, setDashboardData] = useState<any | null>(null);
   const [dashboardLoading, setDashboardLoading] = useState(false);
   // Guards against duplicate concurrent /api/admin/dashboard fetches (e.g. the
@@ -3711,10 +3754,25 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
               Each one maps to a real admin endpoint; nothing was invented for
               the sidebar, and no section was added for a feature the backend
               does not have. Desktop (lg+): a persistent, sticky left sidebar.
-              Below lg the same list stays a horizontally scrollable strip, so a
-              phone never gets a cramped fixed sidebar. The layout rules live in
-              .r4m-admin-nav (src/index.css). */}
-          <div className="lg:grid lg:grid-cols-[236px_minmax(0,1fr)] lg:gap-8 lg:items-start">
+              Below lg this <nav> is not presented at all — STAGE 3B moved the
+              small-screen navigation into the shared `MobileDrawer`, so exactly
+              one navigation exists per viewport and a phone never gets a cramped
+              fixed sidebar. The layout rules live in .r4m-admin-nav
+              (src/index.css). */}
+          <div
+            className="lg:grid lg:grid-cols-[236px_minmax(0,1fr)] lg:gap-8 lg:items-start r4m-admin-shell"
+            data-sidebar={sidebarCollapsed ? 'collapsed' : 'expanded'}
+          >
+          {/* STAGE 3B — the desktop sidebar shell. `AdminSidebar` renders nothing
+              below lg (`hidden lg:flex`), so at those widths the <nav> inside it
+              is not presented either and `MobileDrawer` is the ONE navigation.
+              `data-sidebar` on the grid drives the collapsed rail in
+              src/index.css; the aria-current markers and handlers below are
+              unchanged, so the collapse is presentation only. */}
+          <AdminSidebar
+            collapsed={sidebarCollapsed}
+            onToggleCollapsed={() => setSidebarCollapsed((previous) => !previous)}
+          >
           <nav
             className="r4m-admin-nav flex border-b border-[var(--appearance-border)] overflow-x-auto scrollbar-none"
             aria-label={lang === 'en' ? 'Admin sections' : 'Sehemu za msimamizi'}
@@ -3875,7 +3933,26 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
               <span>Audit Log</span>
             </button>
           </nav>
+          </AdminSidebar>
           <div className="space-y-6 min-w-0">
+
+          {/* STAGE 3B — the mobile navigation trigger. Below lg the sticky
+              sidebar column is not presented, so this is the only route to
+              another section; at lg and up it disappears and the sidebar is
+              always on screen. It is a real control (sets `mobileNavOpen`),
+              never a decorative affordance. */}
+          <div className="lg:hidden">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setMobileNavOpen(true)}
+              aria-expanded={mobileNavOpen}
+              aria-controls={ADMIN_MOBILE_DRAWER_ID}
+            >
+              <Menu size={ICON_SIZE.ui} aria-hidden="true" />
+              <span>Sections</span>
+            </Button>
+          </div>
 
           {/* BATCH B0 — contextual top bar. Shows the current section (from the
               shared nav registry), the existing stale-data flag, and the
@@ -7645,6 +7722,20 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
           </div>
         )}
       </Modal>
+
+      {/* STAGE 3B — the mobile navigation drawer. `MobileDrawer` returns null
+          while closed, so nothing inert sits in the DOM on a narrow screen. It
+          lists the same destinations the sidebar does (from the shared nav
+          registry) and a pick calls the SAME `setActiveTab` handler the sidebar
+          buttons call, then closes itself. Below lg it is the only navigation
+          presented; at lg and up it renders nothing. */}
+      <MobileDrawer
+        open={mobileNavOpen}
+        onClose={() => setMobileNavOpen(false)}
+        activeSection={activeTab}
+        onSelect={(section) => setActiveTab(section as typeof activeTab)}
+        sections={WIRED_ADMIN_SECTIONS}
+      />
 
       {/* Lightbox Image Zoom Portal */}
       {lightboxImage && (
