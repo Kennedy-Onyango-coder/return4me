@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronRight, X } from 'lucide-react';
 import { ICON_SIZE } from '../../ui';
+import { trapModalFocus } from '../../../utils/modalFocus';
 import {
   ADMIN_NAV_GROUPS,
   type AdminNavGroup,
@@ -49,6 +51,9 @@ export interface MobileDrawerProps {
  *   * picking a section selects it AND closes;
  *   * focus moves into the panel on open and returns to whatever was focused
  *     before it closed;
+ *   * Tab and Shift+Tab cycle inside the panel while it is open, through the
+ *     shared `utils/modalFocus` helper — focus cannot reach the controls the
+ *     scrim covers;
  *   * background scrolling is locked while open and restored on close.
  *
  * The caller supplies a fresh `onClose` each render, so the listener reads it
@@ -64,6 +69,7 @@ export function MobileDrawer({
   sections,
 }: MobileDrawerProps) {
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
 
@@ -99,6 +105,14 @@ export function MobileDrawer({
       if (event.key === 'Escape') {
         event.preventDefault();
         onCloseRef.current();
+        return;
+      }
+      // Trap Tab inside the panel through the EXISTING shared helper used by
+      // `ui/Modal`, so the console has one focus-management implementation.
+      // Without it, Tab walks out of the open drawer into the background
+      // controls the scrim covers (WCAG 2.4.3).
+      if (panelRef.current) {
+        trapModalFocus(event, panelRef.current);
       }
     };
     document.addEventListener('keydown', handleKeyDown);
@@ -114,7 +128,14 @@ export function MobileDrawer({
 
   if (!open) return null;
 
-  return (
+  // Rendered through a portal onto `document.body`, matching `ui/Modal`.
+  // Required, not stylistic: the console wraps the surface in `.fade-in`, whose
+  // animation leaves a non-`none` transform on the element. A transformed
+  // ancestor becomes the containing block for `position: fixed`, so an in-tree
+  // `fixed inset-0` layer would size against the full page instead of the
+  // viewport — opening the drawer while scrolled would place the header and
+  // close button above the top of the screen with no way to reach them.
+  return createPortal(
     <div className="fixed inset-0 z-50 lg:hidden">
       {/* Backdrop. Its own element (not a handler on the container) so a click
           inside the panel cannot bubble into a close. */}
@@ -126,9 +147,11 @@ export function MobileDrawer({
 
       <div
         id={ADMIN_MOBILE_DRAWER_ID}
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-label="Admin sections"
+        tabIndex={-1}
         style={{
           width: adminDrawerWidth,
           transitionDuration: `${adminShellTransitionMs}ms`,
@@ -204,7 +227,8 @@ export function MobileDrawer({
           ))}
         </nav>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
