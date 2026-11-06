@@ -39,6 +39,10 @@ const repoRoot = path.resolve(import.meta.dirname, '..', '..');
 const read = (rel: string) => fs.readFileSync(path.resolve(repoRoot, rel), 'utf8');
 
 const adminView = read('src/components/AdminView.tsx');
+// STAGE 4B — the Overview's money cards (including the launch-policy hub figure)
+// are one contained component now. The pins that are about the CARD read that
+// file; the pins that are about AdminView's own wiring keep reading AdminView.
+const overviewMoneyZone = read('src/components/admin/dashboard/OverviewMoneyZone.tsx');
 const serverTs = read('src/server.ts');
 const databaseTs = read('src/db/database.ts');
 const safeViewsSource = read('src/services/adminSafeViews.ts');
@@ -155,7 +159,10 @@ describe('WS2/WS5 — a figure the payload did not carry is never rendered as 0'
     expect([...OVERVIEW_OPTIONAL_STATS_FIELDS]).toContain('payoutIneligibleAgentsCount');
     // The Overview card reads it through the shared read-out module, so an
     // unreported figure is the em dash and a genuine 0 still reads as 0.
-    expect(adminView).toContain('formatMetricCount(dashboardData.stats?.payoutIneligibleAgentsCount).text');
+    // STAGE 4B — that card is the Overview's money zone component now; the figure,
+    // the formatter and the em-dash rule are unchanged, only the file holding them.
+    expect(overviewMoneyZone).toContain('formatMetricCount(dashboardData.stats?.payoutIneligibleAgentsCount).text');
+    expect(adminView).not.toContain('formatMetricCount(dashboardData.stats?.payoutIneligibleAgentsCount).text');
   });
 
   it('no longer turns an absent earnings figure into "KES 0 earned"', () => {

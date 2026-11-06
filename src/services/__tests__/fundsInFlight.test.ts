@@ -312,6 +312,23 @@ describe('computeUnresolvedPayouts — payouts awaiting provider reconciliation'
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 const SERVER_TS = fs.readFileSync(path.join(REPO_ROOT, 'src/server.ts'), 'utf8');
 const ADMIN_VIEW_TSX = fs.readFileSync(path.join(REPO_ROOT, 'src/components/AdminView.tsx'), 'utf8');
+// STAGE 4B — the Overview's cards are contained components now
+// (components/admin/dashboard/Overview*.tsx). The assertions below are about what
+// the CONSOLE renders, so they read the Overview as a whole: AdminView plus those
+// four files. That broadens the "one label per state", "no zero-default" and
+// "provider check" rules to the new files — nothing is weakened, and a merged
+// "available funds" figure reappearing in ANY of them still fails.
+const OVERVIEW_TSX = [
+  ADMIN_VIEW_TSX,
+  'src/components/admin/dashboard/OverviewStatusStrip.tsx',
+  'src/components/admin/dashboard/OverviewAttentionZone.tsx',
+  'src/components/admin/dashboard/OverviewMoneyZone.tsx',
+  'src/components/admin/dashboard/OverviewActivityZone.tsx',
+]
+  .map((source) => (source.startsWith('src/components/admin/dashboard/')
+    ? fs.readFileSync(path.join(REPO_ROOT, source), 'utf8')
+    : source))
+  .join('\n');
 const DATABASE_TS = fs.readFileSync(path.join(REPO_ROOT, 'src/db/database.ts'), 'utf8');
 
 const DASHBOARD = (() => {
@@ -375,25 +392,25 @@ describe('the console renders in-flight money honestly', () => {
       'unresolvedPayoutsCount', 'unresolvedPayoutsAmount',
     ];
     for (const field of fields) {
-      expect(ADMIN_VIEW_TSX).not.toContain(`stats?.${field} || 0`);
-      expect(ADMIN_VIEW_TSX).not.toContain(`stats?.${field} ?? 0`);
-      expect(ADMIN_VIEW_TSX).not.toContain(`stats.${field} || 0`);
+      expect(OVERVIEW_TSX).not.toContain(`stats?.${field} || 0`);
+      expect(OVERVIEW_TSX).not.toContain(`stats?.${field} ?? 0`);
+      expect(OVERVIEW_TSX).not.toContain(`stats.${field} || 0`);
     }
   });
 
   it('labels each state separately instead of publishing one merged figure', () => {
-    expect(ADMIN_VIEW_TSX).toContain("'Funds Held (not yet paid out)'");
-    expect(ADMIN_VIEW_TSX).toContain("'Awaiting Payout'");
-    expect(ADMIN_VIEW_TSX).toContain("'Payout In Flight'");
-    expect(ADMIN_VIEW_TSX).toContain("'Unresolved Payouts'");
+    expect(OVERVIEW_TSX).toContain("'Funds Held (not yet paid out)'");
+    expect(OVERVIEW_TSX).toContain("'Awaiting Payout'");
+    expect(OVERVIEW_TSX).toContain("'Payout In Flight'");
+    expect(OVERVIEW_TSX).toContain("'Unresolved Payouts'");
     // No card claims to be a spendable balance: nothing in this codebase models
     // a float, clearing account or provider balance, so no such label may exist.
-    expect(ADMIN_VIEW_TSX).not.toContain("'Available Funds'");
-    expect(ADMIN_VIEW_TSX).not.toContain("'Available Balance'");
+    expect(OVERVIEW_TSX).not.toContain("'Available Funds'");
+    expect(OVERVIEW_TSX).not.toContain("'Available Balance'");
   });
 
   it('flags an unresolved payout for a provider check', () => {
-    expect(ADMIN_VIEW_TSX).toContain('Needs provider check');
+    expect(OVERVIEW_TSX).toContain('Needs provider check');
   });
 });
 

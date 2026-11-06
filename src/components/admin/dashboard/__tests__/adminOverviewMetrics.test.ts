@@ -208,3 +208,58 @@ describe('readOverviewStats — a failed response is not a screen of zeros', () 
     expect(readout.stats).toBe(stats);
   });
 });
+
+// =============================================================================
+// STAGE 4B (F-03) — `disputesOpenCount`: THE ONE DISPUTES FIGURE THE OVERVIEW
+// MAY SHOW.
+// =============================================================================
+// The dashboard publishes `stats.disputesOpenCount` (counted server-side as
+// `disputes.filter(d => !d.resolved_at).length`), but the console used to count
+// the raw `disputes` array instead — which is EVERY dispute, resolved ones
+// included. Registering the server's own figure here makes the card readthrough
+// the same validator as every other Overview number, with the same
+// absence-versus-corruption distinction: an older build that does not publish it
+// reads as "not reported", and a present-but-garbage value fails the payload.
+describe('disputesOpenCount — registered, optional, and validated as a count', () => {
+  it('is OPTIONAL, never required', () => {
+    expect(OVERVIEW_OPTIONAL_STATS_FIELDS).toContain('disputesOpenCount');
+    expect(OVERVIEW_REQUIRED_STATS_FIELDS).not.toContain('disputesOpenCount');
+  });
+
+  it('accepts a genuine positive count and a genuine zero', () => {
+    expect(readOverviewStats(payloadWith({ ...validStats(), disputesOpenCount: 4 })).ok).toBe(true);
+
+    const zero = readOverviewStats(payloadWith({ ...validStats(), disputesOpenCount: 0 }));
+    expect(zero.ok).toBe(true);
+    expect(formatMetricCount(zero.stats?.disputesOpenCount)).toEqual({ text: '0', reported: true });
+  });
+
+  it('lets the field be ABSENT (an older build) and renders the em dash', () => {
+    const stats = validStats() as Record<string, unknown>;
+    delete stats.disputesOpenCount;
+    const readout = readOverviewStats(payloadWith(stats));
+    expect(readout.ok).toBe(true);
+    expect(formatMetricCount(readout.stats?.disputesOpenCount)).toEqual({
+      text: METRIC_NOT_REPORTED,
+      reported: false,
+    });
+  });
+
+  it('rejects a negative, fractional or otherwise invalid PRESENT value', () => {
+    for (const bad of [-1, 2.5, '3', null, NaN, Infinity, -Infinity, {}, [], true]) {
+      const readout = readOverviewStats(payloadWith({ ...validStats(), disputesOpenCount: bad }));
+      expect(readout.ok, `disputesOpenCount=${String(bad)} must fail the payload`).toBe(false);
+      expect(readout.reason).toContain('disputesOpenCount');
+    }
+  });
+
+  it('does not weaken the rule for any existing field', () => {
+    // Still five required figures, still optional for the in-flight and
+    // hub-payability fields — adding one field changed nothing else.
+    expect(OVERVIEW_REQUIRED_STATS_FIELDS.length).toBe(5);
+    for (const field of ['settlementPendingAmount', 'fundsInFlightAmount', 'unresolvedPayoutsAmount', 'payoutIneligibleAgentsCount']) {
+      expect(OVERVIEW_OPTIONAL_STATS_FIELDS).toContain(field);
+    }
+    expect(readOverviewStats(payloadWith({ ...validStats(), fundsInFlightAmount: 'garbage' })).ok).toBe(false);
+  });
+});

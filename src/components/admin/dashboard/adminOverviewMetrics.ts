@@ -141,6 +141,20 @@ export const OVERVIEW_OPTIONAL_STATS_FIELDS = [
   'unresolvedPayoutsCount',
   'unresolvedPayoutsAmount',
   /**
+   * STAGE 4B (F-03) — disputes with no recorded resolution yet: the server's own
+   * `disputes.filter(d => !d.resolved_at).length`. The Overview's disputes card
+   * must read THIS, never `disputes.length` — the dashboard's `disputes` array is
+   * every dispute ever recorded (`getDisputes()` has no `where`), so counting it
+   * claimed work that was already done.
+   *
+   * Optional on exactly the same terms as every field here: absent means "not
+   * reported" and renders as the em dash, never as 0, which would claim every
+   * dispute has been resolved. Present-but-corrupt is rejected — and because the
+   * name ends in `Count`, readOverviewStats() already applies the count rule to
+   * it (whole and non-negative), not the money rule.
+   */
+  'disputesOpenCount',
+  /**
    * PROGRAMME 1 / WS2 — hubs the launch payout policy would refuse at settlement
    * time (a stored Till, Paybill, Pochi la Biashara or free-form destination, or
    * a method other than Personal M-Pesa). Optional on the same terms as every

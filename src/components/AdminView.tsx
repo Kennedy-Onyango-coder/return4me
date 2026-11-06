@@ -81,6 +81,16 @@ import {
   isReportedNumber,
   readOverviewStats,
 } from './admin/dashboard/adminOverviewMetrics';
+// STAGE 4B — THE OVERVIEW'S FOUR ZONES. Each is a contained, presentation-only
+// component that receives the read-only dashboard payload and a navigation
+// callback through props; none of them fetches, writes or decides anything.
+// AdminView keeps sole ownership of the dashboard request (with its coalescing
+// and sequence-number guard), the stale/retry behaviour, the dashboard data
+// state, the active-tab routing and every permission check.
+import OverviewStatusStrip from './admin/dashboard/OverviewStatusStrip';
+import OverviewAttentionZone from './admin/dashboard/OverviewAttentionZone';
+import OverviewMoneyZone from './admin/dashboard/OverviewMoneyZone';
+import OverviewActivityZone from './admin/dashboard/OverviewActivityZone';
 // §10 — the console states who is signed in, using ONLY the claims the
 // authenticated session actually carries. The helper decodes a display label and
 // never returns the token itself (see src/services/adminSession.ts).
@@ -346,44 +356,12 @@ function DisputeClaimantPanel({
 }
 
 // ---------------------------------------------------------------------------
-// B1 — THE OVERVIEW'S "NEEDS ATTENTION" QUEUE CARD.
-//
-// The Overview is opened to decide what to do next, so every queue it shows is
-// three things in one card: the figure, what the figure counts in plain words,
-// and the control that opens the section holding the rows behind it — a count
-// must never be a dead end.
-//
-// PRESENTATION ONLY. The count arrives as display text, already formatted by
-// the shared read-out module (adminOverviewMetrics), so this component never
-// computes, formats or defaults a number: a figure the server did not report
-// reaches it as the same em dash every other Overview card shows, and cannot
-// be dressed up as a zero here.
+// B1 — THE OVERVIEW'S "NEEDS ATTENTION" QUEUE CARD moved to
+// components/admin/dashboard/OverviewAttentionZone.tsx in STAGE 4B, together with
+// the panel that renders it and the queue it belongs to. It is presentation only
+// and holds no data, so nothing about it belongs in this file: AdminView keeps
+// the fetch, the routing and the state, and the zone renders what it is given.
 // ---------------------------------------------------------------------------
-interface OverviewQueueCardProps {
-  label: string;
-  /** Already-formatted display text — formatMetricCount(...).text, never a raw figure. */
-  count: string;
-  description: string;
-  /** Opens the section whose rows this figure counts. */
-  actionLabel: string;
-  onOpen: () => void;
-}
-
-function OverviewQueueCard({ label, count, description, actionLabel, onOpen }: OverviewQueueCardProps) {
-  return (
-    <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-panel p-4 sm:p-5 shadow-raised flex flex-col gap-3">
-      <div className="space-y-1 min-w-0">
-        <p className="text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">{label}</p>
-        <p className="text-section font-extrabold text-[var(--appearance-text-primary)] tabular-nums tracking-tight leading-tight">{count}</p>
-        <p className="text-caption text-[var(--appearance-text-muted)] leading-snug">{description}</p>
-      </div>
-      <Button variant="ghost" size="sm" className="self-start" onClick={onOpen}>
-        {actionLabel}
-        <ArrowRight size={ICON_SIZE.metadata} aria-hidden="true" />
-      </Button>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // D-2B-B — A REFUSED PAYOUT INITIATION IS EXPLAINED BY THE SERVER, NOT GUESSED.
@@ -3318,94 +3296,30 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
   // already existed and remain the only thing that gates the two network calls.
   const isAuthBusy = pendingTwoFactorToken ? twoFactorLoading : authLoading;
 
-  // B4 — "NEEDS ATTENTION" OVERVIEW QUEUE CARDS
+  // STAGE 4B (F-01, F-02, F-03, F-04) — THE FOUR DYNAMIC "ATTENTION" CARDS ARE GONE.
   //
-  // Each card shows an actionable metric with a count, description, and button
-  // to open the section holding the rows behind it. Cards are only rendered when
-  // the dashboard data is available and the count indicates something the operator
-  // should look at.
-  const overviewCards: React.JSX.Element[] = [];
-
-  if (dashboardData) {
-    // Pending settlements — if there are claims waiting for approval, they need attention.
-    if (dashboardData.pendingSettlements && dashboardData.pendingSettlements.length > 0) {
-      overviewCards.push(
-        <OverviewQueueCard
-          key={`pending-settlements-${dashboardData.pendingSettlements.length}`}
-          label={"Pending Settlements"}
-          count={formatMetricCount(dashboardData.pendingSettlements.length).text}
-          description={
-          dashboardData.pendingSettlements.length === 1
-            ? '1 claim awaiting settlement approval'
-            : `${dashboardData.pendingSettlements.length} claims awaiting settlement approval`
-        }
-          actionLabel={"View Settlements"}
-          onOpen={() => setActiveTab('ledger')}
-        />
-      );
-    }
-
-    // Open disputes — if there are unresolved disputes, the operator should review them.
-    if (dashboardData.disputes && dashboardData.disputes.length > 0) {
-      overviewCards.push(
-        <OverviewQueueCard
-          key={`open-disputes-${dashboardData.disputes.length}`}
-          label={"Open Disputes"}
-          count={formatMetricCount(dashboardData.disputes.length).text}
-          description={
-          dashboardData.disputes.length === 1
-            ? '1 dispute requiring review'
-            : `${dashboardData.disputes.length} disputes requiring review`
-        }
-          actionLabel={"View Disputes"}
-          onOpen={() => setActiveTab('review')}
-        />
-      );
-    }
-
-    // Payment strikes — if there are payment strikes, they need operator attention.
-    if (dashboardData.paymentStrikes && dashboardData.paymentStrikes.length > 0) {
-      overviewCards.push(
-        <OverviewQueueCard
-          key={`payment-strikes-${dashboardData.paymentStrikes.length}`}
-          label={"Payment Strikes"}
-          count={formatMetricCount(dashboardData.paymentStrikes.length).text}
-          description={
-          dashboardData.paymentStrikes.length === 1
-            ? '1 payment strike requiring resolution'
-            : `${dashboardData.paymentStrikes.length} payment strikes requiring resolution`
-        }
-          actionLabel={"View Strikes"}
-          onOpen={() => setActiveTab('strikes')}
-        />
-      );
-    }
-
-    // Unresolved payouts — if there are payouts needing reconciliation.
-    if (
-      dashboardData.agents &&
-      dashboardData.agents.length > 0 &&
-      dashboardData.agents.some((a: any) => a.payoutStatus === 'unresolved')
-    ) {
-      const unresolvedCount = dashboardData.agents.filter(
-        (a: any) => a.payoutStatus === 'unresolved'
-      ).length;
-      overviewCards.push(
-        <OverviewQueueCard
-          key={`unresolved-payouts-${unresolvedCount}`}
-          label={"Unresolved Payouts"}
-          count={formatMetricCount(unresolvedCount).text}
-          description={
-          unresolvedCount === 1
-            ? '1 unresolved payout'
-            : `${unresolvedCount} unresolved payouts`
-        }
-          actionLabel={"View Payouts"}
-          onOpen={() => setActiveTab('payouts')}
-        />
-      );
-    }
-  }
+  // They were a second, half-connected implementation of the same idea as the
+  // "Needs attention" panel below, and each was wrong in a way the static cards
+  // were not:
+  //   * "Pending Settlements" duplicated that panel's settlement card verbatim,
+  //     from the same array length;
+  //   * "Open Disputes" counted `disputes.length` — every dispute, resolved ones
+  //     included — and opened `review`, which holds items, not disputes;
+  //   * "Payment Strikes" read `dashboardData.paymentStrikes`, a key this
+  //     dashboard has never published, so it could never render at all;
+  //   * "Unresolved Payouts" read `agents[].payoutStatus`, which the admin agent
+  //     view does not expose, so it could never render either — and the
+  //     authoritative figure was already on the panel.
+  //
+  // They were also the only React keys on this screen built from a live count, so
+  // every count change remounted the card: focus loss, a restarting transition and
+  // no stable identity. With them gone, every list on the Overview is keyed by a
+  // real record id.
+  //
+  // Nothing was replaced: the surviving cards are the ones that were already
+  // correct — including the disputes card on the panel, which reads the server's
+  // `stats.disputesOpenCount` and opens `disputes` — so each figure now appears
+  // exactly once, from one source.
 
   return (
     <div className="w-full fade-in">
@@ -4055,299 +3969,61 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
           {/* TAB CONTENT 1: STATS WORKSPACE */}
           {activeTab === 'stats' && (
             <div className="space-y-6">
-              {/* BATCH 3 — READING PROVENANCE. Every figure below carries the time
-                  of the reading it came from, and a background refresh is stated
-                  in prose (aria-live) rather than replacing the figures with a
-                  spinner: an operator mid-read must never lose the numbers they
-                  were looking at, and must never have to guess their age. */}
-              <div className="flex flex-wrap items-center justify-between gap-2" aria-live="polite">
-                <p className="text-caption text-[var(--appearance-text-muted)]">
-                  {dashboardLoadedAt
-                    ? `Last updated ${new Date(dashboardLoadedAt).toLocaleTimeString()}${dashboardStale ? ' — the latest refresh failed, so this is an older reading' : ''}`
-                    : 'Waiting for the first reading…'}
-                </p>
-                {dashboardLoading && dashboardData && (
-                  <p className="flex items-center gap-2 text-caption font-semibold text-[var(--appearance-text-muted)]" aria-busy="true">
-                    <Loader2 className="animate-spin" size={ICON_SIZE.metadata} aria-hidden="true" />
-                    {'Refreshing…'}
-                  </p>
-                )}
-              </div>
+              {/* STAGE 4B — THE OVERVIEW IS FOUR CONTAINED ZONES.
+                  AdminView keeps what only it can own: the dashboard fetch and its
+                  coalescing/sequence-number guard, the stale-and-retry behaviour,
+                  the dashboard data state, the active-tab routing and every
+                  permission check. The four components below receive that
+                  read-only payload and a navigation callback through props; none
+                  of them fetches, writes or decides anything. */}
 
-              {/* B1 — NEEDS ATTENTION. The Overview is opened to decide what to
-                  do next, so the queues an administrator can act on come first,
-                  each as ONE card: the figure (formatted by the shared read-out
-                  module, so an unreported value is an em dash and never a
+              {/* Z0 — READING PROVENANCE (Batch 3). Every figure below carries the
+                  time of the reading it came from, and a background refresh is
+                  stated in prose (aria-live) rather than replacing the figures
+                  with a spinner: an operator mid-read must never lose the numbers
+                  they were looking at, and must never have to guess their age. */}
+              <OverviewStatusStrip
+                dashboardData={dashboardData}
+                dashboardLoadedAt={dashboardLoadedAt}
+                dashboardStale={dashboardStale}
+                dashboardLoading={dashboardLoading}
+              />
+
+              {/* Z1 — NEEDS ATTENTION (B1/B2/B3/B4/B5). The Overview is opened to
+                  decide what to do next, so the queues an administrator can act on
+                  come first, each as ONE card: the figure (formatted by the shared
+                  read-out module, so an unreported value is an em dash and never a
                   zero), what the figure counts in plain words, and the control
                   that opens the section holding the rows behind it — a count is
                   never a dead end.
 
                   Every figure here already exists in this tab's payload: the
                   validated stats block, the settlement array and the item flags
-                  this console renders elsewhere. No new endpoint, no polling,
-                  no second request. */}
-              <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-4 sm:p-6 shadow-sm space-y-4">
-                <div className="space-y-1">
-                  <h3 className="font-extrabold text-caption text-[var(--appearance-text-muted)] uppercase tracking-widest flex items-center gap-2">
-                    <AlertTriangle size={ICON_SIZE.ui} aria-hidden="true" />
-                    {'Needs attention'}
-                  </h3>
-                  <p className="text-body text-[var(--appearance-text-muted)]">
-                    {'Work waiting on an administrator right now. Each figure opens the section that holds the rows behind it.'}
-                  </p>
-                </div>
+                  this console renders elsewhere. No new endpoint, no polling, no
+                  second request. */}
+              <OverviewAttentionZone
+                dashboardData={dashboardData}
+                onOpenSection={setActiveTab}
+              />
+              {/* Z2 — MONEY. The headline grid is terminal-state figures; "Money in
+                  flight" is money attached to a claim that has moved on. The escrow
+                  AMOUNT and the escrow COUNT stay two separate cards under two
+                  labels, and the in-flight figures stay three separately labelled
+                  facts: nothing here is summed into an "available funds" number. */}
+              <OverviewMoneyZone
+                dashboardData={dashboardData}
+                totalRevenueLabel={t.totalRev}
+                amountLabel={inFlightAmountLabel}
+              />
 
-                {/* B4 -- "NEEDS ATTENTION" OVERVIEW QUEUE CARDS */}
-                {overviewCards}
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
-                  <OverviewQueueCard
-                    label={'Pending agent approvals'}
-                    count={formatMetricCount(dashboardData.stats.pendingAgentsCount).text}
-                    description={'Agent applications waiting for a decision.'}
-                    actionLabel={'Review agents'}
-                    onOpen={() => setActiveTab('agents')}
-                  />
-                  <OverviewQueueCard
-                    label={'Settlements awaiting action'}
-                    count={formatMetricCount(Array.isArray(dashboardData.pendingSettlements) ? dashboardData.pendingSettlements.length : undefined).text}
-                    description={'Claims in the dispute window awaiting settlement action.'}
-                    actionLabel={'Open settlements'}
-                    onOpen={() => setActiveTab('ledger')}
-                  />
-                  <OverviewQueueCard
-                    label={'Items flagged for review'}
-                    count={formatMetricCount(Array.isArray(dashboardData.items) ? dashboardData.items.filter((item: any) => item.flaggedForReview).length : undefined).text}
-                    description={'Listings with low-confidence or missing details waiting for a manual check.'}
-                    actionLabel={'Open review queue'}
-                    onOpen={() => setActiveTab('review')}
-                  />
-                  <OverviewQueueCard
-                    label={'Open disputes'}
-                    count={formatMetricCount(dashboardData.stats.disputesOpenCount).text}
-                    description={'Disputes with no recorded resolution yet.'}
-                    actionLabel={'Review disputes'}
-                    onOpen={() => setActiveTab('disputes')}
-                  />
-                  {/* The unresolved-payout figure lives here with the queues —
-                      it counts rows an administrator must reconcile. PROGRAMME 1
-                      promoted the rows behind it into their own section (Payout
-                      Integrity), so the figure now opens that section instead of
-                      expanding in place: the count is still never a dead end, and
-                      the rows now sit with the launch-policy verdict per hub, in
-                      the one place an operator works them. The rows are still
-                      read only when asked for — the section's own disclosure gates
-                      the single read of GET /api/admin/payout-reconciliation. */}
-                  <div className="space-y-2">
-                    <StatCard
-                      icon={AlertTriangle}
-                      label={'Unresolved Payouts'}
-                      value={inFlightCountLabel(dashboardData.stats?.unresolvedPayoutsCount)}
-                      status={
-                        isReported(dashboardData.stats?.unresolvedPayoutsCount) && dashboardData.stats.unresolvedPayoutsCount > 0
-                          ? <Badge variant="warning">Needs provider check</Badge>
-                          : undefined
-                      }
-                      description={isReported(dashboardData.stats?.unresolvedPayoutsCount)
-                        ? (dashboardData.stats.unresolvedPayoutsCount > 0
-                            ? (`${formatKesAmount(dashboardData.stats?.unresolvedPayoutsAmount).text} is neither confirmed paid nor safe to resend automatically. Verify each row with the provider before any manual action.`)
-                            : ('No payout row is awaiting provider reconciliation.'))
-                        : ('Not reported by this server build — treat as unknown, not as zero.')}
-                    />
-                    {/* PROGRAMME 1 — the figure's own control. It opens the
-                        section that holds the rows, so the count an operator
-                        reads here always has somewhere to go. */}
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      className="w-full"
-                      onClick={() => setActiveTab('payouts')}
-                    >
-                      {'Open payout integrity'}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4">
-                <StatCard
-                  icon={Package}
-                  label={'Active Holding Items'}
-                  value={formatMetricCount(dashboardData.stats.itemsAtAgentCount).text}
-                  description={'Items physically held at an agent, awaiting the claimant’s collection.'}
-                />
-                <StatCard
-                  icon={Users}
-                  label={'Pending Agents'}
-                  value={formatMetricCount(dashboardData.stats.pendingAgentsCount).text}
-                  description={'Agent applications still awaiting approval.'}
-                />
-                {/* PHASE 10 (F-2): this card previously rendered
-                    `stats.escrowHeldCount` — a COUNT of claims — under the label
-                    "Escrow Funds Held", immediately to the left of a genuine
-                    `KES {totalRevenue}` card, so the figure read as money. It now
-                    shows the authoritative monetary total (SUM of the
-                    escrow-held claims' locked_total_fee, computed server-side),
-                    and the count has its own card under a label that says what it
-                    is. The misleading presentation is gone from both the value
-                    and the label. */}
-                {/* These two cards are deliberately NOT <StatCard>: their exact
-                    rendered label/value markup is pinned by adminEscrowMetric.test.ts
-                    (the financial-truthfulness guard that stops a claim COUNT
-                    being shown as money). They are styled to the same visual
-                    language as StatCard so the grid still reads as one set. */}
-                <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-4 sm:p-5 shadow-sm">
-                  <span className="block text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">Escrow Funds Held</span>
-                  <span className="block mt-1 text-section font-extrabold text-[var(--appearance-primary)] tabular-nums tracking-tight leading-tight">{formatKesAmount(dashboardData.stats.escrowHeldAmount).text}</span>
-                </div>
-                <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-4 sm:p-5 shadow-sm">
-                  <span className="block text-caption font-extrabold uppercase tracking-widest text-[var(--appearance-text-muted)]">Claims in Escrow</span>
-                  <span className="block mt-1 text-section font-extrabold text-[var(--appearance-primary)] tabular-nums tracking-tight leading-tight">{formatMetricCount(dashboardData.stats.escrowHeldCount).text}</span>
-                </div>
-                <StatCard
-                  icon={Coins}
-                  label={t.totalRev}
-                  value={formatKesAmount(dashboardData.stats.totalRevenue).text}
-                  description={'Platform-fee ledger entries already marked completed — confirmed money, not the in-flight figures below.'}
-                />
-                {/* PROGRAMME 1 / WS2 — hubs the launch policy would refuse at
-                    settlement time. Read through the same read-out module as
-                    every other Overview figure, so a build that does not report
-                    it shows the em dash rather than a reassuring 0. This figure
-                    counts hubs; this build provides NO control that corrects a
-                    stored destination or method, and the verdict per hub is
-                    stated in Payout Integrity. */}
-                <StatCard
-                  icon={Banknote}
-                  label={'Hubs That Cannot Be Paid'}
-                  value={formatMetricCount(dashboardData.stats?.payoutIneligibleAgentsCount).text}
-                  description={'Registered hubs whose stored payout destination or method the launch policy refuses at settlement time. Open Payout Integrity for the verdict per hub.'}
-                />
-              </div>
-
-              {/* MONEY IN FLIGHT (Batch 1) — the cards above are TERMINAL-STATE
-                  figures: "Escrow Funds Held" counts only claims still in
-                  escrow_held, and "Total Revenue" only platform_fee rows already
-                  marked completed. Money attached to a claim that has moved on —
-                  the dispute window still running, or a payout submitted whose
-                  provider outcome is not yet confirmed — was invisible on this
-                  overview, which is exactly the state an approved settlement with
-                  an unresolved finder payout sits in.
-
-                  Each state is shown as its OWN labelled fact. They are
-                  deliberately NOT merged into an "available funds" number: no
-                  provider or accounting model in this codebase supports one, so
-                  such a figure would be invented rather than computed.
-
-                  A figure this server build did not report renders as "—", never
-                  as 0 (see inFlightAmountLabel), so a missing value can never be
-                  mistaken for a genuine zero. */}
-              <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-4 sm:p-6 shadow-sm space-y-4">
-                <div className="space-y-1">
-                  <h3 className="font-extrabold text-caption text-[var(--appearance-text-muted)] uppercase tracking-widest flex items-center gap-2">
-                    <ShieldCheck size={ICON_SIZE.ui} aria-hidden="true" />
-                    {'Money in flight'}
-                  </h3>
-                  <p className="text-body text-[var(--appearance-text-muted)]">
-                    {isReported(dashboardData.stats?.fundsInFlightAmount)
-                      ? ('Funds the platform is still holding for claims that have not been paid out yet.')
-                      : ('This server build does not report in-flight funds — read the figures below as unknown, not as zero.')}
-                  </p>
-                </div>
-
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4">
-                  <StatCard
-                    icon={Coins}
-                    label={'Funds Held (not yet paid out)'}
-                    value={inFlightAmountLabel(dashboardData.stats?.fundsInFlightAmount)}
-                    description={isReported(dashboardData.stats?.fundsInFlightCount)
-                      ? (`Across ${dashboardData.stats.fundsInFlightCount} claim(s) in escrow, inside the dispute window, or mid-payout.`)
-                      : ('The claim count was not reported by this server build.')}
-                  />
-                  <StatCard
-                    icon={ClipboardList}
-                    label={'Awaiting Payout'}
-                    value={inFlightAmountLabel(dashboardData.stats?.settlementPendingAmount)}
-                    description={isReported(dashboardData.stats?.settlementPendingCount)
-                      ? (`Dispute window closed; ${dashboardData.stats.settlementPendingCount} claim(s) awaiting settlement approval or payout initiation.`)
-                      : ('The claim count was not reported by this server build.')}
-                  />
-                  <StatCard
-                    icon={RefreshCw}
-                    label={'Payout In Flight'}
-                    value={inFlightAmountLabel(dashboardData.stats?.releasingAmount)}
-                    description={isReported(dashboardData.stats?.releasingCount)
-                      ? (`Submitted to the provider; ${dashboardData.stats.releasingCount} claim(s) not yet confirmed paid.`)
-                      : ('The claim count was not reported by this server build.')}
-                  />
-                </div>
-              </div>
-
-              <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-6 shadow-sm space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <h3 className="font-extrabold text-caption text-[var(--appearance-text-muted)] uppercase tracking-widest flex items-center gap-2">
-                    <ClipboardList size={ICON_SIZE.ui} aria-hidden="true" />
-                    {'Recent platform activity'}
-                  </h3>
-                  <Button variant="ghost" size="sm" onClick={() => setActiveTab('ledger')}>
-                    {'Open ledger'}
-                    <ArrowRight size={ICON_SIZE.metadata} aria-hidden="true" />
-                  </Button>
-                </div>
-                {dashboardData.ledger.length === 0 ? (
-                  <EmptyState
-                    icon={ClipboardList}
-                    title={'No ledger entries yet'}
-                    description={'Ledger entries appear here as soon as they are recorded.'}
-                  />
-                ) : (
-                  <div className="r4m-scroll-x" role="region" aria-label={'Latest ledger entries'} tabIndex={0}>
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="bg-[var(--appearance-surface-muted)] text-caption font-extrabold text-[var(--appearance-text-muted)] uppercase tracking-widest border-b border-[var(--appearance-border)]">
-                          <th scope="col" className="px-5 py-3 font-bold">{'Time'}</th>
-                          <th scope="col" className="px-5 py-3 font-bold">{'Type'}</th>
-                          <th scope="col" className="px-5 py-3 font-bold">{'Amount'}</th>
-                          <th scope="col" className="px-5 py-3 font-bold">{'Claim'}</th>
-                          <th scope="col" className="px-5 py-3 font-bold">{'Status'}</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-[var(--appearance-border)] text-caption text-[var(--appearance-text-muted)]">
-                        {dashboardData.ledger.slice(0, 5).map((entry: any) => (
-                          <tr key={entry.id} className="hover:bg-[var(--appearance-surface-muted)]/50 transition">
-                            <td className="px-5 py-3.5 text-[var(--appearance-text-muted)] whitespace-nowrap">
-                              {entry.created_at ? new Date(entry.created_at).toLocaleString() : '—'}
-                            </td>
-                            <td className="px-5 py-3.5">
-                              <Badge
-                                variant={
-                                  entry.type === 'payment_received' ? 'info' :
-                                    entry.type === 'finder_payout' ? 'success' :
-                                      entry.type === 'agent_payout' ? 'warning' : 'neutral'
-                                }
-                              >
-                                {entry.type.replace('_', ' ')}
-                              </Badge>
-                            </td>
-                            <td className="px-5 py-3.5 font-bold text-[var(--appearance-text-primary)] tabular-nums">{formatKesAmount(entry.amount).text}</td>
-                            <td className="px-5 py-3.5">{entry.claim_id || '—'}</td>
-                            <td className="px-5 py-3.5">
-                              <Badge
-                                variant={
-                                  entry.status === 'completed' ? 'success'
-                                    : entry.status === 'failed' ? 'danger' : 'warning'
-                                }
-                              >
-                                {entry.status.toUpperCase()}
-                              </Badge>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
+              {/* Z3 -- RECENT PLATFORM ACTIVITY. The five newest of the newest 100
+                  ledger entries, with the control that opens the Ledger section
+                  where the full list, its filters and its action live, and the rows
+                  are keyed by their own ledger id. */}
+              <OverviewActivityZone
+                dashboardData={dashboardData}
+                onOpenLedger={() => setActiveTab('ledger')}
+              />
 
               {/* Admin 2FA / Security */}
               <div className="bg-[var(--appearance-surface)] border border-[var(--appearance-border)] rounded-2xl p-6 shadow-sm space-y-4">

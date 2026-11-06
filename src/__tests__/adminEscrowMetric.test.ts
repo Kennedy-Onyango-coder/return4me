@@ -25,6 +25,15 @@ import path from 'path';
 
 const serverTs = fs.readFileSync(path.resolve(__dirname, '../server.ts'), 'utf8');
 const adminView = fs.readFileSync(path.resolve(__dirname, '../components/AdminView.tsx'), 'utf8');
+// STAGE 4B — the Overview's money cards are one contained component now
+// (components/admin/dashboard/OverviewMoneyZone.tsx). The markup, the labels, the
+// formatters and the money/count distinction are UNCHANGED; only the file holding
+// them moved. The escrow pins below therefore read that file, while `adminView`
+// stays for the "AdminView no longer renders this card" assertion.
+const moneyZone = fs.readFileSync(
+  path.resolve(__dirname, '../components/admin/dashboard/OverviewMoneyZone.tsx'),
+  'utf8',
+);
 
 describe('admin dashboard publishes escrow funds as money, not a count', () => {
   it('derives the escrow statistics from the authoritative aggregate helper', () => {
@@ -59,7 +68,7 @@ describe('admin console renders the escrow card truthfully', () => {
   const ESCROW_LABEL = '>Escrow Funds Held</span>';
 
   it('renders "Escrow Funds Held" as a KES monetary amount', () => {
-    const labelIndex = adminView.indexOf(ESCROW_LABEL);
+    const labelIndex = moneyZone.indexOf(ESCROW_LABEL);
     expect(labelIndex, 'the Escrow Funds Held card must exist').toBeGreaterThan(-1);
 
     // The value rendered for that card is in the same JSX card, immediately
@@ -68,22 +77,22 @@ describe('admin console renders the escrow card truthfully', () => {
     // untouched), but every money card on the Overview now reads through the ONE
     // read-out module, so a missing figure is an em dash rather than the literal
     // text "KES undefined".
-    const cardWindow = adminView.slice(labelIndex, labelIndex + 400);
+    const cardWindow = moneyZone.slice(labelIndex, labelIndex + 400);
     expect(cardWindow).toContain('formatKesAmount(dashboardData.stats.escrowHeldAmount)');
   });
 
   it('does NOT render the claim count under the "Escrow Funds Held" label', () => {
-    const labelIndex = adminView.indexOf(ESCROW_LABEL);
-    const cardWindow = adminView.slice(labelIndex, labelIndex + 400);
+    const labelIndex = moneyZone.indexOf(ESCROW_LABEL);
+    const cardWindow = moneyZone.slice(labelIndex, labelIndex + 400);
     // The exact original defect: `{dashboardData.stats.escrowHeldCount}` under
     // this label. It must never come back.
     expect(cardWindow).not.toContain('dashboardData.stats.escrowHeldCount');
   });
 
   it('renders the count under its own truthful "Claims in Escrow" label', () => {
-    const labelIndex = adminView.indexOf('>Claims in Escrow</span>');
+    const labelIndex = moneyZone.indexOf('>Claims in Escrow</span>');
     expect(labelIndex, 'the Claims in Escrow card must exist').toBeGreaterThan(-1);
-    const cardWindow = adminView.slice(labelIndex, labelIndex + 400);
+    const cardWindow = moneyZone.slice(labelIndex, labelIndex + 400);
     expect(cardWindow).toContain('dashboardData.stats.escrowHeldCount');
   });
 
@@ -92,11 +101,20 @@ describe('admin console renders the escrow card truthfully', () => {
     // lengthens the two expressions by ~20 characters each. The property under
     // test is unchanged: the amount card and the count card are neighbours in the
     // same grid, so the two are read as a pair.
-    const amountCard = adminView.indexOf('formatKesAmount(dashboardData.stats.escrowHeldAmount)');
-    const countCard = adminView.indexOf('formatMetricCount(dashboardData.stats.escrowHeldCount)');
+    const amountCard = moneyZone.indexOf('formatKesAmount(dashboardData.stats.escrowHeldAmount)');
+    const countCard = moneyZone.indexOf('formatMetricCount(dashboardData.stats.escrowHeldCount)');
     expect(amountCard).toBeGreaterThan(-1);
     expect(countCard).toBeGreaterThan(amountCard);
     // Same grid, same card styling — a small, non-invasive change.
     expect(countCard - amountCard).toBeLessThan(600);
+  });
+
+  it('is no longer rendered from AdminView, and moved without its markup changing', () => {
+    // STAGE 4B containment: the card lives in exactly one place.
+    expect(adminView).not.toContain(ESCROW_LABEL);
+    expect(adminView).not.toContain('formatKesAmount(dashboardData.stats.escrowHeldAmount)');
+    // ...and the money/count distinction moved with it, verbatim.
+    expect(moneyZone).toContain('>Claims in Escrow</span>');
+    expect(moneyZone).toContain('formatMetricCount(dashboardData.stats.escrowHeldCount)');
   });
 });

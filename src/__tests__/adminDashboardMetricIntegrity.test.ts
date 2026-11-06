@@ -38,6 +38,23 @@ import {
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const adminViewTs = fs.readFileSync(path.resolve(repoRoot, 'src/components/AdminView.tsx'), 'utf8');
+// STAGE 4B — the Overview's rendering now lives in four contained components
+// (components/admin/dashboard/Overview*.tsx). The assertions about OVERVIEW
+// MARKUP read AdminView plus those four, so containing the markup cannot silently
+// weaken a rule: a raw figure, a lost formatter or a wrong card reappearing in any
+// of the five files still fails. Assertions about AdminView's own wiring (the
+// request, the coalescing, the sequence guard, the stale/retry path) keep reading
+// AdminView alone.
+const OVERVIEW_ZONE_FILES = [
+  'src/components/admin/dashboard/OverviewStatusStrip.tsx',
+  'src/components/admin/dashboard/OverviewAttentionZone.tsx',
+  'src/components/admin/dashboard/OverviewMoneyZone.tsx',
+  'src/components/admin/dashboard/OverviewActivityZone.tsx',
+];
+const overviewTs = [
+  adminViewTs,
+  ...OVERVIEW_ZONE_FILES.map((relative) => fs.readFileSync(path.resolve(repoRoot, relative), 'utf8')),
+].join('\n');
 const serverTs = fs.readFileSync(path.resolve(repoRoot, 'src/server.ts'), 'utf8');
 
 const claim = (id: string, itemId: string | null, status: string) => ({ id, item_id: itemId, status });
@@ -153,7 +170,7 @@ describe('the Overview validates a dashboard payload before it renders it', () =
     // The old markup `KES {dashboardData.stats.escrowHeldAmount}` renders the
     // literal text "KES undefined" when the field is absent — a figure-shaped
     // claim the server never made.
-    expect(adminViewTs).not.toContain('KES {dashboardData.stats.');
+    expect(overviewTs).not.toContain('KES {dashboardData.stats.');
   });
 
   it('never interpolates a money figure raw — not into JSX text, and not into a template literal', () => {
@@ -182,7 +199,7 @@ describe('the Overview validates a dashboard payload before it renders it', () =
         `\${dashboardData.stats.${field}}`,
         `\${dashboardData.stats?.${field}}`,
       ]) {
-        expect(adminViewTs, `${field} must go through the read-out module, never be interpolated raw`).not.toContain(raw);
+        expect(overviewTs, `${field} must go through the read-out module, never be interpolated raw`).not.toContain(raw);
       }
     }
   });
@@ -193,11 +210,11 @@ describe('the Overview validates a dashboard payload before it renders it', () =
     // — the ONE Overview money figure that never reached the read-out module.
     // The region is this card's own text, not the whole 3,000-line file, so the
     // assertion cannot be satisfied by an unrelated change somewhere else.
-    const cardAt = adminViewTs.indexOf("label={'Unresolved Payouts'}");
+    const cardAt = overviewTs.indexOf("label={'Unresolved Payouts'}");
     expect(cardAt, 'the Unresolved Payouts card must exist').toBeGreaterThan(-1);
-    const cardEnd = adminViewTs.indexOf('treat as unknown, not as zero.', cardAt);
+    const cardEnd = overviewTs.indexOf('treat as unknown, not as zero.', cardAt);
     expect(cardEnd, 'the Unresolved Payouts card must close where expected').toBeGreaterThan(cardAt);
-    const card = adminViewTs.slice(cardAt, cardEnd);
+    const card = overviewTs.slice(cardAt, cardEnd);
 
     // The amount now goes through the shared, validated read-out module…
     expect(card).toContain('formatKesAmount(dashboardData.stats?.unresolvedPayoutsAmount).text');
@@ -210,11 +227,11 @@ describe('the Overview validates a dashboard payload before it renders it', () =
   });
 
   it('renders every required Overview figure through the one read-out module', () => {
-    expect(adminViewTs).toContain('formatKesAmount(dashboardData.stats.escrowHeldAmount).text');
-    expect(adminViewTs).toContain('formatMetricCount(dashboardData.stats.escrowHeldCount).text');
-    expect(adminViewTs).toContain('formatKesAmount(dashboardData.stats.totalRevenue).text');
-    expect(adminViewTs).toContain('formatMetricCount(dashboardData.stats.itemsAtAgentCount).text');
-    expect(adminViewTs).toContain('formatMetricCount(dashboardData.stats.pendingAgentsCount).text');
+    expect(overviewTs).toContain('formatKesAmount(dashboardData.stats.escrowHeldAmount).text');
+    expect(overviewTs).toContain('formatMetricCount(dashboardData.stats.escrowHeldCount).text');
+    expect(overviewTs).toContain('formatKesAmount(dashboardData.stats.totalRevenue).text');
+    expect(overviewTs).toContain('formatMetricCount(dashboardData.stats.itemsAtAgentCount).text');
+    expect(overviewTs).toContain('formatMetricCount(dashboardData.stats.pendingAgentsCount).text');
   });
 
   it('still issues the dashboard request as a plain GET', () => {
@@ -231,7 +248,7 @@ describe('stale, loading, retry and ordering behaviour', () => {
     expect(adminViewTs).toContain('setDashboardStale(false)');
     // A failed refresh must never blank the reading: there is no second write.
     expect(adminViewTs).not.toContain('setDashboardData(null)');
-    expect(adminViewTs).toContain("' — the latest refresh failed, so this is an older reading'");
+    expect(overviewTs).toContain("' — the latest refresh failed, so this is an older reading'");
     expect(adminViewTs).toContain("'Retry refresh'");
     expect(adminViewTs).toContain('{dashboardStale && dashboardData && (');
   });
@@ -261,10 +278,12 @@ describe('stale, loading, retry and ordering behaviour', () => {
   });
 
   it('announces refresh state to assistive tech without hiding the figures', () => {
-    expect(adminViewTs).toContain('aria-busy="true"');
-    expect(adminViewTs).toContain('aria-live="polite"');
+    // STAGE 4B — the provenance strip is components/admin/dashboard/OverviewStatusStrip.tsx;
+    // the property under test is the same one, read from the Overview as a whole.
+    expect(overviewTs).toContain('aria-busy="true"');
+    expect(overviewTs).toContain('aria-live="polite"');
     // The background-refresh indicator is only rendered when figures exist.
-    expect(adminViewTs).toContain('{dashboardLoading && dashboardData && (');
+    expect(overviewTs).toContain('{dashboardLoading && dashboardData && (');
   });
 
   it('adds no polling for the dashboard', () => {

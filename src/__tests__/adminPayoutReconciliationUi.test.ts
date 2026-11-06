@@ -30,8 +30,15 @@ const ADMIN_VIEW = 'src/components/AdminView.tsx';
 const PANEL = 'src/components/admin/payouts/PayoutReconciliationPanel.tsx';
 const TABLE = 'src/components/admin/payouts/PayoutReconciliationTable.tsx';
 const CLIENT = 'src/services/adminPayoutReconciliationApi.ts';
+// STAGE 4B — the Overview's "Unresolved Payouts" figure now renders inside the
+// Overview's contained attention zone (Z1) instead of AdminView.tsx. The figure's
+// own control therefore lives in that file, while AdminView still routes the
+// zone's section request onto the tab state; the locality invariant below is
+// asserted in the file that renders the figure, and the routing half in AdminView.
+const OVERVIEW_ATTENTION = 'src/components/admin/dashboard/OverviewAttentionZone.tsx';
 
 const adminView = SRC(ADMIN_VIEW);
+const attentionZone = SRC(OVERVIEW_ATTENTION);
 const panel = SRC(PANEL);
 const table = SRC(TABLE);
 const client = SRC(CLIENT);
@@ -73,12 +80,17 @@ describe('Batch 2 admin unresolved-payouts UI: the rows behind the figure are di
     //   1. the FIGURE still carries the LOCALITY bound: the control it renders
     //      must be within 2,000 characters (~1% of the file) of the label, so a
     //      figure moved to another card, another tab or another component still
-    //      breaks this;
+    //      breaks this. STAGE 4B moved the figure into the Overview's attention
+    //      zone, so the bound is asserted there — against the destination that
+    //      file actually names — and AdminView is asserted to route that request
+    //      onto the payouts tab, so the figure is still not a dead end;
     //   2. the DISCLOSURE, its `aria-expanded` state, the section id it points at
     //      and the single panel mount must all sit inside that section's slice.
-    expect(adminView).toMatch(
-      /label=\{'Unresolved Payouts'\}[\s\S]{0,2000}setActiveTab\('payouts'\)/,
+    expect(attentionZone).toMatch(
+      /label=\{'Unresolved Payouts'\}[\s\S]{0,2000}onOpenSection\('payouts'\)/,
     );
+    expect(adminView).toContain('<OverviewAttentionZone');
+    expect(adminView).toMatch(/onOpenSection=\{setActiveTab\}/);
 
     const sectionAt = adminView.indexOf("{activeTab === 'payouts' && (");
     const sectionEnd = adminView.indexOf("{activeTab === 'audit' && (", sectionAt);

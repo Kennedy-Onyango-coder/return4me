@@ -32,9 +32,25 @@ const repoRoot = path.resolve(__dirname, '../..');
 const read = (rel: string) => fs.readFileSync(path.resolve(repoRoot, rel), 'utf8');
 const adminView = read('src/components/AdminView.tsx');
 
+// STAGE 4B — the Overview's presentation now lives in four contained components
+// (components/admin/dashboard/Overview*.tsx). `code` is what an assertion about
+// RENDERED MARKUP reads: AdminView plus those four files, so containing the
+// markup cannot silently weaken a rule — a raw palette class, a hidden label or a
+// collapsed semantic variant reappearing in ANY of the five files still fails.
+// Assertions about the console's own chrome (the single heading band, the
+// duplicated-description removals, the section copy wiring) keep reading
+// `adminView` alone.
+const OVERVIEW_ZONE_FILES = [
+  'src/components/admin/dashboard/OverviewStatusStrip.tsx',
+  'src/components/admin/dashboard/OverviewAttentionZone.tsx',
+  'src/components/admin/dashboard/OverviewMoneyZone.tsx',
+  'src/components/admin/dashboard/OverviewActivityZone.tsx',
+];
+const consoleSource = [adminView, ...OVERVIEW_ZONE_FILES.map(read)].join('\n');
+
 /** De-comment, so an assertion is about shipped code and not about the prose
  *  that explains it (several Batch 2 comments quote the old class names). */
-const code = adminView
+const code = consoleSource
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .replace(/^[ \t]*\/\/.*$/gm, '');
 
