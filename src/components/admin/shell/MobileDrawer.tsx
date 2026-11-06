@@ -38,6 +38,25 @@ export interface MobileDrawerProps {
 
 
 /**
+ * The groups the drawer presents: the registry's own groups and order, restricted
+ * to the sections the console can actually reach, with any group left empty by
+ * that restriction dropped.
+ *
+ * Exported as a pure function for ONE reason: the drawer renders through a portal
+ * onto `document.body`, which `react-dom/server` cannot render, so the
+ * destination list it will show is asserted directly here instead of through
+ * markup. It holds no state and decides nothing — `AdminView` still owns the
+ * wired list, and the registry still owns every id, label and icon.
+ */
+export function visibleAdminNavGroups(sections: readonly AdminSectionId[]): AdminNavGroup[] {
+  const allowed = new Set<AdminSectionId>(sections);
+  return ADMIN_NAV_GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => allowed.has(item.id)),
+  })).filter((group) => group.items.length > 0);
+}
+
+/**
  * The small-screen admin navigation drawer.
  *
  * Shown below `lg` (`lg:hidden`) — from `lg` up the console renders
@@ -78,13 +97,10 @@ export function MobileDrawer({
     onCloseRef.current = onClose;
   }, [onClose]);
 
-  const visibleGroups = useMemo<AdminNavGroup[]>(() => {
-    const allowed = new Set<AdminSectionId>(sections);
-    return ADMIN_NAV_GROUPS.map((group) => ({
-      ...group,
-      items: group.items.filter((item) => allowed.has(item.id)),
-    })).filter((group) => group.items.length > 0);
-  }, [sections]);
+  const visibleGroups = useMemo<AdminNavGroup[]>(
+    () => visibleAdminNavGroups(sections),
+    [sections],
+  );
 
   useEffect(() => {
     if (!open) return undefined;

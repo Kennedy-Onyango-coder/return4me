@@ -70,15 +70,13 @@ describe('the two sections exist, and the sidebar agrees with the registry', () 
       'agents', 'found_items', 'stranded_items', 'lost_reports', 'review',
       'notifications', 'categories', 'strikes', 'audit',
     ]);
-    // N9 registered 'notifications' but the console's sidebar does not yet carry
-    // a button for it (pre-existing, NOT introduced by Stage 3B-6B, and the reason
-    // notificationOutboxWiring.test.ts fails on this tree). It is excluded BY NAME
-    // here so this assertion keeps its job — every registered section the console
-    // actually declares has a button, in registry order — instead of being deleted.
-    const UNWIRED_SECTION_IDS = ['notifications'];
-    expect(declaredSections(adminView)).toEqual(
-      ADMIN_SECTION_IDS.filter((id) => !UNWIRED_SECTION_IDS.includes(id)),
-    );
+    // STAGE 3C removed the by-name exclusion this assertion used to carry.
+    // 'notifications' had been registered by N9 while the console carried no
+    // button for it; instead of deleting the tripwire, the gap was documented
+    // here by name. The console now declares that section too, so the assertion
+    // is whole again: the console's DECLARED sections are exactly the registry,
+    // in the registry's order, with nothing filtered out.
+    expect(declaredSections(adminView)).toEqual(ADMIN_SECTION_IDS);
   });
 
   it('gives each new section the nav label and the state key it renders', () => {

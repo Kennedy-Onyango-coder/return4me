@@ -289,7 +289,7 @@ describe('UX-15B: the administrator identity band and its sign-out', () => {
 // -----------------------------------------------------------------------------
 
 describe('UX-15B: the console section navigation', () => {
-  it('still declares exactly the real sections — the ten, plus Stranded Items, Payout Integrity and Audit Log — in the nav landmark', () => {
+  it('still declares exactly the real sections — the ten, plus Stranded Items, Payout Integrity, Audit Log and the Notification Outbox — in the nav landmark', () => {
     const declared = [...NAV.matchAll(/aria-current=\{activeTab === '([a-z_]+)'/g)].map((m) => m[1]);
     // PROGRAMME 1 appended two sections, both backed by endpoints that exist and
     // both read-only, exactly as PHASE 11A appended 'lost_reports' before them.
@@ -301,10 +301,17 @@ describe('UX-15B: the console section navigation', () => {
     // invented endpoint. The expectation stays an exact match — not a
     // "contains" — so a section still cannot appear in the nav without a
     // decision recorded here.
+    // STAGE 3C appended 'notifications' on the same terms: it is the section N9
+    // registered and wrote a panel for, and mounting it added one destination and
+    // no new mutation — its single write is the pre-existing, server-authorized
+    // single-row retry behind a confirmation step. Fourteen sections, one button
+    // each, and the list stays an EXACT match so nothing can join the nav without
+    // a decision recorded here.
     expect(declared.sort()).toEqual(
       [
         'stats', 'agents', 'found_items', 'disputes', 'claims', 'ledger', 'review',
         'categories', 'strikes', 'lost_reports', 'payouts', 'audit', 'stranded_items',
+        'notifications',
       ].sort(),
     );
     expect(NAV).toContain("aria-current={activeTab === 'stats' ? 'page' : undefined}");
@@ -340,20 +347,21 @@ describe('UX-15B: the console section navigation', () => {
   });
 
   it('stays a navigation control, not a row of generic action buttons', () => {
-    // One <button> per declared section: 13 since Stage 3B-6B added Stranded
-    // Items. The count is pinned (not derived from `declared`) so that a section
-    // added to the nav without its button — or a button added without a section —
-    // still fails here rather than silently in the console.
-    expect(count(NAV, /<button\b/g)).toBe(13);
+    // One <button> per declared section: 14 since STAGE 3C mounted the
+    // Notification Outbox (13 after Stage 3B-6B added Stranded Items). The count
+    // is pinned (not derived from `declared`) so that a section added to the nav
+    // without its button — or a button added without a section — still fails here
+    // rather than silently in the console.
+    expect(count(NAV, /<button\b/g)).toBe(14);
     expect(NAV).not.toContain('<Button');
   });
 
   it('sizes every nav icon from the UX-01 ladder, decoratively', () => {
     expect(rawIconSize(NAV)).toEqual([]);
-    // The same 13 buttons: every icon is ladder-sized AND hidden from assistive
-    // technology, including the Stranded Items icon this batch added.
-    expect(count(NAV, /size=\{ICON_SIZE\.metadata\}/g)).toBe(13);
-    expect(count(NAV, /aria-hidden="true"/g)).toBe(13);
+    // The same 14 buttons: every icon is ladder-sized AND hidden from assistive
+    // technology, including the BellRing icon STAGE 3C added.
+    expect(count(NAV, /size=\{ICON_SIZE\.metadata\}/g)).toBe(14);
+    expect(count(NAV, /aria-hidden="true"/g)).toBe(14);
   });
 
   it('uses the appearance tokens for the nav text, the bar and the rule', () => {

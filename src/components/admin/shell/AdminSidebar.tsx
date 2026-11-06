@@ -18,7 +18,7 @@ export interface AdminSidebarProps {
    *
    * Deliberately `children` rather than a registry-driven list rendered HERE.
    * `AdminView` keeps the single definition of every destination — its
-   * `<nav aria-label="Admin sections">` with the 13 `setActiveTab(...)` handlers
+   * `<nav aria-label="Admin sections">` with the 14 `setActiveTab(...)` handlers
    * and `aria-current={activeTab === '<id>' ? 'page' : undefined}` markers — and
    * that markup is pinned by `adminConsoleShell.test.ts` and
    * `adminProgramme1Sections.test.ts`. Re-rendering the same list from a second

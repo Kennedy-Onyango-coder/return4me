@@ -34,12 +34,19 @@ const indexCss = read('src/index.css');
  * assigned to a hub the platform will not hand work to, backed by
  * GET /api/admin/stranded-items; its one action reuses the pre-existing audited
  * POST /api/admin/items/:id/unassign, so no endpoint was invented for it either.
+ *
+ * STAGE 3C appended 'notifications' — the section N9 registered and wrote a panel
+ * for, which this console had never mounted. Its read is GET
+ * /api/admin/notifications and its only write is the pre-existing single-row
+ * POST /api/admin/notifications/:id/retry, both behind authenticateJWT +
+ * requireCurrentAdminSession. No endpoint was invented to make it fit here.
  */
 const REAL_SECTIONS = [
   'stats', 'agents', 'found_items', 'disputes', 'claims', 'ledger', 'review', 'categories', 'strikes',
   'lost_reports',
   'payouts', 'audit',
   'stranded_items',
+  'notifications',
 ] as const;
 
 describe('admin sidebar (Request 05 / §11)', () => {

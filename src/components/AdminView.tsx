@@ -33,7 +33,7 @@ import {
 // PROGRAMME 1 — `Banknote` and `ScrollText` are the two icons the nav registry
 // already uses for the two sections this batch adds (Payout Integrity, Audit
 // Log). They are imported here because the sidebar renders its own buttons.
-import { ShieldCheck, BarChart2, Users, FileCheck, Coins, HelpCircle, Loader2, ArrowRight, AlertTriangle, RefreshCw, CheckCircle, ShieldAlert, Copy, Package, PackageSearch, ClipboardList, FileSearch, X, Banknote, ScrollText, ArrowDownLeft, ArrowUpRight, Landmark, Menu } from 'lucide-react';
+import { ShieldCheck, BarChart2, Users, FileCheck, Coins, HelpCircle, Loader2, ArrowRight, AlertTriangle, RefreshCw, CheckCircle, ShieldAlert, Copy, Package, PackageSearch, ClipboardList, FileSearch, X, Banknote, ScrollText, BellRing, ArrowDownLeft, ArrowUpRight, Landmark, Menu } from 'lucide-react';
 // BATCH 1 (shared admin visual language) — the console reuses the SAME design
 // system every other surface uses. These are presentation primitives only:
 // they hold no data, make no requests and change no behaviour.
@@ -169,6 +169,13 @@ import {
   summarizePayoutIntegrity,
 } from './admin/payouts/payoutIntegrityPresentation';
 import AuditLogPanel from './admin/audit/AuditLogPanel';
+// BATCH A2 / STAGE 3C — the Notification Outbox panel. N9 wrote and registered it
+// but never mounted it, so its destination led nowhere. Stage 3C mounts the
+// EXISTING panel — no second table, no second API client, no second heading — and
+// gives it nothing but the session token: the panel owns its own bounded read,
+// its filters, its confirmation dialog and its post-attempt re-read. Mounting it
+// sends nothing: a delivery is retried only after an operator confirms one row.
+import NotificationOutboxPanel from './admin/notifications/NotificationOutboxPanel';
 import StrandedItemsQueueSection from './admin/stranded/StrandedItemsQueueSection';
 import AgentPayoutDestinationChangesPanel from './admin/payouts/AgentPayoutDestinationChangesPanel';
 import {
@@ -449,14 +456,14 @@ function isReported(value: unknown): boolean {
  * STAGE 3B — the sections the console can actually render, in the registry's
  * order (overview → money → operations → configuration).
  *
- * The registry (`ADMIN_NAV_GROUPS`) is the owner of a section's id, label, icon
- * and heading copy, but it also lists `notifications`, which this console does
- * not yet wire to a panel — a pre-existing gap that
- * `adminProgramme1Sections.test.ts` documents by name and that
- * `notificationOutboxWiring.test.ts` is red about on this tree. Rendering a
- * drawer entry for it would put a control on screen whose only effect is to set
- * state nothing renders, so the drawer is given the intersection instead. This
- * list is the `activeTab` union below, spelled out once.
+ * The registry (`ADMIN_NAV_GROUPS`) owns a section's id, label, icon and heading
+ * copy. STAGE 3C closed the last gap between that registry and this console: the
+ * `notifications` destination N9 had already registered is now MOUNTED, so the
+ * wired list below is the registry's list and nothing is filtered out. Before
+ * that, rendering a drawer entry for it would have put a control on screen whose
+ * only effect was to set state nothing rendered, so the drawer was given the
+ * intersection instead. This list is the `activeTab` union below, spelled out
+ * once, and `notificationOutboxWiring.test.ts` pins the two together.
  */
 const WIRED_ADMIN_SECTIONS: readonly AdminSectionId[] = [
   'stats',
@@ -469,6 +476,8 @@ const WIRED_ADMIN_SECTIONS: readonly AdminSectionId[] = [
   'stranded_items',
   'lost_reports',
   'review',
+  // STAGE 3C — the section N9 registered, now backed by a mounted panel.
+  'notifications',
   'categories',
   'strikes',
   'audit',
@@ -504,7 +513,7 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
   // own section state: `payouts` (Payout Integrity, WS1/WS2/WS5) and `audit`
   // (Audit Log, WS4). Both ids exist in the shared nav registry, so the sidebar,
   // the top bar and this state cannot disagree about what a section is called.
-  const [activeTab, setActiveTab] = useState<'stats' | 'agents' | 'disputes' | 'ledger' | 'review' | 'categories' | 'strikes' | 'found_items' | 'stranded_items' | 'claims' | 'lost_reports' | 'payouts' | 'audit'>('stats');
+  const [activeTab, setActiveTab] = useState<'stats' | 'agents' | 'disputes' | 'ledger' | 'review' | 'categories' | 'strikes' | 'found_items' | 'stranded_items' | 'claims' | 'lost_reports' | 'payouts' | 'audit' | 'notifications'>('stats');
   // STAGE 3B — shell state. Two INDEPENDENT booleans on purpose: collapsing the
   // desktop rail must never open or close the mobile drawer, and closing the
   // drawer must never expand or collapse the rail. Neither is persisted and
@@ -3777,14 +3786,16 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
             className="r4m-admin-nav flex border-b border-[var(--appearance-border)] overflow-x-auto scrollbar-none"
             aria-label={lang === 'en' ? 'Admin sections' : 'Sehemu za msimamizi'}
           >
-            {/* BATCH B0 — grouped sidebar, extended by PROGRAMME 1. The twelve
-                buttons below are the ten pre-existing sections plus the two
-                sections this batch adds — Payout Integrity (Money, WS1/WS2/WS5)
-                and Audit Log (Configuration, WS4) — in grouped order (Overview
-                / Money / Operations / Configuration, mirroring ADMIN_NAV_GROUPS
-                in admin/shell). Both additions are backed by endpoints that
-                really exist, and both are read-only: neither adds a mutation to
-                the console. */}
+            {/* BATCH B0 — grouped sidebar, extended by PROGRAMME 1 and STAGE 3C.
+                The fourteen buttons below are the ten pre-existing sections, the
+                two PROGRAMME 1 sections — Payout Integrity (Money, WS1/WS2/WS5)
+                and Audit Log (Configuration, WS4) — and STAGE 3C's Notification
+                Outbox (Operations), in grouped order (Overview / Money /
+                Operations / Configuration, mirroring ADMIN_NAV_GROUPS in
+                admin/shell). Every addition is backed by endpoints that really
+                exist; Payout Integrity and Audit Log add no mutation at all, and
+                Notification Outbox's only mutation is the pre-existing
+                single-row, server-authorized retry behind a confirmation step. */}
             <AdminNavGroupLabel>Overview</AdminNavGroupLabel>
             <button
               onClick={() => setActiveTab('stats')}
@@ -3897,6 +3908,21 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
             >
               <FileCheck size={ICON_SIZE.metadata} aria-hidden="true" />
               <span>Manual Review</span>
+            </button>
+            {/* STAGE 3C — Notification Outbox. The registry's own label and icon
+                (`BellRing`), in the Operations group it was registered in, and
+                nothing else: the selection goes through the SAME `setActiveTab`
+                the other thirteen buttons call, so desktop and the mobile drawer
+                cannot disagree about what this destination is. */}
+            <button
+              onClick={() => setActiveTab('notifications')}
+              aria-current={activeTab === 'notifications' ? 'page' : undefined}
+              className={`py-3 px-6 text-caption font-bold transition border-b-2 -mb-px flex items-center space-x-1.5 shrink-0 ${
+                activeTab === 'notifications' ? 'border-[var(--appearance-primary)] text-[var(--appearance-text-primary)] font-extrabold' : 'border-transparent text-[var(--appearance-text-muted)] hover:text-[var(--appearance-text-primary)]'
+              }`}
+            >
+              <BellRing size={ICON_SIZE.metadata} aria-hidden="true" />
+              <span>Notification Outbox</span>
             </button>
             <AdminNavGroupLabel>Configuration</AdminNavGroupLabel>
             <button
@@ -7667,6 +7693,31 @@ export default function AdminView({ token, setToken, onCategoriesChanged }: Admi
       {activeTab === 'audit' && (
         <div className="space-y-6">
           <AuditLogPanel token={token} />
+        </div>
+      )}
+
+      {/* ====================================================================
+          STAGE 3C — SECTION: NOTIFICATION OUTBOX (BATCH A2 / N9)
+          ====================================================================
+          The existing panel, mounted behind the section id the registry already
+          carried. It is NOT re-implemented here: `NotificationOutboxPanel` owns
+          its own bounded read (GET /api/admin/notifications), its status / event
+          / channel filters, its client-side paging over the window the server
+          returned, its loading / empty / stale-error states, its confirmation
+          dialog and its re-read after any attempt.
+
+          MOUNTING SENDS NOTHING. A retry is a real provider operation, so it
+          exists only behind that confirmation step and only for a row the server
+          itself marked retryable; the payment, handover or claim action behind a
+          message is never replayed. Opening this section performs exactly one
+          read, and leaving it aborts that read.
+
+          ONE guarded block, like every other section: selecting another
+          destination unmounts this view, so no notification record and no retry
+          control can remain on screen under a section that does not own it. */}
+      {activeTab === 'notifications' && (
+        <div className="space-y-6">
+          <NotificationOutboxPanel token={token} />
         </div>
       )}
 
